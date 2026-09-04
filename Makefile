@@ -70,7 +70,7 @@ migrate-local: ## Run migrations against the local-storage stack (needs `make do
 	cd localstack && $(LOCAL_COMPOSE) run --rm --no-deps -v "$(CURDIR)/alembic:/app/alembic" turncall alembic upgrade head
 
 docker-all: ## Start all services including turncall
-	cd localstack && docker compose up -d
+	cd localstack && docker compose up -d --build
 
 clean: ## Clean build artifacts
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

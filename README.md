@@ -460,7 +460,7 @@ any extra flags through to its `setup.py` — see each example's README.
 | Component | Technology |
 |-----------|-----------|
 | Framework | FastAPI + Uvicorn |
-| Voice Pipeline | Pipecat 1.4 |
+| Voice Pipeline | Pipecat 1.8 |
 | Database | PostgreSQL + SQLAlchemy async + Alembic |
 | Cache | Redis |
 | Telephony | Twilio Voice + Media Streams |
