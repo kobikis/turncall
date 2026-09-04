@@ -49,6 +49,25 @@ jobs:
           fi
           echo "All commits signed off."
 
+  # Build the image on every PR, without pushing. release.yml only builds on a
+  # tag, so before this the first build of a Dockerfile change happened after
+  # the tag was already public — which is exactly how the 1.0.0 build failed.
+  # Same platform and cache as the release build, so a green run here means the
+  # release build will get that far too.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: false
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   test:
     runs-on: ubuntu-latest
     services:
