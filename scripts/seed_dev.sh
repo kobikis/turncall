@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
-# Seed a dev project + API key + published agent, and bind your Twilio number to
-# it, so inbound calls resolve instead of 'twilio_inbound_unknown_number'.
+# Seed a dev project + API key + published agent.
 #
-# Requires the server running (make run) and reachable at BASE_URL.
+# TURNCALL_NUMBER is optional. Without it you get an agent you can talk to in
+# the browser over WebRTC — no Twilio, no phone number, no tunnel. With it, the
+# number is also bound to the agent so inbound calls resolve instead of
+# 'twilio_inbound_unknown_number'.
+#
+# Requires the server running and reachable at BASE_URL.
 #
 # Usage:
-#   TURNCALL_NUMBER=+15551234567 bash scripts/seed_dev.sh
-#   TURNCALL_NUMBER=+15551234567 TWILIO_PN_SID=PNxxxx BASE_URL=http://localhost:8090 bash scripts/seed_dev.sh
+#   bash scripts/seed_dev.sh                            # browser (WebRTC) only
+#   TURNCALL_NUMBER=+15551234567 bash scripts/seed_dev.sh   # also bind a number
 #
-# Use EXACTLY the number Twilio sends as the `To` (see the to_number= log line).
+# With a number, use EXACTLY what Twilio sends as the `To` (see the to_number= log).
 set -euo pipefail
 
 BASE="${BASE_URL:-http://localhost:8090}"
-NUMBER="${TURNCALL_NUMBER:?Set TURNCALL_NUMBER to your Twilio number in E.164, e.g. +15551234567}"
+NUMBER="${TURNCALL_NUMBER:-}"   # optional — unset means browser/WebRTC only
 PN_SID="${TWILIO_PN_SID:-PN00000000000000000000000000000000}"  # real PN SID optional for local testing
 
 # Bootstrap (project/key creation) is platform-gated. Fall back to .env.
@@ -41,7 +45,7 @@ AID=$(curl -fsS -X POST "$BASE/v1/agents" \
     "config": {
       "system_prompt": "You are a friendly receptionist. Keep replies short and natural.",
       "first_message": "Thanks for calling! How can I help?",
-      "stt": {"provider": "deepgram", "model": "nova-2"},
+      "stt": {"provider": "deepgram", "model": "nova-3-general"},
       "llm": {"provider": "openai", "model": "gpt-4o-mini"},
       "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"}
     }
@@ -50,16 +54,25 @@ AID=$(curl -fsS -X POST "$BASE/v1/agents" \
 echo "→ publishing agent"
 curl -fsS -X POST "$BASE/v1/agents/$AID/publish" -H "Authorization: Bearer $TC" >/dev/null
 
-echo "→ binding number $NUMBER → agent"
-curl -fsS -X POST "$BASE/v1/phone-numbers" \
-  -H "Authorization: Bearer $TC" -H 'Content-Type: application/json' -d "{
-    \"external_number_sid\": \"$PN_SID\",
-    \"e164_number\": \"$NUMBER\",
-    \"routing_target_type\": \"agent\",
-    \"routing_target_id\": \"$AID\"
-  }" >/dev/null
+if [[ -n "$NUMBER" ]]; then
+  echo "→ binding number $NUMBER → agent"
+  curl -fsS -X POST "$BASE/v1/phone-numbers" \
+    -H "Authorization: Bearer $TC" -H 'Content-Type: application/json' -d "{
+      \"external_number_sid\": \"$PN_SID\",
+      \"e164_number\": \"$NUMBER\",
+      \"routing_target_type\": \"agent\",
+      \"routing_target_id\": \"$AID\"
+    }" >/dev/null
+fi
 
 echo
-echo "✅ seeded — call $NUMBER now"
+if [[ -n "$NUMBER" ]]; then
+  echo "✅ seeded — call $NUMBER now"
+else
+  echo "✅ seeded — talk to it in your browser:"
+  echo "     cd examples/webrtc-client && npm install && npm run dev"
+  echo "   then open http://localhost:5173 and paste the key and agent id below."
+  echo "   (To answer real phone calls instead, re-run with TURNCALL_NUMBER set.)"
+fi
 echo "   API key (save it, shown once): $TC"
 echo "   agent_id: $AID   project_id: $PID"
