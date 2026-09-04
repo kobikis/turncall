@@ -10,7 +10,7 @@ npm install
 npm run dev
 ```
 
-Opens at http://localhost:5173
+Opens at http://localhost:5174
 
 ## Usage
 

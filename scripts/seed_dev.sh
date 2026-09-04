@@ -73,7 +73,7 @@ if [[ -n "$NUMBER" ]]; then
 else
   echo "✅ seeded — talk to it in your browser:"
   echo "     cd examples/webrtc-client && npm install && npm run dev"
-  echo "   then open http://localhost:5173 and paste the key and agent id below."
+  echo "   then open http://localhost:5174 and paste the key and agent id below."
   echo "   (To answer real phone calls instead, re-run with TURNCALL_NUMBER set.)"
 fi
 echo "   API key (save it, shown once): $TC"

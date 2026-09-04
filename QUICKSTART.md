@@ -120,7 +120,7 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:5173>, paste in:
+Open <http://localhost:5174>, paste in:
 
 - **Server URL** — `http://localhost:8090`
 - **API Key** — the `tc_...` from step 4
