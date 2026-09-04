@@ -1,6 +1,9 @@
 # Quickstart
 
-Get a voice AI receptionist answering phone calls in 5 minutes.
+Get a voice AI receptionist answering a real phone call.
+
+Budget 20–30 minutes the first time. Most of it is signing up for Twilio
+and the provider keys — the stack itself starts in one command.
 
 ## Prerequisites
 
@@ -66,6 +69,14 @@ make migrate-local      # Creates database tables
 ```
 
 That's it — the API is live. Continue to step 4 to point Twilio at it.
+
+> **Which one you chose decides your container names.** The compose project is
+> named after its directory, so `make docker-up` gives you `localstack-turncall-1`
+> and `localstack-postgres-1`, while `make docker-up-local` gives you
+> `turncall-local-*`. Confusing, but harmless on its own — it matters if you also
+> run [TurnCall Builder](https://github.com/kobikis/turncall-builder-api), which
+> reaches into these containers by name and has a matching target for each.
+> `docker ps` tells you which you have.
 
 ## 4. Expose via ngrok
 
@@ -175,10 +186,28 @@ curl http://localhost:8090/v1/tools/invocations/CALL_ID -H "Authorization: Beare
 
 ## Next Steps
 
-- [docs/api-reference.md](docs/api-reference.md) — Full API reference
-- [docs/architecture.md](docs/architecture.md) — System design
-- [docs/server-events.md](docs/server-events.md) — Dynamic routing with server hooks
-- [docs/getting-started.md](docs/getting-started.md) — Manual API setup (without setup script)
+Full documentation, rendered: **[docs.turncall.io](https://docs.turncall.io)**
+
+- [API reference](https://docs.turncall.io/api-reference/overview) — every endpoint
+- [Architecture](https://docs.turncall.io/architecture) — system design and the pipeline
+- [Server events](https://docs.turncall.io/guides/server-events) — dynamic routing with hooks
+- [Providers](https://docs.turncall.io/guides/providers) — choosing STT / LLM / TTS
+
+### Build agents by describing them
+
+[TurnCall Builder](https://github.com/kobikis/turncall-builder-api) is a
+conversational agent builder for this engine: describe an agent in plain
+English, answer a few follow-up questions, and it generates and creates the
+config for you. It runs against the stack you just started.
+
+Two things to know before you wire it up:
+
+- **`PLATFORM_API_KEY` must be identical in both repos.** The builder mints its
+  TurnCall API key through the platform-gated bootstrap endpoints, so its
+  `.env` value has to match the one here. A mismatch fails with a 401.
+- **Use the builder target that matches how you started TurnCall** —
+  `make docker-up-local` here pairs with `make docker-up-local` there, and
+  `make docker-up` with `make docker-up`, because the container names differ.
 
 ## Customization
 
