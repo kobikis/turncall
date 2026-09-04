@@ -75,7 +75,7 @@ See [Architecture](/architecture) for the full pipeline, call flows, and data mo
 | Component | Technology |
 |-----------|-----------|
 | Framework | FastAPI + Uvicorn |
-| Voice Pipeline | Pipecat 1.4 |
+| Voice Pipeline | Pipecat 1.8 |
 | Database | PostgreSQL + SQLAlchemy async + Alembic |
 | Cache | Redis |
 | Telephony | Twilio Voice + Media Streams |
@@ -88,3 +88,12 @@ See [Architecture](/architecture) for the full pipeline, call flows, and data mo
 | Knowledge Base | pgvector + OpenAI embeddings |
 | VAD | Silero |
 | Turn Detection | Smart Turn V3 (local ONNX) |
+
+## Build agents by describing them
+
+Prefer not to hand-write agent configs? The
+[Agent Builder](/guides/agent-builder) turns a plain-English description into a
+deployed agent — it asks follow-up questions, generates the config, and creates
+it in your instance.
+
+It's a separate, source-available app that runs alongside this engine.
