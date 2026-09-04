@@ -3,6 +3,33 @@ title: Changelog
 description: "Latest updates and improvements to TurnCall"
 ---
 
+<Update label="2026-09-04" description="September 4, 2026" tags={["Release", "Update", "Fix"]}>
+
+## 1.0.0 — first open-source release
+
+TurnCall is now open source under the MIT licence, with container images published to `ghcr.io/kobikis/turncall`. From this release on, a breaking change to the REST API, the agent config schema, or the webhook payloads means a major version bump.
+
+## Changed
+
+**Voice pipeline upgraded to Pipecat 1.8.1** — from 1.5. No config or agent changes required.
+
+**Provider model defaults refreshed** — these apply only to agents that do *not* set a model explicitly. Pin the old value in your agent config to keep it:
+
+| Role | Was | Now |
+|---|---|---|
+| Deepgram STT | `nova-2` | `nova-3-general` |
+| ElevenLabs TTS | `eleven_turbo_v2_5` (deprecated upstream) | `eleven_flash_v2_5` |
+| Cartesia TTS | `sonic-3` | `sonic-3.5` |
+| OpenAI Realtime | `gpt-4o-realtime-preview` | `gpt-realtime-2.1` |
+
+**A call now ends when a service can no longer work** — Pipecat 1.8 stops using an STT, TTS or LLM after an unrecoverable failure (a rejected API key, an unknown model or voice, a connection that will not re-establish) rather than retrying per chunk. TurnCall ends the pipeline promptly instead of leaving the caller on a silent line until the idle timeout.
+
+## Bug fixes
+
+**Per-agent Deepgram config was ignored** — `stt.model` and `stt.language` were hardcoded to `nova-2` and `en` for the Deepgram provider, discarding whatever an agent specified. Both are now honored. If you run non-English agents on Deepgram, their configured language now actually takes effect — verify transcription quality after upgrading.
+
+</Update>
+
 <Update label="2026-07-11" description="July 11, 2026" tags={["Feature", "Update", "Fix"]}>
 
 ## New features
