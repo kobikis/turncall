@@ -17,13 +17,13 @@
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat" alt="MIT"></a>
     <a href="#"><img src="https://img.shields.io/badge/python-3.12+-blue?style=flat&logo=python&logoColor=white" alt="Python 3.12+"></a>
     <a href="https://github.com/kobikis/turncall/pkgs/container/turncall"><img src="https://img.shields.io/badge/ghcr.io-turncall-2496ED?style=flat&logo=docker&logoColor=white" alt="Container image"></a>
-    <a href="https://docs.turncall.io"><img src="https://img.shields.io/badge/docs-docs.turncall.io-0B7285?style=flat&logo=readthedocs&logoColor=white" alt="Docs"></a>
+    <a href="QUICKSTART.md"><img src="https://img.shields.io/badge/quickstart-10_min-0B7285?style=flat&logo=rocket&logoColor=white" alt="Quickstart"></a>
     <a href="https://github.com/kobikis/turncall/stargazers"><img src="https://img.shields.io/github/stars/kobikis/turncall?style=flat&color=yellow" alt="Stars"></a>
   </p>
 
   <p>
     <a href="#see-it">See it</a> ·
-    <a href="#quick-start">Quick start</a> ·
+    <a href="QUICKSTART.md">Quick start</a> ·
     <a href="#features">Features</a> ·
     <a href="#api">API</a> ·
     <a href="#architecture">Architecture</a> ·
@@ -314,7 +314,7 @@ See [examples/knowledge-base/](examples/knowledge-base/) for a complete setup de
 
 | Doc | Description |
 |-----|-------------|
-| [Quickstart](https://docs.turncall.io/quickstart) | Step-by-step setup |
+| [QUICKSTART.md](QUICKSTART.md) | Step-by-step setup — browser first, no phone number needed |
 | [Architecture](https://docs.turncall.io/architecture) | System design, pipeline, modules |
 | [API reference](https://docs.turncall.io/api-reference/overview) | Every endpoint |
 | [Providers](https://docs.turncall.io/guides/providers) | Choosing STT / LLM / TTS |
@@ -460,7 +460,7 @@ any extra flags through to its `setup.py` — see each example's README.
 | Component | Technology |
 |-----------|-----------|
 | Framework | FastAPI + Uvicorn |
-| Voice Pipeline | Pipecat 1.4 |
+| Voice Pipeline | Pipecat 1.8 |
 | Database | PostgreSQL + SQLAlchemy async + Alembic |
 | Cache | Redis |
 | Telephony | Twilio Voice + Media Streams |

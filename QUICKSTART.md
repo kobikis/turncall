@@ -85,7 +85,7 @@ make docker-up-local    # Postgres + Redis + TurnCall API (:8090), no LocalStack
 make migrate-local      # Creates database tables
 ```
 
-That's it — the API is live. Continue to step 4 to point Twilio at it.
+That's it — the API is live. Continue to step 4 to seed an agent.
 
 > **Which one you chose decides your container names.** The compose project is
 > named after its directory, so `make docker-up` gives you `localstack-turncall-1`
@@ -185,8 +185,9 @@ python examples/receptionist/setup.py \
   --server-url "https://xxxx.ngrok-free.app"
 ```
 
-Or re-run the seed script with the number set, which binds it to the same
-agent you already talked to:
+Or re-run the seed script with the number set. Note it creates a **new**
+project, key and agent and binds the number to that one — your browser client
+keeps pointing at the first agent, so save the newly printed values:
 
 ```bash
 TURNCALL_NUMBER=+15559876543 bash scripts/seed_dev.sh

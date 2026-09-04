@@ -26,7 +26,9 @@ fi
 PK="${PLATFORM_API_KEY:?Set PLATFORM_API_KEY (see env.example) — bootstrap endpoints require it}"
 
 # Extract a field from a {"success":true,"data":{...}} response body on stdin.
-json() { python -c "import sys,json;print(json.load(sys.stdin)$1)"; }
+# python3, not python: macOS 12.3+ and Ubuntu 20.04+ ship no bare `python`,
+# and the browser quickstart tells people they do not need Python at all.
+json() { python3 -c "import sys,json;print(json.load(sys.stdin)$1)"; }
 
 echo "→ creating project"
 PID=$(curl -fsS -X POST "$BASE/v1/projects" \
