@@ -1,0 +1,195 @@
+---
+title: Quickstart
+description: "Get TurnCall running in 5 minutes"
+icon: "rocket"
+---
+
+## Prerequisites
+
+- Python 3.12+
+- Docker (for Postgres + Redis)
+- Twilio account with a phone number
+- OpenAI API key (or Ollama for local LLM)
+- Deepgram API key (free at [console.deepgram.com](https://console.deepgram.com))
+- ngrok (for local development)
+
+## Setup
+
+<Steps>
+  <Step title="Clone and install">
+    ```bash
+    git clone https://github.com/kobikis/turncall.git
+    cd turncall
+    python -m venv .venv
+    source .venv/bin/activate
+    make dev
+    ```
+  </Step>
+  <Step title="Configure environment">
+    ```bash
+    cp env.example .env
+    ```
+
+    Edit `.env` with your credentials:
+
+    ```bash .env
+    DATABASE_URL=postgresql+asyncpg://turncall:turncall@localhost:5432/turncall
+    REDIS_URL=redis://localhost:6379/0
+    TWILIO_ACCOUNT_SID=ACxxxxxxxx
+    TWILIO_AUTH_TOKEN=xxxxxxxx
+    OPENAI_API_KEY=sk-xxxxxxxx
+    DEEPGRAM_API_KEY=xxxxxxxx
+    TURNCALL_NUMBER=+15559876543      # your Twilio number (used by example run.sh scripts)
+    TWILIO_PN_SID=PNxxxxxxxx          # its Phone Number SID
+    PUBLIC_BASE_URL=https://xxxx.ngrok.io   # public URL (fill in after the ngrok step)
+    ```
+
+    `PLATFORM_API_KEY` ships with a dev default (`dev-platform-key`) that gates
+    project and API-key creation — the examples read it automatically. Set a
+    strong unique value in production.
+  </Step>
+  <Step title="Start the stack">
+    ```bash
+    make docker-up    # Postgres + Redis + TurnCall API (:8090) + LocalStack
+    make migrate      # Create database tables
+    ```
+
+    The API is now serving on `http://localhost:8090`. To iterate on server
+    code with hot reload instead, stop the `turncall` container (both bind
+    `:8090`) and use `make run`.
+  </Step>
+  <Step title="Expose via ngrok">
+    ```bash
+    ngrok http 8090
+    # Copy the https://xxxx.ngrok.io URL
+    ```
+  </Step>
+  <Step title="Run the example">
+    ```bash
+    ./examples/receptionist/run.sh
+    ```
+
+    Every example ships a `run.sh` that reads `TURNCALL_NUMBER`, `TWILIO_PN_SID`,
+    and `PUBLIC_BASE_URL` from `.env` — or pass the flags yourself:
+
+    ```bash
+    python examples/receptionist/setup.py \
+      --twilio-number "+15559876543" \
+      --twilio-number-sid "PNxxxxxxxx" \
+      --server-url "https://xxxx.ngrok.io"
+    ```
+  </Step>
+  <Step title="Call your number">
+    The receptionist agent will answer, understand your intent, and route accordingly.
+  </Step>
+</Steps>
+
+## What You Just Built
+
+```mermaid
+flowchart LR
+    You["📞 You dial"] --> T["Twilio"]
+    T --> WH["TurnCall<br/>/webhooks/twilio/voice/inbound"]
+    WH --> DB[("Resolve agent<br/>+ create call")]
+    DB --> A["Pipecat pipeline<br/>STT → LLM → TTS"]
+    A -->|audio| You
+```
+
+Twilio opens a media-stream WebSocket to `/ws/media-stream`; the pipeline runs until you hang up, then the call is marked `completed`.
+
+## Manual Setup via API
+
+If you prefer to set things up step by step:
+
+### Create a project
+
+Project and first-API-key creation are gated by the platform credential —
+send `X-Platform-Key` matching your `PLATFORM_API_KEY`:
+
+```bash
+curl -X POST http://localhost:8090/v1/projects \
+  -H "X-Platform-Key: dev-platform-key" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-project"}'
+```
+
+### Create an API key
+
+```bash
+curl -X POST "http://localhost:8090/v1/api-keys?project_id=PROJECT_ID" \
+  -H "X-Platform-Key: dev-platform-key" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "dev-key", "role": "admin"}'
+# Save the raw_key from the response
+```
+
+### Create an agent
+
+```bash
+curl -X POST http://localhost:8090/v1/agents \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-agent",
+    "config": {
+      "system_prompt": "You are a helpful assistant.",
+      "first_message": "Hello! How can I help?",
+      "stt": {"provider": "deepgram", "model": "nova-3-general", "language": "en"},
+      "llm": {"provider": "openai", "model": "gpt-4o-mini", "temperature": 0.7, "max_tokens": 1024},
+      "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"}
+    }
+  }'
+```
+
+### Publish the agent
+
+```bash
+curl -X POST http://localhost:8090/v1/agents/AGENT_ID/publish \
+  -H "Authorization: Bearer tc_xxx"
+```
+
+### Bind a phone number
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "external_number_sid": "PNxxxxxxxx",
+    "e164_number": "+15559876543",
+    "routing_target_type": "agent",
+    "routing_target_id": "AGENT_ID"
+  }'
+```
+
+### Configure Twilio webhooks
+
+Set your Twilio number's webhook URLs:
+- **Voice URL**: `https://xxxx.ngrok.io/webhooks/twilio/voice/inbound` (POST)
+- **Status URL**: `https://xxxx.ngrok.io/webhooks/twilio/status` (POST)
+
+### Call your number
+
+That's it — call the number and talk to your agent.
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `REDIS_URL` | Yes | Redis connection string |
+| `TWILIO_ACCOUNT_SID` | Yes | Twilio account SID |
+| `TWILIO_AUTH_TOKEN` | Yes | Twilio auth token |
+| `OPENAI_API_KEY` | Yes* | OpenAI API key. *Not required if using Ollama |
+| `DEEPGRAM_API_KEY` | Yes | Deepgram API key |
+| `ELEVENLABS_API_KEY` | No | ElevenLabs API key |
+| `CARTESIA_API_KEY` | No | Cartesia API key |
+| `ANTHROPIC_API_KEY` | No | Anthropic API key (for Claude) |
+| `GOOGLE_API_KEY` | No | Google API key (for Gemini Live S2S) |
+| `OPENROUTER_API_KEY` | No | OpenRouter API key (multi-model + fallback routing) |
+| `HEYGEN_LIVE_AVATAR_API_KEY` | No | HeyGen video avatar (LiveAvatar key, app.liveavatar.com) |
+| `TAVUS_API_KEY` | No | Tavus video avatar (platform.tavus.io) |
+| `PUBLIC_BASE_URL` | No* | Public HTTPS base URL for Twilio callbacks (e.g. `https://abc.ngrok.io`). *Required for warm [call transfer](/guides/tools) and no-answer fallback. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OTLP collector for [OpenTelemetry traces](/guides/observability) (e.g. `http://localhost:4318`). Required for tracing in production. |
+
+See [Providers](/guides/providers) for provider-specific configuration and [Video Avatar](/guides/video-avatar) for avatars.

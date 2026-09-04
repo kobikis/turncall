@@ -1,0 +1,13 @@
+Acme Corp FAQ
+
+Q: What are your business hours?
+A: We are open Monday through Friday, 9am to 6pm Eastern Time.
+
+Q: What is your return policy?
+A: You can return any item within 30 days of purchase for a full refund.
+
+Q: How do I contact support?
+A: Email support@acmecorp.com or call 1-800-ACME-HELP.
+
+Q: Where are you located?
+A: Our headquarters is at 123 Innovation Drive, Austin, TX 78701.

@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /Users/kobikisos/PycharmProjects/turncall/.claude/scripts/hooks/session-start.js",
+            "description": "Inject skill routing rules and project context at session start"
+          }
+        ]
+      }
+    ]
+  }
+}

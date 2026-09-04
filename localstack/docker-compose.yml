@@ -1,0 +1,139 @@
+services:
+  localstack:
+    image: localstack/localstack:2026.05
+    hostname: localstack
+    environment:
+      # LocalStack 2026.x REQUIRES a valid auth token — even for community
+      # services like S3 the container exits 55 without one. Export a valid
+      # LOCALSTACK_AUTH_TOKEN (app.localstack.cloud) in your shell before
+      # `make docker-up`, or pin an older image (e.g. localstack:3) to run
+      # token-free.
+      - LOCALSTACK_AUTH_TOKEN
+      - DEBUG=s3
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - SERVICES=s3
+      - AWS_SECRET_ACCESS_KEY=123
+      - LOG_LEVEL=INFO
+    env_file:
+      - ./config/local_stack_env
+    ports:
+      - "4566:4566"
+    volumes:
+      - "${TMPDIR:-/tmp}/localstack:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./config:/tmp/config"
+      - "./run.sh:/etc/localstack/init/ready.d/run.sh"
+    networks:
+      - localstack_nw
+    healthcheck:
+      test: [ "CMD", "awslocal", "s3api", "wait", "bucket-exists", "--bucket", "call-recordings" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: turncall
+      POSTGRES_PASSWORD: turncall
+      POSTGRES_DB: turncall
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    depends_on:
+      localstack:
+        condition: service_healthy
+    networks:
+      - localstack_nw
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U turncall"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    depends_on:
+      localstack:
+        condition: service_healthy
+    networks:
+      - localstack_nw
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  turncall:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "8090:8090"
+    # Project-root .env supplies provider API keys (Twilio/OpenAI/Deepgram/...).
+    # The environment: block below overrides any infra URLs in .env so the
+    # container talks to the compose postgres/redis services, not localhost.
+    env_file:
+      - ../.env
+    environment:
+      TURNCALL_ENV: development
+      DATABASE_URL: postgresql+asyncpg://turncall:turncall@postgres:5432/turncall
+      REDIS_URL: redis://redis:6379/0
+      # Pin the API-key pepper here (not just .env) so it's STABLE across
+      # container recreations — if it drifts, every existing agent's key stops
+      # validating (peppered hash no longer matches). Dev-only value; set a real
+      # strong secret via .env for any non-local deployment.
+      API_KEY_HASH_SECRET: turncall-local-dev-pepper-do-not-change
+
+      # --- Storage: pick ONE of the three blocks below ---
+
+      # 1) Local filesystem (writes to the ../storage bind mount). No AWS at all.
+      # STORAGE_BACKEND: local
+      # LOCAL_STORAGE_PATH: /app/storage
+
+      # 2) LocalStack S3 (active) — fake AWS in the localstack container. The
+      # bucket is created by run.sh; AWS_ENDPOINT_URL_S3 redirects botocore
+      # (>=1.34) to LocalStack instead of real AWS. Any credentials work.
+      STORAGE_BACKEND: s3
+      S3_BUCKET_NAME: call-recordings
+      AWS_REGION: us-east-1
+      AWS_ENDPOINT_URL_S3: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+
+      # 3) Real AWS S3 — no endpoint override (botocore defaults to real AWS).
+      # Use a real bucket + real IAM credentials (prefer pulling these from
+      # ../.env rather than hardcoding here).
+      # STORAGE_BACKEND: s3
+      # S3_BUCKET_NAME: your-prod-bucket
+      # AWS_REGION: us-east-1
+      # AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      # AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+
+      PYTHONPATH: /app/src
+    volumes:
+      - ../src:/app/src
+      - ../storage:/app/storage
+    networks:
+      - localstack_nw
+    depends_on:
+      localstack:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+networks:
+  localstack_nw:
+    external: false
+    driver: bridge
+
+volumes:
+  pgdata:
+  redisdata:

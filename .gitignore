@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual env
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+# secrets — never commit. `.env*` catches .env, .env2, .env.local, .env.bak;
+# `*.env` catches prod.env. Templates are re-allowed explicitly.
+.env*
+*.env
+!.env.example
+!env.example
+
+# Storage (root only, not src/turncall/storage/)
+/storage/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Linting
+.ruff_cache/
+
+# Backups
+.claude_backup/
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+/examples/claude_patterns/
+
+docs/research

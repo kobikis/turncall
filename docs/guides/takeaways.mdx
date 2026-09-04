@@ -1,0 +1,82 @@
+---
+title: Takeaways
+description: "Reusable structured outputs extracted from every call"
+icon: "clipboard-check"
+---
+
+Takeaways turn finished conversations into validated JSON. Define a takeaway once — a name, a JSON Schema, optionally a custom prompt and model — attach it to any number of agents, and after each call an LLM fills the schema from the transcript. Results arrive inside `call.ended` and the analysis API.
+
+Use them for CSAT scores, lead qualification fields, booking details, follow-up flags — anything you'd otherwise parse out of transcripts by hand.
+
+## Create a takeaway
+
+```bash
+curl -X POST http://localhost:8090/v1/takeaways \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "csat",
+    "description": "Customer satisfaction, inferred from the conversation",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "score": {"type": "integer", "minimum": 1, "maximum": 5},
+        "reason": {"type": "string"}
+      },
+      "required": ["score"]
+    }
+  }'
+```
+
+The `name` keys the result in payloads, so it must be identifier-shaped (`csat`, `lead_quality`, `booking-details`) and is immutable after creation. The schema is validated at create time — a broken schema fails here, not after every call.
+
+Optional fields: `prompt` (extra extraction instructions) and `model` (per-takeaway LLM override — e.g. a cheap model for a boolean, a strong one for complex extraction).
+
+## Attach to agents
+
+Reference takeaways by id in the agent's analysis config:
+
+```json
+{
+  "analysis": {
+    "enabled": true,
+    "takeaway_ids": ["<csat-takeaway-uuid>", "<lead-quality-uuid>"]
+  }
+}
+```
+
+Multiple agents can attach the same takeaway; editing it in one place updates extraction everywhere.
+
+## Results
+
+Each attached takeaway is extracted in its own concurrent LLM call after the call ends (a few seconds, in the background). Results land keyed by name:
+
+```json
+// call.ended payload → analysis.takeaways
+{
+  "csat": {
+    "result": {"score": 4, "reason": "Issue resolved quickly"},
+    "valid": true,
+    "model": "gpt-4o-mini",
+    "duration_ms": 1240
+  }
+}
+```
+
+Also available via `GET /v1/calls/{call_id}/analysis`. Extracted JSON is validated against your schema (with one automatic retry on mismatch); a failed extraction is reported as `{"valid": false, "error": "..."}` rather than silently dropped — one bad takeaway never affects the others.
+
+## Manage
+
+```
+POST   /v1/takeaways          # Create
+GET    /v1/takeaways          # List
+GET    /v1/takeaways/{id}     # Get
+PUT    /v1/takeaways/{id}     # Update (schema/description/prompt/model — not name)
+DELETE /v1/takeaways/{id}     # Delete (409 while agents still attach it)
+```
+
+<Note>
+  The older inline `analysis.structured_extraction_schema` keeps working
+  (result at `analysis.structured_data`), but takeaways are the recommended
+  path — reusable, multiple per agent, independently validated.
+</Note>

@@ -1,0 +1,91 @@
+---
+title: Phone Numbers
+description: "Bind Twilio numbers to agents"
+icon: "phone"
+---
+
+Phone numbers connect your Twilio numbers to TurnCall agents. Each number can route to a specific agent or to a webhook for dynamic routing.
+
+## Bind a Phone Number
+
+### Static routing (to an agent)
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "external_number_sid": "PNxxxxxxxx",
+    "e164_number": "+15551234567",
+    "routing_target_type": "agent",
+    "routing_target_id": "AGENT_UUID"
+  }'
+```
+
+### Dynamic routing (server URL)
+
+Route calls to a webhook that decides which agent to use:
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "external_number_sid": "PNxxxxxxxx",
+    "e164_number": "+15551234567",
+    "routing_target_type": "webhook",
+    "server_url": "https://your-server.com/turncall-events"
+  }'
+```
+
+See [Call Init](/guides/call-init) for details on how dynamic routing works.
+
+Binding with a `server_url` returns a `server_url_secret` — TurnCall signs each call-init request with it so your endpoint can verify the source.
+
+## Update a Binding
+
+Re-route a number in place — the phone id and its `server_url_secret` stay stable, so a call-init endpoint keeps verifying with the same secret across edits:
+
+```bash
+curl -X PUT http://localhost:8090/v1/phone-numbers/PHONE_UUID \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "routing_target_type": "agent",
+    "routing_target_id": "OTHER_AGENT_UUID",
+    "sms_enabled": true
+  }'
+```
+
+A secret is minted only when `server_url` appears on a number that never had one; it is never rotated implicitly.
+
+## Configure Twilio
+
+After binding a number in TurnCall, set the Twilio webhook URLs:
+
+- **Voice URL**: `https://your-host/webhooks/twilio/voice/inbound` (POST)
+- **Status URL**: `https://your-host/webhooks/twilio/status` (POST)
+
+## SMS Support
+
+Enable SMS on a phone number to handle both voice calls and text messages:
+
+```json
+{
+  "sms_enabled": true
+}
+```
+
+When `sms_enabled: true` is set on bind, TurnCall auto-configures the Twilio SMS webhook. See [SMS / Chat](/guides/sms-chat) for details.
+
+## WhatsApp Support
+
+Enable WhatsApp on a phone number:
+
+```json
+{
+  "whatsapp_enabled": true
+}
+```
+
+See [WhatsApp](/guides/whatsapp) for full setup instructions.

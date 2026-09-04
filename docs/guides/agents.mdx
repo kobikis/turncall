@@ -1,0 +1,122 @@
+---
+title: Agents
+description: "Create and configure voice AI agents"
+icon: "robot"
+---
+
+Agents are the core unit in TurnCall. An agent defines the personality, voice, and capabilities of your AI assistant.
+
+## Create an Agent
+
+```bash
+curl -X POST http://localhost:8090/v1/agents \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "receptionist",
+    "config": {
+      "system_prompt": "You are a dental clinic receptionist...",
+      "first_message": "Thank you for calling! How can I help?",
+      "stt": {"provider": "deepgram", "model": "nova-3-general", "language": "en"},
+      "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+      "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"}
+    }
+  }'
+```
+
+## Agent Config
+
+```json
+{
+  "name": "receptionist",
+  "config": {
+    "system_prompt": "You are a helpful receptionist...",
+    "first_message": "Hello! How can I help?",
+    "stt": {"provider": "deepgram", "model": "nova-3-general", "language": "en"},
+    "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+    "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"},
+    "tools": [],
+    "mcp_servers": [],
+    "silence_timeout_ms": 800,
+    "interruption_enabled": true,
+    "smart_turn_detection": true,
+    "voicemail_detection": {
+      "enabled": true,
+      "voicemail_message": "Please call us back..."
+    },
+    "server_url": {
+      "url": "https://your-server.com/events",
+      "events": ["*"]
+    }
+  }
+}
+```
+
+## Template Variables
+
+Personalize agents per-call using `{{variable}}` placeholders:
+
+```json
+{
+  "system_prompt": "You are helping {{customer_name}}. Their account is {{account_id}}.",
+  "first_message": "Hello {{customer_name}}!"
+}
+```
+
+Variables are rendered at call start via [call-init](/guides/call-init) or the API. See [Server Events](/guides/server-events) for how to dynamically inject variables.
+
+## Pipeline Mode
+
+| Mode | Description | Latency |
+|------|-------------|---------|
+| `cascade` (default) | STT → LLM → TTS | ~800ms |
+| `s2s` | Speech-to-speech via single model | ~300ms |
+
+Set `pipeline_mode` in the agent config:
+
+```json
+{
+  "pipeline_mode": "s2s",
+  "s2s": {"provider": "openai", "voice": "alloy"}
+}
+```
+
+See [Speech-to-Speech](/guides/s2s) for details.
+
+## Voice Activity Detection
+
+TurnCall uses **Silero VAD** for barge-in (interruption handling) and **Smart Turn V3** (ML-based, local ONNX) for accurate end-of-turn detection.
+
+```json
+{
+  "interruption_enabled": true,
+  "smart_turn_detection": true,
+  "silence_timeout_ms": 800
+}
+```
+
+## Voicemail Detection
+
+For outbound calls, detect voicemail and leave a message:
+
+```json
+{
+  "voicemail_detection": {
+    "enabled": true,
+    "voicemail_message": "Hi, this is TurnCall. Please call us back at..."
+  }
+}
+```
+
+<Note>
+  Voicemail detection cannot be combined with `pipeline_mode: "s2s"`.
+</Note>
+
+## Delete an Agent
+
+```bash
+curl -X DELETE http://localhost:8090/v1/agents/AGENT_UUID \
+  -H "Authorization: Bearer tc_xxx"
+```
+
+Deleting archives the agent (any state): it stops answering calls and disappears from active use, while its call history, transcripts, and analyses remain queryable.

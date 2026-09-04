@@ -1,0 +1,36 @@
+name: Bug report
+description: Something isn't working
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you expected, and what you got instead.
+    validations: {required: true}
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Agent config (redact keys)...
+        2. Placed a call via Twilio / WebRTC / WhatsApp...
+        3. Observed...
+    validations: {required: true}
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options: [Twilio voice, WebRTC, WhatsApp voice, SMS/Chat, WhatsApp text, Not transport-specific]
+    validations: {required: true}
+  - type: input
+    id: version
+    attributes:
+      label: TurnCall version / commit
+    validations: {required: true}
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Redact API keys and phone numbers. This is a public issue.
+      render: shell

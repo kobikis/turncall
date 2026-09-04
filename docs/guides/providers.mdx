@@ -1,0 +1,123 @@
+---
+title: Providers
+description: "Configure STT, LLM, and TTS providers per agent"
+icon: "shuffle"
+---
+
+TurnCall supports multiple providers for each stage of the voice pipeline. Configure them per-agent.
+
+## Provider Matrix
+
+| Role | Providers |
+|------|-----------|
+| **STT** | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming) |
+| **LLM** | `openai` (default), `anthropic` (Claude), `ollama` (local), `custom_openai` (any OpenAI-compatible), `openrouter` (multi-model + fallback routing, voice only) |
+| **TTS** | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3, streaming, 60+ emotions) |
+| **S2S** | `openai` (Realtime API — optional `base_url` targets an OpenAI-Realtime gateway like Vercel AI Gateway / LiteLLM / xAI, e.g. Grok), `google` (Gemini Live) |
+
+## STT Configuration
+
+<CodeGroup>
+```json Deepgram (default)
+"stt": {"provider": "deepgram", "model": "nova-3-general", "language": "en"}
+```
+
+```json OpenAI Whisper
+"stt": {"provider": "openai", "model": "whisper-1"}
+```
+
+```json ElevenLabs Scribe
+"stt": {"provider": "elevenlabs"}
+```
+
+```json Cartesia Ink
+"stt": {"provider": "cartesia"}
+```
+</CodeGroup>
+
+## LLM Configuration
+
+<CodeGroup>
+```json OpenAI (default)
+"llm": {"provider": "openai", "model": "gpt-4o-mini"}
+```
+
+```json Anthropic Claude
+"llm": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
+```
+
+```json Ollama (local)
+"llm": {"provider": "ollama", "model": "gemma3:12b"}
+```
+
+```json Custom OpenAI-compatible
+"llm": {
+  "provider": "custom_openai",
+  "model": "meta-llama/Llama-3-70b",
+  "base_url": "https://api.together.xyz/v1",
+  "api_key": "your-key"
+}
+```
+
+```json OpenRouter (model fallback)
+"llm": {
+  "provider": "openrouter",
+  "model": "anthropic/claude-3.5-sonnet",
+  "fallback_models": ["openai/gpt-4o", "google/gemini-flash-1.5"]
+}
+```
+</CodeGroup>
+
+<Note>
+  **OpenRouter** routes through [openrouter.ai](https://openrouter.ai) with automatic failover — if the primary model rate-limits or errors mid-call, it falls over to the next model in `fallback_models`. Voice only (WebRTC / Twilio / WhatsApp voice); not supported on the SMS/Chat text path. The model that answered each turn is recorded on `transcript.final` events.
+</Note>
+
+### LLM Options
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `provider` | Yes | `openai`, `anthropic`, `ollama`, `custom_openai`, or `openrouter` |
+| `model` | Yes | Model name |
+| `base_url` | For `custom_openai` | OpenAI-compatible API base URL |
+| `api_key` | No | API key for `custom_openai` (masked in responses) |
+| `fallback_models` | For `openrouter` | Ordered list of fallback models (voice only) |
+| `temperature` | No | 0.0–2.0 (default: 0.7) |
+| `max_tokens` | No | 1–128000 (default: 1024) |
+
+## TTS Configuration
+
+<CodeGroup>
+```json Deepgram (default)
+"tts": {"provider": "deepgram", "voice": "aura-2-helena-en"}
+```
+
+```json OpenAI
+"tts": {"provider": "openai", "voice": "alloy"}
+```
+
+```json ElevenLabs
+"tts": {"provider": "elevenlabs", "voice": "rachel"}
+```
+
+```json Cartesia Sonic
+"tts": {"provider": "cartesia", "voice": "sonic-english-female"}
+```
+</CodeGroup>
+
+## Required API Keys
+
+| Provider | Environment Variable |
+|----------|---------------------|
+| Deepgram | `DEEPGRAM_API_KEY` |
+| OpenAI | `OPENAI_API_KEY` |
+| Anthropic | `ANTHROPIC_API_KEY` |
+| ElevenLabs | `ELEVENLABS_API_KEY` |
+| Cartesia | `CARTESIA_API_KEY` |
+| Google (Gemini) | `GOOGLE_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
+| HeyGen (video avatar) | `HEYGEN_LIVE_AVATAR_API_KEY` |
+| Tavus (video avatar) | `TAVUS_API_KEY` |
+
+<Info>
+  Ollama requires no API key — just install it locally and run `ollama pull <model>`.
+</Info>

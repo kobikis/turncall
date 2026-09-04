@@ -1,0 +1,319 @@
+{
+  "version": "2.0",
+  "description": "Skill activation rules - auto-generated from .claude/skills/",
+  "skills": [
+    {
+      "name": "python-patterns",
+      "type": "suggest",
+      "priority": "high",
+      "description": "Python principles, framework selection, async patterns, type hints",
+      "keywords": [
+        "python",
+        "framework",
+        "type hints",
+        "project structure"
+      ],
+      "intentPatterns": [
+        "(python|pythonic).*?(pattern|best practice|architecture)",
+        "(project|code).*?structure",
+        "type.*?hint"
+      ],
+      "filePaths": [
+        "**/*.py"
+      ],
+      "message": "Consider using the `python-patterns` skill for this task."
+    },
+    {
+      "name": "async-python-patterns",
+      "type": "suggest",
+      "priority": "high",
+      "description": "Asyncio, concurrent programming, async/await patterns",
+      "keywords": [
+        "async",
+        "await",
+        "asyncio",
+        "concurrent",
+        "httpx"
+      ],
+      "intentPatterns": [
+        "(async|await|asyncio).*?(pattern|convert|optimize)",
+        "(blocking|sync).*?(to async|convert)",
+        "concurrent.*?(programming|task)"
+      ],
+      "filePaths": [
+        "**/*async*.py",
+        "**/*concurrent*.py"
+      ],
+      "message": "Consider using the `async-python-patterns` skill for this task."
+    },
+    {
+      "name": "python-testing",
+      "type": "suggest",
+      "priority": "high",
+      "description": "Pytest, TDD, fixtures, mocking, parametrization, 80%+ coverage",
+      "keywords": [
+        "pytest",
+        "test",
+        "fixture",
+        "mock",
+        "coverage"
+      ],
+      "intentPatterns": [
+        "(test|testing).*?(python|pytest|coverage)",
+        "(fixture|mock|parametr).*?(test|setup)",
+        "coverage.*?(report|check|increase)"
+      ],
+      "filePaths": [
+        "**/tests/**/*.py",
+        "**/test_*.py",
+        "**/*_test.py"
+      ],
+      "message": "Consider using the `python-testing` skill for this task."
+    },
+    {
+      "name": "tdd-workflow",
+      "type": "suggest",
+      "priority": "high",
+      "description": "Test-first development, RED-GREEN-IMPROVE cycle",
+      "keywords": [
+        "tdd",
+        "test first",
+        "red green",
+        "test driven"
+      ],
+      "intentPatterns": [
+        "(tdd|test.driven).*?(develop|workflow|approach)",
+        "(write|create).*?test.*?first",
+        "red.*?green.*?refactor"
+      ],
+      "filePaths": [
+        "**/tests/**/*.py"
+      ],
+      "message": "Consider using the `tdd-workflow` skill for this task."
+    },
+    {
+      "name": "postgres-patterns",
+      "type": "suggest",
+      "priority": "high",
+      "description": "PostgreSQL optimization, schema design, indexing",
+      "keywords": [
+        "postgres",
+        "sql",
+        "schema",
+        "index",
+        "query optimization"
+      ],
+      "intentPatterns": [
+        "(postgres|postgresql|sql).*?(optimize|schema|index)",
+        "(query|database).*?(performance|slow|optimize)",
+        "(schema|migration).*?design"
+      ],
+      "filePaths": [
+        "**/models/**/*.py",
+        "**/migrations/**/*.py",
+        "**/*schema*.py"
+      ],
+      "message": "Consider using the `postgres-patterns` skill for this task."
+    },
+    {
+      "name": "docker-patterns",
+      "type": "suggest",
+      "priority": "high",
+      "description": "Docker, Docker Compose, container security, volumes",
+      "keywords": [
+        "docker",
+        "container",
+        "dockerfile",
+        "compose"
+      ],
+      "intentPatterns": [
+        "(docker|container).*?(build|optimize|secure)",
+        "dockerfile.*?(create|review|optimize)",
+        "(compose|multi.container).*?setup"
+      ],
+      "filePaths": [
+        "**/Dockerfile*",
+        "**/docker-compose*.yml",
+        "**/.dockerignore"
+      ],
+      "message": "Consider using the `docker-patterns` skill for this task."
+    },
+    {
+      "name": "deployment-patterns",
+      "type": "suggest",
+      "priority": "high",
+      "description": "CI/CD, containerization, health checks, rollback strategies",
+      "keywords": [
+        "deploy",
+        "ci/cd",
+        "health check",
+        "rollback",
+        "kubernetes"
+      ],
+      "intentPatterns": [
+        "(deploy|deployment).*?(pattern|strategy|pipeline)",
+        "(ci|cd|cicd).*?(pipeline|workflow|setup)",
+        "(health.*?check|readiness|liveness)"
+      ],
+      "filePaths": [
+        "**/.github/workflows/*.yml",
+        "**/k8s/**/*.yaml",
+        "**/helm/**/*"
+      ],
+      "message": "Consider using the `deployment-patterns` skill for this task."
+    },
+    {
+      "name": "security-review",
+      "type": "suggest",
+      "priority": "high",
+      "description": "Auth, secrets, API endpoints, security audit patterns",
+      "keywords": [
+        "security",
+        "auth",
+        "vulnerability",
+        "owasp",
+        "secrets"
+      ],
+      "intentPatterns": [
+        "(security|secure).*?(review|audit|scan)",
+        "(auth|authentication|authorization).*?(implement|review)",
+        "(vulnerability|owasp|injection).*?(check|prevent)"
+      ],
+      "filePaths": [
+        "**/auth/**/*.py",
+        "**/security/**/*.py",
+        "**/middleware/**/*.py"
+      ],
+      "message": "Consider using the `security-review` skill for this task."
+    },
+    {
+      "name": "design-doc-mermaid",
+      "type": "suggest",
+      "priority": "high",
+      "description": "Mermaid diagrams for architecture, sequence, deployment docs",
+      "keywords": [
+        "mermaid",
+        "diagram",
+        "architecture",
+        "sequence diagram"
+      ],
+      "intentPatterns": [
+        "(mermaid|diagram).*?(create|generate|design)",
+        "(architecture|sequence|deployment).*?diagram",
+        "(design.*?doc|technical.*?doc).*?(create|generate)"
+      ],
+      "filePaths": [
+        "**/*.md",
+        "**/docs/**/*"
+      ],
+      "message": "Consider using the `design-doc-mermaid` skill for this task."
+    },
+    {
+      "name": "perplexity-deep-search",
+      "type": "suggest",
+      "priority": "high",
+      "description": "Deep search via Perplexity API for research tasks",
+      "keywords": [
+        "search",
+        "research",
+        "perplexity",
+        "deep search"
+      ],
+      "intentPatterns": [
+        "(deep|thorough).*?search",
+        "(research|investigate).*?(topic|question)",
+        "perplexity.*?(search|api)"
+      ],
+      "filePaths": [],
+      "message": "Consider using the `perplexity-deep-search` skill for this task."
+    },
+    {
+      "name": "verification-loop",
+      "type": "suggest",
+      "priority": "high",
+      "description": "Comprehensive verification and validation system",
+      "keywords": [
+        "verify",
+        "validate",
+        "check",
+        "verification"
+      ],
+      "intentPatterns": [
+        "(verify|validate|check).*?(implementation|code|result)",
+        "verification.*?(loop|cycle|process)"
+      ],
+      "filePaths": [],
+      "message": "Consider using the `verification-loop` skill for this task."
+    },
+    {
+      "name": "strategic-compact",
+      "type": "suggest",
+      "priority": "high",
+      "description": "Manual context compaction at logical intervals",
+      "keywords": [
+        "compact",
+        "context",
+        "summarize"
+      ],
+      "intentPatterns": [
+        "(compact|compress).*?context",
+        "strategic.*?(compact|summary)"
+      ],
+      "filePaths": [],
+      "message": "Consider using the `strategic-compact` skill for this task."
+    },
+    {
+      "name": "skill-creator",
+      "type": "suggest",
+      "priority": "high",
+      "description": "Create new skills, modify and improve existing skills, and measure skill performance",
+      "keywords": [
+        "create skill",
+        "build skill",
+        "improve skill",
+        "optimize skill",
+        "skill creator",
+        "run evals"
+      ],
+      "intentPatterns": [
+        "(create|build|write|make).*?skill",
+        "(improve|optimize|iterate).*?skill",
+        "skill.*?(eval|benchmark|performance|test)"
+      ],
+      "filePaths": [
+        ".claude/skills/**/*"
+      ],
+      "message": "Consider using the `skill-creator` skill for this task."
+    },
+    {
+      "name": "pr-review",
+      "type": "suggest",
+      "priority": "high",
+      "description": "Reviews a GitHub PR diff for correctness, security, Python best practices, and test coverage",
+      "keywords": [
+        "pr review",
+        "pull request",
+        "code review",
+        "review pr",
+        "gh pr"
+      ],
+      "intentPatterns": [
+        "(review|check|analyze).*?(pr|pull.request)",
+        "pr.*?(review|feedback|comments)",
+        "(what.*?wrong|issues).*?(pr|pull.request)"
+      ],
+      "filePaths": [],
+      "message": "Consider using the `pr-review` skill for this task."
+    }
+  ],
+  "globalSettings": {
+    "enableSkillSuggestions": true,
+    "maxSuggestionsPerPrompt": 2,
+    "priorityOrder": [
+      "critical",
+      "high",
+      "medium",
+      "low"
+    ]
+  }
+}

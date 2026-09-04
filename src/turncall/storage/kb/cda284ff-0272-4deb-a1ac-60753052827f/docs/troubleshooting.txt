@@ -1,0 +1,25 @@
+Troubleshooting Guide
+
+## Widget Won't Connect
+1. Check that your API key is valid in Settings > API Keys
+2. Ensure your firewall allows outbound connections on port 443
+3. Try regenerating your API key
+4. If using a proxy, add *.acmewidget.com to your allowlist
+
+## Slow Performance
+1. Check your internet connection speed (minimum 10 Mbps recommended)
+2. Reduce the sync frequency in Settings > Sync
+3. Clear the local cache: Settings > Advanced > Clear Cache
+4. Contact support if issue persists after cache clear
+
+## Data Not Syncing
+1. Verify the source connection in Settings > Connections
+2. Check the sync log for errors: Dashboard > Logs
+3. Ensure the source data format matches the expected schema
+4. Try a manual sync: Dashboard > Sync Now
+
+## Billing Issues
+1. Check your payment method in Settings > Billing
+2. Ensure your card has not expired
+3. Contact billing@acmecorp.com for invoice questions
+4. Downgrade/upgrade plans at Settings > Subscription

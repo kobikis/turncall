@@ -1,0 +1,25 @@
+name: Feature proposal
+description: Discuss a feature before writing code
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please open this **before** submitting a feature PR. We'd rather agree on
+        the approach than have you spend a weekend on something we decline.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The problem, not the solution you have in mind.
+    validations: {required: true}
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+    validations: {required: true}
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Would you like to implement it?
+      options: [{label: I'm willing to open a PR if the approach is agreed}]

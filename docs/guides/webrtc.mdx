@@ -1,0 +1,59 @@
+---
+title: WebRTC
+description: "Browser-based voice calls"
+icon: "globe"
+---
+
+TurnCall supports browser-based voice calls via WebRTC using Pipecat's SmallWebRTCTransport. Audio flows peer-to-peer at 16kHz.
+
+## SDP Signaling
+
+### Connect
+
+Send an SDP offer and receive an answer:
+
+```bash
+curl -X POST http://localhost:8090/v1/webrtc/connect \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sdp": "v=0...",
+    "type": "offer",
+    "requestData": {
+      "agent_id": "AGENT_UUID"
+    }
+  }'
+```
+
+### ICE Trickle
+
+```bash
+curl -X PATCH http://localhost:8090/v1/webrtc/connect \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"candidate": "...", "sdpMid": "0", "sdpMLineIndex": 0}'
+```
+
+## Dynamic Routing
+
+Pass `server_url` in `requestData` for pre-call initialization:
+
+```json
+{
+  "sdp": "v=0...",
+  "type": "offer",
+  "requestData": {
+    "server_url": "https://your-server.com/turncall/init"
+  }
+}
+```
+
+See [Pre-Call Init](/guides/call-init) for response format.
+
+## Browser Client
+
+See the [examples/webrtc-client/](https://github.com/kobikis/turncall/tree/master/examples/webrtc-client) directory for a complete browser client using Pipecat JS SDK + WebRTC.
+
+## Video Avatar
+
+WebRTC cascade agents can add a lip-synced video avatar (HeyGen or Tavus). See [Video Avatar](/guides/video-avatar).

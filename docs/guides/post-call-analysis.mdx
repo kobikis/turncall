@@ -1,0 +1,133 @@
+---
+title: Post-Call Analysis
+description: "Automatic LLM-powered analysis after calls end"
+icon: "chart-bar"
+---
+
+TurnCall automatically analyzes calls after they end using LLM-powered analysis. Results include summaries, success evaluation, sentiment analysis, structured data extraction, and custom scoring.
+
+## Setup
+
+Add an `analysis` config to your agent:
+
+```json
+{
+  "analysis": {
+    "enabled": true,
+    "summary_enabled": true,
+    "summary_prompt": "Summarize in 2-3 sentences...",
+    "success_evaluation": {
+      "enabled": true,
+      "rubric": "Was the customer's issue resolved?",
+      "scale": "pass_fail"
+    },
+    "sentiment_enabled": true,
+    "structured_extraction_schema": {
+      "type": "object",
+      "properties": {
+        "customer_issue": {"type": "string"},
+        "resolution": {"type": "string"}
+      }
+    },
+    "scoring_rubric": {
+      "professionalism": {
+        "max_score": 10,
+        "description": "Was the agent professional?"
+      }
+    },
+    "model": "gpt-4o"
+  }
+}
+```
+
+## Analysis Options
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `true` | Enable/disable post-call analysis |
+| `summary_enabled` | `true` | Generate call summary |
+| `summary_prompt` | (auto) | Custom prompt for summary generation |
+| `success_evaluation.enabled` | `false` | Evaluate call success |
+| `success_evaluation.scale` | `pass_fail` | `pass_fail`, `likert` (1-5), or `numeric` (0-100) |
+| `success_evaluation.rubric` | (auto) | Criteria for success evaluation |
+| `sentiment_enabled` | `false` | Analyze customer sentiment |
+| `structured_extraction_schema` | `null` | JSON Schema for data extraction |
+| `scoring_rubric` | `null` | Custom scoring criteria |
+| `model` | (agent's LLM) | Override LLM model for analysis |
+
+## Event flow
+
+A single **`call.ended`** webhook fires once post-call processing finishes — after the recording is persisted and analysis completes (~2-5s). It carries everything inline: transcript, recording, `summary`, and the full `analysis`, plus `status`, a derived `ended_reason`, and any `metadata` you set at [call-init](/guides/call-init).
+
+There is no separate `analysis.completed` event — the analysis is part of the `call.ended` payload. If you need the results before the webhook, poll the [Get Analysis](#get-analysis) endpoint below.
+
+TurnCall gates `call.ended` on both the recording and the analysis being ready:
+
+1. Analysis runs first, in parallel with the recording upload that started when the call disconnected.
+2. TurnCall polls `recording_status` until it reaches `completed` or `failed` (or a 15-second timeout elapses).
+3. `call.ended` is dispatched once, with `recording_status` always included and `recording_url` included when present.
+
+`call.ended` always fires — even if the recording fails or the timeout trips, the webhook still goes out so subscribers can rely on it as the end-of-call signal. Use `recording_status` to tell "no recording" apart from "still pending":
+
+```json
+{
+  "event": "call.ended",
+  "project_id": "project-uuid",
+  "call_id": "call-uuid",
+  "session_id": null,
+  "agent_id": "agent-uuid",
+  "event_id": "event-uuid",
+  "timestamp": "2026-06-28T18:42:10.512+00:00",
+  "payload": {
+    "status": "completed",
+    "ended_reason": "customer_ended_call",
+    "duration_ms": 45000,
+    "transcript": [
+      {"role": "assistant", "text": "Hello!", "timestamp": "..."},
+      {"role": "customer", "text": "I need help with billing", "timestamp": "..."}
+    ],
+    "summary": "Customer asked about billing...",
+    "analysis": {},
+    "recording_status": "completed",
+    "recording_url": "https://storage.example.com/recordings/call-uuid.wav"
+  }
+}
+```
+
+Envelope identifiers live at the top level; event-specific data sits under `payload`. Use `event_id` as an idempotency key — it is stable across delivery retries and shared across subscribers, so you can dedupe redeliveries. `agent_id` reflects the agent that handled the event (handoff-aware). In the payload, `ended_reason` reports *why* the call ended — one of `customer_ended_call`, `assistant_ended_call`, `customer_did_not_answer`, `customer_busy`, `voicemail`, `transferred`, `pipeline_error`, `telephony_failed`, or `unknown` — and is more granular than the coarse `status`. `metadata` echoes back the custom fields you attached at [call-init](/guides/call-init) for CRM correlation.
+
+If you need the recording earlier than `call.ended`, subscribe to [`recording.ready`](/guides/server-events), which fires as soon as the file lands in storage.
+
+## Fetch a Recording
+
+Stream the WAV directly from TurnCall — useful when you don't want to expose your object-storage URLs to clients, or when the stored URL is presigned and short-lived:
+
+```bash
+curl http://localhost:8090/v1/calls/CALL_ID/recording \
+  -H "Authorization: Bearer tc_xxx" \
+  -o call.wav
+```
+
+Returns `404` until the recording is persisted (watch `recording_status` on `call.ended`, or subscribe to [`recording.ready`](/guides/server-events)).
+
+## Get Analysis
+
+```bash
+curl http://localhost:8090/v1/calls/CALL_ID/analysis \
+  -H "Authorization: Bearer tc_xxx"
+```
+
+Possible responses:
+
+```json
+{"status": "completed", "analysis": {...}}
+{"status": "pending"}
+{"status": "not_configured"}
+```
+
+## Re-run Analysis
+
+```bash
+curl -X POST http://localhost:8090/v1/calls/CALL_ID/analysis/rerun \
+  -H "Authorization: Bearer tc_xxx"
+```

@@ -1,0 +1,50 @@
+---
+title: Agent Versioning
+description: "Publish, promote, and rollback agent versions"
+icon: "code-branch"
+---
+
+TurnCall uses a linear version model with auto-promotion. Each published version is immutable — edit the draft, publish when ready.
+
+## Lifecycle
+
+```
+POST /agents → v1 (draft) → PUT /agents/v1 → POST /agents/v1/publish → v1 live
+POST /agents → v2 (draft) → POST /agents/v2/publish → v2 live, v1 auto-archived
+POST /agents/v1/rollback → v1 restored, v2 archived
+```
+
+## States
+
+| State | Description |
+|-------|-------------|
+| `draft` | Editable. Not yet live. |
+| `published` | Immutable. Active and serving calls. |
+| `archived` | Immutable. Previously published, auto-archived when a newer version is published. |
+
+## Publish
+
+Publishing a new version auto-archives the previous published version and auto-updates all phone numbers.
+
+```bash
+curl -X POST http://localhost:8090/v1/agents/AGENT_ID/publish \
+  -H "Authorization: Bearer tc_xxx"
+```
+
+## Version History
+
+```bash
+curl http://localhost:8090/v1/agents/AGENT_ID/versions \
+  -H "Authorization: Bearer tc_xxx"
+```
+
+## Rollback
+
+Restore a previously published version:
+
+```bash
+curl -X POST http://localhost:8090/v1/agents/OLD_VERSION_ID/rollback \
+  -H "Authorization: Bearer tc_xxx"
+```
+
+This restores the old version to `published`, archives the current version, and updates all phone number routing.

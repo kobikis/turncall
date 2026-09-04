@@ -1,0 +1,84 @@
+# Local-storage stack: postgres + redis + turncall, NO localstack.
+# Storage writes to the ../storage bind mount (STORAGE_BACKEND=local).
+# Run: cd localstack && docker compose -f docker-compose.local.yml up -d
+# (or `make docker-up-local`)
+#
+# ponytail: own project name isolates volumes/network/container names, but host
+# ports 5432/6379/8090 still clash if the localstack stack is also up — stop one
+# first, or remap ports here if you truly need both at once.
+name: turncall-local
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: turncall
+      POSTGRES_PASSWORD: turncall
+      POSTGRES_DB: turncall
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - turncall_nw
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U turncall"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    networks:
+      - turncall_nw
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  turncall:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "8090:8090"
+    # Project-root .env supplies provider API keys (Twilio/OpenAI/Deepgram/...).
+    # The environment: block below overrides infra URLs + forces local storage.
+    env_file:
+      - ../.env
+    environment:
+      TURNCALL_ENV: development
+      DATABASE_URL: postgresql+asyncpg://turncall:turncall@postgres:5432/turncall
+      REDIS_URL: redis://redis:6379/0
+      # Stable across recreations — see docker-compose.yml for why.
+      API_KEY_HASH_SECRET: turncall-local-dev-pepper-do-not-change
+
+      # Local filesystem storage — writes to the ../storage bind mount. No AWS.
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_PATH: /app/storage
+
+      PYTHONPATH: /app/src
+    volumes:
+      - ../src:/app/src
+      - ../storage:/app/storage
+    networks:
+      - turncall_nw
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+networks:
+  turncall_nw:
+    external: false
+    driver: bridge
+
+volumes:
+  pgdata:
+  redisdata:

@@ -1,0 +1,113 @@
+---
+title: Knowledge Base
+description: "Upload documents for retrieval-augmented generation (RAG)"
+icon: "book"
+---
+
+Give your agents access to documents for retrieval-augmented generation. TurnCall supports three retrieval modes so you can choose the right strategy for your use case.
+
+## Retrieval Modes
+
+| Mode | Behavior | Best For |
+|------|----------|----------|
+| `prompt` | Full document text injected into system prompt at call/chat start | Small docs (&lt;5KB): FAQs, company info |
+| `auto` | Per-turn semantic search via pgvector, context injected before LLM | Product catalogs, policies |
+| `tool` | LLM calls `query_knowledge` tool when it decides to search | Large tech docs, archives |
+
+## Setup
+
+<Steps>
+  <Step title="Create a knowledge base">
+    ```bash
+    curl -X POST http://localhost:8090/v1/knowledge-bases \
+      -H "Authorization: Bearer tc_xxx" \
+      -H "Content-Type: application/json" \
+      -d '{"name": "product-docs", "description": "Product documentation"}'
+    ```
+  </Step>
+  <Step title="Upload a document">
+    ```bash
+    curl -X POST http://localhost:8090/v1/knowledge-bases/KB_ID/documents \
+      -H "Authorization: Bearer tc_xxx" \
+      -F "file=@product-catalog.pdf"
+    ```
+
+    Supported file types: PDF, TXT, Markdown, DOCX, CSV, JSON, YAML, XML, TSV. Max 10 MB.
+  </Step>
+  <Step title="Link to an agent">
+    Choose the retrieval mode that fits your content:
+
+    <CodeGroup>
+    ```bash Prompt mode
+    curl -X POST http://localhost:8090/v1/agents/AGENT_ID/knowledge-bases \
+      -H "Authorization: Bearer tc_xxx" \
+      -H "Content-Type: application/json" \
+      -d '{"knowledge_base_id": "KB_ID", "mode": "prompt"}'
+    ```
+
+    ```bash Auto mode
+    curl -X POST http://localhost:8090/v1/agents/AGENT_ID/knowledge-bases \
+      -H "Authorization: Bearer tc_xxx" \
+      -H "Content-Type: application/json" \
+      -d '{"knowledge_base_id": "KB_ID", "mode": "auto", "top_k": 5}'
+    ```
+
+    ```bash Tool mode
+    curl -X POST http://localhost:8090/v1/agents/AGENT_ID/knowledge-bases \
+      -H "Authorization: Bearer tc_xxx" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "knowledge_base_id": "KB_ID",
+        "mode": "tool",
+        "tool_description": "Search product docs for specifications and pricing"
+      }'
+    ```
+    </CodeGroup>
+  </Step>
+</Steps>
+
+## Test Search
+
+Debug your knowledge base by running a test search:
+
+```bash
+curl -X POST http://localhost:8090/v1/knowledge-bases/KB_ID/search \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is the return policy?", "top_k": 3}'
+```
+
+## Configuration
+
+### Knowledge Base Settings
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `embedding_model` | `text-embedding-3-small` | OpenAI embedding model |
+| `chunk_size` | 512 | Tokens per chunk |
+| `chunk_overlap` | 64 | Overlap between chunks |
+
+### Link Settings
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `mode` | required | `prompt`, `auto`, or `tool` |
+| `priority` | 0 | Ordering when multiple KBs are linked |
+| `top_k` | 5 | Number of chunks to retrieve (auto/tool) |
+| `similarity_threshold` | 0.3 | Minimum cosine similarity (vector leg; calibrated for `text-embedding-3-*`) |
+| `tool_description` | — | Required for tool mode |
+
+## Architecture
+
+```
+Upload → Extract + Clean (PDF/TXT/DOCX) → Chunk (token-based) → Contextual Enrichment (LLM, best-effort) → Embed (OpenAI) → Store (pgvector + tsvector)
+
+Search: hybrid — vector KNN + Postgres full-text, fused by rank (RRF)
+
+Voice: transport.input → STT → user_agg → [KnowledgeRetrievalProcessor] → LLM → TTS
+Chat:  inbound message → session → [KB retrieval] → LLM completion → reply
+```
+
+<Info>
+  Requires PostgreSQL with the pgvector extension: `CREATE EXTENSION IF NOT EXISTS vector;`
+</Info>

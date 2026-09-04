@@ -1,0 +1,22 @@
+.venv
+.git
+.idea
+.vscode
+__pycache__
+*.pyc
+# Secrets. Same widened patterns as .gitignore: `.env.*` alone misses `.env2`.
+# The Dockerfile only COPYs named paths, so this is defence in depth — it stops
+# a stray env file entering the build context, and stops a future `COPY . .`
+# from turning that into a published leak.
+.env*
+*.env
+!.env.example
+!env.example
+storage/
+.pytest_cache
+.mypy_cache
+.coverage
+htmlcov
+.claude
+.claude_backup
+examples

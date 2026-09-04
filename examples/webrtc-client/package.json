@@ -1,0 +1,17 @@
+{
+  "name": "turncall-webrtc-client",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@pipecat-ai/client-js": "^1.7.0",
+    "@pipecat-ai/small-webrtc-transport": "^1.10.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}

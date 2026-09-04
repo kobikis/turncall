@@ -1,0 +1,88 @@
+---
+title: MCP Tools
+description: "Connect agents to MCP servers for auto-discovered tools"
+icon: "plug"
+---
+
+TurnCall supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io) for connecting agents to external tool servers. Tools are auto-discovered at call start via `tools/list` and registered alongside webhook and built-in tools.
+
+## Configuration
+
+Add `mcp_servers` to your agent config:
+
+```json
+{
+  "mcp_servers": [
+    {
+      "name": "crm-tools",
+      "transport": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {"Authorization": "Bearer ..."}
+    },
+    {
+      "name": "local-db",
+      "transport": "stdio",
+      "command": "python",
+      "args": ["mcp_server.py", "--stdio"]
+    }
+  ]
+}
+```
+
+## Transport Types
+
+| Transport | Config | Notes |
+|-----------|--------|-------|
+| `http` (default) | `url` + optional `headers` | Streamable HTTP (recommended) |
+| `sse` | `url` + optional `headers` | Server-Sent Events |
+| `stdio` | `command` + `args` + `env` | Local subprocess |
+
+## Server Config Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Unique server name (lowercase, alphanumeric) |
+| `transport` | No | `http` (default), `sse`, or `stdio` |
+| `url` | For http/sse | MCP server URL |
+| `headers` | No | Custom headers (e.g. Authorization) |
+| `command` | For stdio | Executable command |
+| `args` | No | Command arguments (stdio) |
+| `env` | No | Environment variables (stdio) |
+| `timeout_seconds` | No | Connection timeout (default: 10) |
+| `tool_filter` | No | Only expose these tools (null = all) |
+
+## How It Works
+
+<Steps>
+  <Step title="Call starts">
+    TurnCall connects to each configured MCP server.
+  </Step>
+  <Step title="Tool discovery">
+    Calls `tools/list` on each server to discover available tools.
+  </Step>
+  <Step title="Registration">
+    MCP tools are merged with webhook and built-in tools in the pipeline.
+  </Step>
+  <Step title="Execution">
+    When the LLM calls an MCP tool, TurnCall routes it through the MCP client.
+  </Step>
+  <Step title="Cleanup">
+    MCP sessions are cleaned up when the call ends.
+  </Step>
+</Steps>
+
+## stdio Transport
+
+<Warning>
+  stdio transport requires `MCP_STDIO_ENABLED=true` and the command must be listed in `MCP_STDIO_ALLOWED_COMMANDS`.
+</Warning>
+
+```json
+{
+  "name": "local-tools",
+  "transport": "stdio",
+  "command": "python",
+  "args": ["mcp_server.py", "--stdio"],
+  "env": {"DB_URL": "postgresql://..."}
+}
+```

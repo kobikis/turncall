@@ -1,0 +1,152 @@
+---
+title: Pre-Call Init
+description: "Dynamic agent resolution before the pipeline starts"
+icon: "play"
+---
+
+Pre-call initialization lets you dynamically select and configure the agent before a call starts. Works on all transports.
+
+## Supported Transports
+
+| Transport | Trigger | `call.type` value |
+|-----------|---------|-------------------|
+| Twilio voice | `routing_target_type: "webhook"` on phone number | `inboundPhoneCall` |
+| WhatsApp voice | `routing_target_type: "webhook"` on phone number | `inboundWhatsAppCall` |
+| WebRTC | `server_url` in POST /v1/webrtc/connect body | `webrtc` |
+
+## Setup
+
+### Phone numbers (Twilio / WhatsApp)
+
+Bind with `routing_target_type: "webhook"`:
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "e164_number": "+15551234567",
+    "external_number_sid": "PNxxx",
+    "routing_target_type": "webhook",
+    "server_url": "https://your-server.com/turncall/init"
+  }'
+```
+
+### WebRTC
+
+Pass `server_url` in `requestData`:
+
+```json
+POST /v1/webrtc/connect
+{
+  "sdp": "v=0...",
+  "type": "offer",
+  "requestData": {
+    "server_url": "https://your-server.com/turncall/init"
+  }
+}
+```
+
+## Your Server Receives
+
+```json
+{
+  "message": {
+    "type": "call-init",
+    "call": {
+      "id": "call-uuid",
+      "provider_call_id": "CA...",
+      "type": "inboundPhoneCall"
+    },
+    "phoneNumber": {"number": "+15551234567"},
+    "customer": {"number": "+15559876543"},
+    "timestamp": "2026-04-06T12:00:00Z"
+  }
+}
+```
+
+## Verify the Signature
+
+Each call-init request is HMAC-signed with the number's `server_url_secret` (returned when you [bind the number](/guides/phone-numbers)). Headers: `X-TurnCall-Signature: v1=<hex>` and `X-TurnCall-Timestamp`; the HMAC-SHA256 is computed over `"{timestamp}.{raw_body}"` — the same scheme as [event webhooks](/guides/server-events).
+
+```python
+import hashlib, hmac
+
+def verify(raw_body: str, sig: str, ts: str, secret: str) -> bool:
+    expected = "v1=" + hmac.new(
+        secret.encode(), f"{ts}.{raw_body}".encode(), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, sig)
+```
+
+Reject unverified requests — call-init decides which agent answers a real call.
+
+## Response Options
+
+<Tabs>
+  <Tab title="Agent ID">
+    ```json
+    {
+      "agent_id": "agent-uuid-here"
+    }
+    ```
+  </Tab>
+  <Tab title="Agent ID + Variables">
+    ```json
+    {
+      "agent_id": "agent-uuid-here",
+      "variables": {
+        "customer_name": "John Smith",
+        "account_id": "ACC-123"
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Inline Agent">
+    ```json
+    {
+      "agent": {
+        "system_prompt": "You are helping John Smith...",
+        "first_message": "Hello John!"
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Full Response">
+    ```json
+    {
+      "agent_id": "agent-uuid-here",
+      "variables": {"customer_name": "Jane", "tier": "enterprise"},
+      "metadata": {"crm_id": "C-789"},
+      "dynamic_data": {
+        "knowledge_context": "Customer has 2 open tickets: #101, #102."
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Response Fields
+
+| Field | Purpose |
+|-------|---------|
+| `agent_id` | Load existing agent by UUID |
+| `agent` | Inline agent config (alternative to `agent_id`) |
+| `variables` | Template variables rendered into `{{placeholders}}` in prompts |
+| `metadata` | Stored on call record for analytics |
+| `dynamic_data.knowledge_context` | Prepended to system prompt as runtime context |
+
+## What Happens
+
+<Steps>
+  <Step title="call.initializing webhook event fires (informational)" />
+  <Step title="Template {{variables}} are rendered into the system prompt" />
+  <Step title="knowledge_context is prepended to the system prompt" />
+  <Step title="metadata is stored on the call record" />
+  <Step title="call.started event fires" />
+  <Step title="Pipeline starts with the resolved configuration" />
+</Steps>
+
+<Tip>
+  For persistent, searchable knowledge, use the [Knowledge Base API](/guides/knowledge-base) instead of `knowledge_context`. Use `knowledge_context` for per-call dynamic data like CRM records or open tickets.
+</Tip>

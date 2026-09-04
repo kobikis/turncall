@@ -1,0 +1,73 @@
+---
+title: WhatsApp
+description: "Voice calls and text messages via WhatsApp Business"
+icon: "whatsapp"
+---
+
+TurnCall supports both voice calls and text messages via the WhatsApp Business Cloud API.
+
+## WhatsApp Text Flow
+
+```
+Customer messages WhatsApp number → Meta POSTs /webhooks/whatsapp
+  → validate X-Hub-Signature-256 → resolve phone → agent
+  → create/resume session (24h TTL) → build LLM history → chat completion
+  → send reply via WhatsApp Cloud API
+```
+
+## WhatsApp Voice Flow
+
+```
+Customer calls WhatsApp number → Meta POSTs /webhooks/whatsapp (field: "calls")
+  → validate signature → Pipecat WhatsAppClient handles WebRTC (SDP offer/answer)
+  → pre-accept + accept call via Cloud API → Pipecat pipeline (16kHz)
+  → on "terminate" event: cleanup
+```
+
+## Setup
+
+<Steps>
+  <Step title="Configure environment variables">
+    ```bash
+    WHATSAPP_TOKEN=your-access-token
+    WHATSAPP_PHONE_NUMBER_ID=your-phone-number-id
+    WHATSAPP_APP_SECRET=your-app-secret
+    WHATSAPP_WEBHOOK_VERIFY_TOKEN=your-verify-token
+    ```
+  </Step>
+  <Step title="Set up Meta webhook">
+    In the Meta Developer Console:
+    - **Callback URL**: `https://your-host/webhooks/whatsapp`
+    - **Verify Token**: must match `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
+    - **Subscribe to**: `messages` + `calls`
+  </Step>
+  <Step title="Enable WhatsApp on phone number">
+    ```bash
+    curl -X POST http://localhost:8090/v1/phone-numbers \
+      -H "Authorization: Bearer tc_xxx" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "external_number_sid": "PNxxx",
+        "e164_number": "+15551234567",
+        "whatsapp_enabled": true,
+        "routing_target_type": "agent",
+        "routing_target_id": "AGENT_ID"
+      }'
+    ```
+  </Step>
+</Steps>
+
+## Credentials
+
+Get these from the Meta Developer Console:
+
+| Variable | Where to Find |
+|----------|--------------|
+| `WHATSAPP_TOKEN` | WhatsApp > API Setup > Access Token |
+| `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp > API Setup > Phone Number ID |
+| `WHATSAPP_APP_SECRET` | App Settings > Basic > App Secret (32 hex chars) |
+| `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | Any string you choose |
+
+<Note>
+  The app must be in **live mode** for public access. Development mode requires test numbers.
+</Note>

@@ -1,0 +1,76 @@
+---
+title: Observability
+description: "OpenTelemetry tracing and pipeline observers for per-stage latency"
+icon: "chart-line"
+---
+
+TurnCall instruments every call with two complementary mechanisms, both **on by default**:
+
+- **Observers** — log per-call signals (user→bot latency, turn timing, LLM, transcription, startup). No external infrastructure; they just log.
+- **OpenTelemetry tracing** — emits a span tree per call (conversation → turn → STT/LLM/TTS) with TTFB and token counts, exported to any OTLP backend (Jaeger, Grafana Tempo, Datadog, Honeycomb, …).
+
+Both cover **cascade and S2S** calls. See [ADR-0010](https://github.com/kobikis/turncall/blob/master/adr/0010-otel-tracing-and-observers.md).
+
+## Tracing
+
+Each call becomes one trace whose `conversation_id` **is the `call_id`**, so a trace joins straight back to the call record. The span tree:
+
+```
+conversation (call_id)
+└── turn
+    ├── stt   (metrics.ttfb, gen_ai.system, model)
+    ├── llm   (metrics.ttfb, gen_ai.usage.input/output_tokens, model)
+    └── tts   (metrics.ttfb, character_count)
+```
+
+Span attributes also carry `turncall.project_id`, `turncall.agent_id`, `turncall.direction`, and `turncall.transport` — plus `turncall.from_number` / `turncall.to_number` unless you turn PII off (below).
+
+### Enable it
+
+Point TurnCall at an OTLP collector:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf      # or grpc
+OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer xxx   # if your backend needs auth
+```
+
+Then make a call and the spans appear in your backend.
+
+<Note>
+**Production requires an endpoint.** Tracing never falls back to console output in production — synchronous stdout writes would stall the realtime audio path. With no `OTEL_EXPORTER_OTLP_ENDPOINT` set in production, tracing self-disables with a warning. In development, tracing prints spans to the console when no endpoint is configured.
+</Note>
+
+## Observers
+
+The five observers log to the application logger on every call:
+
+| Observer | Logs |
+|---|---|
+| User↔bot latency | response latency (caller stops → bot starts) |
+| Turn tracking | turn boundaries and timing |
+| Startup timing | per-processor startup + transport readiness |
+| LLM | LLM activity and responses |
+| Transcription | speech-to-text events |
+
+They **supplement** the [server events](/guides/server-events) / webhook transcript stream (which is your *product* data) — observers are operational logging for debugging "why did that call feel slow?".
+
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `PIPECAT_ENABLE_OBSERVERS` | `true` | Toggle the five observers |
+| `PIPECAT_ENABLE_TRACING` | `true` | Toggle OTel tracing |
+| `PIPECAT_TRACE_INCLUDE_PII` | `true` | Put caller phone numbers (`from`/`to`) on spans. Set `false` for compliance-sensitive deployments — non-PII attributes stay. |
+| `PIPECAT_OTEL_SERVICE_NAME` | `turncall` | `service.name` in traces |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | (unset) | OTLP collector URL; required for tracing in production |
+
+## Local quick start
+
+Run a collector with a traces UI, then point TurnCall at it:
+
+```bash
+docker run -d --name jaeger -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one
+# TurnCall: OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+# make a call, then open http://localhost:16686
+```

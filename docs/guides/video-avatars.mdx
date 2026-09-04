@@ -1,0 +1,94 @@
+---
+title: Video avatars
+description: "Add a photorealistic video avatar to your agent with HeyGen or Tavus"
+icon: "user-tie"
+---
+
+Video avatars render your agent as a photorealistic talking head while audio flows through the normal cascade pipeline. The avatar sits between TTS and the user-facing transport, so video frames stay lip-synced to whatever voice you have configured.
+
+Use this when you are running a [WebRTC](/guides/webrtc) call and want a visual presence — for example, a kiosk, in-app assistant, or sales demo. Phone calls do not support avatars.
+
+## Providers
+
+| Provider | Latency | Resolution | When to use |
+|----------|---------|------------|-------------|
+| `heygen` | ~1s | 720p | Broad avatar library, established |
+| `tavus` | Under 600ms | 1080p | Lowest latency, highest fidelity |
+
+Both providers share the same configuration shape — switch between them by changing `provider`.
+
+## Configure an agent
+
+Add an `avatar` block to your agent config:
+
+<CodeGroup>
+```json HeyGen
+{
+  "config": {
+    "stt": {"provider": "deepgram"},
+    "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+    "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"},
+    "avatar": {
+      "enabled": true,
+      "provider": "heygen",
+      "avatar_id": "Anna_public_3_20240108",
+      "is_sandbox": true
+    }
+  }
+}
+```
+
+```json Tavus
+{
+  "config": {
+    "stt": {"provider": "deepgram"},
+    "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+    "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"},
+    "avatar": {
+      "enabled": true,
+      "provider": "tavus",
+      "replica_id": "r79e1c033f",
+      "persona_id": "pipecat-stream"
+    }
+  }
+}
+```
+</CodeGroup>
+
+## Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `enabled` | Yes | Set to `true` to attach the avatar. Defaults to `false` |
+| `provider` | Yes | `heygen` or `tavus` |
+| `avatar_id` | HeyGen only | HeyGen avatar identifier |
+| `is_sandbox` | HeyGen only | Use HeyGen's sandbox tier. Defaults to `true` |
+| `replica_id` | Tavus only | Tavus replica identifier |
+| `persona_id` | Tavus only | Tavus persona. Defaults to `pipecat-stream` |
+
+## API keys
+
+Set the key for your chosen provider in `.env`:
+
+| Provider | Environment variable |
+|----------|----------------------|
+| HeyGen | `HEYGEN_LIVE_AVATAR_API_KEY` |
+| Tavus | `TAVUS_API_KEY` |
+
+If the API key or required ID is missing at call start, the avatar is skipped and the call continues with audio only. Check the server logs to confirm the avatar attached successfully.
+
+## Receive the video stream
+
+Avatars only render over [WebRTC](/guides/webrtc). The video track is added to the same peer connection as audio, so you receive it automatically — just attach the remote stream's video track to a `<video>` element in your client.
+
+```js
+pc.ontrack = (event) => {
+  if (event.track.kind === "video") {
+    document.querySelector("video").srcObject = event.streams[0];
+  }
+};
+```
+
+<Note>
+  Tavus uses Daily internally to reach its rendering servers, and HeyGen uses LiveKit the same way. Neither changes the user-facing transport — your client still talks to TurnCall over SmallWebRTC.
+</Note>

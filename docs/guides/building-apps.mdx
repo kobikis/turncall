@@ -1,0 +1,54 @@
+---
+title: Building Apps on TurnCall
+description: "Patterns for apps that drive TurnCall — outbound dialers, inbound routers, text"
+icon: "wrench"
+---
+
+TurnCall is API-only: your app never touches audio. It tells TurnCall **which agent** handles a call and reacts to what happens. There are two directions, and every app is some mix of them:
+
+- **You → TurnCall** (REST): create agents, bind numbers, place outbound calls, control live calls.
+- **TurnCall → you** (HTTP callbacks): [webhooks](/guides/server-events) (fire-and-forget events) and [call-init](/guides/call-init) (synchronous — TurnCall asks your server which agent to use, mid-ring).
+
+## The logic seam
+
+Every app has exactly one spot that's **yours** — a decision the platform can't make. Keep your business logic there and let TurnCall own the call:
+
+| Pattern | The seam | TurnCall handles |
+|---|---|---|
+| **Outbound** (leads → call by logic) | which lead to call next | placing the call, the conversation, the outcome event |
+| **Inbound** (call → route by logic) | which agent answers (via call-init) | the ring, the agent, the call |
+| **Text** (SMS / Chat) | the agent prompt (and optional routing) | sessions, replies, history |
+
+## Outbound campaigns
+
+Your app holds leads and decides who to call; TurnCall places the call and reports back.
+
+1. Publish an agent and bind an outbound number (`routing_target_type: "agent"`).
+2. For each lead: `POST /v1/calls/outbound` with `to_number`, `from_number_id` (the bound number's id), and `metadata` (e.g. your `lead_id`, echoed back).
+3. React to the [`call.ended`](/guides/post-call-analysis) webhook — branch on `ended_reason` (answered, voicemail, busy, …) and `analysis` to set the disposition and schedule retries.
+
+Cap in-flight calls, dedupe on `event_id`, and keep compliance (consent, DNC, calling hours) in your lead-selection logic.
+
+## Inbound routing
+
+Decide which agent answers, per call, from live context.
+
+- **By logic:** bind the number with `routing_target_type: "webhook"` and a `server_url`. TurnCall POSTs [call-init](/guides/call-init) before selecting the agent and uses the `agent_id` (plus optional `variables`/`metadata`) you return. Answer within ~5s and always return a usable default.
+- **Static split:** if "by logic" is just an A/B/% split, skip the webhook and use [weighted routing](/guides/ab-testing) (`PUT /v1/phone-numbers/{id}/routing`).
+
+## Text (SMS / Chat)
+
+Same agents, no audio. Bind a number with `sms_enabled: true` and TurnCall runs the SMS conversation for you (observe via `session.*` / `chat.created` webhooks), or drive an in-app chat yourself with `POST /v1/chat`. See [SMS / Chat](/guides/sms-chat).
+
+## The builder skill
+
+There's a [Claude Code](https://claude.com/claude-code) plugin that encodes these patterns — install it and Claude wires the integration correctly (endpoints, webhooks, call-init, and where your logic plugs in). It carries a curated API reference and a snapshot of the OpenAPI spec, and is **model-invoked** — it fires on its own when you're working with TurnCall.
+
+Install it from the **turncall-skill** marketplace:
+
+```
+/plugin marketplace add kobikis/turncall-skill
+/plugin install turncall@turncall-skill
+```
+
+Or copy `skills/turncall/` from that repo into your project's `.claude/skills/`.

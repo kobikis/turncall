@@ -1,0 +1,238 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "maple",
+  "name": "TurnCall",
+  "colors": {
+    "primary": "#E87B35",
+    "light": "#F5A623",
+    "dark": "#D46A2E"
+  },
+  "favicon": "/logo/favicon.svg",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/building-apps",
+              "guides/agents",
+              "guides/phone-numbers",
+              "guides/providers",
+              "guides/s2s",
+              "guides/tools",
+              "guides/mcp",
+              "guides/knowledge-base",
+              "guides/server-events",
+              "guides/call-init",
+              "guides/agent-versioning",
+              "guides/ab-testing",
+              "guides/takeaways",
+              "guides/post-call-analysis",
+              "guides/observability",
+              "guides/sms-chat",
+              "guides/whatsapp",
+              "guides/webrtc",
+              "guides/video-avatar"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Changelog",
+        "groups": [
+          {
+            "group": "Changelog",
+            "pages": [
+              "changelog"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "openapi": "openapi.json",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api-reference/overview"
+            ]
+          },
+          {
+            "group": "Projects",
+            "pages": [
+              "POST /v1/projects",
+              "GET /v1/projects/{project_id}"
+            ]
+          },
+          {
+            "group": "API Keys",
+            "pages": [
+              "POST /v1/api-keys",
+              "GET /v1/api-keys",
+              "DELETE /v1/api-keys/{api_key_id}"
+            ]
+          },
+          {
+            "group": "Agents",
+            "pages": [
+              "POST /v1/agents",
+              "GET /v1/agents",
+              "GET /v1/agents/{agent_id}",
+              "PUT /v1/agents/{agent_id}",
+              "DELETE /v1/agents/{agent_id}",
+              "POST /v1/agents/{agent_id}/publish",
+              "GET /v1/agents/{agent_id}/versions",
+              "POST /v1/agents/{agent_id}/rollback",
+              "POST /v1/agents/{agent_id}/knowledge-bases",
+              "GET /v1/agents/{agent_id}/knowledge-bases",
+              "DELETE /v1/agents/{agent_id}/knowledge-bases/{kb_id}"
+            ]
+          },
+          {
+            "group": "Phone Numbers",
+            "pages": [
+              "POST /v1/phone-numbers",
+              "GET /v1/phone-numbers",
+              "GET /v1/phone-numbers/{phone_number_id}",
+              "PUT /v1/phone-numbers/{phone_number_id}",
+              "DELETE /v1/phone-numbers/{phone_number_id}",
+              "PUT /v1/phone-numbers/{phone_number_id}/routing",
+              "GET /v1/phone-numbers/{phone_number_id}/routing",
+              "DELETE /v1/phone-numbers/{phone_number_id}/routing"
+            ]
+          },
+          {
+            "group": "Calls",
+            "pages": [
+              "POST /v1/calls/outbound",
+              "GET /v1/calls",
+              "GET /v1/calls/{call_id}",
+              "GET /v1/calls/{call_id}/events",
+              "GET /v1/calls/{call_id}/transcript",
+              "GET /v1/calls/{call_id}/recording",
+              "GET /v1/calls/{call_id}/analysis",
+              "POST /v1/calls/{call_id}/analysis/rerun"
+            ]
+          },
+          {
+            "group": "Call Control",
+            "pages": [
+              "POST /v1/calls/{call_id}/end",
+              "POST /v1/calls/{call_id}/transfer",
+              "POST /v1/calls/{call_id}/handoff",
+              "POST /v1/calls/{call_id}/dtmf",
+              "POST /v1/calls/{call_id}/messages"
+            ]
+          },
+          {
+            "group": "Chat",
+            "pages": [
+              "POST /v1/chat",
+              "GET /v1/chat/sessions",
+              "GET /v1/chat/sessions/{session_id}",
+              "DELETE /v1/chat/sessions/{session_id}",
+              "GET /v1/chat/sessions/{session_id}/messages"
+            ]
+          },
+          {
+            "group": "Knowledge Bases",
+            "pages": [
+              "POST /v1/knowledge-bases",
+              "GET /v1/knowledge-bases",
+              "GET /v1/knowledge-bases/{kb_id}",
+              "PUT /v1/knowledge-bases/{kb_id}",
+              "DELETE /v1/knowledge-bases/{kb_id}",
+              "POST /v1/knowledge-bases/{kb_id}/documents",
+              "GET /v1/knowledge-bases/{kb_id}/documents",
+              "GET /v1/knowledge-bases/{kb_id}/documents/{doc_id}",
+              "DELETE /v1/knowledge-bases/{kb_id}/documents/{doc_id}",
+              "POST /v1/knowledge-bases/{kb_id}/search"
+            ]
+          },
+          {
+            "group": "Takeaways",
+            "pages": [
+              "POST /v1/takeaways",
+              "GET /v1/takeaways",
+              "GET /v1/takeaways/{takeaway_id}",
+              "PUT /v1/takeaways/{takeaway_id}",
+              "DELETE /v1/takeaways/{takeaway_id}"
+            ]
+          },
+          {
+            "group": "Tools",
+            "pages": [
+              "POST /v1/tools",
+              "GET /v1/tools/invocations/{call_id}"
+            ]
+          },
+          {
+            "group": "Webhooks",
+            "pages": [
+              "POST /v1/webhooks",
+              "GET /v1/webhooks",
+              "DELETE /v1/webhooks/{webhook_id}"
+            ]
+          },
+          {
+            "group": "WebRTC",
+            "pages": [
+              "POST /v1/webrtc/connect",
+              "PATCH /v1/webrtc/connect"
+            ]
+          },
+          {
+            "group": "Health",
+            "pages": [
+              "GET /health",
+              "GET /ready",
+              "GET /live"
+            ]
+          }
+        ]
+      }
+    ],
+    "global": {
+      "anchors": [
+        {
+          "anchor": "GitHub",
+          "href": "https://github.com/kobikis/turncall",
+          "icon": "github"
+        }
+      ]
+    }
+  },
+  "logo": {
+    "light": "/logo/wordmark.svg",
+    "dark": "/logo/wordmark.svg"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/kobikis/turncall"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Get Started",
+      "href": "/quickstart"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/kobikis/turncall"
+    }
+  }
+}

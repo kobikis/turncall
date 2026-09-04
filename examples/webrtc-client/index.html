@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TurnCall WebRTC Client</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: system-ui, sans-serif; background: #f8fafc; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+        .container { background: white; border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.1); padding: 32px; width: 420px; }
+        h1 { font-size: 24px; margin-bottom: 4px; }
+        .subtitle { color: #64748b; font-size: 14px; margin-bottom: 24px; }
+        .field { margin-bottom: 16px; }
+        .field label { display: block; font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 4px; }
+        .field input { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; }
+        .field input:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
+        .buttons { display: flex; gap: 8px; margin-top: 20px; }
+        button { flex: 1; padding: 12px; font-size: 15px; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; transition: opacity 0.2s; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        #startBtn { background: #22c55e; color: white; }
+        #stopBtn { background: #ef4444; color: white; }
+        #status { margin-top: 16px; padding: 12px; border-radius: 8px; background: #f1f5f9; font-size: 13px; color: #475569; text-align: center; }
+        .connected { background: #dcfce7 !important; color: #166534 !important; }
+        .error { background: #fef2f2 !important; color: #991b1b !important; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>TurnCall</h1>
+        <p class="subtitle">Browser voice assistant via WebRTC</p>
+
+        <div class="field">
+            <label>Server URL</label>
+            <input type="text" id="serverUrl" value="http://localhost:8090" />
+        </div>
+        <div class="field">
+            <label>API Key</label>
+            <input type="text" id="apiKey" placeholder="vk_..." />
+        </div>
+        <div class="field">
+            <label>Agent ID</label>
+            <input type="text" id="assistantId" placeholder="paste agent UUID" />
+        </div>
+
+        <div class="buttons">
+            <button id="startBtn" onclick="start()">Start Call</button>
+            <button id="stopBtn" onclick="stop()" disabled>End Call</button>
+        </div>
+
+        <div id="status">Ready</div>
+
+        <video id="avatar" autoplay playsinline style="display:none;width:100%;border-radius:8px;margin-top:16px;"></video>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>

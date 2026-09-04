@@ -1,0 +1,52 @@
+---
+title: A/B Testing
+description: "Weighted traffic routing on phone numbers"
+icon: "flask"
+---
+
+Split traffic between agent versions to test performance. Routing is deterministic by caller number (SHA256 hash) — the same caller always gets the same variant.
+
+## Set Weights
+
+Weights must sum to 100:
+
+```bash
+curl -X PUT http://localhost:8090/v1/phone-numbers/PHONE_ID/routing \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "weights": [
+      {"agent_id": "agent-v1-uuid", "weight": 80},
+      {"agent_id": "agent-v2-uuid", "weight": 20}
+    ]
+  }'
+```
+
+## Check Routing
+
+```bash
+curl http://localhost:8090/v1/phone-numbers/PHONE_ID/routing \
+  -H "Authorization: Bearer tc_xxx"
+```
+
+Response:
+
+```json
+{"mode": "weighted", "weights": [...]}
+```
+
+## Clear Test
+
+Revert to single-agent routing:
+
+```bash
+curl -X DELETE http://localhost:8090/v1/phone-numbers/PHONE_ID/routing \
+  -H "Authorization: Bearer tc_xxx"
+```
+
+## How It Works
+
+1. Inbound call arrives on a phone number with weighted routing
+2. TurnCall hashes the caller's phone number (SHA256)
+3. The hash determines which agent variant handles the call
+4. Same caller always gets the same variant (deterministic)

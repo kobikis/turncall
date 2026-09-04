@@ -1,0 +1,256 @@
+---
+title: Changelog
+description: "Latest updates and improvements to TurnCall"
+---
+
+<Update label="2026-07-11" description="July 11, 2026" tags={["Feature", "Update", "Fix"]}>
+
+## New features
+
+**Temperature and max tokens on voice calls** — `llm.temperature` and `llm.max_tokens` were accepted in agent config (and honored on chat/SMS) but silently ignored by the voice pipeline; they now apply to every cascade voice call across all LLM providers (OpenAI, Anthropic, Ollama, custom endpoints, OpenRouter). S2S agents gain the same knobs on the `s2s` block: `s2s.max_tokens` on both providers, `s2s.temperature` on Gemini Live (the OpenAI Realtime GA API has no temperature control — setting it there returns a clear validation error instead of being silently dropped). The voicemail classifier stays pinned to a deterministic low temperature regardless of agent settings.
+
+**Platform credential for bootstrap** — Project creation and first-API-key creation (`POST /v1/projects`, `POST /v1/api-keys`) are now gated behind a single privileged credential: the `X-Platform-Key` header must match the server's `PLATFORM_API_KEY`. The gate fails closed — unset means every bootstrap call is rejected — so anonymous callers can no longer mint projects on an exposed deployment. Everything after bootstrap keeps using project-scoped `tc_...` keys. `env.example` ships a dev default (`dev-platform-key`); set a strong unique value in production.
+
+**One-command example launchers** — Every example now ships a `run.sh`: it reads the shared values (`TURNCALL_NUMBER`, `TWILIO_PN_SID`, `PUBLIC_BASE_URL`) from `.env`, names exactly what's missing if unset, and passes extra flags through to the example's `setup.py`. The seed script and all examples also send the new platform credential automatically.
+
+**Prohibited topics enforced** — `guardrails.prohibited_topics` is now compiled into the system prompt with refusal instructions, so listed topics are actually declined instead of being config-only metadata.
+
+**Knowledge injection for voice prompt mode** — Knowledge bases attached in `prompt` mode now inject their document text into the system prompt on voice calls too (previously chat-only), and agents with any knowledge attachment get a hint that they have a knowledge base, reducing "I don't have access to that" refusals.
+
+## Bug fixes
+
+**S2S calls now produce transcripts** — Speech-to-speech pipelines (OpenAI Realtime, Gemini Live) were not persisting conversation transcripts; they are now captured to the call record and `transcript.final` events like cascade calls.
+
+**WebRTC calls finalized as FAILED on pipeline build errors** — A WebRTC call whose pipeline failed to build was left dangling in `in_progress`; it now finalizes as `FAILED` with a proper `call.ended`.
+
+**Validation errors return 422, not 500** — Request bodies that failed `model_validator` checks surfaced as generic 500s; they now return 422 with the validation detail.
+
+</Update>
+
+<Update label="2026-07-08" description="July 8, 2026" tags={["Feature", "Update", "Fix"]}>
+
+## New features
+
+**Speech-to-Speech via gateways (Grok, and more)** — The `openai` S2S provider now takes an optional `s2s.base_url` pointing at any OpenAI-Realtime-compatible gateway ([Vercel AI Gateway](https://vercel.com/docs/ai-gateway), [LiteLLM](https://docs.litellm.ai/)) or xAI direct. Provider-prefixed realtime models like `xai/grok-voice-think-fast-1.0` and `openai/gpt-realtime-2` then stream over the same WebSocket protocol — no new provider, same low-latency pipeline. The endpoint is SSRF-gated by `BYOM_ALLOWED_URL_PATTERNS`, and a gateway `base_url` lifts the OpenAI voice allowlist so third-party voices pass through. See the [Speech-to-Speech guide](/guides/s2s#gateways-and-third-party-models).
+
+## Updates
+
+**Voice pipeline upgraded to Pipecat 1.5** — Under-the-hood upgrade of the real-time voice engine, bringing upstream latency and resource-teardown fixes. Fully backward compatible — no config or agent changes required.
+
+## Bug fixes
+
+**Gemini Live default model refreshed** — The Speech-to-Speech example and docs now default the `google` provider to `models/gemini-3.1-flash-live-preview`; the previous `gemini-2.5-flash-native-audio-preview` is on Google's deprecation schedule. Gemini voices are no longer allowlisted — its native-audio voice set grows per model, so any voice is accepted and Gemini validates it on connect.
+
+**Agents no longer read markdown aloud** — Language models sometimes format replies with markdown (`**bold**`, `` `code` ``, `# headings`), which text-to-speech would voice literally ("asterisk asterisk"). Markdown symbols are now stripped before speech across every TTS provider (Deepgram, ElevenLabs, OpenAI, Cartesia), so agents speak the words, not the punctuation.
+
+</Update>
+
+<Update label="2026-07-06" description="Week of July 6" tags={["Feature", "Update", "Fix"]}>
+
+## New features
+
+**Takeaways — reusable structured outputs** — Define a named JSON schema once (optionally with a custom prompt and model), attach it to any agents via `analysis.takeaway_ids`, and every call ends with validated JSON extracted from the conversation — CSAT scores, lead fields, booking details. Each takeaway runs as its own concurrent extraction (one failure never affects the others), results are schema-validated with automatic retry, and land keyed by name in `call.ended` under `analysis.takeaways` and in the [analysis API](/guides/post-call-analysis). CRUD at `/v1/takeaways`. See the [takeaways guide](/guides/takeaways).
+
+**Hybrid knowledge retrieval** — [Knowledge base](/guides/knowledge-base) search now combines vector similarity with Postgres full-text search, fused by rank (RRF). Exact-term questions against record-like documents ("what is the flight date?", reservation codes) hit reliably even where embeddings under-score; retrieval degrades to lexical-only if embedding generation fails. One migration adds the index.
+
+**Contextual chunk enrichment** — At ingest, each chunk is prefixed with an LLM-written sentence situating it in its document (filename, what this part covers, key entities), improving retrieval on multi-document knowledge bases. Best-effort: failures fall back to a filename prefix and never block an upload.
+
+**`GET /v1/calls/{id}/recording`** — Fetch a call's recorded WAV directly from the API. The endpoint streams the audio from object storage, so you can download or embed a recording without minting a signed URL yourself.
+
+## Updates
+
+**PDF extraction cleanup** — Web pages saved as PDF no longer drown retrieval in navigation links, session URLs, and repeated page headers; the noise is stripped at extraction.
+
+**Smarter voice retrieval queries** — Auto-mode retrieval now windows the query over the previous user turn and the agent's last reply, so follow-ups like "and what time?" carry the entities they refer to.
+
+## Bug fixes
+
+**`duration_ms` missing when the agent ended the call** — Calls ended by the `end_call` [tool](/guides/tools) could finalize with a null `duration_ms`. Duration is now stamped on every end path, so `call.ended` and the call record always carry it.
+
+**Agent-spoken lines missing from transcripts** — The agent's `first_message`, voicemail message, and transfer messages are spoken directly (not through the LLM turn), and were absent from the stored transcript and `transcript.final` webhooks. All directly-spoken utterances now appear in the transcript alongside conversational turns.
+
+**Transcript speaker field always null** — On `transcript.final` events derived from finalized speech, the speaker field was populated from the wrong source and came through as null. It now correctly reports `role` (`customer` / `assistant`).
+
+</Update>
+
+<Update label="2026-07-04" description="Week of June 30" tags={["Feature"]}>
+
+## New features
+
+**Signed tool webhooks** — Custom webhook tools can now set a `webhook_secret`; when present, TurnCall HMAC-signs each tool POST with `X-TurnCall-Signature` / `X-TurnCall-Timestamp` using the same `v1=` scheme as [event webhooks](/guides/server-events), so your endpoint can verify the call really came from TurnCall. Unset = unsigned, fully backward compatible.
+
+**`PUT /v1/phone-numbers/{id}`** — Update a number's routing, `server_url`, or `sms_enabled` in place. The phone id and its call-init `server_url_secret` stay stable across edits — no more unbind/rebind rotating the secret your [call-init](/guides/call-init) endpoint verifies with.
+
+**`DELETE /v1/agents/{id}`** — Delete (archive) an agent. Call history, transcripts, and analyses remain queryable.
+
+## Updates
+
+**Knowledge retrieval default threshold 0.7 → 0.3** — The default `similarity_threshold` for [knowledge base](/guides/knowledge-base) search and agent attachments was calibrated for older embedding models. `text-embedding-3-small` (the default) scores related content in the 0.3–0.5 range, so the 0.7 default filtered out everything. Existing attachments keep their stored threshold — re-link (or set `similarity_threshold` explicitly) to pick up the new default.
+
+</Update>
+
+<Update label="2026-07-01" description="Week of June 30" tags={["Fix"]}>
+
+## Bug fixes
+
+**Calls stuck `in_progress` after caller hangup** — When a caller ended the call (hanging up on Twilio, closing the tab on [WebRTC](/guides/webrtc), or ending a [WhatsApp](/guides/whatsapp) session), the call could stay at `status=in_progress` with no `ended_at`, `duration_ms`, or [post-call analysis](/guides/post-call-analysis), and the `call.ended` webhook never fired. Caller-initiated hangups now finalize the call on every transport and deliver `call.ended` exactly once, whether the call ends via the caller, the `end_call` tool, or a Twilio status callback.
+
+</Update>
+
+<Update label="2026-06-29" description="Week of June 29" tags={["Feature"]}>
+
+## New features
+
+**OpenTelemetry tracing & pipeline observers** — Every call is now instrumented for per-stage latency. [Tracing](/guides/observability) emits a span tree (conversation → turn → STT/LLM/TTS, with TTFB and token counts) to any OTLP backend (Jaeger, Grafana Tempo, Datadog, …) — the trace's `conversation_id` is the `call_id`, so a trace links straight to the call. Five built-in observers log latency, turn timing, LLM, transcription, and startup cost. Both are on by default and cover cascade and S2S. Point `OTEL_EXPORTER_OTLP_ENDPOINT` at a collector to see traces; tracing self-disables in production without an endpoint (it never console-exports on the audio path).
+
+**Warm call transfer with operator briefing** — `transfer_call` now does real warm transfers, not just blind ones. Set `transfer_mode: "warm"` and the operator hears a `briefing` before the caller is bridged — either a literal string or `{"from_summary": true}` to summarize the conversation on the fly. Both modes can play a `transfer_message` to the caller first ("Connecting you to support…"), and a `fallback_message` covers the operator not answering. Works from the agent (the `transfer_call` tool) and the control API (`POST /v1/calls/{id}/transfer`). See the [tools guide](/guides/tools) and the [call-transfer example](https://github.com/kobikis/turncall/tree/master/examples/call-transfer).
+
+**Transfer answering-machine detection** — when a transfer's destination answers, a new `transfer.answered` webhook reports `answered_by` (`human` / `machine`), so you can tell when a transfer reached voicemail. (The caller is still connected and can leave a message — voicemail is detected, not blocked.)
+
+Warm transfer and the no-answer fallback require `PUBLIC_BASE_URL` to be set (Twilio calls back to TurnCall for the briefing and fallback). Cold transfer and the caller message work without it.
+
+</Update>
+
+<Update label="2026-06-28" description="Week of June 23" tags={["Feature", "Update", "Fix"]}>
+
+## New features
+
+**`agent_id` and `event_id` on every webhook** — The delivered webhook envelope now carries `agent_id` (the agent that handled the event, resolved from the call's current active agent so handoffs are reflected) and `event_id` (a unique id, stable across delivery retries and shared across subscribers — use it as a deduplication key). Both sit at the top level alongside `call_id` and `session_id`.
+
+**`ended_reason` on `call.ended`** — The end-of-call webhook now reports *why* a call ended, distinct from the coarse `status`: `customer_ended_call`, `assistant_ended_call`, `customer_did_not_answer`, `customer_busy`, `voicemail`, `transferred`, `pipeline_error`, `telephony_failed`, or `unknown`.
+
+**Richer `call.ended` payload** — `call.ended` now also includes `status` (final call status), `provider_call_sid` (correlate with Twilio), and `metadata` (the custom data you attached at [call-init](/guides/call-init), echoed back for CRM correlation).
+
+## Updates
+
+**`tool.result` includes the tool output** — The `tool.result` webhook payload now carries the tool's `result`, not just its name and arguments.
+
+## Breaking changes
+
+**Transcript events use `role`, not `user_id`** — On `transcript.final` events the speaker field was renamed from `user_id` to `role` (values `customer` / `assistant`) — it is a speaker label, never an identifier. Update consumers that read `payload.user_id`.
+
+## Bug fixes
+
+**WebRTC calls in Docker** — The runtime image now installs the native libraries (`libxcb`, `libGL`, glib) that the WebRTC media stack loads at runtime, fixing `webrtc/connect` failures (`libxcb.so.1: cannot open shared object file`) on self-hosted deployments.
+
+</Update>
+
+<Update label="2026-06-24" description="Week of June 23" tags={["Feature", "Update", "Fix"]}>
+
+## New features
+
+**Built-in call recordings on every transport** — TurnCall now records every call itself and writes a WAV file to your configured storage, whether the call comes in over [Twilio](/guides/providers), [WebRTC](/guides/webrtc), or [WhatsApp](/guides/whatsapp). No Twilio recording configuration is required. When the file lands, `recording_url` is populated, `recording_status` flips to `completed`, and a `recording.ready` event fires.
+
+**Reliable call timestamps** — `started_at` and `duration_ms` are now stamped by the call pipeline itself instead of relying on Twilio status callbacks. `duration_ms` is always computed from `ended_at - started_at`, so it stays accurate even when carrier callbacks are delayed or dropped.
+
+## Updates
+
+**Smaller, hardened Docker image** — The official Docker image is now a multi-stage build that ships only runtime dependencies, runs as a non-root user, and skips the ~2.5 GB of CUDA libraries that were previously pulled in by default. Self-hosters get a leaner image with a smaller attack surface and no changes required to deploy. See [Quickstart](/quickstart).
+
+**Pipeline metrics enabled by default** — Call pipelines now emit timing and usage metrics out of the box, giving you visibility into per-stage latency and provider usage for every call.
+
+**`call.ended` now waits for the recording** — The `call.ended` webhook is gated on both [post-call analysis](/guides/post-call-analysis) and recording persistence, so the payload carries a populated `recording_url` on the happy path instead of a stale `null`. The event always fires, and now includes `recording_status` so subscribers can distinguish a failed recording from one that's still uploading.
+
+## Bug fixes
+
+**Empty recordings on inbound Twilio calls** — `recording_url` is no longer blank and `recording_status` no longer stays stuck at `none`. Inbound Twilio calls use a media-stream connection that never triggered Twilio-side recording, so no file was ever produced. The pipeline now records the call directly.
+
+**Scrambled audio on PSTN calls** — Fixed a resampler bug that caused clicks and aliasing on continuous TTS audio over [Twilio](/guides/providers) calls. Outbound audio is now clean across frame boundaries.
+
+**Mid-call dead air and cut-offs** — Transcript taps and webhook delivery no longer run inline on the realtime audio path, so slow webhook endpoints or database writes can no longer cause brief audio stalls or words being cut off mid-sentence.
+
+**Dropped call events under load** — Resolved a race condition that could cause concurrent transcript, handoff, and lifecycle events to collide on the same sequence number and be dropped. High-throughput calls now record every event in order.
+
+**Twilio webhooks rejected behind a tunnel or proxy** — Inbound [Twilio](/guides/providers) webhooks no longer return `403 twilio_invalid_signature` when TurnCall runs behind ngrok, a load balancer, or a container with forwarded headers. Signature validation now uses the public forwarded URL, matching what Twilio signs.
+
+</Update>
+
+<Update label="2026-06-23" description="Week of June 23" tags={["Feature", "Update"]}>
+
+## New features
+
+**Video avatars** — Render your agent as a photorealistic talking head during [WebRTC](/guides/webrtc) calls. Choose between HeyGen and Tavus by setting `avatar.provider` on the agent config. Tavus delivers sub-600ms latency at 1080p; HeyGen streams alongside your existing voice pipeline. See [Video Avatar](/guides/video-avatar) for setup and field reference.
+
+**OpenRouter LLM provider** — Route LLM traffic through OpenRouter to access hundreds of models with automatic fallback routing. Configure primary and fallback models per agent to improve reliability when an upstream model is degraded. See [providers](/guides/providers).
+
+## Updates
+
+**Pipecat 1.4 upgrade** — The underlying voice pipeline has been upgraded from Pipecat 1.0 to 1.4 for improved stability and provider compatibility. No action required.
+
+**Streaming audio and latency fixes** — Audio resampling now drops empty buffers instead of pushing silence, reducing artifacts and lowering end-to-end latency on cascade pipelines.
+
+</Update>
+
+<Update label="2026-04-21" description="Week of April 21" tags={["Feature", "Update"]}>
+
+## New features
+
+**Interactive API reference** — You can now explore and test every TurnCall endpoint directly from the docs. The new [API reference](/api-reference/overview) includes request and response schemas, example payloads, and a built-in playground.
+
+**Open source under MIT license** — TurnCall is now fully open source. The entire project is available under the MIT license, so you can self-host, fork, and contribute freely.
+
+## Updates
+
+**Rebrand to TurnCall** — The project has been renamed from Voicey to TurnCall. All API endpoints, configuration files, and documentation now use the TurnCall name consistently. No action is required if you are using the hosted API.
+
+</Update>
+
+<Update label="2026-04-18" description="Week of April 14–18" tags={["Feature", "Update", "Fix"]}>
+
+## New features
+
+**MCP server support for tools** — You can now connect [MCP servers](/guides/mcp) to your agents for auto-discovered tool calling. Any tools exposed by your MCP server are automatically available during calls.
+
+**Post-call analysis** — TurnCall now automatically generates a structured [post-call analysis](/guides/post-call-analysis) after every call, including a summary, sentiment score, success evaluation, and custom data extraction. The `call.ended` webhook is enriched with the full transcript, recording URL, and analysis results.
+
+**Agent versioning** — Publish immutable [agent versions](/guides/agent-versioning), auto-promote phone numbers to the latest version, and roll back instantly when needed.
+
+**A/B testing** — Route traffic across agent versions with [weighted A/B testing](/guides/ab-testing) on phone numbers. Routing is deterministic by caller, so the same caller always reaches the same version.
+
+**Cartesia STT/TTS provider** — Cartesia is now available as a speech-to-text and text-to-speech [provider](/guides/providers), giving you another option for voice quality and latency tuning.
+
+**Anthropic Claude as LLM provider** — You can now use Anthropic Claude models as the LLM [provider](/guides/providers) for your agents, alongside OpenAI and Ollama.
+
+**Knowledge base with RAG** — Upload documents to a [knowledge base](/guides/knowledge-base) and attach it to agents. Three retrieval modes are available: prompt injection, automatic retrieval, and tool-based lookup.
+
+**Pre-call init hook** — Use the [call-init](/guides/call-init) server event to dynamically resolve agent configuration before the pipeline starts. You can also hand off mid-call between agents using the built-in handoff tool.
+
+## Updates
+
+**Richer webhook payloads** — The `call.ended` webhook now includes call metadata (from/to number, direction, duration), the full transcript, and the recording URL. All call events are dispatched to webhook subscribers.
+
+**Call recording storage** — Twilio call recordings are now automatically downloaded and stored locally or in S3.
+
+## Bug fixes
+
+**Duplicate `call.started` events** — Fixed an issue where `call.started` was fired twice per call.
+
+**Transcript sequencing** — Transcript events now use database sequence numbers, preventing ordering collisions in high-throughput calls.
+
+**Webhook payload format** — Fixed the webhook event key to use `event` consistently (previously some payloads used `event_type`).
+
+</Update>
+
+<Update label="2026-04-11" description="Week of April 7–11" tags={["Feature", "Update"]}>
+
+## New features
+
+**SMS and chat support** — Agents can now handle text-based conversations over [SMS and the Chat API](/guides/sms-chat). Sessions are managed automatically so returning users pick up where they left off.
+
+**WhatsApp Business integration** — Connect your agents to [WhatsApp](/guides/whatsapp) for both voice calls and text messages through the WhatsApp Business platform.
+
+**Speech-to-speech mode** — A new [speech-to-speech pipeline](/guides/s2s) delivers ultra-low-latency voice interactions powered by OpenAI Realtime and Gemini Live, bypassing the traditional STT → LLM → TTS chain.
+
+**Bring Your Own Model (BYOM)** — Point your agents at any OpenAI-compatible endpoint to use custom or self-hosted LLMs as the [provider](/guides/providers).
+
+**WebRTC support** — Launch [browser-based voice calls](/guides/webrtc) directly from your web application without requiring a phone number.
+
+**Smart Turn and voicemail detection** — Improved turn-taking with Smart Turn V3 and Silero VAD reduces false interruptions. Incoming calls are now automatically screened for voicemail so your agent can hang up early instead of talking to a machine.
+
+## Updates
+
+**Pipecat 1.0 migration** — The underlying voice pipeline has been upgraded to Pipecat 1.0, improving stability and enabling new provider integrations.
+
+**Renamed "assistant" to "agent"** — All API endpoints and documentation now use "agent" consistently. The `/v1/assistants` endpoints have been replaced by `/v1/agents`.
+
+</Update>

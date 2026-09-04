@@ -1,0 +1,22 @@
+# Golden retrieval cases for the Bangkok Airways reservation fixture.
+# `expect` must appear in a retrieved chunk for the case to count as a hit.
+# Queries mirror how callers actually ask on a voice call — including
+# fragmentary follow-ups that arrive with conversation-window context.
+cases:
+  - query: "what is the flight date?"
+    expect: "13 July 2026"
+  - query: "what's my reservation number?"
+    expect: "DGRVB5"
+  - query: "what time does the flight depart?"
+    expect: "08:45"
+  - query: "which airline and flight number is it?"
+    expect: "PG 106"
+  - query: "how much checked baggage is allowed?"
+    expect: "20 KG"
+  - query: "when can I check in online?"
+    expect: "24 hrs prior"
+  - query: "what is the e-ticket number?"
+    expect: "829-2311294702"
+  # follow-up-shaped query, as the window builder would emit it
+  - query: "Your flight PG 106 departs Ko Samui on Monday 13 July 2026 at 08:45.\nand what time does it land?"
+    expect: "10:00"

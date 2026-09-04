@@ -1,0 +1,89 @@
+---
+title: Video Avatar
+description: "Lip-synced video avatars on WebRTC calls (HeyGen, Tavus)"
+icon: "user-circle"
+---
+
+Add a real-time, lip-synced video avatar to a voice agent. The avatar consumes the agent's TTS audio and renders a talking-head video that streams to the browser alongside the voice.
+
+<Warning>
+  Avatars are **WebRTC + cascade only**. The avatar taps the `tts` stage, which S2S doesn't have. On a phone (Twilio/WhatsApp) or S2S agent the avatar is skipped with a warning.
+</Warning>
+
+## Configuration
+
+Set `transport: "webrtc"`, `pipeline_mode: "cascade"`, and an `avatar` block.
+
+<CodeGroup>
+```json HeyGen
+{
+  "transport": "webrtc",
+  "pipeline_mode": "cascade",
+  "avatar": {
+    "enabled": true,
+    "provider": "heygen",
+    "avatar_id": "<liveavatar-id>",
+    "is_sandbox": true
+  }
+}
+```
+
+```json Tavus
+{
+  "transport": "webrtc",
+  "pipeline_mode": "cascade",
+  "avatar": {
+    "enabled": true,
+    "provider": "tavus",
+    "replica_id": "<replica-id>"
+  }
+}
+```
+</CodeGroup>
+
+## Options
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `enabled` | Yes | Turn the avatar on |
+| `provider` | Yes | `heygen` or `tavus` |
+| `avatar_id` | HeyGen | LiveAvatar avatar ID |
+| `is_sandbox` | No | HeyGen sandbox mode (default `true`); some avatars are production-only |
+| `replica_id` | Tavus | Tavus replica ID |
+| `persona_id` | No | Tavus persona (default `pipecat-stream` — lip-syncs your TTS) |
+
+## Providers
+
+| Provider | Latency | Quality | Notes |
+|----------|---------|---------|-------|
+| **Tavus** | sub-600ms | 1080p, highest fidelity | Recommended for quality + latency |
+| **HeyGen** | ~600ms+ render buffer | good | LiveAvatar platform |
+
+<Note>
+  **HeyGen needs a LiveAvatar key, not a HeyGen key.** Pipecat targets `api.liveavatar.com`; HeyGen's old `/v1/streaming.*` API is sunset. Get the key from [app.liveavatar.com](https://app.liveavatar.com).
+</Note>
+
+## Required API Keys
+
+| Provider | Environment Variable | Where |
+|----------|---------------------|-------|
+| HeyGen | `HEYGEN_LIVE_AVATAR_API_KEY` | [app.liveavatar.com](https://app.liveavatar.com) |
+| Tavus | `TAVUS_API_KEY` | [platform.tavus.io](https://platform.tavus.io) |
+
+Tavus also requires the `tavus` extra (`pip install -e .` pulls `daily-python`).
+
+## Pipeline
+
+```
+transport.input → STT → user_agg (VAD + SmartTurn)
+  → LLM → TTS → [avatar] → transport.output (audio + video)
+  → context_aggregator.assistant → observability
+```
+
+The avatar provider runs its own WebRTC leg to its servers (HeyGen → LiveKit, Tavus → Daily) and emits video frames back into the pipeline; TurnCall's SmallWebRTC transport carries them to the browser. The provider's leg is internal — the user-facing transport stays SmallWebRTC.
+
+## Latency
+
+The avatar adds an inherent render/buffer delay (~600ms+) on top of the cascade response — it cannot be tuned away, only minimized by provider choice. Tavus is currently the lowest-latency option.
+
+See [examples/video-avatar](https://github.com/kobikis/turncall/tree/master/examples/video-avatar) for a runnable setup script.

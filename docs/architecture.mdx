@@ -1,0 +1,206 @@
+---
+title: Architecture
+description: "System design, call flow, and the real-time pipeline"
+icon: "sitemap"
+---
+
+TurnCall is a **modular monolith** (FastAPI) that orchestrates real-time voice AI agents over phone calls, browser WebRTC, WhatsApp, and SMS/chat. All Pipecat code is isolated in `orchestrator/`; every other module is framework-agnostic.
+
+## System Overview
+
+```mermaid
+flowchart TB
+    Phone["📞 Phone"]
+    Browser["🌐 Browser"]
+    WhatsApp["💬 WhatsApp"]
+    SMS["✉️ SMS"]
+
+    Twilio["Twilio<br/>PSTN + Media Streams"]
+    WebRTC["SmallWebRTC<br/>peer-to-peer"]
+    Meta["Meta Cloud API"]
+
+    Phone --> Twilio
+    Browser --> WebRTC
+    WhatsApp --> Meta
+    SMS --> Twilio
+
+    subgraph Server["TurnCall Server (FastAPI / Uvicorn)"]
+        direction TB
+        API["Control Plane — REST API<br/>/v1/agents · /v1/calls · /v1/phone-numbers<br/>/v1/knowledge-bases · /v1/chat · /v1/webrtc"]
+        WH["Webhooks<br/>Twilio voice/status/SMS · WhatsApp calls/messages"]
+        Pipe["Real-time Pipeline (per call)<br/>Pipecat — STT · LLM · TTS · S2S"]
+        SVC["Services<br/>call control · retrieval · analysis · routing"]
+    end
+
+    PG[("PostgreSQL<br/>+ pgvector")]
+    Redis[("Redis")]
+
+    Twilio --> WH
+    Meta --> WH
+    WebRTC --> API
+    WH --> Pipe
+    API --> SVC
+    Pipe --> SVC
+    SVC --> PG
+    SVC --> Redis
+    Pipe -.->|media| Twilio
+    Pipe -.->|media| WebRTC
+    Pipe -.->|media| Meta
+```
+
+## Inbound Call Flow (Twilio)
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant T as Twilio
+    participant W as TurnCall Webhook
+    participant DB as PostgreSQL
+    participant P as Pipecat Pipeline
+
+    C->>T: Dials number
+    T->>W: POST /webhooks/twilio/voice/inbound
+    W->>DB: Resolve phone → agent, create Call record
+    W-->>T: TwiML Stream directive + callId
+    T->>P: WebSocket /ws/media-stream (8kHz μ-law)
+    P->>DB: Stream transcripts, events, tool calls
+    loop Conversation
+        C->>P: Speech
+        P-->>C: Agent response
+    end
+    C->>T: Hangup
+    T->>P: Stream closed
+    P->>DB: Mark Call COMPLETED
+```
+
+<Note>
+  Dynamic routing: if the phone number's `routing_target_type` is `webhook`, TurnCall POSTs a **call-init** request to your server first and applies the returned agent / variables / knowledge context before the pipeline starts. See [Pre-Call Init](/guides/call-init).
+</Note>
+
+### Other entry points
+
+<AccordionGroup>
+  <Accordion title="Outbound call">
+    `POST /v1/calls/outbound` creates the Call record and initiates the Twilio call → Twilio hits `/webhooks/twilio/voice/outbound` → the handler resolves the agent from the Call record by `CallSid` → same pipeline as inbound.
+  </Accordion>
+  <Accordion title="Browser (WebRTC)">
+    `POST /v1/webrtc/connect` with an SDP offer → `SmallWebRTCRequestHandler` creates the connection and returns the SDP answer → `PATCH /v1/webrtc/connect` trickles ICE candidates → audio flows peer-to-peer at 16kHz into the same pipeline.
+  </Accordion>
+  <Accordion title="WhatsApp voice">
+    Meta POSTs `/webhooks/whatsapp` (field `calls`) → signature validated → Pipecat `WhatsAppClient` handles the WebRTC SDP exchange → 16kHz `SmallWebRTCTransport` pipeline.
+  </Accordion>
+  <Accordion title="SMS / Chat (text)">
+    Inbound text → resolve session (24h TTL) → build LLM history → chat completion → reply. No Pipecat pipeline — it's a text path through `services/`.
+  </Accordion>
+</AccordionGroup>
+
+## Real-time Pipeline
+
+Two pipeline modes, selected per agent via `pipeline_mode`.
+
+### Cascade (default, ~800ms)
+
+```mermaid
+flowchart LR
+    IN["transport.input"] --> STT["STT<br/>Deepgram"]
+    STT --> VM1{"Voicemail<br/>detector?"}
+    VM1 --> TURN["user_agg<br/>VAD + SmartTurn V3"]
+    TURN --> KB{"KB<br/>retrieval?"}
+    KB --> LLM["LLM<br/>OpenAI / Anthropic / Ollama / OpenRouter"]
+    LLM --> TTS["TTS<br/>Deepgram / OpenAI / ElevenLabs / Cartesia"]
+    TTS --> AV{"Video<br/>avatar?"}
+    AV --> OUT["transport.output"]
+    OUT --> OBS["observability<br/>transcripts · events · webhooks"]
+```
+
+Optional stages (dashed in the code): **VoicemailDetector** (outbound), **KnowledgeRetrieval** (auto-mode RAG), **video avatar** (HeyGen/Tavus, WebRTC + cascade only). Transcript taps sit after STT and after the LLM to record both sides.
+
+### Speech-to-Speech (~300ms)
+
+```mermaid
+flowchart LR
+    IN["transport.input"] --> UA["user_agg<br/>VAD"]
+    UA --> S2S["S2S LLM<br/>OpenAI Realtime / Gemini Live"]
+    S2S --> OUT["transport.output"]
+    OUT --> ASST["context_aggregator.assistant"]
+    ASST --> OBS["observability"]
+```
+
+A single model handles STT + reasoning + TTS natively over one WebSocket, so the `stt`/`llm`/`tts` config fields are ignored.
+
+<Info>
+  Twilio media is 8kHz μ-law on the wire; the serializer converts to/from PCM16. S2S models run at 24kHz, so an internal resampler bridges the rates.
+</Info>
+
+## Call State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> initiated
+    initiated --> ringing
+    initiated --> failed
+    ringing --> in_progress
+    ringing --> no_answer
+    ringing --> busy
+    in_progress --> transferring
+    in_progress --> handed_off
+    in_progress --> completed
+    in_progress --> voicemail
+    transferring --> in_progress
+    transferring --> completed
+    transferring --> failed
+    handed_off --> in_progress
+    voicemail --> completed
+    completed --> [*]
+    failed --> [*]
+    no_answer --> [*]
+    busy --> [*]
+```
+
+## Module Responsibilities
+
+| Module | Purpose |
+|--------|---------|
+| `api/` | REST API — projects, agents, phone numbers, calls, webhooks, WebRTC, chat |
+| `auth/` | API key generation (SHA-256, `tc_` prefix), RBAC, project scoping |
+| `domain/` | Immutable Pydantic models, enums, call + session state machines |
+| `orchestrator/` | Pipecat pipeline — **all** Pipecat imports isolated here |
+| `services/` | Call control, SMS/chat, retrieval, analysis, weighted routing, template rendering |
+| `storage/` | SQLAlchemy async models, repository pattern, PostgreSQL + Redis |
+| `adapters/` | Object storage (local filesystem, S3) |
+| `events/` | Webhook delivery, server events, signing |
+| `webhooks/` | Twilio + WhatsApp handlers, media stream WebSocket |
+
+## Data Model
+
+```mermaid
+erDiagram
+    projects ||--o{ api_keys : owns
+    projects ||--o{ agents : owns
+    projects ||--o{ phone_numbers : owns
+    projects ||--o{ calls : owns
+    projects ||--o{ knowledge_bases : owns
+    agents ||--o{ phone_numbers : "routes to"
+    agents ||--o{ agent_knowledge_bases : links
+    knowledge_bases ||--o{ agent_knowledge_bases : links
+    knowledge_bases ||--o{ documents : contains
+    documents ||--o{ document_chunks : "chunked into"
+    calls ||--o{ call_events : emits
+    calls ||--o{ tool_invocations : records
+    sms_sessions ||--o{ sms_messages : contains
+```
+
+| Table | Purpose |
+|-------|---------|
+| `projects` | Tenant boundary |
+| `api_keys` | Auth (hashed, prefix-indexed) |
+| `agents` | Versioned voice agent configs (JSONB `config_blob`) |
+| `phone_numbers` | Twilio number → agent routing (incl. weighted A/B) |
+| `calls` | Call records with state machine |
+| `call_events` | Event log — transcripts, tools, transfers |
+| `tool_invocations` | Tool execution audit (input/output/latency) |
+| `webhook_subscriptions` | Outbound webhook config |
+| `knowledge_bases` · `documents` · `document_chunks` | RAG — metadata, files, pgvector embeddings |
+| `agent_knowledge_bases` | Agent ↔ KB links with retrieval mode |
+| `sms_sessions` · `sms_messages` | SMS/chat session + message history |
+| `test_suites` · `test_runs` | Agent test scenarios + results |

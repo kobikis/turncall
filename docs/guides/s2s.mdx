@@ -1,0 +1,102 @@
+---
+title: Speech-to-Speech
+description: "Ultra-low latency with OpenAI Realtime and Gemini Live"
+icon: "bolt"
+---
+
+Speech-to-Speech (S2S) mode skips separate STT and TTS stages — the model handles audio natively for ultra-low latency (~300ms).
+
+## Configuration
+
+Set `pipeline_mode: "s2s"` in the agent config. The `stt`, `llm`, and `tts` fields are ignored in S2S mode.
+
+<CodeGroup>
+```json OpenAI Realtime
+{
+  "pipeline_mode": "s2s",
+  "s2s": {
+    "provider": "openai",
+    "model": "gpt-realtime-2.1",
+    "voice": "alloy"
+  }
+}
+```
+
+```json Gemini Live
+{
+  "pipeline_mode": "s2s",
+  "s2s": {
+    "provider": "google",
+    "model": "models/gemini-3.1-flash-live-preview",
+    "voice": "Kore"
+  }
+}
+```
+
+```json Gateway (Grok, etc.)
+{
+  "pipeline_mode": "s2s",
+  "s2s": {
+    "provider": "openai",
+    "base_url": "wss://ai-gateway.vercel.sh/v1/realtime",
+    "model": "xai/grok-voice-think-fast-1.0",
+    "voice": "cosmo"
+  }
+}
+```
+</CodeGroup>
+
+## Options
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `provider` | Yes | `openai` or `google` |
+| `model` | No | Model name (defaults per provider). Gemini default: `models/gemini-3.1-flash-live-preview` |
+| `voice` | No | Voice name (default: `alloy` / `Charon`) |
+| `turn_detection` | No | `server_vad` (default) or `pipecat_vad` |
+| `base_url` | No | `wss://` endpoint of an OpenAI-Realtime-compatible gateway (`openai` provider only). See [Gateways](#gateways-and-third-party-models) |
+
+### Voices
+
+- **OpenAI Realtime** — one of a fixed set: `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`. An unknown voice is rejected on create.
+- **Gemini Live** — any [Gemini-supported voice](https://ai.google.dev/gemini-api/docs/live) (e.g. `Aoede`, `Charon`, `Kore`, `Puck`, `Zephyr`, and more). The set grows per model, so TurnCall doesn't allowlist it — Gemini validates the voice when the session connects.
+
+## Gateways and third-party models
+
+The `openai` provider speaks the OpenAI-Realtime WebSocket protocol — and so do OpenAI-Realtime-compatible gateways ([Vercel AI Gateway](https://vercel.com/docs/ai-gateway), [LiteLLM](https://docs.litellm.ai/)) and xAI direct. Set `s2s.base_url` to route the realtime connection through one; provider-prefixed models like `xai/grok-voice-think-fast-1.0` or `openai/gpt-realtime-2` then flow over the same protocol — no new provider, same pipeline.
+
+Two requirements:
+
+<Steps>
+  <Step title="Allowlist the gateway URL">
+    `base_url` is an outbound target, so it's gated by the same SSRF guard as custom LLM endpoints. Add its `wss://` pattern to `BYOM_ALLOWED_URL_PATTERNS`, e.g. `["wss://ai-gateway.vercel.sh/*"]`. A `base_url` outside the allowlist is rejected before the call starts.
+  </Step>
+  <Step title="Use the gateway key">
+    Set `OPENAI_API_KEY` to the gateway's API key — it's sent as `Authorization: Bearer …` on the WebSocket.
+  </Step>
+</Steps>
+
+<Note>
+  When `base_url` is set, the OpenAI voice allowlist is bypassed — the gateway routes to models with their own voice sets (e.g. Grok), which it validates upstream. Pass the target model's own voice name.
+</Note>
+
+## Pipeline
+
+```
+transport.input → user_agg (VAD)
+  → S2S_LLM (OpenAI Realtime / Gemini Live WebSocket)
+  → transport.output
+  → context_aggregator.assistant → observability
+```
+
+## Required API Keys
+
+| Provider | Environment Variable |
+|----------|---------------------|
+| OpenAI Realtime | `OPENAI_API_KEY` |
+| Gemini Live | `GOOGLE_API_KEY` |
+| Gateway (Vercel AI Gateway / LiteLLM / xAI) | `OPENAI_API_KEY` set to the gateway key |
+
+<Warning>
+  S2S mode cannot be combined with `voicemail_detection.enabled: true`.
+</Warning>

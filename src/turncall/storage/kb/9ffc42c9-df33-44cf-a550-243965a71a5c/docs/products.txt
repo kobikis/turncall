@@ -1,0 +1,28 @@
+Acme Widget Pro - $49.99
+Our flagship widget with 10x processing power. Features include:
+- Real-time data synchronization
+- Cloud-based dashboard
+- API integration support
+- 99.9% uptime SLA
+
+Acme Widget Lite - $19.99
+Perfect for small teams. Features include:
+- Basic data synchronization
+- Web dashboard
+- Email support
+- 99% uptime SLA
+
+Acme Widget Enterprise - $199.99/month
+For large organizations. Features include:
+- Unlimited data synchronization
+- Custom dashboard with SSO
+- Dedicated API endpoints
+- Priority 24/7 support
+- Custom SLA
+
+Acme Analytics Add-on - $29.99/month
+Real-time analytics for any Widget plan:
+- Usage dashboards
+- Anomaly detection
+- Weekly email reports
+- Export to CSV/JSON

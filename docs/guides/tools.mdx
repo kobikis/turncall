@@ -1,0 +1,144 @@
+---
+title: Tools
+description: "Built-in tools, webhook tools, and tool invocation recording"
+icon: "wrench"
+---
+
+TurnCall agents can call tools during conversations. Tools let the AI take actions — transfer calls, look up customer data, book appointments, and more.
+
+## Built-in Tools
+
+These work out of the box with no server needed:
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `end_call` | Terminate the call | `reason` (optional) |
+| `transfer_call` | Transfer to a phone number (cold or warm) | `target_number` (required), `transfer_mode`, `transfer_message`, `briefing`, `fallback_message`, `reason` |
+| `handoff_to_agent` | Switch to another AI agent | `agent_id` (required), `reason`, `context` |
+| `send_dtmf` | Send keypad tones | `digits` (required) |
+
+### Call transfer (cold / warm)
+
+`transfer_call` moves a live Twilio call to a human:
+
+- `transfer_mode`: `cold` (blind — bridge immediately) or `warm` (brief the operator first).
+- `transfer_message`: spoken to the **caller** before the dial ("Connecting you…").
+- `briefing` (warm only): spoken to the **operator** before bridging — a string, or `{"from_summary": true}` to summarize the transcript on the fly.
+- `fallback_message`: spoken to the caller if the operator doesn't answer, then the call ends.
+
+The same parameters work via the control API: `POST /v1/calls/{call_id}/transfer`. Warm
+transfer and `fallback_message` require `PUBLIC_BASE_URL` to be set (Twilio calls back to
+TurnCall for the operator briefing and the no-answer fallback). If the operator's line goes
+to voicemail, the caller is still connected (and can leave a message); a `transfer.answered`
+event reports `answered_by` (`human`/`machine`). See the
+[call-transfer example](https://github.com/kobikis/turncall/tree/master/examples/call-transfer).
+
+<Note>
+  Transfers redirect the call's PSTN leg, so they work on Twilio calls — a
+  WebRTC or WhatsApp session has no phone leg to bridge.
+</Note>
+
+### Choosing the transfer target
+
+`target_number` is an argument the LLM supplies, so where the number comes from is a design choice. Rule of thumb: **prompt = policy** (when to transfer, what to say), **code = facts that change** (who's on call, at what number).
+
+| Pattern | How | Best for |
+|---------|-----|----------|
+| Fixed number | Write it in the `system_prompt`: "when the caller asks for a human, call `transfer_call` with target_number +1555…" | One escalation line that rarely changes |
+| Known at call start | [Call-init](/guides/call-init) returns it as a template variable (`{{account_manager_number}}`) | Per-caller routing (CRM: each customer has an owner) |
+| Resolved at transfer time | A custom webhook tool (e.g. `get_transfer_number`) returns `{"target_number": "+1555…"}`; the prompt instructs: call it first, then `transfer_call` with the result | On-call rotations, time-of-day routing, anything that can change mid-call |
+| Your server decides | Watch [events](/guides/server-events) and issue `POST /v1/calls/{call_id}/transfer` yourself | Routing logic that shouldn't involve the LLM at all |
+
+For the lookup-tool pattern, three rules keep transfers reliable: **always return a number** (bake in a fallback line — an error mid-transfer strands a frustrated caller), **answer fast** (the caller waits in silence; the default tool timeout is 10s), and **return E.164**. Avoid putting schedules or rota tables in the prompt itself — the LLM has no reliable clock and can mistranscribe digits; that logic belongs in the tool.
+
+## Custom Webhook Tools
+
+Define tools with a `webhook_url` — TurnCall POSTs to your server when the LLM invokes the tool:
+
+```json
+{
+  "name": "lookup_customer",
+  "description": "Look up customer details by phone number",
+  "parameters_schema": {
+    "type": "object",
+    "properties": {
+      "phone_number": {
+        "type": "string",
+        "description": "E.164 phone number"
+      }
+    },
+    "required": ["phone_number"]
+  },
+  "webhook_url": "https://your-api.com/tools/lookup",
+  "execution_mode": "sync",
+  "timeout_seconds": 10,
+  "max_retries": 1
+}
+```
+
+### Webhook Payload
+
+Your server receives:
+
+```json
+{
+  "tool_name": "lookup_customer",
+  "arguments": {"phone_number": "+15559876543"},
+  "call_id": "call-uuid",
+  "project_id": "project-uuid"
+}
+```
+
+Return any JSON — it's passed back to the LLM as the tool result.
+
+### Signed Tool Webhooks
+
+Set `webhook_secret` (min 16 chars) on a tool and TurnCall HMAC-signs every POST so your endpoint can verify it really came from TurnCall:
+
+```json
+{
+  "name": "lookup_customer",
+  "webhook_url": "https://your-api.com/tools/lookup",
+  "webhook_secret": "your-shared-secret-min-16-chars"
+}
+```
+
+Each request then carries `X-TurnCall-Signature: v1=<hex>` and `X-TurnCall-Timestamp` — HMAC-SHA256 over `"{timestamp}.{raw_body}"`, the same scheme as [event webhooks](/guides/server-events). Verify with:
+
+```python
+import hashlib, hmac
+
+def verify(raw_body: str, sig: str, ts: str, secret: str) -> bool:
+    expected = "v1=" + hmac.new(
+        secret.encode(), f"{ts}.{raw_body}".encode(), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, sig)
+```
+
+Unset secret = unsigned POST (backward compatible).
+
+## Tool Invocation Recording
+
+All tool calls (webhook + MCP + built-in) are recorded in the `tool_invocations` table with:
+- Input arguments
+- Output result
+- Status (success/error)
+- Latency (ms)
+
+Query invocations via the API:
+
+```bash
+curl http://localhost:8090/v1/tools/invocations/CALL_ID \
+  -H "Authorization: Bearer tc_xxx"
+```
+
+## Validate Tool Schema
+
+Test your tool definition before adding it to an agent:
+
+```bash
+curl -X POST http://localhost:8090/v1/tools \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my_tool", "description": "...", "parameters_schema": {...}}'
+```

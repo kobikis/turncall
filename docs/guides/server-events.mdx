@@ -1,0 +1,94 @@
+---
+title: Server Events
+description: "Bidirectional server hooks for call lifecycle"
+icon: "arrows-left-right"
+---
+
+TurnCall supports bidirectional server hooks. The platform calls your server URL and your response can influence call behavior.
+
+## Setup
+
+Bind a phone number with `routing_target_type: "webhook"`:
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "external_number_sid": "PNxxx",
+    "e164_number": "+15551234567",
+    "routing_target_type": "webhook",
+    "server_url": "https://your-server.com/turncall-events"
+  }'
+```
+
+Or set `server_url` in the agent config for per-agent events.
+
+## Event Types
+
+| Event | When | Response Controls |
+|-------|------|-------------------|
+| `call-init` | Before agent selection | Which agent + variables |
+| `function-call` | Tool execution | Tool result |
+| `call-end` | After call ends | — |
+| `status-update` | Call status changes | — |
+| `transcript-update` | Transcript updates | — |
+| `speech-update` | Speaking events | — |
+
+## function-call
+
+Sent when the agent calls a tool (alternative to per-tool webhook URLs).
+
+### Request
+
+```json
+{
+  "message": {
+    "type": "function-call",
+    "call": {"id": "call-uuid"},
+    "functionCall": {
+      "name": "lookup_customer",
+      "parameters": {"phone": "+15559876543"}
+    }
+  }
+}
+```
+
+### Response
+
+```json
+{
+  "result": {"name": "John Smith", "account_id": "ACC-123"}
+}
+```
+
+## call-end
+
+Sent after a call ends. Fire-and-forget (response ignored).
+
+```json
+{
+  "message": {
+    "type": "call-end",
+    "call": {"id": "call-uuid"},
+    "endedReason": "completed",
+    "transcript": [
+      {"role": "assistant", "content": "Hello!"},
+      {"role": "user", "content": "I need help with billing"}
+    ],
+    "summary": "Customer asked about billing...",
+    "durationMs": 45000
+  }
+}
+```
+
+## Signature Verification
+
+All server events include HMAC-SHA256 signatures:
+
+```
+X-TurnCall-Signature: v1=<hex_hmac>
+X-TurnCall-Timestamp: 1712345678
+```
+
+Verify by computing HMAC-SHA256 over `"timestamp.body"` using the signing secret returned when you created the phone number.
