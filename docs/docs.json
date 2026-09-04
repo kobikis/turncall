@@ -25,6 +25,7 @@
             "group": "Guides",
             "pages": [
               "guides/building-apps",
+              "guides/agent-builder",
               "guides/agents",
               "guides/phone-numbers",
               "guides/providers",

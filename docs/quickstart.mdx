@@ -1,17 +1,31 @@
 ---
 title: Quickstart
-description: "Get TurnCall running in 5 minutes"
+description: "Talk to a voice agent in your browser in about 10 minutes"
 icon: "rocket"
 ---
 
+Two paths. **Start with the browser one** — no Twilio account, no phone
+number, no tunnel, so you find out whether you like this before spending
+money.
+
+| | Browser (WebRTC) | Phone (Twilio) |
+|---|---|---|
+| Time | ~10 min | +15–20 min |
+| Needs | Docker, 2 free API keys | also Twilio, a number, ngrok |
+| Costs | nothing | a number is ~$1/mo |
+
 ## Prerequisites
 
-- Python 3.12+
-- Docker (for Postgres + Redis)
-- Twilio account with a phone number
-- OpenAI API key (or Ollama for local LLM)
+**For the browser path:**
+
+- Docker (runs Postgres, Redis and the API)
+- Node 20+ (for the browser client)
+- OpenAI API key (or Ollama for a local LLM)
 - Deepgram API key (free at [console.deepgram.com](https://console.deepgram.com))
-- ngrok (for local development)
+
+**Additionally for phone calls:** a Twilio account with a number, and ngrok.
+
+Python 3.12+ is only needed for host development.
 
 ## Setup
 
@@ -32,16 +46,16 @@ icon: "rocket"
 
     Edit `.env` with your credentials:
 
+    For the browser path, **two keys are all you need**:
+
     ```bash .env
-    DATABASE_URL=postgresql+asyncpg://turncall:turncall@localhost:5432/turncall
-    REDIS_URL=redis://localhost:6379/0
-    TWILIO_ACCOUNT_SID=ACxxxxxxxx
-    TWILIO_AUTH_TOKEN=xxxxxxxx
     OPENAI_API_KEY=sk-xxxxxxxx
     DEEPGRAM_API_KEY=xxxxxxxx
-    TURNCALL_NUMBER=+15559876543      # your Twilio number (used by example run.sh scripts)
-    TWILIO_PN_SID=PNxxxxxxxx          # its Phone Number SID
-    PUBLIC_BASE_URL=https://xxxx.ngrok.io   # public URL (fill in after the ngrok step)
+    ```
+
+    Everything else in `env.example` already has a working local default.
+    Twilio credentials are **not required to boot** — leave them blank until
+    you want phone calls.
     ```
 
     `PLATFORM_API_KEY` ships with a dev default (`dev-platform-key`) that gates
@@ -58,29 +72,82 @@ icon: "rocket"
     code with hot reload instead, stop the `turncall` container (both bind
     `:8090`) and use `make run`.
   </Step>
+  <Step title="Seed an agent">
+    ```bash
+    bash scripts/seed_dev.sh
+    ```
+
+    Creates a project, an API key and a published receptionist agent, and
+    prints both — **the key is shown once**. No phone number involved.
+  </Step>
+  <Step title="Talk to it">
+    ```bash
+    cd examples/webrtc-client
+    npm install
+    npm run dev
+    ```
+
+    Open <http://localhost:5173>, paste in the server URL
+    (`http://localhost:8090`), the `tc_...` key and the agent id from the
+    previous step, then click **Start Call** and talk.
+
+    Audio goes over WebRTC straight to your own machine — speech → Deepgram →
+    GPT-4o-mini → Deepgram TTS → speech, in roughly 800 ms.
+  </Step>
+</Steps>
+
+## Talk to it
+
+That's the whole loop, with no telephony involved: **speech → Deepgram →
+GPT-4o-mini → Deepgram TTS → speech**, in roughly 800 ms.
+
+Things worth trying before you add a phone number:
+
+- Change `system_prompt` on the agent and reconnect — the personality is one field.
+- Swap `tts.provider` to `cartesia` or `elevenlabs` for a different voice.
+- Set `pipeline_mode: "s2s"` to route through OpenAI Realtime instead, which
+  drops latency to roughly 300 ms. See [Speech-to-Speech](/guides/s2s).
+- Point `llm.provider` at `ollama` to run the model locally, so nothing but
+  audio transcription leaves your machine.
+
+Prefer describing an agent to writing its config? The
+[Agent Builder](/guides/agent-builder) does that.
+
+## Answer a real phone call
+
+Everything above needed no Twilio. To have the agent pick up an actual phone,
+you now also need a Twilio account, a number (~$1/mo) and a tunnel.
+
+<Steps>
   <Step title="Expose via ngrok">
     ```bash
     ngrok http 8090
-    # Copy the https://xxxx.ngrok.io URL
+    # copy the https:// forwarding URL — it changes on each restart
     ```
   </Step>
-  <Step title="Run the example">
+  <Step title="Add the Twilio values to .env">
+    ```bash .env
+    TWILIO_ACCOUNT_SID=ACxxxxxxxx
+    TWILIO_AUTH_TOKEN=xxxxxxxx
+    TURNCALL_NUMBER=+15559876543            # your Twilio number, E.164
+    TWILIO_PN_SID=PNxxxxxxxx                # its Phone Number SID
+    PUBLIC_BASE_URL=https://xxxx.ngrok.io   # the ngrok URL
+    ```
+  </Step>
+  <Step title="Bind the number">
     ```bash
     ./examples/receptionist/run.sh
     ```
 
-    Every example ships a `run.sh` that reads `TURNCALL_NUMBER`, `TWILIO_PN_SID`,
-    and `PUBLIC_BASE_URL` from `.env` — or pass the flags yourself:
+    Or re-run the seed script with the number set, binding it to the agent you
+    already talked to:
 
     ```bash
-    python examples/receptionist/setup.py \
-      --twilio-number "+15559876543" \
-      --twilio-number-sid "PNxxxxxxxx" \
-      --server-url "https://xxxx.ngrok.io"
+    TURNCALL_NUMBER=+15559876543 bash scripts/seed_dev.sh
     ```
   </Step>
   <Step title="Call your number">
-    The receptionist agent will answer, understand your intent, and route accordingly.
+    The receptionist answers, understands your intent, and routes accordingly.
   </Step>
 </Steps>
 
