@@ -51,7 +51,9 @@ sync-skill: gen-openapi ## Regenerate docs spec + copy it into the turncall-skil
 	python scripts/sync_skill.py --skill-repo $(SKILL_REPO)
 
 docker-up: ## Start local stack (postgres + redis + turncall api + localstack)
-	cd localstack && docker compose up -d
+	# --build: src/ is bind-mounted so code is live, but a dependency change needs
+	# the image rebuilt — without it you get an ImportError against the old venv.
+	cd localstack && docker compose up -d --build
 
 docker-down: ## Stop local infrastructure
 	cd localstack && docker compose down --volumes
@@ -59,7 +61,7 @@ docker-down: ## Stop local infrastructure
 LOCAL_COMPOSE = docker compose -f docker-compose.local.yml
 
 docker-up-local: ## Start local-storage stack (postgres + redis + turncall api, NO localstack)
-	cd localstack && $(LOCAL_COMPOSE) up -d
+	cd localstack && $(LOCAL_COMPOSE) up -d --build
 
 docker-down-local: ## Stop the local-storage stack
 	cd localstack && $(LOCAL_COMPOSE) down --volumes
