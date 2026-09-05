@@ -99,12 +99,19 @@ services:
       # 2) LocalStack S3 (active) — fake AWS in the localstack container. The
       # bucket is created by run.sh; AWS_ENDPOINT_URL_S3 redirects botocore
       # (>=1.34) to LocalStack instead of real AWS. Any credentials work.
+      #
+      # The credentials fall through to your real ones when set, because this
+      # environment: block OVERRIDES env_file — hardcoding them here made the
+      # container authenticate to Bedrock as "test"/"test", which fails as an
+      # auth error *with credentials present*. The endpoint override is
+      # S3-specific, so Bedrock/Nova Sonic still reach real AWS either way.
+      # See adr/0016.
       STORAGE_BACKEND: s3
       S3_BUCKET_NAME: call-recordings
-      AWS_REGION: us-east-1
       AWS_ENDPOINT_URL_S3: http://localstack:4566
-      AWS_ACCESS_KEY_ID: test
-      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
 
       # 3) Real AWS S3 — no endpoint override (botocore defaults to real AWS).
       # Use a real bucket + real IAM credentials (prefer pulling these from
