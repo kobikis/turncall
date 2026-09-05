@@ -7,8 +7,11 @@ Definitions only; implementation lives in code and ADRs.
 
 **Provider**:
 The named LLM (or STT/TTS) backend selected per agent — e.g. `openai`, `anthropic`,
-`ollama`, `custom_openai`, `openrouter`. A provider determines which service the
-orchestrator instantiates and how its API key is resolved.
+`ollama`, `custom_openai`, `openrouter`, `bedrock`. A provider determines which service
+the orchestrator instantiates and how its credentials are resolved — a single API key
+for all but [[Bedrock]], which resolves an AWS credential triple plus a region.
+A provider names a *vendor* in every case except [[Bedrock]], which names a gateway
+hosting other vendors' models.
 
 **OpenRouter**:
 A first-class LLM provider that routes to many upstream models through a single
@@ -34,6 +37,23 @@ LiteLLM) or xAI direct — how third-party realtime models like Grok voice run
 without their own provider. The platform `OPENAI_API_KEY` is the bearer sent to
 the gateway. _Avoid_: "xai provider" — no such provider exists; the example's
 `--provider xai` flag is a preset for this mode.
+
+**Bedrock**:
+The AWS-hosted gateway [[provider]] (`bedrock`) reaching Anthropic, Meta, Mistral and
+Amazon foundation models through one API. The only [[provider]] whose name is a gateway
+rather than a vendor: `provider: "bedrock", model: "anthropic.claude-..."` names two
+different companies, and the same Claude model is reachable through either `anthropic`
+or `bedrock` with different credentials and a different failure surface. Model ids come
+in three forms — direct, `us.`-prefixed cross-region inference profiles, and
+provisioned-throughput ARNs. See ADR-0016.
+_Avoid_: "the AWS provider" — that is [[Nova Sonic]]'s `aws` S2S provider, a different thing.
+
+**Nova Sonic**:
+Amazon's native speech-to-speech model, run as the `aws` S2S [[provider]]
+(`amazon.nova-2-sonic-v1:0`, i.e. Nova Sonic 2). Reached through a different API surface
+than [[Bedrock]]'s converse endpoint, which is why it carries a separate provider name
+rather than being a Bedrock model id. Its sessions expire at roughly six minutes and roll
+over transparently — ordinary phone calls exercise that path. See ADR-0016.
 
 ## Call quality of service
 
@@ -191,3 +211,20 @@ first-API-key creation. Identifies the *builder as a caller*, not a user (TurnCa
 stays identity-free). Distinct from project-scoped [[API key]]s (`tc_...`), which
 authorize everything else. Fails closed: unset means all bootstrap calls are rejected.
 _Avoid_: "admin key", "master key" (an admin API key is project-scoped; this is not).
+
+**Frozen credentials**:
+The explicit `(access_key_id, secret_access_key, session_token, region)` tuple TurnCall
+resolves itself and hands to AWS services, instead of letting boto3 resolve per call.
+Forced by [[Nova Sonic]], whose constructor requires explicit credentials while
+[[Bedrock]]'s accepts `None` and falls back to boto3's chain — resolving centrally is what
+stops one agent config behaving differently by pipeline mode. Re-resolved on each session
+rollover so temporary credentials cannot expire mid-call. See ADR-0016.
+_Avoid_: "the AWS key" — there is no single key; SSO, IRSA and assume-role all produce a triple.
+
+**Agent AWS credentials** (`AWS_AGENT_CREDENTIALS_ENABLED`):
+Per-agent *static* AWS keys — off by default, rejected at agent create when disabled, and
+the deliberate escape hatch rather than the normal path (mirroring `BYOM_ENABLED`). The
+default multi-tenant route is a per-agent `role_arn` assumed from platform credentials,
+which yields temporary credentials and persists no durable secret. The flag exists because
+`config_blob` is plain JSONB: secrets are masked on read but not encrypted at rest.
+_Avoid_: conflating with [[Platform credential]], which gates bootstrap endpoints and is unrelated.
