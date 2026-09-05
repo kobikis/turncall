@@ -23,7 +23,7 @@ Usage:
   python examples/bedrock/setup.py \\
     --server-url "http://localhost:8090" \\
     --region eu-central-1 \\
-    --model "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    --model "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
   # Nova Sonic 2 (speech-to-speech, no STT/TTS in the pipeline)
   python examples/bedrock/setup.py \\
@@ -59,7 +59,11 @@ BASE_URL = "http://localhost:8090"
 # you want in production — they fail over between regions in the geography.
 # Provisioned-throughput ARNs work here too; the model id passes through
 # verbatim, TurnCall does not validate it.
-DEFAULT_LLM_MODEL = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+# Verified working on-demand. Newer Anthropic models on Bedrock CANNOT be
+# invoked by their bare id — they require a cross-region inference profile, which
+# is what the "us." prefix is. Outside the US, use the "eu." or "apac." prefix
+# for the matching geography.
+DEFAULT_LLM_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 DEFAULT_S2S_MODEL = "amazon.nova-2-sonic-v1:0"
 NOVA_SONIC_VOICES = ("matthew", "tiffany", "amy", "lupe", "carlos")
 

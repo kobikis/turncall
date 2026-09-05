@@ -123,7 +123,7 @@ class TestCredentialsReachTheServices:
         config = AgentConfig(
             llm=LLMConfig(
                 provider="bedrock",
-                model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+                model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 temperature=0.25,
                 max_tokens=999,
                 extra={"thinking": {"type": "enabled"}},
@@ -142,7 +142,7 @@ class TestCredentialsReachTheServices:
         assert params["region_name"] == "ap-southeast-2"
 
         settings = service._settings
-        assert settings.model == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+        assert settings.model == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
         assert settings.temperature == 0.25
         assert settings.max_tokens == 999
         # llm.extra is Bedrock's passthrough — how Anthropic extended thinking

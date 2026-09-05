@@ -229,7 +229,7 @@ not a vendor — the same Claude model is reachable through either `anthropic` o
 ```json
 "llm": {
   "provider": "bedrock",
-  "model": "anthropic.claude-3-5-sonnet-20241022-v2:0"
+  "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 },
 "aws": {"region": "us-west-2"}
 ```
