@@ -114,7 +114,10 @@ def main() -> None:
     parser.add_argument(
         "--webhook-url",
         default="http://host.docker.internal:9001/events",
-        help="URL of your webhook server (host.docker.internal reaches the host from the Dockerized API; use localhost if running the API on the host)",
+        help=(
+            "URL of your webhook server. host.docker.internal reaches the host "
+            "from the Dockerized API; use localhost when running the API on the host."
+        ),
     )
     parser.add_argument(
         "--api-key",

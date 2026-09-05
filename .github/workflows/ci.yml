@@ -22,7 +22,9 @@ jobs:
       # Pinned: an unpinned ruff turns every upstream release into a red build
       # on code nobody touched. Bump deliberately.
       - run: pip install ruff==0.15.18
-      - run: ruff check src/ tests/
+      # examples/ included: it is the code users copy first, and it went
+      # unlinted long enough to accumulate errors nobody saw.
+      - run: ruff check src/ tests/ examples/
 
   # CONTRIBUTING.md requires a DCO sign-off; enforce it rather than just asking.
   # Plain bash so there is no third-party action in the supply chain.
