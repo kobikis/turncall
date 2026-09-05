@@ -24,26 +24,46 @@
           {
             "group": "Guides",
             "pages": [
-              "guides/building-apps",
-              "guides/agent-builder",
-              "guides/agents",
-              "guides/phone-numbers",
-              "guides/providers",
-              "guides/s2s",
-              "guides/tools",
-              "guides/mcp",
-              "guides/knowledge-base",
-              "guides/server-events",
-              "guides/call-init",
-              "guides/agent-versioning",
-              "guides/ab-testing",
-              "guides/takeaways",
-              "guides/post-call-analysis",
-              "guides/observability",
-              "guides/sms-chat",
-              "guides/whatsapp",
-              "guides/webrtc",
-              "guides/video-avatar"
+              {
+                "group": "Build an agent",
+                "pages": [
+                  "guides/agent-builder",
+                  "guides/agents",
+                  "guides/providers",
+                  "guides/s2s",
+                  "guides/tools",
+                  "guides/mcp",
+                  "guides/knowledge-base"
+                ]
+              },
+              {
+                "group": "Connect a channel",
+                "pages": [
+                  "guides/phone-numbers",
+                  "guides/webrtc",
+                  "guides/whatsapp",
+                  "guides/sms-chat",
+                  "guides/video-avatar"
+                ]
+              },
+              {
+                "group": "Integrate",
+                "pages": [
+                  "guides/building-apps",
+                  "guides/server-events",
+                  "guides/call-init"
+                ]
+              },
+              {
+                "group": "Operate",
+                "pages": [
+                  "guides/agent-versioning",
+                  "guides/ab-testing",
+                  "guides/post-call-analysis",
+                  "guides/takeaways",
+                  "guides/observability"
+                ]
+              }
             ]
           }
         ]

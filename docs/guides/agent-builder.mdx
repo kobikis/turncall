@@ -139,6 +139,98 @@ call it for real.
 The events panel polls your instance, so you can watch what its calls produce
 as they happen.
 
+## 7. Push the agent to your own GitHub
+
+Every created agent gets a generated **Agent Backend** — a FastAPI service
+holding its custom tool handlers, its `/events` receiver and its call-init
+endpoint. By default that code lives only in the builder's Docker environment.
+You can push it to a repository you own and run it yourself.
+
+<Note>
+  Nothing is ever created on your GitHub. You choose an existing repository, a
+  branch and an optional folder — the builder only writes into it.
+</Note>
+
+### Connect your account
+
+GitHub connections are **per person**, not per workspace: the credential is
+authorized by you against an account you control, and pushes are attributed to
+you. Click **GitHub** in the sidebar footer, next to your email.
+
+You need a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new):
+
+<Steps>
+  <Step title="Pick the repositories">
+    Under **Repository access**, choose *Only select repositories* and select
+    the ones agents will push to.
+  </Step>
+  <Step title="Grant one permission">
+    Under **Permissions → Repository**, set **Contents: Read and write**.
+    That is the only one needed — `Metadata: Read-only` is added automatically.
+  </Step>
+  <Step title="Paste it in">
+    Generate, copy it once, and paste it into the console. It is stored
+    encrypted and never shown again.
+  </Step>
+</Steps>
+
+<Warning>
+  If the repositories belong to an **organisation**, it may need to approve the
+  token before it works — check *Org settings → Third-party Access → Personal
+  access tokens*. Until then the token looks valid but sees nothing.
+</Warning>
+
+### Link a repository
+
+Open an agent, go to the **Code** tab, and choose a repository, a branch, and
+optionally a folder inside it.
+
+The folder is what lets one repository hold several agents:
+
+```
+my-agents/
+├── agents/
+│   ├── receptionist/     ← folder: "agents/receptionist"
+│   └── dental-booking/   ← folder: "agents/dental-booking"
+└── README.md             ← yours, never touched
+```
+
+Leave it empty to use the repository root instead — one repository per agent.
+
+### What a push contains
+
+| File | What it is |
+|------|------------|
+| `app.py`, `Dockerfile`, `docker-compose.yml`, `requirements.txt` | The Agent Backend service |
+| `agent.json` | The agent's prompt, model, voice, tools and guardrails |
+| `.env.example` | The variables the service needs, with no values |
+| `README.md` | How to run it |
+
+Editing the prompt or model changes `agent.json` only. The code changes when
+the agent's **custom tools** change, because that is what the backend
+implements.
+
+`.env` is never pushed, and secrets inside `agent.json` are redacted to `***`.
+
+### Running it yourself
+
+```bash
+git clone https://github.com/<you>/<repo>.git
+cd <repo>/<folder>
+cp .env.example .env     # then fill it in
+docker compose up -d --build
+```
+
+### If someone edits the repository
+
+Pushes are one-way and never forced. If the agent's files change on GitHub, the
+next push **refuses** and tells you, rather than overwriting the change — the
+Code tab links to the diff so you can reconcile it in your own repository
+first.
+
+Disconnecting, unlinking or deleting the agent never deletes anything on
+GitHub.
+
 ## Licensing
 
 The engine is MIT. The two builder repos are **source-available under
