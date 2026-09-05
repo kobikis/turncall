@@ -52,16 +52,16 @@ make run          # start server
 
 ```bash
 # WebRTC only (browser calls, no Twilio needed):
-python examples/openrouter-fallback/setup.py --server-url "http://localhost:8090"
+python3 examples/openrouter-fallback/setup.py --server-url "http://localhost:8090"
 
 # Custom primary + fallback chain:
-python examples/openrouter-fallback/setup.py \
+python3 examples/openrouter-fallback/setup.py \
   --server-url "http://localhost:8090" \
   --llm-model "anthropic/claude-3.5-sonnet" \
   --fallback "openai/gpt-4o" --fallback "google/gemini-flash-1.5"
 
 # With Twilio phone number:
-python examples/openrouter-fallback/setup.py \
+python3 examples/openrouter-fallback/setup.py \
   --server-url "https://xxxx.ngrok.io" \
   --twilio-number "+15559876543" \
   --twilio-number-sid "PNxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"

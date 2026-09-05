@@ -61,7 +61,7 @@ ngrok http 8000
 ### 6. Run setup script
 
 ```bash
-python examples/receptionist/setup.py \
+python3 examples/receptionist/setup.py \
   --twilio-number "+15559876543" \
   --twilio-number-sid "PNxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
   --server-url "https://xxxx.ngrok.io"

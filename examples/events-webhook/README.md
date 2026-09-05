@@ -10,12 +10,12 @@ cd examples/events-webhook
 uvicorn webhook_server:app --port 9001
 
 # Terminal 2: Full setup (project + agent + phone + webhook subscription)
-python setup.py \
+python3 setup.py \
   --twilio-number-sid PN_YOUR_SID \
   --twilio-number +15551234567
 
 # Or use an existing API key (skip project/agent/phone creation)
-python setup.py --api-key tc_YOUR_KEY
+python3 setup.py --api-key tc_YOUR_KEY
 
 # Make a call — events appear in Terminal 1
 ```
@@ -23,11 +23,11 @@ python setup.py --api-key tc_YOUR_KEY
 ## Subscribe to Specific Events
 
 ```bash
-python setup.py --api-key tc_YOUR_KEY --events call.ended call.started call.failed
+python3 setup.py --api-key tc_YOUR_KEY --events call.ended call.started call.failed
 
-python setup.py --api-key tc_YOUR_KEY --events transcript.final
+python3 setup.py --api-key tc_YOUR_KEY --events transcript.final
 
-python setup.py --api-key tc_YOUR_KEY --events "*"
+python3 setup.py --api-key tc_YOUR_KEY --events "*"
 ```
 
 ## Available Events

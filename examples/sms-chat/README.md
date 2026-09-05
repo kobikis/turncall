@@ -47,7 +47,7 @@ ngrok http 8090
 ### 4. Run setup script
 
 ```bash
-python examples/sms-chat/setup.py \
+python3 examples/sms-chat/setup.py \
   --twilio-number "+15559876543" \
   --twilio-number-sid "PNxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
   --server-url "https://xxxx.ngrok.io"

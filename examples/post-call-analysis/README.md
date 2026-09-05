@@ -55,7 +55,7 @@ All data is included in a single comprehensive `call.ended` webhook:
 ## Setup
 
 ```bash
-python examples/post-call-analysis/setup.py \
+python3 examples/post-call-analysis/setup.py \
   --twilio-number-sid PN_YOUR_SID \
   --twilio-number +15551234567
 ```

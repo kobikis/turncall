@@ -60,7 +60,7 @@ ngrok http 9000
 ### 3. Run the setup script
 
 ```bash
-python examples/tools-showcase/setup.py \
+python3 examples/tools-showcase/setup.py \
   --twilio-number "+15559876543" \
   --twilio-number-sid "PNxxxxxxxx" \
   --turncall-url "https://xxxx.ngrok.io" \

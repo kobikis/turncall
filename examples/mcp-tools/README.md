@@ -13,13 +13,13 @@ Instead of defining webhook tools in the agent config, you point the agent at an
 ```bash
 # Terminal 1: Start the MCP server (CRM tools)
 cd examples/mcp-tools
-python mcp_server.py
+python3 mcp_server.py
 
 # Terminal 2: Start TurnCall
 make run
 
 # Terminal 3: Setup agent + phone number
-python setup.py \
+python3 setup.py \
   --twilio-number-sid PN_YOUR_SID \
   --twilio-number +15551234567
 
@@ -38,8 +38,8 @@ python setup.py \
 Run in HTTP mode (default) or stdio mode:
 
 ```bash
-python mcp_server.py              # HTTP on port 9002
-python mcp_server.py --stdio      # stdio (local subprocess)
+python3 mcp_server.py              # HTTP on port 9002
+python3 mcp_server.py --stdio      # stdio (local subprocess)
 ```
 
 ## Agent Config

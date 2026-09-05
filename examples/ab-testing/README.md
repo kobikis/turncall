@@ -55,7 +55,7 @@ ngrok http 8090
 ### 5. Run setup script
 
 ```bash
-python examples/ab-testing/setup.py \
+python3 examples/ab-testing/setup.py \
   --twilio-number "+15559876543" \
   --twilio-number-sid "PNxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
   --server-url "https://xxxx.ngrok-free.app"

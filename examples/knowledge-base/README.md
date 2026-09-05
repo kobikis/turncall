@@ -60,7 +60,7 @@ make run
 ### 5. Run setup script
 
 ```bash
-python examples/knowledge-base/setup.py
+python3 examples/knowledge-base/setup.py
 ```
 
 This creates:

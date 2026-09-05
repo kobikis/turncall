@@ -31,6 +31,6 @@ if [[ ${#missing[@]} -gt 0 ]]; then
   exit 1
 fi
 
-echo "REMINDER: Start the tool server first (separate terminal): python webhook_server.py" >&2
+echo "REMINDER: Start the tool server first (separate terminal): python3 webhook_server.py" >&2
 
 exec "$PY" "$DIR/setup.py" --twilio-number "$TURNCALL_NUMBER" --twilio-number-sid "$TWILIO_PN_SID" --turncall-url "$PUBLIC_BASE_URL" "$@"
