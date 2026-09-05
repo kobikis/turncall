@@ -8,11 +8,24 @@ TurnCall uses a linear version model with auto-promotion. Each published version
 
 ## Lifecycle
 
+```mermaid
+flowchart LR
+    D1["v1 draft<br/>POST /agents"] -->|"PUT /agents/v1"| D1E["v1 edited"]
+    D1E -->|"POST /agents/v1/publish"| L1["v1 live"]
+    L1 -.->|"POST /agents"| D2["v2 draft"]
+    D2 -->|"POST /agents/v2/publish"| L2["v2 live"]
+    L2 -->|auto| A1["v1 archived<br/>phone numbers promoted"]
+    L2 -.->|"POST /agents/v1/rollback"| R["v1 live again<br/>v2 archived"]
+
+    classDef draft fill:#fef3c7,stroke:#fbbf24,stroke-width:1.5px,color:#78350f
+    classDef live fill:#dcfce7,stroke:#4ade80,stroke-width:2px,color:#14532d
+    classDef archived fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#334155
+    class D1,D1E,D2 draft
+    class L1,L2,R live
+    class A1 archived
 ```
-POST /agents → v1 (draft) → PUT /agents/v1 → POST /agents/v1/publish → v1 live
-POST /agents → v2 (draft) → POST /agents/v2/publish → v2 live, v1 auto-archived
-POST /agents/v1/rollback → v1 restored, v2 archived
-```
+
+Each published version is immutable — editing after publish means a new draft.
 
 ## States
 
