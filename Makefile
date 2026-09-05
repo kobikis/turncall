@@ -35,10 +35,10 @@ run: ## Run the development server
 	python -m turncall
 
 migrate: ## Run database migrations (in docker; needs `make docker-up` first)
-	cd localstack && docker compose run --rm --no-deps -v "$(CURDIR)/alembic:/app/alembic" turncall alembic upgrade head
+	cd localstack && $(COMPOSE) run --rm --no-deps -v "$(CURDIR)/alembic:/app/alembic" turncall alembic upgrade head
 
 migrate-new: ## Create a new migration (usage: make migrate-new msg="description"; needs `make docker-up` first)
-	cd localstack && docker compose run --rm --no-deps -v "$(CURDIR)/alembic:/app/alembic" turncall alembic revision --autogenerate -m "$(msg)"
+	cd localstack && $(COMPOSE) run --rm --no-deps -v "$(CURDIR)/alembic:/app/alembic" turncall alembic revision --autogenerate -m "$(msg)"
 
 gen-openapi: ## Regenerate docs/openapi.json from the app spec
 	python scripts/gen_openapi.py
@@ -53,12 +53,16 @@ sync-skill: gen-openapi ## Regenerate docs spec + copy it into the turncall-skil
 docker-up: ## Start local stack (postgres + redis + turncall api + localstack)
 	# --build: src/ is bind-mounted so code is live, but a dependency change needs
 	# the image rebuilt — without it you get an ImportError against the old venv.
-	cd localstack && docker compose up -d --build
+	cd localstack && $(COMPOSE) up -d --build
 
 docker-down: ## Stop local infrastructure
-	cd localstack && docker compose down --volumes
+	cd localstack && $(COMPOSE) down --volumes
 
-LOCAL_COMPOSE = docker compose -f docker-compose.local.yml
+# --env-file: compose interpolates ${AWS_*} from the *project* .env, which is
+# localstack/.env by default and does not exist. Point it at the repo .env so
+# real AWS credentials reach the container instead of the LocalStack defaults.
+COMPOSE = docker compose --env-file ../.env
+LOCAL_COMPOSE = docker compose --env-file ../.env -f docker-compose.local.yml
 
 docker-up-local: ## Start local-storage stack (postgres + redis + turncall api, NO localstack)
 	cd localstack && $(LOCAL_COMPOSE) up -d --build
@@ -70,7 +74,7 @@ migrate-local: ## Run migrations against the local-storage stack (needs `make do
 	cd localstack && $(LOCAL_COMPOSE) run --rm --no-deps -v "$(CURDIR)/alembic:/app/alembic" turncall alembic upgrade head
 
 docker-all: ## Start all services including turncall
-	cd localstack && docker compose up -d --build
+	cd localstack && $(COMPOSE) up -d --build
 
 clean: ## Clean build artifacts
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
