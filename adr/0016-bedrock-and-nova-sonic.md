@@ -111,8 +111,16 @@ quiet.
   Shipping voice only would mean the API advertising Bedrock while the text path
   quietly ignored it, so if it is staged, the text path must **reject** `bedrock`
   with a clear error in the interim.
-- **`pipecat-ai[aws]` joins the extras** in `pyproject.toml`. boto3 is already
-  present transitively via `aioboto3`.
+- **Pipecat's `aws` extra cannot be declared.** It pins `aiobotocore>=3,<4`,
+  while `aioboto3` — which the S3 storage adapter uses — pins
+  `aiobotocore==2.25.1` and has no 3.x-compatible release (15.5.0 is latest).
+  Declaring both makes the project uninstallable. `AWSBedrockLLMService` was
+  verified to work on aiobotocore 2.25.1, so only `aws-nova-sonic` is declared
+  (it needs just `aws_sdk_bedrock_runtime`) and aiobotocore arrives via
+  aioboto3. If that pin is ever relaxed upstream, or the S3 adapter drops
+  aioboto3 for aiobotocore directly, declare `aws` properly.
+- **`endpointing_sensitivity` is Nova Sonic 2 only.** Pipecat silently nulls it
+  on `amazon.nova-sonic-v1:0`, so it is only meaningful with the default model.
 - **The mask list grows.** `schemas/agents.py` must mask the new secret-bearing
   fields alongside `llm.api_key`.
 - **`provider` no longer means "vendor".** Every other provider names one;

@@ -38,9 +38,24 @@ class LLMConfigSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider(self) -> "LLMConfigSchema":
-        supported = {"openai", "ollama", "custom_openai", "anthropic", "openrouter"}
+        supported = {
+            "openai",
+            "ollama",
+            "custom_openai",
+            "anthropic",
+            "openrouter",
+            "bedrock",
+        }
         if self.provider not in supported:
             msg = f"Unsupported LLM provider: {self.provider}. Supported: {supported}"
+            raise ValueError(msg)
+        if self.provider == "bedrock" and self.base_url:
+            # Rejected rather than ignored: Bedrock is reached through boto3,
+            # not a URL, so a base_url here would silently do nothing.
+            msg = (
+                "base_url is not supported for the bedrock provider "
+                "(see adr/0016). Set config.aws.region instead."
+            )
             raise ValueError(msg)
         return self
 
@@ -241,9 +256,15 @@ class S2SConfigSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider(self) -> "S2SConfigSchema":
-        supported = {"openai", "google"}
+        supported = {"openai", "google", "aws"}
         if self.provider not in supported:
             msg = f"Unsupported S2S provider: {self.provider}. Supported: {supported}"
+            raise ValueError(msg)
+        if self.provider == "aws" and self.base_url:
+            msg = (
+                "base_url is not supported for the aws S2S provider "
+                "(see adr/0016). Set config.aws.region instead."
+            )
             raise ValueError(msg)
         return self
 
@@ -365,6 +386,46 @@ class AvatarConfigSchema(BaseModel):
     persona_id: str = Field(default="pipecat-stream", max_length=256)
 
 
+class AWSConfigSchema(BaseModel):
+    """AWS credentials/region shared by the bedrock LLM and aws S2S providers.
+
+    One block per agent so both providers authenticate as the same principal.
+    See adr/0016.
+    """
+
+    region: str | None = Field(default=None, max_length=64)
+    access_key_id: str | None = Field(default=None, max_length=128)
+    secret_access_key: str | None = Field(default=None, max_length=512)
+    session_token: str | None = Field(default=None, max_length=4096)
+    role_arn: str | None = Field(default=None, max_length=2048)
+    external_id: str | None = Field(default=None, max_length=1224)
+    profile: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_credentials(self) -> "AWSConfigSchema":
+        if bool(self.access_key_id) != bool(self.secret_access_key):
+            msg = (
+                "aws.access_key_id and aws.secret_access_key must be set "
+                "together, or neither"
+            )
+            raise ValueError(msg)
+
+        if self.access_key_id:
+            # Rejected here, at create, rather than at call time — an agent that
+            # looks healthy in the API and fails with a customer on the line is
+            # the worse failure. See adr/0016.
+            from turncall.config.settings import get_settings
+
+            if not get_settings().aws.agent_credentials_enabled:
+                msg = (
+                    "Per-agent static AWS keys are disabled. Set "
+                    "AWS_AGENT_CREDENTIALS_ENABLED=true to allow them, or use "
+                    "aws.role_arn, which stores no durable secret."
+                )
+                raise ValueError(msg)
+        return self
+
+
 class AgentConfigSchema(BaseModel):
     # Reject unknown fields instead of silently dropping them — a typo'd or
     # schema-lagging config section (e.g. a mis-nested "avatar") used to vanish
@@ -400,6 +461,7 @@ class AgentConfigSchema(BaseModel):
         default_factory=lambda: VoicemailDetectionSchema()
     )
     s2s: S2SConfigSchema = Field(default_factory=S2SConfigSchema)
+    aws: AWSConfigSchema = Field(default_factory=AWSConfigSchema)
     avatar: AvatarConfigSchema = Field(default_factory=AvatarConfigSchema)
     transport: str = Field(default="twilio", pattern=r"^(twilio|webrtc|both)$")
     server_url: ServerUrlConfigSchema = Field(default_factory=ServerUrlConfigSchema)
@@ -476,6 +538,7 @@ def _sanitize_config(config: dict[str, Any]) -> dict[str, Any]:
     A read-only key must not be able to exfiltrate credentials for external
     systems, so this covers all secret-bearing fields, not just llm.api_key:
     - llm.api_key (BYOM provider key)
+    - aws.secret_access_key / aws.session_token (adr/0016)
     - server_url.secret (server-events signing secret)
     - tools[].webhook_secret (custom-tool signing secret)
     - mcp_servers[].headers / .env (documented as carrying Authorization)
@@ -489,6 +552,16 @@ def _sanitize_config(config: dict[str, Any]) -> dict[str, Any]:
     llm = out.get("llm")
     if isinstance(llm, dict) and llm.get("api_key") is not None:
         out["llm"] = {**llm, "api_key": _MASK}
+
+    aws = out.get("aws")
+    if isinstance(aws, dict):
+        masked = {
+            k: (_MASK if aws.get(k) is not None else None)
+            for k in ("secret_access_key", "session_token")
+            if k in aws
+        }
+        if masked:
+            out["aws"] = {**aws, **masked}
 
     server_url = out.get("server_url")
     if isinstance(server_url, dict) and server_url.get("secret") is not None:

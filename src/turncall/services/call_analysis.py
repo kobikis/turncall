@@ -17,7 +17,7 @@ from typing import Any
 
 from loguru import logger
 
-from turncall.domain.models import AnalysisConfig, LLMConfig
+from turncall.domain.models import AnalysisConfig, AWSConfig, LLMConfig
 from turncall.services.llm_text import complete_text
 
 
@@ -212,6 +212,7 @@ async def analyze_call(
     llm_config: LLMConfig,
     *,
     system_prompt: str = "",
+    aws: AWSConfig | None = None,
 ) -> AnalysisResult:
     """Run post-call analysis on a transcript.
 
@@ -252,7 +253,7 @@ async def analyze_call(
 
     start = datetime.now(UTC)
     try:
-        completion = await complete_text(effective_llm, messages)
+        completion = await complete_text(effective_llm, messages, aws=aws)
     except Exception:
         logger.exception("analysis_llm_error")
         return AnalysisResult(
@@ -305,6 +306,7 @@ async def extract_takeaway(
     prompt: str | None = None,
     model: str | None = None,
     system_prompt: str = "",
+    aws: AWSConfig | None = None,
 ) -> dict[str, Any]:
     """Run one takeaway extraction: LLM call, schema validation, one retry.
 
@@ -346,7 +348,7 @@ async def extract_takeaway(
     last_error = ""
     for _attempt in range(2):  # initial + one retry with the validation error
         try:
-            completion = await complete_text(effective_llm, messages)
+            completion = await complete_text(effective_llm, messages, aws=aws)
             data = json.loads(_strip_json_fences(completion.text))
             jsonschema.validate(data, schema)
             return {

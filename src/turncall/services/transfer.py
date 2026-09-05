@@ -106,7 +106,7 @@ async def resolve_briefing_text(
         return intent.briefing_text
 
     # Auto-summary: gather the transcript and run the agent's LLM on the fly.
-    from turncall.domain.models import LLMConfig
+    from turncall.domain.models import AWSConfig, LLMConfig
     from turncall.services.llm_text import complete_text
     from turncall.storage.repositories import agent_repo, call_repo
 
@@ -131,6 +131,7 @@ async def resolve_briefing_text(
         return "The caller is being transferred to you."
 
     llm_config = LLMConfig(**(agent.config_blob.get("llm") or {}))
+    aws_config = AWSConfig(**(agent.config_blob.get("aws") or {}))
     try:
         result = await complete_text(
             llm_config,
@@ -138,6 +139,7 @@ async def resolve_briefing_text(
                 {"role": "system", "content": _SUMMARY_SYSTEM},
                 {"role": "user", "content": f"Transcript:\n{transcript}"},
             ],
+            aws=aws_config,
         )
         return result.text.strip() or "The caller is being transferred to you."
     except Exception:

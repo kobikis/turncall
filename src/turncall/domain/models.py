@@ -202,6 +202,33 @@ class MCPServerConfig(DomainModel):
     tool_filter: list[str] | None = None
 
 
+class AWSConfig(DomainModel):
+    """AWS credentials and region for the `bedrock` LLM and `aws` S2S providers.
+
+    One block per agent rather than one per role: an agent uses a single AWS
+    account, and duplicating credentials would let the LLM and the voice leg
+    drift into authenticating as different principals — invisible through the
+    API, since both are masked. See ADR-0016.
+
+    Resolution order is role_arn > static keys > profile > the ambient boto3
+    chain (env, SSO cache, instance profile, IRSA).
+    """
+
+    region: str | None = None  # None → settings.aws.region (AWS_REGION)
+    # Static keys are the deliberate escape hatch, gated at the API boundary by
+    # AWS_AGENT_CREDENTIALS_ENABLED: they land in config_blob, which is
+    # unencrypted JSONB.
+    access_key_id: str | None = None
+    secret_access_key: str | None = None
+    session_token: str | None = None
+    # Preferred multi-tenant path — assumed from platform credentials, yields
+    # temporary credentials and persists no durable secret.
+    role_arn: str | None = None
+    external_id: str | None = None
+    # Named profile for the ambient chain; how an SSO login is selected.
+    profile: str | None = None
+
+
 class AgentConfig(DomainModel):
     pipeline_mode: str = "cascade"  # "cascade" | "s2s"
     system_prompt: str = ""
@@ -223,6 +250,7 @@ class AgentConfig(DomainModel):
         default_factory=lambda: VoicemailConfig()
     )
     s2s: S2SConfig = Field(default_factory=S2SConfig)
+    aws: AWSConfig = Field(default_factory=AWSConfig)
     avatar: AvatarConfig = Field(default_factory=AvatarConfig)
     transport: str = "twilio"  # "twilio" | "webrtc" | "both"
     server_url: ServerUrlConfig = Field(default_factory=ServerUrlConfig)

@@ -120,7 +120,7 @@ Optional stages (dashed in the code): **VoicemailDetector** (outbound), **Knowle
 ```mermaid
 flowchart LR
     IN["transport.input"] --> UA["user_agg<br/>VAD"]
-    UA --> S2S["S2S LLM<br/>OpenAI Realtime / Gemini Live"]
+    UA --> S2S["S2S LLM<br/>OpenAI Realtime / Gemini Live<br/>Amazon Nova Sonic"]
     S2S --> OUT["transport.output"]
     OUT --> ASST["context_aggregator.assistant"]
     ASST --> OBS["observability"]

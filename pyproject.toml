@@ -52,7 +52,12 @@ dependencies = [
     # Voice Pipeline
     # webrtc-video: the `webrtc` extra's OpenCV dep is deprecated and drops in
     # 2.0.0; video pipelines (avatars over SmallWebRTC) need this extra instead.
-    "pipecat-ai[openai,deepgram,elevenlabs,silero,webrtc,webrtc-video,local-smart-turn,google,anthropic,cartesia,heygen,tavus,tracing]>=1.8.1,<2.0.0",
+    # NOTE: pipecat's "aws" extra is deliberately NOT listed. It pins
+    # aiobotocore>=3,<4, while aioboto3 (below, used by the S3 storage adapter)
+    # pins aiobotocore==2.25.1 and has no 3.x-compatible release — declaring it
+    # makes the project uninstallable. AWSBedrockLLMService works fine on
+    # aiobotocore 2.25.1, which aioboto3 already provides. See adr/0016.
+    "pipecat-ai[openai,deepgram,elevenlabs,silero,webrtc,webrtc-video,local-smart-turn,google,anthropic,cartesia,heygen,tavus,aws-nova-sonic,tracing]>=1.8.1,<2.0.0",
     # OTLP span exporter (pipecat[tracing] ships otel api/sdk but not an exporter).
     # See ADR-0010.
     "opentelemetry-exporter-otlp>=1.43.0",

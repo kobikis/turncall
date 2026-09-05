@@ -245,6 +245,28 @@ def _create_llm_service(
             ),
         )
 
+    if provider == "bedrock":
+        from pipecat.services.aws.llm import AWSBedrockLLMService
+
+        from turncall.services.aws_credentials import resolve_aws_credentials
+
+        credentials = resolve_aws_credentials(config.aws)
+        settings_kwargs: dict[str, Any] = {
+            "model": config.llm.model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if config.llm.extra:
+            # Bedrock's passthrough for model-specific parameters — how
+            # Anthropic extended thinking is reached here. reasoning_effort
+            # stays OpenAI-family-only (ADR-0014) rather than growing a
+            # second spelling for the same idea.
+            settings_kwargs["additional_model_request_fields"] = config.llm.extra
+        return AWSBedrockLLMService(
+            settings=AWSBedrockLLMService.Settings(**settings_kwargs),
+            **credentials.bedrock_kwargs(),
+        )
+
     raise ValueError(f"Unsupported LLM provider: {provider}")
 
 

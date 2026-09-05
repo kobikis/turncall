@@ -194,7 +194,9 @@ async def _process_chat_message(
     )
 
     llm_messages = await _build_llm_messages(db, session_row.id, system_prompt)
-    completion = await complete_text(agent_config.llm, llm_messages)
+    completion = await complete_text(
+        agent_config.llm, llm_messages, aws=agent_config.aws
+    )
 
     # 5. Store agent reply
     agent_msg = await sms_message_repo.create_message(

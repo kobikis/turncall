@@ -29,7 +29,7 @@ Define an agent via API, bind it to a phone number, and callers talk to your AI.
     Mix and match STT, LLM, and TTS providers per agent — Deepgram, OpenAI, Anthropic, ElevenLabs, Cartesia, Ollama.
   </Card>
   <Card title="Speech-to-Speech" icon="bolt">
-    Ultra-low latency (~300ms) via OpenAI Realtime or Gemini Live.
+    Ultra-low latency (~300ms) via OpenAI Realtime, Gemini Live or Amazon Nova Sonic.
   </Card>
   <Card title="Tool Calling" icon="wrench">
     Built-in tools (transfer, handoff, DTMF) + webhook tools + MCP servers.
@@ -63,7 +63,7 @@ flowchart LR
 
     TC["TurnCall<br/>webhook / connect"] --> MODE{"pipeline_mode"}
     MODE -->|cascade| C["STT → VAD + SmartTurn → LLM → TTS<br/>~800ms"]
-    MODE -->|s2s| S["OpenAI Realtime / Gemini Live<br/>~300ms"]
+    MODE -->|s2s| S["OpenAI Realtime / Gemini Live<br/>Amazon Nova Sonic<br/>~300ms"]
     C --> OUT["🔊 Audio back"]
     S --> OUT
 ```
@@ -82,9 +82,9 @@ See [Architecture](/architecture) for the full pipeline, call flows, and data mo
 | Browser | WebRTC (SmallWebRTCTransport) |
 | Video Avatar | HeyGen / Tavus (Pipecat avatar services) |
 | STT | Deepgram / OpenAI / ElevenLabs / Cartesia |
-| LLM | OpenAI / Anthropic Claude / Ollama / OpenRouter / Any OpenAI-compatible |
+| LLM | OpenAI / Anthropic Claude / Ollama / OpenRouter / AWS Bedrock / Any OpenAI-compatible |
 | TTS | Deepgram / OpenAI / ElevenLabs / Cartesia |
-| S2S | OpenAI Realtime / Gemini Live |
+| S2S | OpenAI Realtime / Gemini Live / Amazon Nova Sonic 2 |
 | Knowledge Base | pgvector + OpenAI embeddings |
 | VAD | Silero |
 | Turn Detection | Smart Turn V3 (local ONNX) |
