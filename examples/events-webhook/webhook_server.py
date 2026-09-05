@@ -142,7 +142,8 @@ def _print_analysis(analysis: dict) -> None:
     sentiment = analysis.get("sentiment")
     if sentiment:
         print(
-            f"  Sentiment: {sentiment.get('overall')} (satisfaction: {sentiment.get('customer_satisfaction', 'N/A')})"
+            f"  Sentiment: {sentiment.get('overall')} "
+            f"(satisfaction: {sentiment.get('customer_satisfaction', 'N/A')})"
         )
 
     structured = analysis.get("structured_data")

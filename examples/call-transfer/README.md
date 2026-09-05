@@ -12,7 +12,7 @@ briefing), with an optional message to the caller. Covers the LLM-initiated path
 ```bash
 # 1. Start turncall: make run
 # 2. Create project + a transfer-savvy agent + bind your number:
-python examples/call-transfer/setup.py \
+python3 examples/call-transfer/setup.py \
   --twilio-number-sid PN_YOUR_SID \
   --twilio-number +15551234567 \
   --transfer-to +15557654321        # the human/operator number

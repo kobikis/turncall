@@ -465,6 +465,9 @@ Every example ships a `run.sh` launcher: it reads the shared values
 (`TURNCALL_NUMBER`, `TWILIO_PN_SID`, `PUBLIC_BASE_URL`) from `.env` and passes
 any extra flags through to its `setup.py` — see each example's README.
 
+**[examples/](examples/)** indexes them by what they demonstrate and by what
+each one needs — several run with no phone number and no tunnel.
+
 | Example | Description |
 |---------|-------------|
 | [examples/receptionist/](examples/receptionist/) | Dental clinic receptionist with transfer + handoff |
@@ -473,6 +476,7 @@ any extra flags through to its `setup.py` — see each example's README.
 | [examples/ollama-local/](examples/ollama-local/) | Voice agent with local LLM via Ollama (BYOM) |
 | [examples/openrouter-fallback/](examples/openrouter-fallback/) | OpenRouter LLM with model fallback routing (voice only) |
 | [examples/s2s-realtime/](examples/s2s-realtime/) | Ultra-low latency S2S with OpenAI Realtime / Gemini Live / Grok (via gateway) |
+| [examples/bedrock/](examples/bedrock/) | AWS Bedrock as the LLM, or Amazon Nova Sonic 2 as S2S |
 | [examples/webrtc-client/](examples/webrtc-client/) | Browser voice client (Pipecat JS + WebRTC) |
 | [examples/video-avatar/](examples/video-avatar/) | WebRTC cascade agent with a HeyGen LiveAvatar video |
 | [examples/knowledge-base/](examples/knowledge-base/) | Knowledge base RAG with all three retrieval modes |

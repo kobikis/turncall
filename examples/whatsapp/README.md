@@ -69,7 +69,7 @@ In Meta Developer Console:
 ### 6. Run setup script
 
 ```bash
-python examples/whatsapp/setup.py \
+python3 examples/whatsapp/setup.py \
   --whatsapp-number "+1555XXXXXXX" \
   --whatsapp-phone-number-id "1234567890"
 ```

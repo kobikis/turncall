@@ -11,6 +11,7 @@ Run: uvicorn webhook_server:app --port 9000
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -63,7 +64,6 @@ ORDERS: dict[str, dict] = {
 # Store for created tickets (in-memory)
 TICKETS: list[dict] = []
 
-import os
 
 # Agent ID — set via: export SUPPORT_AGENT_ID=<uuid>
 SUPPORT_AGENT_ID: str = os.environ.get("SUPPORT_AGENT_ID", "")

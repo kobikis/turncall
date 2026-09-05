@@ -48,10 +48,10 @@ make run          # start server
 
 ```bash
 # WebRTC only (browser calls, no Twilio needed):
-python examples/ollama-local/setup.py --server-url "http://localhost:8090"
+python3 examples/ollama-local/setup.py --server-url "http://localhost:8090"
 
 # With Twilio phone number:
-python examples/ollama-local/setup.py \
+python3 examples/ollama-local/setup.py \
   --server-url "https://xxxx.ngrok.io" \
   --twilio-number "+15559876543" \
   --twilio-number-sid "PNxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
@@ -79,7 +79,7 @@ Any model Ollama can serve works. Recommended for voice (need fast responses):
 You can also use any OpenAI-compatible API (Together AI, Groq, Fireworks, vLLM, etc.):
 
 ```bash
-python examples/ollama-local/setup.py \
+python3 examples/ollama-local/setup.py \
   --server-url "http://localhost:8090" \
   --llm-provider custom_openai \
   --llm-model "meta-llama/Llama-3-70b-chat-hf" \

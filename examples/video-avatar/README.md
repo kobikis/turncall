@@ -22,10 +22,10 @@ browser over WebRTC. The avatar's lips are driven by the TTS audio.
 
 ```bash
 # HeyGen (default)
-python examples/video-avatar/setup.py --avatar-id <your-liveavatar-id>
+python3 examples/video-avatar/setup.py --avatar-id <your-liveavatar-id>
 
 # Tavus — higher quality, lower latency
-python examples/video-avatar/setup.py --provider tavus --replica-id <your-replica-id>
+python3 examples/video-avatar/setup.py --provider tavus --replica-id <your-replica-id>
 ```
 
 Then open `examples/webrtc-client/index.html`, paste the printed **API key**

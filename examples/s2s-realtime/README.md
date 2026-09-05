@@ -41,21 +41,21 @@ make docker-up && make migrate && make run
 
 ```bash
 # OpenAI Realtime (default)
-python examples/s2s-realtime/setup.py --server-url "http://localhost:8090"
+python3 examples/s2s-realtime/setup.py --server-url "http://localhost:8090"
 
 # Gemini Live (cheaper, emotion-aware)
-python examples/s2s-realtime/setup.py \
+python3 examples/s2s-realtime/setup.py \
   --server-url "http://localhost:8090" \
   --provider google \
   --voice Kore
 
 # Grok voice (presets the Vercel AI Gateway — see the Grok section below)
-python examples/s2s-realtime/setup.py \
+python3 examples/s2s-realtime/setup.py \
   --server-url "http://localhost:8090" \
   --provider xai
 
 # With Twilio phone number
-python examples/s2s-realtime/setup.py \
+python3 examples/s2s-realtime/setup.py \
   --server-url "https://xxxx.ngrok.io" \
   --twilio-number "+15559876543" \
   --twilio-number-sid "PNxxxxxxxx"
