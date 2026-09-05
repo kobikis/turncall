@@ -95,6 +95,11 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: pip install -e ".[dev]"
+      # docs/openapi.json is generated from the app and copied into the
+      # turncall-skill repo by `make sync-skill`, so a stale spec silently
+      # misdocuments the API for everyone downstream. Runs here rather than in
+      # `lint` because generating it imports the app.
+      - run: make check-openapi
       # Only the sequence-number race test needs a live DB; it self-skips
       # without one, so migrating is what keeps it from silently not running.
       - run: alembic upgrade head
