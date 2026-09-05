@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.domain.call_state import infer_ended_reason
 from turncall.domain.enums import CallEventType
-from turncall.domain.models import AnalysisConfig, LLMConfig
+from turncall.domain.models import AnalysisConfig, AWSConfig, LLMConfig
 
 
 async def _gather_transcript(
@@ -102,6 +102,7 @@ async def _run_post_call(
     analysis_config: AnalysisConfig,
     llm_config: LLMConfig,
     system_prompt: str,
+    aws_config: AWSConfig | None = None,
 ) -> None:
     """Full post-call processing: transcript, recording, analysis, webhook."""
     from turncall.storage.repositories import call_repo
@@ -134,6 +135,7 @@ async def _run_post_call(
                 analysis_config,
                 llm_config,
                 system_prompt=system_prompt,
+                aws=aws_config,
             )
             analysis_dict = result.to_dict()
 
@@ -146,6 +148,7 @@ async def _run_post_call(
                 llm_config,
                 transcript_payloads,
                 system_prompt,
+                aws_config,
             )
             if takeaways_dict:
                 analysis_dict["takeaways"] = takeaways_dict
@@ -246,6 +249,7 @@ async def run_analysis_inline(
     analysis_config = AnalysisConfig(**analysis_raw)
     llm_raw = agent_config_blob.get("llm", {})
     llm_config = LLMConfig(**llm_raw)
+    aws_config = AWSConfig(**(agent_config_blob.get("aws") or {}))
     system_prompt = agent_config_blob.get("system_prompt", "")
 
     await _run_post_call(
@@ -255,6 +259,7 @@ async def run_analysis_inline(
         analysis_config,
         llm_config,
         system_prompt,
+        aws_config,
     )
 
 
@@ -265,6 +270,7 @@ async def _extract_takeaways(
     llm_config: LLMConfig,
     transcript_payloads: list[dict[str, Any]],
     system_prompt: str,
+    aws_config: AWSConfig | None = None,
 ) -> dict[str, Any] | None:
     """Load the agent's attached takeaways and extract them concurrently.
     Best-effort: failures produce valid=False entries, never an exception."""
@@ -296,6 +302,7 @@ async def _extract_takeaways(
                     name=r.name,
                     schema=r.schema,
                     llm_config=llm_config,
+                    aws=aws_config,
                     description=r.description,
                     prompt=r.prompt,
                     model=r.model or analysis_config.model,
@@ -330,6 +337,7 @@ def trigger_post_call_analysis(
     analysis_config = AnalysisConfig(**analysis_raw)
     llm_raw = agent_config_blob.get("llm", {})
     llm_config = LLMConfig(**llm_raw)
+    aws_config = AWSConfig(**(agent_config_blob.get("aws") or {}))
     system_prompt = agent_config_blob.get("system_prompt", "")
 
     task = asyncio.create_task(
@@ -340,6 +348,7 @@ def trigger_post_call_analysis(
             analysis_config,
             llm_config,
             system_prompt,
+            aws_config,
         ),
         name=f"post-call-{call_id}",
     )

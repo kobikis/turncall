@@ -1,6 +1,6 @@
 ---
 title: Speech-to-Speech
-description: "Ultra-low latency with OpenAI Realtime and Gemini Live"
+description: "Ultra-low latency with OpenAI Realtime, Gemini Live and Amazon Nova Sonic"
 icon: "bolt"
 ---
 
@@ -33,6 +33,18 @@ Set `pipeline_mode: "s2s"` in the agent config. The `stt`, `llm`, and `tts` fiel
 }
 ```
 
+```json Amazon Nova Sonic 2
+{
+  "pipeline_mode": "s2s",
+  "s2s": {
+    "provider": "aws",
+    "model": "amazon.nova-2-sonic-v1:0",
+    "voice": "matthew"
+  },
+  "aws": {"region": "us-east-1"}
+}
+```
+
 ```json Gateway (Grok, etc.)
 {
   "pipeline_mode": "s2s",
@@ -50,16 +62,41 @@ Set `pipeline_mode: "s2s"` in the agent config. The `stt`, `llm`, and `tts` fiel
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | Yes | `openai` or `google` |
+| `provider` | Yes | `openai`, `google`, or `aws` |
 | `model` | No | Model name (defaults per provider). Gemini default: `models/gemini-3.1-flash-live-preview` |
-| `voice` | No | Voice name (default: `alloy` / `Charon`) |
+| `voice` | No | Voice name (default: `alloy` / `Charon` / `matthew`) |
 | `turn_detection` | No | `server_vad` (default) or `pipecat_vad` |
-| `base_url` | No | `wss://` endpoint of an OpenAI-Realtime-compatible gateway (`openai` provider only). See [Gateways](#gateways-and-third-party-models) |
+| `base_url` | No | `wss://` endpoint of an OpenAI-Realtime-compatible gateway (`openai` provider only — **rejected** on `aws`). See [Gateways](#gateways-and-third-party-models) |
+| `extra` | No | Provider passthrough. On `aws`: `endpointing_sensitivity` (`LOW`/`MEDIUM`/`HIGH`) |
 
 ### Voices
 
 - **OpenAI Realtime** — one of a fixed set: `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`. An unknown voice is rejected on create.
 - **Gemini Live** — any [Gemini-supported voice](https://ai.google.dev/gemini-api/docs/live) (e.g. `Aoede`, `Charon`, `Kore`, `Puck`, `Zephyr`, and more). The set grows per model, so TurnCall doesn't allowlist it — Gemini validates the voice when the session connects.
+- **Nova Sonic** — `matthew` (default), `tiffany`, `amy`, `lupe`, `carlos`. AWS validates on connect.
+
+## Amazon Nova Sonic
+
+Nova Sonic runs on AWS and shares the agent's [`aws` credential block](/guides/providers#credentials) with the Bedrock LLM provider — same account, same region resolution, no separate key.
+
+Nova Sonic **2** (`amazon.nova-2-sonic-v1:0`) is the default; the older `amazon.nova-sonic-v1:0` still works.
+
+```json
+"s2s": {
+  "provider": "aws",
+  "extra": {"endpointing_sensitivity": "HIGH"}
+}
+```
+
+`endpointing_sensitivity` tunes how quickly Nova Sonic decides the caller has stopped speaking. It lives in `extra` because it doesn't fit the `server_vad` / `pipecat_vad` split that `turn_detection` uses.
+
+<Warning>
+  `endpointing_sensitivity` is **Nova Sonic 2 only** — it is silently ignored on `amazon.nova-sonic-v1:0`.
+</Warning>
+
+<Note>
+  **Sessions roll over about every 6 minutes.** Nova Sonic caps session length and TurnCall transparently continues the conversation in a new one — ordinary phone calls hit this routinely. AWS credentials are re-resolved at each rollover, so calls outlasting a temporary credential's lifetime (assume-role and IRSA are typically ~1 hour) keep working instead of dying mid-sentence.
+</Note>
 
 ## Gateways and third-party models
 
@@ -84,7 +121,7 @@ Two requirements:
 
 ```
 transport.input → user_agg (VAD)
-  → S2S_LLM (OpenAI Realtime / Gemini Live WebSocket)
+  → S2S_LLM (OpenAI Realtime / Gemini Live / Nova Sonic)
   → transport.output
   → context_aggregator.assistant → observability
 ```
@@ -96,6 +133,7 @@ transport.input → user_agg (VAD)
 | OpenAI Realtime | `OPENAI_API_KEY` |
 | Gemini Live | `GOOGLE_API_KEY` |
 | Gateway (Vercel AI Gateway / LiteLLM / xAI) | `OPENAI_API_KEY` set to the gateway key |
+| Amazon Nova Sonic | *No key* — see [AWS credentials](/guides/providers#credentials) |
 
 <Warning>
   S2S mode cannot be combined with `voicemail_detection.enabled: true`.

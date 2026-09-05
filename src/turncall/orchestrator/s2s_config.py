@@ -1,7 +1,8 @@
 """S2S (speech-to-speech) service factory.
 
-Maps S2SConfig to Pipecat's OpenAIRealtimeLLMService or GeminiLiveLLMService
-with appropriate session properties, voice, and turn detection settings.
+Maps S2SConfig to Pipecat's OpenAIRealtimeLLMService, GeminiLiveLLMService or
+AWSNovaSonicLLMService with appropriate session properties, voice, and turn
+detection settings.
 """
 
 from typing import Any
@@ -9,6 +10,14 @@ from typing import Any
 from loguru import logger
 
 from turncall.domain.models import AgentConfig
+
+# S2SConfig's defaults are OpenAI Realtime's. Nova Sonic needs its own, applied
+# only when the agent left the field untouched — an explicitly wrong model is
+# surfaced by AWS rather than silently swapped. See ADR-0016.
+_OPENAI_DEFAULT_MODEL = "gpt-realtime-2.1"
+_OPENAI_DEFAULT_VOICE = "alloy"
+_NOVA_SONIC_MODEL = "amazon.nova-2-sonic-v1:0"
+_NOVA_SONIC_VOICE = "matthew"
 
 
 def _build_s2s_system_prompt(config: AgentConfig) -> str:
@@ -33,6 +42,8 @@ def create_s2s_service(
         return _create_openai_realtime(config, openai_api_key)
     if provider == "google":
         return _create_gemini_live(config, google_api_key)
+    if provider == "aws":
+        return _create_nova_sonic(config)
     raise ValueError(f"Unsupported S2S provider: {provider}")
 
 
@@ -141,5 +152,73 @@ def _create_gemini_live(config: AgentConfig, api_key: str) -> Any:
         model=s2s.model,
         voice=s2s.voice,
         turn=s2s.turn_detection,
+    )
+    return service
+
+
+def _create_nova_sonic(config: AgentConfig) -> Any:
+    """Create a Nova Sonic 2 S2S service from S2SConfig + the agent's aws block."""
+    from pipecat.services.aws.nova_sonic.llm import AWSNovaSonicLLMService
+
+    # Imported as a module, not a name: create_client() below re-resolves on
+    # every session rollover, and binding late keeps that observable.
+    from turncall.services import aws_credentials
+
+    class _RefreshingNovaSonic(AWSNovaSonicLLMService):  # type: ignore[misc]
+        """Re-resolves AWS credentials every time a Bedrock client is built.
+
+        Nova Sonic sessions expire at ~6 minutes and Pipecat rolls over to a new
+        one, which calls create_client() again through the
+        NovaSonicSessionSender protocol. Temporary credentials (assume-role,
+        IRSA) are typically good for about an hour, so without refreshing here a
+        long call would die mid-conversation when they expired — and the caller
+        would just hear the line go quiet. See ADR-0016.
+        """
+
+        def __init__(self, *, aws_config: Any, **kwargs: Any) -> None:
+            self._turncall_aws = aws_config
+            super().__init__(**kwargs)
+
+        def create_client(self) -> Any:
+            fresh = aws_credentials.resolve_aws_credentials(self._turncall_aws)
+            self._access_key_id = fresh.access_key_id
+            self._secret_access_key = fresh.secret_access_key
+            self._session_token = fresh.session_token
+            self._region = fresh.region
+            return super().create_client()
+
+    s2s = config.s2s
+    credentials = aws_credentials.resolve_aws_credentials(config.aws)
+
+    model = _NOVA_SONIC_MODEL if s2s.model == _OPENAI_DEFAULT_MODEL else s2s.model
+    voice = _NOVA_SONIC_VOICE if s2s.voice == _OPENAI_DEFAULT_VOICE else s2s.voice
+
+    settings_kwargs: dict[str, Any] = {"model": model, "voice": voice}
+    system_prompt = _build_s2s_system_prompt(config)
+    if system_prompt:
+        settings_kwargs["system_instruction"] = system_prompt
+    if s2s.temperature is not None:
+        settings_kwargs["temperature"] = s2s.temperature
+    if s2s.max_tokens is not None:
+        settings_kwargs["max_tokens"] = s2s.max_tokens
+    # Nova Sonic endpoints server-side; its sensitivity knob has no home in
+    # turn_detection's server_vad|pipecat_vad enum, so it rides in extra.
+    sensitivity = s2s.extra.get("endpointing_sensitivity")
+    if sensitivity:
+        settings_kwargs["endpointing_sensitivity"] = sensitivity
+
+    service = _RefreshingNovaSonic(
+        aws_config=config.aws,
+        settings=AWSNovaSonicLLMService.Settings(**settings_kwargs),
+        **credentials.nova_sonic_kwargs(),
+    )
+
+    logger.info(
+        "S2S service created: provider=aws model={model} voice={voice} "
+        "region={region} temporary_credentials={temp}",
+        model=model,
+        voice=voice,
+        region=credentials.region,
+        temp=credentials.session_token is not None,
     )
     return service

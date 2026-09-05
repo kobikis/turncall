@@ -89,9 +89,9 @@ locally through Ollama and no audio leaves your network except to the telco.
 - **Twilio PSTN calls** — Inbound and outbound phone calls via Twilio
 - **WebRTC browser calls** — Talk to agents from the browser
 - **Video Avatar** — Optional HeyGen LiveAvatar (lip-synced video) on WebRTC cascade calls
-- **Multi-provider STT/LLM/TTS** — Deepgram, OpenAI, Anthropic Claude, ElevenLabs, Cartesia, Ollama, OpenRouter, or any OpenAI-compatible endpoint (configurable per agent)
+- **Multi-provider STT/LLM/TTS** — Deepgram, OpenAI, Anthropic Claude, ElevenLabs, Cartesia, Ollama, OpenRouter, AWS Bedrock, or any OpenAI-compatible endpoint (configurable per agent)
 - **Bring Your Own Model** — Use local LLMs via Ollama or remote endpoints (Together AI, Groq, vLLM, etc.)
-- **Speech-to-Speech** — Ultra-low latency (~300ms) via OpenAI Realtime or Gemini Live
+- **Speech-to-Speech** — Ultra-low latency (~300ms) via OpenAI Realtime, Gemini Live or Amazon Nova Sonic 2
 - **Smart Turn Detection** — ML-based (SmartTurnV3) understands natural pauses
 - **Barge-in** — Silero VAD lets users interrupt mid-speech
 - **Voicemail Detection** — With retry backoff, beep detection, auto-message
@@ -145,7 +145,7 @@ See [QUICKSTART.md](QUICKSTART.md) for detailed setup instructions.
 Phone Call → Twilio → TurnCall webhook → TwiML with <Stream>
   → WebSocket → Pipecat Pipeline:
     Cascade: STT → VAD+SmartTurn → [KB Retrieval] → LLM → TTS → Audio back (~800ms)
-    S2S:     VAD → OpenAI Realtime / Gemini Live → Audio back (~300ms)
+    S2S:     VAD → OpenAI Realtime / Gemini Live / Nova Sonic → Audio back (~300ms)
 
 Browser → POST /v1/webrtc/connect (SDP offer/answer) + PATCH (ICE trickle) → WebRTC audio → Same pipeline
 ```
@@ -220,6 +220,29 @@ Use a local LLM via Ollama or any OpenAI-compatible endpoint:
 
 See [examples/ollama-local/](examples/ollama-local/) for a complete setup guide.
 
+### AWS Bedrock
+
+Run Anthropic, Meta, Mistral or Amazon models through AWS. Bedrock is a *gateway*,
+not a vendor — the same Claude model is reachable through either `anthropic` or
+`bedrock`, with different credentials:
+
+```json
+"llm": {
+  "provider": "bedrock",
+  "model": "anthropic.claude-3-5-sonnet-20241022-v2:0"
+},
+"aws": {"region": "us-west-2"}
+```
+
+Credentials are resolved by the server — an assumed `aws.role_arn`, the ambient
+chain (env vars, SSO profile, EC2 instance profile, ECS task role, EKS IRSA), or
+per-agent static keys behind `AWS_AGENT_CREDENTIALS_ENABLED`. Model availability
+is region-specific and access is opt-in per model in the Bedrock console.
+
+Amazon **Nova Sonic 2** runs as the `aws` S2S provider and shares the same `aws`
+block. See [examples/bedrock/](examples/bedrock/) and
+[adr/0016](adr/0016-bedrock-and-nova-sonic.md).
+
 ### OpenRouter (model fallback routing)
 
 Route through [OpenRouter](https://openrouter.ai) with automatic failover — if the
@@ -250,6 +273,11 @@ Skip STT/TTS entirely — the model handles audio natively:
 // Gemini Live (cheaper, emotion-aware)
 "pipeline_mode": "s2s",
 "s2s": {"provider": "google", "voice": "Kore"}
+
+// Amazon Nova Sonic 2 (runs on your AWS account)
+"pipeline_mode": "s2s",
+"s2s": {"provider": "aws", "voice": "matthew"},
+"aws": {"region": "us-east-1"}
 ```
 
 Grok voice works too — the `openai` provider plus a gateway `base_url`

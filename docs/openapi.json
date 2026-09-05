@@ -5180,6 +5180,97 @@
   },
   "components": {
     "schemas": {
+      "AWSConfigSchema": {
+        "properties": {
+          "region": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "access_key_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Key Id"
+          },
+          "secret_access_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secret Access Key"
+          },
+          "session_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Token"
+          },
+          "role_arn": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role Arn"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1224
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile"
+          }
+        },
+        "type": "object",
+        "title": "AWSConfigSchema",
+        "description": "AWS credentials/region shared by the bedrock LLM and aws S2S providers.\n\nOne block per agent so both providers authenticate as the same principal.\nSee adr/0016."
+      },
       "AgentConfigSchema": {
         "properties": {
           "pipeline_mode": {
@@ -5279,6 +5370,9 @@
           },
           "s2s": {
             "$ref": "#/components/schemas/S2SConfigSchema"
+          },
+          "aws": {
+            "$ref": "#/components/schemas/AWSConfigSchema"
           },
           "avatar": {
             "$ref": "#/components/schemas/AvatarConfigSchema"
@@ -6143,6 +6237,18 @@
             },
             "type": "array",
             "title": "Fallback Models"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(minimal|low|medium|high)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Effort"
           },
           "extra": {
             "additionalProperties": true,

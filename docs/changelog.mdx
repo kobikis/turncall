@@ -3,6 +3,29 @@ title: Changelog
 description: "Latest updates and improvements to TurnCall"
 ---
 
+<Update label="Unreleased" description="Unreleased" tags={["Feature"]}>
+
+## AWS Bedrock and Amazon Nova Sonic
+
+**New LLM provider: `bedrock`** — run Anthropic, Meta, Mistral or Amazon foundation models through AWS, on voice and on SMS/chat. Model ids pass through verbatim, so direct ids, cross-region inference profiles (`us.`-prefixed) and provisioned-throughput ARNs all work. `llm.extra` forwards to Bedrock's `additionalModelRequestFields`, which is how Anthropic extended thinking is reached.
+
+**New S2S provider: `aws`** — Amazon Nova Sonic 2 (`amazon.nova-2-sonic-v1:0`), with `voice` defaulting to `matthew` and `s2s.extra.endpointing_sensitivity` (`LOW`/`MEDIUM`/`HIGH`) tuning how quickly it decides the caller stopped speaking.
+
+**New `aws` agent config block** — one per agent, shared by both providers, so an agent's LLM and voice leg always authenticate as the same principal:
+
+```json
+"llm": {"provider": "bedrock", "model": "anthropic.claude-3-5-sonnet-20241022-v2:0"},
+"aws": {"region": "us-west-2", "role_arn": "arn:aws:iam::123456789012:role/turncall"}
+```
+
+Credentials are resolved by the server from an assumed `role_arn`, static keys, a named profile, or the ambient chain (env vars, SSO cache, EC2 instance profile, ECS task role, EKS IRSA). Nova Sonic sessions roll over roughly every 6 minutes and credentials are re-resolved each time, so calls outliving a temporary credential keep working.
+
+**New setting: `AWS_AGENT_CREDENTIALS_ENABLED`** (default `false`) — per-agent *static* AWS keys persist in the agent config, which is not encrypted at rest, so agents supplying them are rejected at create unless this is enabled. `role_arn` needs no flag and stores no durable secret. `AWS_REGION` now also sets the default Bedrock region; set `aws.region` per agent, since model availability rarely matches where your S3 bucket lives.
+
+See [Providers](/guides/providers#aws-bedrock), [Speech-to-Speech](/guides/s2s#amazon-nova-sonic), `examples/bedrock/`, and `adr/0016`.
+
+</Update>
+
 <Update label="2026-09-04" description="September 4, 2026" tags={["Release", "Update", "Fix"]}>
 
 ## 1.0.0 — first open-source release

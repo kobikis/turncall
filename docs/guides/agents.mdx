@@ -52,6 +52,12 @@ curl -X POST http://localhost:8090/v1/agents \
 }
 ```
 
+<Note>
+  Agents using the `bedrock` LLM provider or the `aws` S2S provider also take a
+  top-level `aws` block for region and credentials — one per agent, shared by
+  both. See [AWS credentials](/guides/providers#credentials).
+</Note>
+
 ## Template Variables
 
 Personalize agents per-call using `{{variable}}` placeholders:

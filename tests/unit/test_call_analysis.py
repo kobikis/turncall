@@ -321,7 +321,9 @@ class TestAnalyzeCall:
 
         captured_config = None
 
-        async def capture_complete_text(config: LLMConfig, messages: list) -> MagicMock:
+        async def capture_complete_text(
+            config: LLMConfig, messages: list, **kwargs: object
+        ) -> MagicMock:
             nonlocal captured_config
             captured_config = config
             result = MagicMock()

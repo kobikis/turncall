@@ -99,6 +99,20 @@ class StorageSettings(BaseSettings):
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
 
 
+class AWSSettings(BaseSettings):
+    """AWS settings for the `bedrock` LLM and `aws` S2S providers (ADR-0016)."""
+
+    model_config = SettingsConfigDict(env_prefix="")
+
+    region: str = Field(default="us-east-1", alias="AWS_REGION")
+    # Per-agent *static* AWS keys are persisted in config_blob (unencrypted
+    # JSONB) and are long-lived by construction, so operators opt in
+    # deliberately. Agents supplying them are rejected at create when off.
+    agent_credentials_enabled: bool = Field(
+        default=False, alias="AWS_AGENT_CREDENTIALS_ENABLED"
+    )
+
+
 class MCPSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MCP_")
 
@@ -208,6 +222,7 @@ class Settings(BaseSettings):
     webhook: WebhookSettings = Field(default_factory=WebhookSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     byom: BYOMSettings = Field(default_factory=BYOMSettings)
+    aws: AWSSettings = Field(default_factory=AWSSettings)
     pipecat: PipecatSettings = Field(default_factory=PipecatSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
 

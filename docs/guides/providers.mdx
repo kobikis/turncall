@@ -11,9 +11,9 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 | Role | Providers |
 |------|-----------|
 | **STT** | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming) |
-| **LLM** | `openai` (default), `anthropic` (Claude), `ollama` (local), `custom_openai` (any OpenAI-compatible), `openrouter` (multi-model + fallback routing, voice only) |
+| **LLM** | `openai` (default), `anthropic` (Claude), `ollama` (local), `custom_openai` (any OpenAI-compatible), `openrouter` (multi-model + fallback routing, voice only), `bedrock` (AWS-hosted Anthropic / Meta / Mistral / Amazon models) |
 | **TTS** | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3, streaming, 60+ emotions) |
-| **S2S** | `openai` (Realtime API — optional `base_url` targets an OpenAI-Realtime gateway like Vercel AI Gateway / LiteLLM / xAI, e.g. Grok), `google` (Gemini Live) |
+| **S2S** | `openai` (Realtime API — optional `base_url` targets an OpenAI-Realtime gateway like Vercel AI Gateway / LiteLLM / xAI, e.g. Grok), `google` (Gemini Live), `aws` (Amazon Nova Sonic 2) |
 
 ## STT Configuration
 
@@ -66,6 +66,14 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
   "fallback_models": ["openai/gpt-4o", "google/gemini-flash-1.5"]
 }
 ```
+
+```json AWS Bedrock
+"llm": {
+  "provider": "bedrock",
+  "model": "anthropic.claude-3-5-sonnet-20241022-v2:0"
+},
+"aws": {"region": "us-west-2"}
+```
 </CodeGroup>
 
 <Note>
@@ -76,13 +84,14 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | Yes | `openai`, `anthropic`, `ollama`, `custom_openai`, or `openrouter` |
+| `provider` | Yes | `openai`, `anthropic`, `ollama`, `custom_openai`, `openrouter`, or `bedrock` |
 | `model` | Yes | Model name |
 | `base_url` | For `custom_openai` | OpenAI-compatible API base URL |
 | `api_key` | No | API key for `custom_openai` (masked in responses) |
 | `fallback_models` | For `openrouter` | Ordered list of fallback models (voice only) |
 | `temperature` | No | 0.0–2.0 (default: 0.7) |
 | `max_tokens` | No | 1–128000 (default: 1024) |
+| `extra` | No | Provider passthrough. On `bedrock` it becomes `additionalModelRequestFields` — how Anthropic extended thinking is reached |
 
 ## TTS Configuration
 
@@ -104,6 +113,77 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 ```
 </CodeGroup>
 
+## AWS Bedrock
+
+Bedrock is a *gateway*, not a vendor: `provider: "bedrock"` with
+`model: "anthropic.claude-..."` names two different companies, and the same
+Claude model is reachable through either `anthropic` or `bedrock` with
+different credentials.
+
+Model ids pass through verbatim in any of the three forms AWS accepts:
+
+| Form | Example |
+|------|---------|
+| Direct | `anthropic.claude-3-5-sonnet-20241022-v2:0` |
+| Cross-region inference profile | `us.anthropic.claude-3-5-sonnet-20241022-v2:0` |
+| Provisioned throughput | `arn:aws:bedrock:us-east-1:123456789012:provisioned-model/abc` |
+
+<Warning>
+  Model availability is **region-specific**, and access is granted per model per
+  region in the Bedrock console. A valid-looking model id in the wrong region
+  fails at call time with `AccessDeniedException` or `ValidationException` —
+  TurnCall's error names both the model and the region so you can tell which
+  half is wrong.
+</Warning>
+
+### Credentials
+
+Bedrock and Nova Sonic share one `aws` block on the agent config, so an agent's
+LLM and voice leg always authenticate as the same principal. Credentials are
+resolved by the **server**, in this order:
+
+| Source | Config | Notes |
+|--------|--------|-------|
+| Assume role | `aws.role_arn` (+ optional `aws.external_id`) | Preferred for multi-tenant setups — yields temporary credentials, stores no secret |
+| Static keys | `aws.access_key_id` + `aws.secret_access_key` | Off by default, see below |
+| Named profile | `aws.profile` | How an SSO login is selected |
+| Ambient chain | *(nothing set)* | Env vars, SSO cache, EC2 instance profile, ECS task role, EKS IRSA |
+
+```json
+"aws": {
+  "region": "us-west-2",
+  "role_arn": "arn:aws:iam::123456789012:role/turncall-bedrock"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `region` | No | Defaults to `AWS_REGION`. Set it explicitly — that variable also points at the S3 bucket |
+| `role_arn` | No | IAM role assumed per call |
+| `external_id` | No | `ExternalId` for the assume-role call |
+| `access_key_id` | No | Requires `AWS_AGENT_CREDENTIALS_ENABLED=true` |
+| `secret_access_key` | No | Masked in API responses |
+| `session_token` | No | For temporary credentials. Masked in API responses |
+| `profile` | No | Named profile resolved from the host's AWS config |
+
+<Warning>
+  **Per-agent static keys are disabled by default.** They persist in the agent
+  config, which is not encrypted at rest, and an AWS key is materially worse to
+  leak than a vendor API key. Agents supplying them are rejected at create
+  unless `AWS_AGENT_CREDENTIALS_ENABLED=true`. Prefer `role_arn`, which stores
+  no durable secret.
+</Warning>
+
+<Note>
+  **SSO is a workstation mechanism.** `aws sso login` is an interactive browser
+  flow a server cannot perform, and its cached token expires. It works for local
+  development via `aws.profile` or the ambient chain; in production use an
+  instance profile, IRSA, or `role_arn`.
+</Note>
+
+See [`adr/0016`](https://github.com/kobikis/turncall/blob/main/adr/0016-bedrock-and-nova-sonic.md)
+for why credentials are resolved this way.
+
 ## Required API Keys
 
 | Provider | Environment Variable |
@@ -117,6 +197,7 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 | OpenRouter | `OPENROUTER_API_KEY` |
 | HeyGen (video avatar) | `HEYGEN_LIVE_AVATAR_API_KEY` |
 | Tavus (video avatar) | `TAVUS_API_KEY` |
+| AWS (Bedrock / Nova Sonic) | *No key* — see [Credentials](#credentials). `AWS_REGION` sets the default region |
 
 <Info>
   Ollama requires no API key — just install it locally and run `ollama pull <model>`.
