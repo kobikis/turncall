@@ -9,49 +9,45 @@ TurnCall is a **modular monolith** (FastAPI) that orchestrates real-time voice A
 ## System Overview
 
 ```mermaid
-flowchart TB
-    Phone["📞 Phone"]
-    Browser["🌐 Browser"]
-    WhatsApp["💬 WhatsApp"]
-    SMS["✉️ SMS"]
+flowchart LR
+    Phone["📞 Phone"] --> Twilio
+    SMS["✉️ SMS"] --> Twilio
+    Browser["🌐 Browser"] --> WebRTC
+    WhatsApp["💬 WhatsApp"] --> Meta
 
-    Twilio["Twilio<br/>PSTN + Media Streams"]
-    WebRTC["SmallWebRTC<br/>peer-to-peer"]
-    Meta["Meta Cloud API"]
+    Twilio["Twilio<br/>PSTN + Media Streams"] --> WH
+    Meta["Meta Cloud API"] --> WH
+    WebRTC["SmallWebRTC<br/>peer-to-peer"] --> API
 
-    Phone --> Twilio
-    Browser --> WebRTC
-    WhatsApp --> Meta
-    SMS --> Twilio
-
-    subgraph Server["TurnCall Server (FastAPI / Uvicorn)"]
+    subgraph Server["TurnCall Server — FastAPI / Uvicorn"]
         direction TB
-        API["Control Plane — REST API<br/>/v1/agents · /v1/calls · /v1/phone-numbers<br/>/v1/knowledge-bases · /v1/chat · /v1/webrtc"]
-        WH["Webhooks<br/>Twilio voice/status/SMS · WhatsApp calls/messages"]
-        Pipe["Real-time Pipeline (per call)<br/>Pipecat — STT · LLM · TTS · S2S"]
-        SVC["Services<br/>call control · retrieval · analysis · routing"]
+        WH["Webhooks<br/>Twilio voice · status · SMS<br/>WhatsApp calls · messages"] --> Pipe
+        API["Control plane — REST<br/>/v1/agents · /v1/calls · /v1/phone-numbers<br/>/v1/knowledge-bases · /v1/chat · /v1/webrtc"] --> SVC
+        Pipe["Real-time pipeline — one per call<br/>Pipecat · STT · LLM · TTS · S2S"] --> SVC["Services<br/>call control · retrieval<br/>analysis · routing"]
     end
 
-    PG[("PostgreSQL<br/>+ pgvector")]
-    Redis[("Redis")]
+    SVC --> PG[("PostgreSQL<br/>+ pgvector")]
+    SVC --> Redis[("Redis")]
+    Pipe -.->|audio| Twilio
+    Pipe -.-> WebRTC
+    Pipe -.-> Meta
 
-    Twilio --> WH
-    Meta --> WH
-    WebRTC --> API
-    WH --> Pipe
-    API --> SVC
-    Pipe --> SVC
-    SVC --> PG
-    SVC --> Redis
-    Pipe -.->|media| Twilio
-    Pipe -.->|media| WebRTC
-    Pipe -.->|media| Meta
+    classDef client fill:#dbeafe,stroke:#60a5fa,stroke-width:1.5px,color:#1e3a8a
+    classDef vendor fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#334155
+    classDef core fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#14532d
+    classDef store fill:#fef3c7,stroke:#fbbf24,stroke-width:1.5px,color:#78350f
+    class Phone,Browser,WhatsApp,SMS client
+    class Twilio,WebRTC,Meta vendor
+    class API,WH,Pipe,SVC core
+    class PG,Redis store
+    style Server fill:#f8fafc,stroke:#cbd5e1,color:#0f172a
 ```
 
 ## Inbound Call Flow (Twilio)
 
 ```mermaid
 sequenceDiagram
+    autonumber
     participant C as Caller
     participant T as Twilio
     participant W as TurnCall Webhook
@@ -70,6 +66,7 @@ sequenceDiagram
     end
     C->>T: Hangup
     T->>P: Stream closed
+    Note over P: No end frame arrives —<br/>the disconnect event ends the pipeline
     P->>DB: Mark Call COMPLETED
 ```
 
@@ -102,28 +99,49 @@ Two pipeline modes, selected per agent via `pipeline_mode`.
 
 ```mermaid
 flowchart LR
-    IN["transport.input"] --> STT["STT<br/>Deepgram"]
-    STT --> VM1{"Voicemail<br/>detector?"}
-    VM1 --> TURN["user_agg<br/>VAD + SmartTurn V3"]
-    TURN --> KB{"KB<br/>retrieval?"}
-    KB --> LLM["LLM<br/>OpenAI / Anthropic / Ollama / OpenRouter"]
-    LLM --> TTS["TTS<br/>Deepgram / OpenAI / ElevenLabs / Cartesia"]
-    TTS --> AV{"Video<br/>avatar?"}
-    AV --> OUT["transport.output"]
+    IN["transport.input"] --> STT["STT<br/>Deepgram · OpenAI<br/>ElevenLabs · Cartesia"]
+    STT -.-> VM["Voicemail<br/>detector"]
+    VM -.-> TURN
+    STT --> TURN["user_agg<br/>VAD + SmartTurn V3"]
+    TURN -.-> KB["Knowledge<br/>retrieval"]
+    KB -.-> LLM
+    TURN --> LLM["LLM<br/>OpenAI · Anthropic · Ollama<br/>OpenRouter · Bedrock"]
+    LLM --> TTS["TTS<br/>Deepgram · OpenAI<br/>ElevenLabs · Cartesia"]
+    TTS -.-> AV["Video<br/>avatar"]
+    AV -.-> OUT
+    TTS --> OUT["transport.output"]
     OUT --> OBS["observability<br/>transcripts · events · webhooks"]
+
+    classDef client fill:#dbeafe,stroke:#60a5fa,stroke-width:1.5px,color:#1e3a8a
+    classDef vendor fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#334155
+    classDef core fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#14532d
+    classDef store fill:#fef3c7,stroke:#fbbf24,stroke-width:1.5px,color:#78350f
+    classDef optional fill:#faf5ff,stroke:#c084fc,stroke-width:1.5px,color:#581c87,stroke-dasharray:5 3
+    class IN,OUT vendor
+    class STT,TURN,LLM,TTS,OBS core
+    class VM,KB,AV optional
 ```
 
-Optional stages (dashed in the code): **VoicemailDetector** (outbound), **KnowledgeRetrieval** (auto-mode RAG), **video avatar** (HeyGen/Tavus, WebRTC + cascade only). Transcript taps sit after STT and after the LLM to record both sides.
+Dashed stages are optional: **VoicemailDetector** (outbound), **KnowledgeRetrieval** (auto-mode RAG), **video avatar** (HeyGen/Tavus, WebRTC + cascade only). Transcript taps sit after STT and after the LLM to record both sides.
 
 ### Speech-to-Speech (~300ms)
 
 ```mermaid
 flowchart LR
     IN["transport.input"] --> UA["user_agg<br/>VAD"]
-    UA --> S2S["S2S LLM<br/>OpenAI Realtime / Gemini Live<br/>Amazon Nova Sonic"]
+    UA --> S2S["S2S model<br/>OpenAI Realtime · Gemini Live<br/>Amazon Nova Sonic 2"]
     S2S --> OUT["transport.output"]
     OUT --> ASST["context_aggregator.assistant"]
     ASST --> OBS["observability"]
+
+    classDef client fill:#dbeafe,stroke:#60a5fa,stroke-width:1.5px,color:#1e3a8a
+    classDef vendor fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#334155
+    classDef core fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#14532d
+    classDef store fill:#fef3c7,stroke:#fbbf24,stroke-width:1.5px,color:#78350f
+    classDef fast fill:#d1fae5,stroke:#10b981,stroke-width:2px,color:#064e3b
+    class IN,OUT vendor
+    class UA,ASST,OBS core
+    class S2S fast
 ```
 
 A single model handles STT + reasoning + TTS natively over one WebSocket, so the `stt`/`llm`/`tts` config fields are ignored.
@@ -155,6 +173,13 @@ stateDiagram-v2
     failed --> [*]
     no_answer --> [*]
     busy --> [*]
+
+    classDef live fill:#dbeafe,stroke:#60a5fa,color:#1e3a8a
+    classDef good fill:#dcfce7,stroke:#4ade80,color:#14532d
+    classDef bad fill:#fee2e2,stroke:#f87171,color:#7f1d1d
+    class initiated,ringing,in_progress,transferring,handed_off live
+    class completed,voicemail good
+    class failed,no_answer,busy bad
 ```
 
 ## Module Responsibilities

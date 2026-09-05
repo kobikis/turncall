@@ -62,10 +62,19 @@ flowchart LR
     WhatsApp["💬 WhatsApp"] --> TC
 
     TC["TurnCall<br/>webhook / connect"] --> MODE{"pipeline_mode"}
-    MODE -->|cascade| C["STT → VAD + SmartTurn → LLM → TTS<br/>~800ms"]
-    MODE -->|s2s| S["OpenAI Realtime / Gemini Live<br/>Amazon Nova Sonic<br/>~300ms"]
+    MODE -->|"cascade (default)"| C["STT → turn detection → LLM → TTS<br/><b>~800 ms</b> · every stage swappable"]
+    MODE -->|"s2s"| S["OpenAI Realtime · Gemini Live<br/>Amazon Nova Sonic 2<br/><b>~300 ms</b> · one model, no seams"]
     C --> OUT["🔊 Audio back"]
     S --> OUT
+
+    classDef client fill:#dbeafe,stroke:#60a5fa,stroke-width:1.5px,color:#1e3a8a
+    classDef core fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#14532d
+    classDef fast fill:#d1fae5,stroke:#10b981,stroke-width:2px,color:#064e3b
+    classDef fork fill:#fef3c7,stroke:#fbbf24,stroke-width:1.5px,color:#78350f
+    class Phone,Browser,WhatsApp,OUT client
+    class TC,C core
+    class S fast
+    class MODE fork
 ```
 
 See [Architecture](/architecture) for the full pipeline, call flows, and data model.

@@ -8,10 +8,27 @@ TurnCall supports text-based conversations via Twilio SMS and the Chat API. Agen
 
 ## SMS Flow
 
+```mermaid
+flowchart LR
+    C["✉️ Customer texts"] --> T["Twilio<br/>POST /webhooks/twilio/sms/inbound"]
+    T --> R["Resolve phone → agent"]
+    R --> S[("Create or resume session<br/>24h TTL")]
+    S --> H["Build LLM history"]
+    H --> L["Chat completion"]
+    L --> OUT["TwiML reply"]
+    OUT --> C
+
+    classDef client fill:#dbeafe,stroke:#60a5fa,stroke-width:1.5px,color:#1e3a8a
+    classDef vendor fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#334155
+    classDef core fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#14532d
+    classDef store fill:#fef3c7,stroke:#fbbf24,stroke-width:1.5px,color:#78350f
+    class C client
+    class T,OUT vendor
+    class R,H,L core
+    class S store
 ```
-Customer texts → Twilio POST /webhooks/twilio/sms/inbound → resolve phone → agent
-  → create/resume session (24h TTL) → build LLM history → chat completion → TwiML reply
-```
+
+No Pipecat pipeline is involved — this is a text path through `services/`.
 
 ### Enable SMS on a Phone Number
 

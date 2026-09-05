@@ -44,11 +44,18 @@ The typical setup order — each resource is scoped to the project of the API ke
 
 ```mermaid
 flowchart LR
-    P["POST /v1/projects"] --> K["POST /v1/api-keys<br/>(returns tc_... once)"]
-    K --> A["POST /v1/agents<br/>draft"]
-    A --> PUB["POST /v1/agents/:id/publish<br/>immutable version"]
-    PUB --> N["POST /v1/phone-numbers<br/>bind number → agent"]
+    P["1 · POST /v1/projects"] --> K["2 · POST /v1/api-keys<br/>returns tc_… once"]
+    K --> A["3 · POST /v1/agents<br/>draft"]
+    A --> PUB["4 · POST /v1/agents/:id/publish<br/>immutable version"]
+    PUB --> N["5 · POST /v1/phone-numbers<br/>bind number → agent"]
     N --> CALL["📞 Inbound calls<br/>+ webhooks fire"]
+
+    classDef step fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#14532d
+    classDef secret fill:#fef3c7,stroke:#fbbf24,stroke-width:1.5px,color:#78350f
+    classDef done fill:#dbeafe,stroke:#60a5fa,stroke-width:1.5px,color:#1e3a8a
+    class P,A,PUB,N step
+    class K secret
+    class CALL done
 ```
 
 ## Response Format

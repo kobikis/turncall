@@ -12,13 +12,22 @@ config, and creates it in your TurnCall instance.
 It's two repos — a FastAPI backend and a React console — running alongside the
 engine:
 
+```mermaid
+flowchart TB
+    WEB["turncall-builder-web · :5173<br/>chat + live editable config"]
+    API["turncall-builder-api · :8000<br/>composer · generation · TurnCall calls"]
+    ENG["turncall · :8090<br/>the voice runtime that answers calls"]
+
+    WEB -->|"/api proxy"| API
+    API -->|REST| ENG
+
+    classDef builder fill:#dbeafe,stroke:#60a5fa,stroke-width:1.5px,color:#1e3a8a
+    classDef engine fill:#dcfce7,stroke:#4ade80,stroke-width:2px,color:#14532d
+    class WEB,API builder
+    class ENG engine
 ```
-turncall-builder-web  (:5173)   chat + editable config
-        │  /api proxy
-turncall-builder-api  (:8000)   composer, generation, TurnCall calls
-        │  REST
-turncall              (:8090)   the voice runtime that answers calls
-```
+
+The engine is MIT; the two builder repos are source-available under FSL-1.1-ALv2.
 
 <Note>
 Not to be confused with the **TurnCall skill** for Claude Code, described in
