@@ -70,7 +70,7 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 ```json AWS Bedrock
 "llm": {
   "provider": "bedrock",
-  "model": "anthropic.claude-3-5-sonnet-20241022-v2:0"
+  "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 },
 "aws": {"region": "us-west-2"}
 ```
@@ -124,9 +124,17 @@ Model ids pass through verbatim in any of the three forms AWS accepts:
 
 | Form | Example |
 |------|---------|
-| Direct | `anthropic.claude-3-5-sonnet-20241022-v2:0` |
-| Cross-region inference profile | `us.anthropic.claude-3-5-sonnet-20241022-v2:0` |
+| Direct | `amazon.nova-pro-v1:0` |
+| Cross-region inference profile | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
 | Provisioned throughput | `arn:aws:bedrock:us-east-1:123456789012:provisioned-model/abc` |
+
+<Warning>
+  **Most newer Anthropic models cannot be invoked by their bare id** — they
+  require a cross-region inference profile, and fail with *"Invocation of model
+  ID … with on-demand throughput isn't supported"*. Add the geography prefix
+  matching your region (`us.`, `eu.`, `apac.`). Amazon's own `amazon.nova-*`
+  models invoke fine directly.
+</Warning>
 
 <Warning>
   Model availability is **region-specific**, and access is granted per model per

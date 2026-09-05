@@ -14,7 +14,7 @@ description: "Latest updates and improvements to TurnCall"
 **New `aws` agent config block** — one per agent, shared by both providers, so an agent's LLM and voice leg always authenticate as the same principal:
 
 ```json
-"llm": {"provider": "bedrock", "model": "anthropic.claude-3-5-sonnet-20241022-v2:0"},
+"llm": {"provider": "bedrock", "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0"},
 "aws": {"region": "us-west-2", "role_arn": "arn:aws:iam::123456789012:role/turncall"}
 ```
 

@@ -56,9 +56,26 @@ Two things bite here, both region-shaped:
 Model ids pass through verbatim, in any of the three forms AWS accepts:
 
 ```
-anthropic.claude-3-5-sonnet-20241022-v2:0     direct
-us.anthropic.claude-3-5-sonnet-20241022-v2:0  cross-region inference profile
-arn:aws:bedrock:...:provisioned-model/...     provisioned throughput
+amazon.nova-pro-v1:0                             direct
+us.anthropic.claude-haiku-4-5-20251001-v1:0      cross-region inference profile
+arn:aws:bedrock:...:provisioned-model/...        provisioned throughput
+```
+
+**Most newer Anthropic models require an inference profile.** Invoking one by
+its bare id fails with:
+
+> Invocation of model ID `anthropic.claude-…` with on-demand throughput isn't
+> supported. Retry your request with the ID or ARN of an inference profile that
+> contains this model.
+
+The fix is the geography prefix — `us.`, `eu.` or `apac.` — matching your
+region. Amazon's own models (`amazon.nova-*`) invoke fine by bare id.
+
+To see what your account can actually use:
+
+```bash
+aws bedrock list-foundation-models --region us-east-1 \
+  --query "modelSummaries[?modelLifecycle.status=='ACTIVE'].modelId" --output table
 ```
 
 ## Nova Sonic notes
