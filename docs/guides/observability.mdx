@@ -9,7 +9,7 @@ TurnCall instruments every call with two complementary mechanisms, both **on by 
 - **Observers** — log per-call signals (user→bot latency, turn timing, LLM, transcription, startup). No external infrastructure; they just log.
 - **OpenTelemetry tracing** — emits a span tree per call (conversation → turn → STT/LLM/TTS) with TTFB and token counts, exported to any OTLP backend (Jaeger, Grafana Tempo, Datadog, Honeycomb, …).
 
-Both cover **cascade and S2S** calls. See [ADR-0010](https://github.com/kobikis/turncall/blob/master/adr/0010-otel-tracing-and-observers.md).
+Both cover **cascade and S2S** calls. See `adr/0010-otel-tracing-and-observers.md`.
 
 ## Tracing
 
