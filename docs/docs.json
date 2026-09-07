@@ -255,5 +255,10 @@
     "socials": {
       "github": "https://github.com/kobikis/turncall"
     }
+  },
+  "errors": {
+    "404": {
+      "redirect": true
+    }
   }
 }
