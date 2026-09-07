@@ -223,31 +223,9 @@ Warm transfer and the no-answer fallback require `PUBLIC_BASE_URL` to be set (Tw
 
 **OpenRouter LLM provider** — Route LLM traffic through OpenRouter to access hundreds of models with automatic fallback routing. Configure primary and fallback models per agent to improve reliability when an upstream model is degraded. See [providers](/guides/providers).
 
-## Updates
-
-**Pipecat 1.4 upgrade** — The underlying voice pipeline has been upgraded from Pipecat 1.0 to 1.4 for improved stability and provider compatibility. No action required.
-
-**Streaming audio and latency fixes** — Audio resampling now drops empty buffers instead of pushing silence, reducing artifacts and lowering end-to-end latency on cascade pipelines.
-
-</Update>
-
-<Update label="2026-04-21" description="Week of April 21" tags={["Feature", "Update"]}>
-
-## New features
-
 **Interactive API reference** — You can now explore and test every TurnCall endpoint directly from the docs. The new [API reference](/api-reference/overview) includes request and response schemas, example payloads, and a built-in playground.
 
 **Open source under MIT license** — TurnCall is now fully open source. The entire project is available under the MIT license, so you can self-host, fork, and contribute freely.
-
-## Updates
-
-**Rebrand to TurnCall** — The project has been renamed from Voicey to TurnCall. All API endpoints, configuration files, and documentation now use the TurnCall name consistently. No action is required if you are using the hosted API.
-
-</Update>
-
-<Update label="2026-04-18" description="Week of April 14–18" tags={["Feature", "Update", "Fix"]}>
-
-## New features
 
 **MCP server support for tools** — You can now connect [MCP servers](/guides/mcp) to your agents for auto-discovered tool calling. Any tools exposed by your MCP server are automatically available during calls.
 
@@ -265,26 +243,6 @@ Warm transfer and the no-answer fallback require `PUBLIC_BASE_URL` to be set (Tw
 
 **Pre-call init hook** — Use the [call-init](/guides/call-init) server event to dynamically resolve agent configuration before the pipeline starts. You can also hand off mid-call between agents using the built-in handoff tool.
 
-## Updates
-
-**Richer webhook payloads** — The `call.ended` webhook now includes call metadata (from/to number, direction, duration), the full transcript, and the recording URL. All call events are dispatched to webhook subscribers.
-
-**Call recording storage** — Twilio call recordings are now automatically downloaded and stored locally or in S3.
-
-## Bug fixes
-
-**Duplicate `call.started` events** — Fixed an issue where `call.started` was fired twice per call.
-
-**Transcript sequencing** — Transcript events now use database sequence numbers, preventing ordering collisions in high-throughput calls.
-
-**Webhook payload format** — Fixed the webhook event key to use `event` consistently (previously some payloads used `event_type`).
-
-</Update>
-
-<Update label="2026-04-11" description="Week of April 7–11" tags={["Feature", "Update"]}>
-
-## New features
-
 **SMS and chat support** — Agents can now handle text-based conversations over [SMS and the Chat API](/guides/sms-chat). Sessions are managed automatically so returning users pick up where they left off.
 
 **WhatsApp Business integration** — Connect your agents to [WhatsApp](/guides/whatsapp) for both voice calls and text messages through the WhatsApp Business platform.
@@ -299,8 +257,28 @@ Warm transfer and the no-answer fallback require `PUBLIC_BASE_URL` to be set (Tw
 
 ## Updates
 
+
+**Pipecat 1.4 upgrade** — The underlying voice pipeline has been upgraded from Pipecat 1.0 to 1.4 for improved stability and provider compatibility. No action required.
+
+**Streaming audio and latency fixes** — Audio resampling now drops empty buffers instead of pushing silence, reducing artifacts and lowering end-to-end latency on cascade pipelines.
+
+**Rebrand to TurnCall** — The project has been renamed from Voicey to TurnCall. All API endpoints, configuration files, and documentation now use the TurnCall name consistently. No action is required if you are using the hosted API.
+
+**Richer webhook payloads** — The `call.ended` webhook now includes call metadata (from/to number, direction, duration), the full transcript, and the recording URL. All call events are dispatched to webhook subscribers.
+
+**Call recording storage** — Twilio call recordings are now automatically downloaded and stored locally or in S3.
+
 **Pipecat 1.0 migration** — The underlying voice pipeline has been upgraded to Pipecat 1.0, improving stability and enabling new provider integrations.
 
 **Renamed "assistant" to "agent"** — All API endpoints and documentation now use "agent" consistently. The `/v1/assistants` endpoints have been replaced by `/v1/agents`.
+
+## Bug fixes
+
+
+**Duplicate `call.started` events** — Fixed an issue where `call.started` was fired twice per call.
+
+**Transcript sequencing** — Transcript events now use database sequence numbers, preventing ordering collisions in high-throughput calls.
+
+**Webhook payload format** — Fixed the webhook event key to use `event` consistently (previously some payloads used `event_type`).
 
 </Update>
