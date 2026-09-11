@@ -184,6 +184,7 @@ def _create_llm_service(
     temperature: float | None = None,
     max_tokens: int | None = None,
     reasoning_effort: str | None = _USE_CONFIG,
+    system_instruction: str = "",
 ) -> Any:
     """Create LLM service. Supports openai, ollama, custom_openai, anthropic, openrouter.
 
@@ -191,6 +192,10 @@ def _create_llm_service(
     values to override (e.g. the voicemail classifier pins a low temperature).
     reasoning_effort defaults to the agent's config; pass explicit None to force
     it off (e.g. the deterministic voicemail classifier). OpenAI-family only.
+
+    system_instruction is the agent's system prompt. It belongs on the service,
+    not as a "system" message at the head of the LLMContext: Pipecat deprecated
+    that in 1.9 and stops honouring it in 2.0.
     """
     provider = config.llm.provider
     temperature = temperature if temperature is not None else config.llm.temperature
@@ -200,6 +205,10 @@ def _create_llm_service(
         if reasoning_effort is _USE_CONFIG
         else reasoning_effort
     )
+
+    # Empty means unset — spread in only when there is one, so a service without
+    # a prompt keeps the provider default instead of an empty string.
+    si = {"system_instruction": system_instruction} if system_instruction else {}
 
     if provider == "openrouter":
         # OpenRouter is OpenAI-compatible; fallback_models ride in extra_body as
@@ -215,6 +224,7 @@ def _create_llm_service(
             base_url="https://openrouter.ai/api/v1",
             settings=OpenAILLMService.Settings(
                 model=config.llm.model,
+                **si,
                 extra=_openai_extra_body(effort, models),
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -226,6 +236,7 @@ def _create_llm_service(
             api_key=openai_api_key,
             settings=OpenAILLMService.Settings(
                 model=config.llm.model,
+                **si,
                 extra=_openai_extra_body(effort),
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -240,6 +251,7 @@ def _create_llm_service(
             api_key=resolved_key,
             settings=AnthropicLLMService.Settings(
                 model=config.llm.model,
+                **si,
                 temperature=temperature,
                 max_tokens=max_tokens,
             ),
@@ -255,6 +267,7 @@ def _create_llm_service(
             base_url=base_url,
             settings=OLLamaLLMService.Settings(
                 model=config.llm.model,
+                **si,
                 temperature=temperature,
                 max_tokens=max_tokens,
             ),
@@ -271,6 +284,7 @@ def _create_llm_service(
             base_url=base_url,
             settings=OpenAILLMService.Settings(
                 model=config.llm.model,
+                **si,
                 extra=_openai_extra_body(effort),
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -285,6 +299,7 @@ def _create_llm_service(
         credentials = resolve_aws_credentials(config.aws)
         settings_kwargs: dict[str, Any] = {
             "model": config.llm.model,
+            **si,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
@@ -471,18 +486,29 @@ def _build_guardrails_section(config: AgentConfig) -> str:
     )
 
 
-def _build_system_messages(
-    config: AgentConfig, *, inject_tools_prompt: bool = False
-) -> list[dict[str, str]]:
-    """Build the initial LLM context messages."""
-    messages: list[dict[str, str]] = []
+def _build_system_instruction(
+    config: AgentConfig,
+    *,
+    inject_tools_prompt: bool = False,
+    knowledge_preamble: str = "",
+) -> str:
+    """Compose the agent's system instruction.
+
+    This goes on the LLM service as `system_instruction`, not into the
+    LLMContext as a "system" message. Pipecat deprecated that in 1.9 and drops
+    it in 2.0, and the OpenAI adapter prepends `system_instruction` to the
+    context messages anyway — so doing both would send the prompt twice.
+
+    The knowledge preamble leads: prompt-mode document text and the awareness
+    hint for auto/tool KBs sit in front of the agent's own words, as before.
+    """
     content = config.system_prompt or ""
     if inject_tools_prompt:
         content += _build_tools_prompt_section(config)
     content += _build_guardrails_section(config)
-    if content:
-        messages.append({"role": "system", "content": content})
-    return messages
+    if knowledge_preamble:
+        return f"{knowledge_preamble}\n\n{content}" if content else knowledge_preamble
+    return content
 
 
 def _build_tools_schema(
@@ -611,45 +637,41 @@ def create_pipeline(
     # --- Cascade pipeline (STT → LLM → TTS) ---
     # Create AI services
     stt = _create_stt_service(config, openai_api_key, sample_rate=audio_sample_rate)
+
+    # BYOM providers describe their tools in the prompt rather than advertising
+    # them through the API: many local models (Gemma and friends) only do
+    # function calling by prompting.
+    byom_provider = config.llm.provider in ("ollama", "custom_openai")
+    system_instruction = _build_system_instruction(
+        config,
+        inject_tools_prompt=byom_provider,
+        knowledge_preamble=knowledge_preamble,
+    )
+    if byom_provider and config.tools:
+        logger.info(
+            "BYOM mode: tools injected into system prompt for {provider}/{model}",
+            provider=config.llm.provider,
+            model=config.llm.model,
+        )
+
     llm = _create_llm_service(
         config,
         openai_api_key,
         anthropic_api_key=anthropic_api_key,
         openrouter_api_key=openrouter_api_key,
         byom_settings=byom_settings,
+        system_instruction=system_instruction,
     )
     tts = _create_tts_service(config, openai_api_key)
 
-    # Build context with system prompt and tools
-    # For BYOM providers (ollama, custom_openai), inject tools into the system
-    # prompt instead of using the API-level tools parameter, since many local
-    # models (e.g., Gemma) support function calling via prompting only.
-    byom_provider = config.llm.provider in ("ollama", "custom_openai")
-    if byom_provider:
-        messages = _build_system_messages(config, inject_tools_prompt=True)
-        if config.tools:
-            logger.info(
-                "BYOM mode: tools injected into system prompt for {provider}/{model}",
-                provider=config.llm.provider,
-                model=config.llm.model,
-            )
-        kwargs: dict[str, Any] = {"messages": messages}
-    else:
+    # The context starts empty — the system prompt is on the LLM service as
+    # system_instruction. BYOM providers advertise no API-level tools, theirs
+    # being described in the prompt instead.
+    kwargs: dict[str, Any] = {"messages": []}
+    if not byom_provider:
         tools_schema = _build_tools_schema(config, extra_tools=mcp_tools)
-        messages = _build_system_messages(config)
-        kwargs = {"messages": messages}
         if tools_schema is not None:
             kwargs["tools"] = tools_schema
-
-    # Prepend knowledge into the system prompt: prompt-mode full text (so it's
-    # always present) + an awareness hint for auto/tool KBs. Built async upstream.
-    if knowledge_preamble:
-        if messages and messages[0].get("role") == "system":
-            base = messages[0]["content"]
-            messages[0] = {**messages[0], "content": f"{knowledge_preamble}\n\n{base}"}
-        else:
-            messages.insert(0, {"role": "system", "content": knowledge_preamble})
-        kwargs["messages"] = messages
 
     context = LLMContext(**kwargs)
 
