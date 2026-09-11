@@ -157,7 +157,9 @@ async def call_init(request: Request) -> JSONResponse:
 async def lookup_customer(request: Request) -> JSONResponse:
     """Handle lookup_customer tool webhook call.
 
-    TurnCall POSTs: {tool_name, arguments, call_id, project_id}
+    TurnCall POSTs: {tool_name, arguments, project_id, call_id, session_id}
+    Exactly one of call_id (voice) / session_id (SMS, chat, WhatsApp text) is
+    set; the other is null.
     """
     body = await request.json()
     args = body.get("arguments", {})
@@ -234,7 +236,9 @@ async def create_ticket(request: Request) -> JSONResponse:
     subject = args.get("subject", "No subject")
     description = args.get("description", "")
     priority = args.get("priority", "medium")
-    call_id = body.get("call_id", "")
+    # Both keys are always present, so a `.get(key, "")` default never fires —
+    # on a text conversation call_id is null and session_id carries the id.
+    origin = body.get("call_id") or body.get("session_id") or "unknown"
 
     ticket_id = f"TKT-{uuid4().hex[:6].upper()}"
     ticket = {
@@ -244,7 +248,7 @@ async def create_ticket(request: Request) -> JSONResponse:
         "priority": priority,
         "status": "open",
         "created_at": datetime.now(UTC).isoformat(),
-        "call_id": call_id,
+        "origin": origin,
     }
     TICKETS.append(ticket)
 

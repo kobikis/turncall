@@ -125,10 +125,16 @@ When the LLM decides to call a custom tool, TurnCall POSTs to the tool's `webhoo
 {
   "tool_name": "lookup_customer",
   "arguments": {"phone_number": "+15551112222"},
+  "project_id": "uuid",
   "call_id": "uuid",
-  "project_id": "uuid"
+  "session_id": null
 }
 ```
+
+Exactly one of `call_id` and `session_id` is set — a voice call sends the
+first, an SMS or chat conversation the second. Both keys are always present,
+so `body.get("call_id", "")` returns `None` rather than `""` on a text turn:
+the default only applies when a key is missing.
 
 Your server returns the result as JSON (becomes the tool response the LLM sees):
 
