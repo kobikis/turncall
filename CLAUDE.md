@@ -463,11 +463,12 @@ Connect agents to MCP servers for auto-discovered tools. Tools are fetched at ca
 - `services/chat_tools.py` — webhook + MCP tools for text turns (per-message connect/close)
 - `services/tool_webhook.py` — the shared webhook POST + HMAC signing, used by both paths
 
-Tools run on voice **and** text. Built-ins are voice-only — all four resolve through `call_control` against a live `call_id`. Text turns cap at `_MAX_TOOL_ROUNDS` (5), then re-ask with the tools withheld so a reply always goes out. Anthropic/Bedrock text tool calling is not implemented (different dialects); `complete_text` logs a warning rather than dropping tools silently.
+Tools run on voice **and** text, on every LLM provider — OpenAI-compatible (`tools`/`tool_calls`), Anthropic (`input_schema` + tool_use/tool_result blocks) and Bedrock Converse (`toolSpec`/`toolUse`/`toolResult`) each have their own dialect in `llm_text.py`. Built-ins are voice-only — all four resolve through `call_control` against a live `call_id`. Calls within one round run concurrently. Text turns cap at `_MAX_TOOL_ROUNDS` (5), then re-ask with the tools withheld so a reply always goes out.
 
 ### Tool Invocation Recording
-All tool calls (webhook + MCP + builtin) recorded in `tool_invocations` table with: input, output, status, latency_ms.
-Query via: `GET /v1/tools/invocations/{call_id}`
+**Voice only.** Tool calls on a call (webhook + MCP + builtin) are recorded in `tool_invocations` with input, output, status, latency_ms, and dispatched as `tool.result` events. Query via `GET /v1/tools/invocations/{call_id}`.
+
+Text sessions record **nothing**: `tool_invocations.call_id` is `NOT NULL` with an FK to `calls`, and a chat session has no call. Chat history stores customer/assistant text only, so a text tool call leaves no trace in either place. Fixing it needs a migration (nullable `call_id` + `session_id` + a CHECK that exactly one is set) and a matching read path.
 
 ## Pipecat Integration
 
