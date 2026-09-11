@@ -1,8 +1,8 @@
 """S2S (speech-to-speech) service factory.
 
-Maps S2SConfig to Pipecat's OpenAIRealtimeLLMService, GeminiLiveLLMService or
-AWSNovaSonicLLMService with appropriate session properties, voice, and turn
-detection settings.
+Maps S2SConfig to Pipecat's OpenAIRealtimeLLMService, OpenAILiveLLMService,
+GeminiLiveLLMService or AWSNovaSonicLLMService with appropriate session
+properties, voice, and turn detection settings.
 """
 
 from typing import Any
@@ -18,6 +18,7 @@ _OPENAI_DEFAULT_MODEL = "gpt-realtime-2.1"
 _OPENAI_DEFAULT_VOICE = "alloy"
 _NOVA_SONIC_MODEL = "amazon.nova-2-sonic-v1:0"
 _NOVA_SONIC_VOICE = "matthew"
+_OPENAI_LIVE_MODEL = "gpt-live-1"
 
 
 def _build_s2s_system_prompt(config: AgentConfig) -> str:
@@ -42,6 +43,8 @@ def create_s2s_service(
         return _create_openai_realtime(config, openai_api_key)
     if provider == "google":
         return _create_gemini_live(config, google_api_key)
+    if provider == "openai_live":
+        return _create_openai_live(config, openai_api_key)
     if provider == "aws":
         return _create_nova_sonic(config)
     raise ValueError(f"Unsupported S2S provider: {provider}")
@@ -220,5 +223,65 @@ def _create_nova_sonic(config: AgentConfig) -> Any:
         voice=voice,
         region=credentials.region,
         temp=credentials.session_token is not None,
+    )
+    return service
+
+
+def _create_openai_live(config: AgentConfig, api_key: str) -> Any:
+    """Create an OpenAILiveLLMService (gpt-live-1) from S2SConfig.
+
+    Unlike Realtime, the live model is full duplex: it listens and speaks at
+    once and decides for itself when to answer and when to stop on being
+    talked over. There is no client-side turn detection to configure — the
+    schema rejects `pipecat_vad` for this provider — and the pipeline just
+    streams audio in and out.
+
+    It can also *delegate* reasoning and tool calls to a backend text model
+    while the conversation keeps going. Set `s2s.extra.backend_model` to turn
+    that on; OpenAI hosts the backend, and the function calls it makes are run
+    by our own tool handlers. Left unset, the live model answers on its own.
+    """
+    from pipecat.services.openai.live.llm import OpenAILiveLLMService
+    from pipecat.services.openai.responses.llm import OpenAIResponsesLLMSettings
+
+    s2s = config.s2s
+
+    # S2SConfig's default model is OpenAI Realtime's. Swap only when the agent
+    # left it untouched, so an explicitly wrong model is reported by OpenAI
+    # rather than silently replaced. Same rule as Nova Sonic (ADR-0016).
+    model = _OPENAI_LIVE_MODEL if s2s.model == _OPENAI_DEFAULT_MODEL else s2s.model
+
+    settings_kwargs: dict[str, Any] = {"model": model, "voice": s2s.voice}
+    system_prompt = _build_s2s_system_prompt(config)
+    if system_prompt:
+        settings_kwargs["system_instruction"] = system_prompt
+    if s2s.temperature is not None:
+        settings_kwargs["temperature"] = s2s.temperature
+    if s2s.max_tokens is not None:
+        settings_kwargs["max_tokens"] = s2s.max_tokens
+
+    service_kwargs: dict[str, Any] = {
+        "api_key": api_key,
+        "settings": OpenAILiveLLMService.Settings(**settings_kwargs),
+    }
+    if s2s.base_url:
+        service_kwargs["base_url"] = s2s.base_url
+
+    backend_model = s2s.extra.get("backend_model")
+    if backend_model:
+        service_kwargs["delegation"] = OpenAILiveLLMService.ResponsesDelegation(
+            settings=OpenAIResponsesLLMSettings(model=backend_model),
+            service_tier=s2s.extra.get("service_tier"),
+        )
+
+    service = OpenAILiveLLMService(**service_kwargs)
+
+    logger.info(
+        "S2S service created: provider=openai_live model={model} voice={voice} "
+        "backend={backend} base_url={base_url}",
+        model=model,
+        voice=s2s.voice,
+        backend=backend_model or "none (live model answers directly)",
+        base_url=s2s.base_url or "openai-default",
     )
     return service

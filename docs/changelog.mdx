@@ -60,6 +60,19 @@ OpenAI shuts down `gpt-4o-transcribe` on 2027-02-26 and `gpt-transcribe` replace
 
 **Chunks retrieved in `auto` mode are now attached as `developer` rather than a second `system` message.** They are guidance for the turn, not the agent's instructions, and a `system` message mid-conversation was already being downgraded to `user` by every provider except OpenAI — so this is no worse anywhere and correct on OpenAI. Your agent's own `system_prompt` is unaffected.
 
+## New S2S provider: OpenAI GPT-Live-1
+
+**`s2s.provider: "openai_live"`** runs OpenAI's `gpt-live-1`, [announced on 10 September 2026](https://openai.com/index/introducing-gpt-live-1-in-the-api/). It is **full duplex** — it listens and speaks at once, and decides for itself when to answer and when to stop on being talked over — where the Realtime API is turn-based. OpenAI reports a 30-point gain on Full Duplex Bench over `gpt-realtime-2.1`, and calls out telephony as a target.
+
+```json
+"pipeline_mode": "s2s",
+"s2s": {"provider": "openai_live", "voice": "alloy"}
+```
+
+**Reasoning and tool calls can be delegated** to a backend text model while the conversation continues. Set `s2s.extra.backend_model` and OpenAI hosts it; the function calls it makes run against your agent's own tools. Left unset, the live model answers alone.
+
+Two differences from `openai`: `s2s.temperature` is supported here (Realtime GA rejects it), and `s2s.turn_detection` must stay `server_vad` — client-side VAD would fight a model doing its own turn-taking, so `pipecat_vad` is rejected at config time.
+
 
 </Update>
 

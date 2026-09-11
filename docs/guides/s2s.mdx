@@ -75,6 +75,46 @@ Set `pipeline_mode: "s2s"` in the agent config. The `stt`, `llm`, and `tts` fiel
 - **Gemini Live** — any [Gemini-supported voice](https://ai.google.dev/gemini-api/docs/live) (e.g. `Aoede`, `Charon`, `Kore`, `Puck`, `Zephyr`, and more). The set grows per model, so TurnCall doesn't allowlist it — Gemini validates the voice when the session connects.
 - **Nova Sonic** — `matthew` (default), `tiffany`, `amy`, `lupe`, `carlos`. AWS validates on connect.
 
+## OpenAI GPT-Live-1
+
+`provider: "openai_live"` runs OpenAI's `gpt-live-1`, a **full-duplex** model: it
+listens and speaks at the same time, and decides for itself when to answer and
+when to stop on being talked over. That is the difference from the Realtime API,
+which is turn-based.
+
+```json
+"pipeline_mode": "s2s",
+"s2s": {"provider": "openai_live", "voice": "alloy"}
+```
+
+Leave `s2s.model` unset and it resolves to `gpt-live-1`. Set it explicitly and
+the value is sent as given.
+
+### Delegation
+
+The live model can hand deeper reasoning and tool calls to a backend text model
+while the conversation keeps going. Name one and OpenAI hosts it; the function
+calls it makes are executed by your agent's own tools.
+
+```json
+"s2s": {"provider": "openai_live", "extra": {"backend_model": "gpt-6-astra"}}
+```
+
+`s2s.extra.service_tier` is passed through when set. Leave `backend_model` unset
+and the live model answers on its own.
+
+### Differences from `openai`
+
+| | `openai` (Realtime) | `openai_live` |
+|---|---|---|
+| Turn-taking | turn-based | full duplex |
+| `s2s.temperature` | rejected — the GA API has no such control | supported |
+| `s2s.turn_detection` | `server_vad` or `pipecat_vad` | `server_vad` only |
+| Backend delegation | — | `extra.backend_model` |
+
+`pipecat_vad` is rejected for this provider: client-side turn detection would
+fight a model that is doing its own.
+
 ## Amazon Nova Sonic
 
 Nova Sonic runs on AWS and shares the agent's [`aws` credential block](/guides/providers#credentials) with the Bedrock LLM provider — same account, same region resolution, no separate key.
