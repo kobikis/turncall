@@ -256,9 +256,16 @@ class S2SConfigSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider(self) -> "S2SConfigSchema":
-        supported = {"openai", "google", "aws"}
+        supported = {"openai", "openai_live", "google", "aws"}
         if self.provider not in supported:
             msg = f"Unsupported S2S provider: {self.provider}. Supported: {supported}"
+            raise ValueError(msg)
+        if self.provider == "openai_live" and self.turn_detection == "pipecat_vad":
+            msg = (
+                "gpt-live-1 is full duplex and handles interruption itself, so "
+                "client-side turn detection would fight it; remove "
+                "s2s.turn_detection or leave it at 'server_vad'"
+            )
             raise ValueError(msg)
         if self.provider == "aws" and self.base_url:
             msg = (
