@@ -376,7 +376,7 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
                 "CARTESIA_API_KEY environment variable is required for Cartesia TTS"
             )
         tts_settings = CartesiaTTSService.Settings(
-            model=config.tts.model or "sonic-3.5",
+            model=config.tts.model or "sonic-3.6",
             voice=config.tts.voice,
             language=config.tts.extra.get("language", config.language),
             extra=_overflow(

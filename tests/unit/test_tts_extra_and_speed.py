@@ -68,3 +68,24 @@ class TestExtra:
             "sk-test",
         )
         assert svc._settings.extra == {"made_up_key": "z"}
+@pytest.mark.unit
+class TestCartesiaDefaultModel:
+    def test_empty_model_falls_back_to_sonic_3_6(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CARTESIA_API_KEY", "sk-cartesia-test")
+        svc = _create_tts_service(_config(provider="cartesia", model=""), "sk-test")
+        assert svc._settings.model == "sonic-3.6"
+
+    def test_known_bug_deepgram_default_leaks_into_other_providers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`TTSConfig.model` defaults to a Deepgram voice whatever the provider.
+
+        So `config.tts.model or "sonic-3.6"` can never fire, and a Cartesia
+        agent that doesn't pin a model sends Cartesia an Aura voice name. The
+        same holds for ElevenLabs' `or "Rachel"` / `or "eleven_flash_v2_5"`.
+        Pinned here so that fixing the defaults shows up as a failing test
+        rather than passing unnoticed.
+        """
+        monkeypatch.setenv("CARTESIA_API_KEY", "sk-cartesia-test")
+        svc = _create_tts_service(_config(provider="cartesia"), "sk-test")
+        assert svc._settings.model == "aura-2-helena-en"

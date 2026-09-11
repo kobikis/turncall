@@ -134,7 +134,7 @@ def main() -> None:
                 "llm": {"provider": "openai", "model": "gpt-4o"},
                 "tts": {
                     "provider": "cartesia",
-                    "model": "sonic-3.5",
+                    "model": "sonic-3.6",
                     "voice": "f9836c6e-a0bd-460e-9d3c-f7299fa60f94",
                     "extra": {
                         "emotion": ["positivity:high", "relaxation:highest"],
@@ -240,7 +240,7 @@ def main() -> None:
                 "llm": {"provider": "openai", "model": "gpt-4o-mini"},
                 "tts": {
                     "provider": "cartesia",
-                    "model": "sonic-3.5",
+                    "model": "sonic-3.6",
                     "voice": args.cartesia_voice,
                     "extra": {"emotion": ["positivity:high", "curiosity"]},
                 },

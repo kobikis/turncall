@@ -46,6 +46,14 @@ OpenAI shuts down `gpt-4o-transcribe` on 2027-02-26 and `gpt-transcribe` replace
 
 **Fixed: ending a call during voicemail detection.** While the voicemail classifier's gate was closed, the frame that ends a call could be dropped instead of reaching the pipeline, leaving the caller on the line until the idle timeout. An agent calling `end_call` in that window now ends the call.
 
+## TTS: speed, provider passthrough, and a newer Cartesia default
+
+**`tts.speed` now works on every provider.** It was read only for Cartesia, so setting it on the default Deepgram voice did nothing. Deepgram (0.7–1.5), OpenAI and ElevenLabs all honour it now. Leaving it at `1.0` sends nothing, exactly as before.
+
+**`tts.extra` now reaches the provider.** Previously only Cartesia's `language` and `emotion` were read and every other key was dropped. Keys naming a setting TurnCall already manages — `voice`, `model`, `speed` — are ignored rather than applied, so `extra` cannot quietly override your configured voice; set `tts.voice` for that.
+
+**Cartesia's default model is now `sonic-3.6`**, matching Cartesia's current Sonic release. It applies only to agents that leave `tts.model` empty; pin `"sonic-3.5"` to stay on the previous one.
+
 
 </Update>
 

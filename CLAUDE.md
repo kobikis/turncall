@@ -15,7 +15,7 @@ Production voice agent platform. API-only backend for real-time AI voice agents 
 - **STT**: Deepgram Nova-2 (streaming) · OpenAI Whisper · ElevenLabs Scribe · Cartesia Ink
 - **LLM**: OpenAI GPT-4o-mini · Anthropic Claude (Sonnet, Haiku, Opus) · Ollama (local models) · OpenRouter (multi-model + fallback routing) · Any OpenAI-compatible endpoint
 - **S2S**: OpenAI Realtime · Gemini Live (native audio-in/audio-out)
-- **TTS**: Deepgram Aura-2 · OpenAI TTS-1 · ElevenLabs Flash v2.5 · Cartesia Sonic-3.5
+- **TTS**: Deepgram Aura-2 · OpenAI TTS-1 · ElevenLabs Flash v2.5 · Cartesia Sonic-3.6
 - **VAD**: Silero (barge-in / interruption handling)
 - **Turn Detection**: Smart Turn V3 (ML-based, local ONNX)
 - **Voicemail**: Pipecat VoicemailDetector with retry backoff
@@ -99,7 +99,7 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 |------|-----------|
 | STT | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming) |
 | LLM | `openai` (default), `anthropic` (Claude), `ollama` (local), `custom_openai` (any OpenAI-compatible endpoint), `openrouter` (multi-model + `fallback_models` routing, voice only), `bedrock` (AWS-hosted Anthropic/Meta/Mistral/Amazon models — a *gateway*, not a vendor; credentials come from the agent's `aws` block, and `llm.extra` passes through to `additionalModelRequestFields` for e.g. Anthropic extended thinking. See `adr/0016`). Sampling: `llm.temperature` (0–2, default 0.7) + `llm.max_tokens` (default 1024) apply on voice and chat/SMS; the voicemail classifier stays pinned at 0.1. `llm.reasoning_effort` (`minimal`\|`low`\|`medium`\|`high`, unset by default) sent via `extra_body` on voice + chat/SMS — OpenAI-family only (openai/openrouter/custom_openai), for reasoning models (o-series/gpt-5); classifier forces it off. See `adr/0014` |
-| TTS | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3.5, streaming, 60+ emotions) |
+| TTS | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3.6, streaming, 60+ emotions) |
 | S2S | `openai` (Realtime API), `google` (Gemini Live), `aws` (Amazon Nova Sonic 2, `amazon.nova-2-sonic-v1:0`; `voice` defaults to `matthew`, `s2s.extra.endpointing_sensitivity` = `LOW`\|`MEDIUM`\|`HIGH`. Sessions roll over every ~6 min and credentials are re-resolved each time. See `adr/0016`) — set `pipeline_mode: "s2s"`. Sampling: `s2s.max_tokens` (both), `s2s.temperature` (google only — Realtime GA rejects it with 422). `openai` accepts an optional `s2s.base_url` (`wss://`) to target an OpenAI-Realtime-compatible gateway (Vercel AI Gateway, LiteLLM) or xAI direct — routes models like `xai/grok-voice-think-fast-1.0` over the same protocol. SSRF-gated by `BYOM_ALLOWED_URL_PATTERNS` |
 
 ## Pipeline
