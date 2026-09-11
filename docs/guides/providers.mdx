@@ -12,8 +12,8 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 |------|-----------|
 | **STT** | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming) |
 | **LLM** | `openai` (default), `anthropic` (Claude), `ollama` (local), `custom_openai` (any OpenAI-compatible), `openrouter` (multi-model + fallback routing, voice only), `bedrock` (AWS-hosted Anthropic / Meta / Mistral / Amazon models) |
-| **TTS** | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3, streaming, 60+ emotions) |
-| **S2S** | `openai` (Realtime API — optional `base_url` targets an OpenAI-Realtime gateway like Vercel AI Gateway / LiteLLM / xAI, e.g. Grok), `google` (Gemini Live), `aws` (Amazon Nova Sonic 2) |
+| **TTS** | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3.6, streaming, 60+ emotions) |
+| **S2S** | `openai` (Realtime API — optional `base_url` targets an OpenAI-Realtime gateway like Vercel AI Gateway / LiteLLM / xAI, e.g. Grok), `openai_live` (GPT-Live-1, full duplex), `google` (Gemini Live), `aws` (Amazon Nova Sonic 2) |
 
 ## STT Configuration
 
@@ -22,8 +22,8 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 "stt": {"provider": "deepgram", "model": "nova-3-general", "language": "en"}
 ```
 
-```json OpenAI Whisper
-"stt": {"provider": "openai", "model": "whisper-1"}
+```json OpenAI
+"stt": {"provider": "openai", "model": "gpt-transcribe"}
 ```
 
 ```json ElevenLabs Scribe
@@ -34,6 +34,25 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 "stt": {"provider": "cartesia"}
 ```
 </CodeGroup>
+
+### STT Options
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `provider` | No | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` |
+| `model` | No | Provider default when unset. OpenAI defaults to `gpt-transcribe` — its predecessor `gpt-4o-transcribe` is withdrawn on 2027-02-26 |
+| `language` | No | BCP-47 code (default `en`) |
+| `extra` | No | Passthrough to the provider. Keys naming a setting TurnCall already manages — `model`, `language`, and Deepgram's `punctuate` / `smart_format` / `interim_results` — are ignored so they cannot silently override your config |
+
+On Deepgram, `extra` reaches the full transcription surface: `profanity_filter`,
+`diarize`, `redact`, `keyterm`, `version`, `utterance_end_ms`.
+
+<Note>
+**Transcripts are not profanity-filtered by default.** Deepgram's filter
+rewrites the words it matches rather than tagging them, so one false positive
+silently alters a transcript you store, analyse and receive in `call.ended`.
+Set `"extra": {"profanity_filter": true}` if you want it on.
+</Note>
 
 ## LLM Configuration
 
@@ -109,9 +128,25 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 ```
 
 ```json Cartesia Sonic
-"tts": {"provider": "cartesia", "voice": "sonic-english-female"}
+"tts": {"provider": "cartesia", "model": "sonic-3.6", "voice": "<cartesia-voice-id>"}
 ```
 </CodeGroup>
+
+### TTS Options
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `provider` | No | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` |
+| `model` | No | Provider default when unset: `aura-2-helena-en`, `tts-1`, `eleven_flash_v2_5`, `sonic-3.6` |
+| `voice` | No | Provider default when unset: `aura-2-helena-en`, `alloy`, `Rachel`. Cartesia voice ids are account-specific, so there is no default — set one |
+| `speed` | No | 0.25–4.0 (default 1.0, which sends nothing). Honoured by Deepgram (0.7–1.5), OpenAI and ElevenLabs |
+| `extra` | No | Passthrough to the provider. Keys naming a setting TurnCall already manages — `model`, `voice`, `speed`, and Cartesia's `language` / `emotion` — are ignored so they cannot silently override your config |
+
+<Note>
+Each provider falls back to **its own** model and voice. Earlier versions leaked
+a Deepgram voice name into the other three, so an agent that chose Cartesia,
+OpenAI or ElevenLabs without naming a model and voice was misconfigured.
+</Note>
 
 ## AWS Bedrock
 
