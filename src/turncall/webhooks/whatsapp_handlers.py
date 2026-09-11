@@ -20,7 +20,7 @@ from turncall.api.deps import DbSession
 from turncall.config import get_settings
 from turncall.domain.enums import CallDirection, CallEventType
 from turncall.domain.models import AgentConfig
-from turncall.orchestrator.pipeline_builder import build_call_pipeline
+from turncall.orchestrator.pipeline_builder import start_call_pipeline
 from turncall.orchestrator.pipeline_factory import CallContext
 from turncall.orchestrator.transport_factory import create_whatsapp_transport
 from turncall.storage.database import create_session_factory, get_engine
@@ -344,7 +344,7 @@ async def _start_voice_pipeline(
     # Build transport and pipeline
     transport = create_whatsapp_transport(connection)
 
-    call_session = await build_call_pipeline(
+    await start_call_pipeline(
         config=config,
         transport=transport,
         call_context=call_context,
@@ -352,7 +352,6 @@ async def _start_voice_pipeline(
         session_factory=session_factory,
         audio_sample_rate=16000,
     )
-    asyncio.create_task(call_session.start())  # noqa: RUF006
 
     logger.info(
         "whatsapp_voice_call_started",

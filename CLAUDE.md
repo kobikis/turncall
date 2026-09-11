@@ -455,7 +455,10 @@ Connect agents to MCP servers for auto-discovered tools. Tools are fetched at ca
 - `services/mcp_client.py` — `MCPSessionManager`: connect, discover, call, cleanup
 - `orchestrator/tool_bridge.py` — Routes MCP tool calls through MCP client
 - `orchestrator/pipeline_factory.py` — Merges MCP tools into pipeline at creation
-- `webhooks/media_stream.py` — MCP discovery before pipeline start
+- `orchestrator/pipeline_builder.py` — `start_call_pipeline()`: MCP discovery for WebRTC + WhatsApp voice (in the task that also runs the call — MCP transports open anyio cancel scopes that must be exited where they were entered)
+- `webhooks/media_stream.py` — MCP discovery before pipeline start (Twilio)
+
+Voice only. SMS/chat has no tool-calling path at all (`services/llm_text.py` sends no `tools`), so `mcp_servers` is ignored there.
 
 ### Tool Invocation Recording
 All tool calls (webhook + MCP + builtin) recorded in `tool_invocations` table with: input, output, status, latency_ms.

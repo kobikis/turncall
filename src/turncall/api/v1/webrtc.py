@@ -5,7 +5,6 @@ Pipecat 1.0 uses SmallWebRTCRequestHandler for signaling:
   - PATCH /connect — ICE candidate trickle
 """
 
-import asyncio
 from dataclasses import fields
 from typing import Any
 from uuid import UUID
@@ -27,7 +26,7 @@ from turncall.api.errors import ApiError, ErrorCode, NotFoundError
 from turncall.auth import Auth
 from turncall.config import get_settings
 from turncall.domain.models import AgentConfig
-from turncall.orchestrator.pipeline_builder import build_call_pipeline
+from turncall.orchestrator.pipeline_builder import start_call_pipeline
 from turncall.orchestrator.pipeline_factory import CallContext
 from turncall.orchestrator.transport_factory import (
     STUN_SERVERS,
@@ -231,7 +230,9 @@ async def webrtc_connect(
         transport = create_whatsapp_transport(connection, video_out=avatar_on)
 
         try:
-            call_session = await build_call_pipeline(
+            # Returns once the pipeline is built; the call runs in a task of its
+            # own so any MCP servers are connected and closed inside it.
+            await start_call_pipeline(
                 config=config,
                 transport=transport,
                 call_context=call_context,
@@ -247,7 +248,6 @@ async def webrtc_connect(
             logger.exception("webrtc pipeline build failed", call_id=str(call.id))
             await _finalize_failed(session_factory, call.id)
             raise
-        asyncio.create_task(call_session.start())  # noqa: RUF006
 
     answer = await _request_handler.handle_web_request(webrtc_request, on_connection)
 
