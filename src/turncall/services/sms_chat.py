@@ -19,6 +19,7 @@ from turncall.domain.enums import CallEventType, ChatChannel, SmsMessageRole
 from turncall.domain.models import AgentConfig
 from turncall.domain.session_state import is_session_expired
 from turncall.events.dispatcher import dispatch_event
+from turncall.services.chat_tools import build_chat_tools
 from turncall.services.llm_text import complete_text
 from turncall.services.template_renderer import render_template
 from turncall.storage.models import SmsSessionRow
@@ -194,9 +195,23 @@ async def _process_chat_message(
     )
 
     llm_messages = await _build_llm_messages(db, session_row.id, system_prompt)
-    completion = await complete_text(
-        agent_config.llm, llm_messages, aws=agent_config.aws
+
+    # Webhook + MCP tools for this turn. The tool_calls turn and its results
+    # live inside complete_text only — history is rebuilt from sms_messages
+    # each turn, which stores the customer/assistant text and nothing else.
+    chat_tools = await build_chat_tools(
+        agent_config, session_id=session_row.id, project_id=project_id
     )
+    try:
+        completion = await complete_text(
+            agent_config.llm,
+            llm_messages,
+            aws=agent_config.aws,
+            tools=chat_tools.schemas or None,
+            execute_tool=chat_tools.execute,
+        )
+    finally:
+        await chat_tools.aclose()
 
     # 5. Store agent reply
     agent_msg = await sms_message_repo.create_message(

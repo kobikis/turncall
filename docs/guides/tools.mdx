@@ -84,12 +84,36 @@ Your server receives:
 {
   "tool_name": "lookup_customer",
   "arguments": {"phone_number": "+15559876543"},
+  "project_id": "project-uuid",
   "call_id": "call-uuid",
-  "project_id": "project-uuid"
+  "session_id": null
 }
 ```
 
 Return any JSON — it's passed back to the LLM as the tool result.
+
+Exactly one of `call_id` and `session_id` is set. A voice call sends
+`call_id`; an SMS, Chat API or WhatsApp text conversation sends `session_id`
+and leaves `call_id` null. Branch on whichever you need — or ignore both if
+your handler is stateless.
+
+### Tools on text channels
+
+The same webhook tools work in SMS, the Chat API and WhatsApp text. Two
+differences worth knowing:
+
+- **Built-in tools are voice-only.** `end_call`, `transfer_call`, `send_dtmf`
+  and `handoff_to_agent` all act on a live call, so they aren't offered in a
+  text session. Configure them if you like — they're simply not advertised to
+  the model there.
+- **Tool exchanges aren't part of the stored history.** Chat history is
+  rebuilt from the stored customer and assistant messages each turn, so the
+  model sees its own tool calls while it resolves one message and not
+  afterwards.
+
+A text turn runs at most five rounds of tool calls. On the fifth, the tools
+are withheld and the model is asked to answer in words, so a model that keeps
+calling tools still produces a reply instead of hanging the conversation.
 
 ### Signed Tool Webhooks
 

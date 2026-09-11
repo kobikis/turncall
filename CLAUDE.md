@@ -116,7 +116,8 @@ transport.input → user_agg (VAD) → S2S_LLM (OpenAI Realtime / Gemini Live) �
 
 SMS/Chat (text-only):
 ```
-inbound message → session lookup/create → message history → LLM chat completion → store reply → respond
+inbound message → session lookup/create → message history → [KB retrieval]
+  → [chat_tools: webhook + MCP] → LLM chat completion (tool loop) → store reply → respond
 ```
 
 ## SMS / Chat
@@ -415,7 +416,9 @@ POST /v1/calls/{id}/analysis/rerun   # Re-run analysis
 | `send_dtmf` | Send keypad tones | `digits` (required) |
 
 ### Custom Webhook Tools
-Require `webhook_url`. TurnCall POSTs: `{tool_name, arguments, call_id, project_id}`.
+Require `webhook_url`. TurnCall POSTs:
+`{tool_name, arguments, project_id, call_id, session_id}` — exactly one of
+`call_id` (voice) / `session_id` (SMS, chat, WhatsApp text) is set, the other null.
 Optional `webhook_secret`: when set, each POST is HMAC-signed (`X-TurnCall-Signature: v1=<hex>`,
 `X-TurnCall-Timestamp`, HMAC-SHA256 over `"{timestamp}.{body}"` — same scheme as event webhooks).
 
@@ -457,8 +460,10 @@ Connect agents to MCP servers for auto-discovered tools. Tools are fetched at ca
 - `orchestrator/pipeline_factory.py` — Merges MCP tools into pipeline at creation
 - `orchestrator/pipeline_builder.py` — `start_call_pipeline()`: MCP discovery for WebRTC + WhatsApp voice (in the task that also runs the call — MCP transports open anyio cancel scopes that must be exited where they were entered)
 - `webhooks/media_stream.py` — MCP discovery before pipeline start (Twilio)
+- `services/chat_tools.py` — webhook + MCP tools for text turns (per-message connect/close)
+- `services/tool_webhook.py` — the shared webhook POST + HMAC signing, used by both paths
 
-Voice only. SMS/chat has no tool-calling path at all (`services/llm_text.py` sends no `tools`), so `mcp_servers` is ignored there.
+Tools run on voice **and** text. Built-ins are voice-only — all four resolve through `call_control` against a live `call_id`. Text turns cap at `_MAX_TOOL_ROUNDS` (5), then re-ask with the tools withheld so a reply always goes out. Anthropic/Bedrock text tool calling is not implemented (different dialects); `complete_text` logs a warning rather than dropping tools silently.
 
 ### Tool Invocation Recording
 All tool calls (webhook + MCP + builtin) recorded in `tool_invocations` table with: input, output, status, latency_ms.
