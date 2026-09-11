@@ -91,7 +91,7 @@ locally through Ollama and no audio leaves your network except to the telco.
 - **Video Avatar** — Optional HeyGen LiveAvatar (lip-synced video) on WebRTC cascade calls
 - **Multi-provider STT/LLM/TTS** — Deepgram, OpenAI, Anthropic Claude, ElevenLabs, Cartesia, Ollama, OpenRouter, AWS Bedrock, or any OpenAI-compatible endpoint (configurable per agent)
 - **Bring Your Own Model** — Use local LLMs via Ollama or remote endpoints (Together AI, Groq, vLLM, etc.)
-- **Speech-to-Speech** — Ultra-low latency (~300ms) via OpenAI Realtime, Gemini Live or Amazon Nova Sonic 2
+- **Speech-to-Speech** — Ultra-low latency (~300ms) via OpenAI Realtime, GPT-Live-1 (full duplex), Gemini Live or Amazon Nova Sonic 2
 - **Smart Turn Detection** — ML-based (SmartTurnV3) understands natural pauses
 - **Barge-in** — Silero VAD lets users interrupt mid-speech
 - **Voicemail Detection** — With retry backoff, beep detection, auto-message
@@ -145,7 +145,7 @@ See [QUICKSTART.md](QUICKSTART.md) for detailed setup instructions.
 Phone Call → Twilio → TurnCall webhook → TwiML with <Stream>
   → WebSocket → Pipecat Pipeline:
     Cascade: STT → VAD+SmartTurn → [KB Retrieval] → LLM → TTS → Audio back (~800ms)
-    S2S:     VAD → OpenAI Realtime / Gemini Live / Nova Sonic → Audio back (~300ms)
+    S2S:     VAD → OpenAI Realtime / GPT-Live-1 / Gemini Live / Nova Sonic → Audio back (~300ms)
 
 Browser → POST /v1/webrtc/connect (SDP offer/answer) + PATCH (ICE trickle) → WebRTC audio → Same pipeline
 ```
@@ -501,7 +501,7 @@ each one needs — several run with no phone number and no tunnel.
 | STT | Deepgram / OpenAI / ElevenLabs / Cartesia |
 | LLM | OpenAI / Anthropic Claude / Ollama / Any OpenAI-compatible |
 | TTS | Deepgram / OpenAI / ElevenLabs / Cartesia |
-| S2S | OpenAI Realtime / Gemini Live |
+| S2S | OpenAI Realtime / GPT-Live-1 / Gemini Live / Nova Sonic 2 |
 | Knowledge Base | pgvector + OpenAI embeddings |
 | VAD | Silero |
 | Turn Detection | Smart Turn V3 (local ONNX) |
