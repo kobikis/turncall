@@ -2854,6 +2854,68 @@
         }
       }
     },
+    "/v1/chat/sessions/{session_id}/tool-invocations": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "List Session Tool Invocations",
+        "description": "List tool invocations made during a chat session.\n\nThe text-channel counterpart of `GET /v1/tools/invocations/{call_id}`.",
+        "operationId": "list_session_tool_invocations_v1_chat_sessions__session_id__tool_invocations_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Session Tool Invocations V1 Chat Sessions  Session Id  Tool Invocations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/knowledge-bases": {
       "post": {
         "tags": [
