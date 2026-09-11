@@ -3,7 +3,16 @@ title: Changelog
 description: "Latest updates and improvements to TurnCall"
 ---
 
-<Update label="Unreleased" description="Unreleased" tags={["Feature", "Update", "Fix"]}>
+<Update label="Unreleased" description="Unreleased" tags={["Feature"]}>
+
+</Update>
+
+<Update label="2026-09-11" description="September 11, 2026" tags={["Release", "Feature", "Update", "Fix"]}>
+
+## 1.1.0
+
+Bedrock and Nova Sonic, GPT-Live-1, Pipecat 1.9, and three config fields that were accepted and then ignored. No REST API, agent config schema or webhook payload shape changed.
+
 
 ## AWS Bedrock and Amazon Nova Sonic
 
@@ -30,6 +39,16 @@ See [Providers](/guides/providers#aws-bedrock), [Speech-to-Speech](/guides/s2s#a
 
 Two things follow. The conversation context now begins empty, so a transcript no longer carries the instructions as a phantom first turn. And `handoff_to_agent` switches agents by updating the model's instruction instead of rewriting that message — which had to change at the same time, because the instruction is prepended to the context, so doing both would have sent the previous agent's prompt alongside the new one.
 
+
+## STT: provider passthrough
+
+**`stt.extra` now reaches the provider.** The field has existed since the beginning and was silently ignored — the API accepted it, stored it, and dropped it. Keys naming a setting TurnCall already manages (`model`, `language`, and Deepgram's `punctuate` / `smart_format` / `interim_results`) are ignored rather than applied, so `extra` cannot quietly override your configuration.
+
+On Deepgram it unlocks the rest of the transcription surface: `profanity_filter`, `diarize`, `redact`, `keyterm`, `version`, `utterance_end_ms`.
+
+```json
+"stt": {"provider": "deepgram", "extra": {"profanity_filter": true, "diarize": true}}
+```
 
 ## Voice pipeline upgraded to Pipecat 1.9
 

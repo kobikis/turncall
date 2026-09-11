@@ -11,6 +11,78 @@ and is not part of this repository's history.
 
 ## [Unreleased]
 
+## [1.1.0]
+
+### Added
+
+- **AWS Bedrock as an LLM provider and Amazon Nova Sonic 2 as S2S.** Model ids
+  pass through verbatim, so direct ids, cross-region inference profiles and
+  provisioned-throughput ARNs all work. Credentials come from a per-agent `aws`
+  block — an assumed `role_arn`, static keys, a named profile, or the ambient
+  chain. See `adr/0016`.
+- **`openai_live` S2S provider** — OpenAI's `gpt-live-1`, which is full duplex:
+  it listens and speaks at once and handles being talked over itself, where the
+  Realtime API is turn-based. Reasoning and tool calls can be delegated to a
+  backend text model with `s2s.extra.backend_model`. `s2s.temperature` is
+  accepted here and `s2s.turn_detection` must stay `server_vad`.
+- **`stt.extra` and `tts.extra` now reach the provider.** Both fields existed
+  and were silently ignored. On Deepgram, `stt.extra` unlocks
+  `profanity_filter`, `diarize`, `redact`, `keyterm`, `version` and
+  `utterance_end_ms`.
+- **`tts.speed` now works on Deepgram, OpenAI and ElevenLabs**, not Cartesia
+  alone. `1.0` still sends nothing.
+
+### Changed
+
+- **Upgraded to Pipecat 1.9.0** from 1.8.1.
+- **Provider defaults refreshed.** These apply only to agents that do *not* set
+  the value explicitly:
+
+  | Role | Was | Now |
+  |---|---|---|
+  | Deepgram STT | profanity filter on | off |
+  | OpenAI STT | `gpt-4o-transcribe` | `gpt-transcribe` |
+  | Cartesia TTS | `sonic-3.5` | `sonic-3.6` |
+  | HeyGen avatar | VP8 | H264 |
+
+  `gpt-4o-transcribe` is withdrawn on 2027-02-26 and LiveAvatar has deprecated
+  VP8. **Deepgram transcripts are no longer profanity-filtered**: the filter
+  rewrites matched words rather than tagging them, so one false positive
+  silently altered a transcript you store, analyse and receive in `call.ended`.
+  Set `stt.extra.profanity_filter` to `true` to restore it.
+- **Retrieved knowledge is attached as `developer`, not a second `system`
+  message.** It is guidance for one turn, not the agent's instructions, and
+  outside OpenAI a mid-conversation `system` message was downgraded to `user`
+  anyway.
+- **The system prompt is set on the LLM service rather than inserted as the
+  first context message.** Internal; no config or API difference. The
+  conversation context now starts empty, so a transcript no longer carries the
+  instructions as a phantom first turn.
+
+### Fixed
+
+- **A Deepgram voice name was being sent to the other TTS providers.**
+  `tts.model` and `tts.voice` both defaulted to `aura-2-helena-en` whatever the
+  provider, so an agent choosing Cartesia, OpenAI or ElevenLabs without naming
+  a model and voice was misconfigured. Each provider now falls back to its own.
+- **`end_call` during voicemail detection.** While the classifier's gate was
+  closed, the frame ending a call could be dropped instead of reaching the
+  pipeline, leaving the caller on the line until the idle timeout.
+- **Assistant transcripts no longer contain text the model never wrote.** A
+  word-timing event matching nothing left to speak was added to the
+  conversation as spoken text.
+- Replaced end-of-life Bedrock model ids and documented inference profiles.
+- Stopped the localstack compose overriding real AWS credentials.
+
+### Upgrade notes
+
+- **Config that was silently ignored now takes effect.** If an agent carries a
+  stray `stt.extra`, `tts.extra` or `tts.speed`, it did nothing before this
+  release and does something now. Worth a scan before upgrading.
+- No REST API, agent config schema or webhook payload shape changed, which is
+  why this is a minor release. The `call.ended` transcript *content* changes
+  with the profanity filter default.
+
 ## [1.0.0]
 
 First public release.
