@@ -12,6 +12,8 @@ both places. See ADR-0016.
 from __future__ import annotations
 
 import asyncio
+import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,6 +22,14 @@ from loguru import logger
 from turncall.adapters.http_client import get_http_client
 from turncall.config.settings import get_settings
 from turncall.domain.models import AWSConfig, LLMConfig
+
+# Runs one tool and returns its result as a string. Owns its own errors —
+# a failure comes back as text for the model to react to, never as an
+# exception, so one bad webhook can't sink the whole reply.
+ToolExecutor = Callable[[str, dict[str, Any]], Awaitable[str]]
+
+# Text has no turn-taking pressure, so nothing naturally ends a tool loop.
+_MAX_TOOL_ROUNDS = 5
 
 
 @dataclass(frozen=True)
@@ -156,11 +166,105 @@ async def _complete_text_bedrock(
     return CompletionResult(text=text, total_tokens=total_tokens)
 
 
+def _decode_args(fn: dict[str, Any]) -> dict[str, Any]:
+    """Tool arguments arrive as a JSON *string*, and a model can emit a broken
+    one. An empty dict lets the tool fail on its own terms rather than taking
+    the whole reply down."""
+    raw = fn.get("arguments") or "{}"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning(
+            "chat_tool_bad_arguments", tool=fn.get("name"), raw=str(raw)[:200]
+        )
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+async def _complete_text_openai(
+    config: LLMConfig,
+    messages: list[dict[str, Any]],
+    api_key: str,
+    tools: list[dict[str, Any]] | None = None,
+    execute_tool: ToolExecutor | None = None,
+) -> CompletionResult:
+    """Chat-completions call, with an optional tool loop.
+
+    Without tools this is the single POST it has always been. With them, each
+    round runs whatever the model asked for and feeds the results back until
+    it answers in words or hits the cap.
+    """
+    base_url = _resolve_base_url(config)
+    url = f"{base_url}/chat/completions"
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    body: dict[str, Any] = {
+        "model": config.model,
+        # Copied: the loop appends to this, and the caller's history is theirs.
+        "messages": list(messages),
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
+    }
+    if config.reasoning_effort:
+        # OpenAI reasoning models (o-series/gpt-5); ignored when unset.
+        body["reasoning_effort"] = config.reasoning_effort
+    if config.provider == "openrouter" and config.fallback_models:
+        # OpenRouter's `models` array — tried in order, primary first.
+        body["models"] = [config.model, *config.fallback_models]
+    if tools:
+        body["tools"] = [{"type": "function", "function": t} for t in tools]
+
+    client = get_http_client()
+    total_tokens = 0
+
+    async def _round() -> dict[str, Any]:
+        nonlocal total_tokens
+        response = await client.post(url, json=body, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        data = response.json()
+        total_tokens += data.get("usage", {}).get("total_tokens", 0)
+        return data["choices"][0]["message"]
+
+    for _ in range(_MAX_TOOL_ROUNDS):
+        message = await _round()
+        calls = message.get("tool_calls") if execute_tool else None
+        if not calls:
+            return CompletionResult(
+                text=message.get("content") or "", total_tokens=total_tokens
+            )
+
+        body["messages"].append(message)
+        for call in calls:
+            fn = call.get("function", {})
+            result = await execute_tool(fn.get("name", ""), _decode_args(fn))
+            body["messages"].append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.get("id", ""),
+                    "content": result,
+                }
+            )
+
+    # Cap reached. Withhold the tools so the model has to answer in words: an
+    # SMS with a mediocre answer beats an SMS that never arrives.
+    logger.warning(
+        "chat_tool_rounds_exhausted", model=config.model, rounds=_MAX_TOOL_ROUNDS
+    )
+    body.pop("tools", None)
+    message = await _round()
+    return CompletionResult(text=message.get("content") or "", total_tokens=total_tokens)
+
+
 async def complete_text(
     config: LLMConfig,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     *,
     aws: AWSConfig | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    execute_tool: ToolExecutor | None = None,
 ) -> CompletionResult:
     """Generate a text completion using the agent's LLM config.
 
@@ -171,10 +275,23 @@ async def complete_text(
     that hold an AgentConfig should pass it; omitting it falls back to the
     ambient boto3 chain, which is not the agent's configured principal.
 
+    `tools` + `execute_tool` opt into function calling (OpenAI-compatible
+    providers only, for now). Omitting them sends exactly the request this
+    function always sent — which callers like post-call analysis and the
+    transfer briefing depend on, since a tool call there would be nonsense.
+
     Note: openrouter is blocked for customer SMS/Chat conversations at the
     sms_chat boundary, but allowed here for internal callers like post-call
     analysis. See ADR-0003.
     """
+    if tools and config.provider in ("bedrock", "anthropic"):
+        # Both take a different tool dialect (content blocks / toolConfig).
+        # Say so rather than dropping them on the floor.
+        logger.warning(
+            "chat_tools_unsupported_provider",
+            provider=config.provider,
+            tools=len(tools),
+        )
     api_key = _resolve_api_key(config)
 
     logger.debug(
@@ -189,34 +306,9 @@ async def complete_text(
     elif config.provider == "anthropic":
         result = await _complete_text_anthropic(config, messages, api_key)
     else:
-        base_url = _resolve_base_url(config)
-        url = f"{base_url}/chat/completions"
-
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-
-        body = {
-            "model": config.model,
-            "messages": messages,
-            "temperature": config.temperature,
-            "max_tokens": config.max_tokens,
-        }
-        if config.reasoning_effort:
-            # OpenAI reasoning models (o-series/gpt-5); ignored when unset.
-            body["reasoning_effort"] = config.reasoning_effort
-        if config.provider == "openrouter" and config.fallback_models:
-            # OpenRouter's `models` array — tried in order, primary first.
-            body["models"] = [config.model, *config.fallback_models]
-
-        client = get_http_client()
-        response = await client.post(url, json=body, headers=headers, timeout=30.0)
-        response.raise_for_status()
-
-        data = response.json()
-        reply_text = data["choices"][0]["message"]["content"]
-        total_tokens = data.get("usage", {}).get("total_tokens", 0)
-        result = CompletionResult(text=reply_text, total_tokens=total_tokens)
+        result = await _complete_text_openai(
+            config, messages, api_key, tools, execute_tool
+        )
 
     logger.debug(
         "llm_text_response",

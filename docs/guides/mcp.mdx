@@ -95,9 +95,14 @@ WhatsApp voice alike — and disconnected when it ends. Discovery adds one
 tight and use `tool_filter` to trim a large catalogue down to the handful the
 agent actually needs.
 
+MCP also works on the text channels — SMS, the Chat API and WhatsApp text —
+where servers are connected per inbound message and closed once the reply is
+sent.
+
 <Warning>
-  SMS and chat sessions do **not** call tools. `services/llm_text.py` sends no
-  `tools` array, so `mcp_servers` on an agent is ignored on those channels —
-  the agent will answer from its prompt and knowledge bases only.
+  That handshake is per message, not per conversation: every inbound text pays
+  a connect plus `tools/list` for each server. It's fine at SMS latencies, but
+  it makes `timeout_seconds` and `tool_filter` matter more than they do on a
+  voice call, where the cost is paid once at the start.
 </Warning>
 

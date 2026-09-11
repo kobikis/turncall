@@ -13,28 +13,17 @@ import json
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-import httpx
 from loguru import logger
 
-from turncall.adapters.http_client import get_http_client
-from turncall.domain.models import ToolDefinition
-from turncall.events.webhook_signing import sign_payload
+from turncall.domain.models import BUILTIN_TOOL_NAMES, ToolDefinition
 from turncall.services import call_control
+from turncall.services.tool_webhook import post_tool_webhook
 
 if TYPE_CHECKING:
     from pipecat.services.llm_service import LLMService
 
     from turncall.orchestrator.pipeline_factory import CallContext
 
-
-BUILTIN_TOOL_NAMES = frozenset(
-    {
-        "end_call",
-        "transfer_call",
-        "handoff_to_agent",
-        "send_dtmf",
-    }
-)
 
 # Background logging/dispatch tasks kept referenced so asyncio (which holds only
 # a weak ref) doesn't GC them mid-flight.
@@ -100,47 +89,12 @@ async def _execute_webhook_tool(
     call_context: CallContext,
 ) -> str:
     """Execute a webhook-based tool by POSTing to the configured URL."""
-    if not tool_def.webhook_url:
-        return '{"error": "No webhook URL configured"}'
-
-    payload = {
-        "tool_name": tool_def.name,
-        "arguments": args,
-        "call_id": str(call_context.call_id),
-        "project_id": str(call_context.project_id),
-    }
-    # Sign over the exact bytes sent so the receiver can verify them verbatim.
-    body = json.dumps(payload)
-    headers = {"Content-Type": "application/json"}
-    if tool_def.webhook_secret:
-        signature, ts = sign_payload(body, tool_def.webhook_secret)
-        headers["X-TurnCall-Signature"] = signature
-        headers["X-TurnCall-Timestamp"] = str(ts)
-
-    client = get_http_client()
-    try:
-        response = await client.post(
-            tool_def.webhook_url,
-            content=body,
-            headers=headers,
-            timeout=tool_def.timeout_seconds,
-        )
-        response.raise_for_status()
-        return response.text
-    except httpx.TimeoutException:
-        logger.warning(
-            "tool_webhook_timeout",
-            tool=tool_def.name,
-            timeout=tool_def.timeout_seconds,
-        )
-        return '{"error": "Tool execution timed out"}'
-    except httpx.HTTPStatusError as exc:
-        logger.warning(
-            "tool_webhook_error",
-            tool=tool_def.name,
-            status=exc.response.status_code,
-        )
-        return f'{{"error": "Tool returned status {exc.response.status_code}"}}'
+    return await post_tool_webhook(
+        tool_def,
+        args,
+        project_id=call_context.project_id,
+        call_id=call_context.call_id,
+    )
 
 
 async def _execute_builtin(
