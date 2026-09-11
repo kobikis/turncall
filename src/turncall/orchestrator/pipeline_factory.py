@@ -40,7 +40,14 @@ class CallContext:
 def _create_stt_service(
     config: AgentConfig, openai_api_key: str, *, sample_rate: int = 8000
 ) -> Any:
-    """Create STT service. Supports deepgram, openai, elevenlabs, and cartesia."""
+    """Create STT service. Supports deepgram, openai, elevenlabs, and cartesia.
+
+    `stt.extra` is forwarded to every provider. Pipecat's `ServiceSettings`
+    treats it as overflow — `given_fields()` merges its entries at the top
+    level — and Deepgram promotes a key matching a declared field onto that
+    field. That promotion is how `profanity_filter` stays reachable now that
+    Pipecat 1.9 no longer sends it by default.
+    """
     provider = config.stt.provider
 
     if provider == "deepgram":
@@ -56,6 +63,7 @@ def _create_stt_service(
                 interim_results=True,
                 punctuate=True,
                 smart_format=True,
+                extra=config.stt.extra,
             ),
         )
         stt._sample_rate = sample_rate
@@ -73,6 +81,7 @@ def _create_stt_service(
             settings=ElevenLabsSTTService.Settings(
                 model=config.stt.model or "scribe_v1",
                 language=config.stt.language or "en",
+                extra=config.stt.extra,
             ),
         )
         stt._sample_rate = sample_rate
@@ -83,7 +92,9 @@ def _create_stt_service(
 
         return OpenAISTTService(
             api_key=openai_api_key,
-            settings=OpenAISTTService.Settings(model=config.stt.model),
+            settings=OpenAISTTService.Settings(
+                model=config.stt.model, extra=config.stt.extra
+            ),
         )
 
     if provider == "cartesia":
@@ -100,6 +111,7 @@ def _create_stt_service(
             settings=CartesiaSTTService.Settings(
                 model=config.stt.model or "ink-whisper",
                 language=config.stt.language or "en",
+                extra=config.stt.extra,
             ),
         )
         stt._sample_rate = sample_rate
