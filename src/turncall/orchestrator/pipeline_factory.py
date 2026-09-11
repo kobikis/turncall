@@ -144,16 +144,11 @@ def _validate_byom_url(base_url: str, byom_settings: BYOMSettings) -> None:
     """Validate base_url against BYOM allowlist settings."""
     if not byom_settings.enabled:
         raise ValueError("BYOM (custom LLM providers) is disabled")
-    if not byom_settings.allowed_url_patterns:
-        return  # Empty allowlist = all URLs allowed (dev mode)
-    import fnmatch
+    # The pattern check itself is shared with MCP server URLs, which are the
+    # same class of attacker-influenceable outbound target.
+    from turncall.services.url_allowlist import check_url_allowed
 
-    for pattern in byom_settings.allowed_url_patterns:
-        if fnmatch.fnmatch(base_url, pattern):
-            return
-    raise ValueError(
-        f"base_url '{base_url}' not in allowed patterns: {byom_settings.allowed_url_patterns}"
-    )
+    check_url_allowed(base_url, byom_settings.allowed_url_patterns)
 
 
 # Sentinel for _create_llm_service's reasoning_effort override: distinguishes
@@ -525,6 +520,21 @@ def _build_tools_schema(
     if extra_tools:
         all_tools.extend(extra_tools)
 
+    # Deduplicate by name, first registration wins. Providers reject a tools
+    # array with two identical function names, and two MCP servers exposing a
+    # common one ("search", "get") is ordinary rather than exotic. Static
+    # tools come first, so a discovered tool can never take over a name the
+    # agent config already uses.
+    seen: set[str] = set()
+    deduped = []
+    for tool in all_tools:
+        if tool.name in seen:
+            logger.warning("tool_name_collision_skipped", tool=tool.name)
+            continue
+        seen.add(tool.name)
+        deduped.append(tool)
+    all_tools = deduped
+
     if not all_tools:
         return None
 
@@ -632,6 +642,7 @@ def create_pipeline(
             audio_sample_rate=audio_sample_rate,
             google_api_key=google_api_key,
             byom_settings=byom_settings,
+            mcp_tools=mcp_tools,
         )
 
     # --- Cascade pipeline (STT → LLM → TTS) ---
@@ -984,6 +995,7 @@ def _create_s2s_pipeline(
     audio_sample_rate: int = 8000,
     google_api_key: str = "",
     byom_settings: BYOMSettings | None = None,
+    mcp_tools: list[Any] | None = None,
 ) -> Pipeline:
     """Build a speech-to-speech pipeline using OpenAI Realtime or Gemini Live.
 
@@ -1003,7 +1015,7 @@ def _create_s2s_pipeline(
     # Build context — system prompt + first_message are handled by the S2S
     # service directly (SessionProperties.instructions for OpenAI,
     # system_instruction for Gemini). Only pass tools via context.
-    tools_schema = _build_tools_schema(config)
+    tools_schema = _build_tools_schema(config, extra_tools=mcp_tools)
     context_kwargs: dict[str, Any] = {"messages": []}
     if tools_schema is not None:
         context_kwargs["tools"] = tools_schema

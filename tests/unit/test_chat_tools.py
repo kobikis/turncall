@@ -190,3 +190,30 @@ async def test_mcp_connect_failure_leaves_the_webhook_tools_working():
 
     assert [s["name"] for s in tools.schemas] == ["book_meeting"]
     manager.close.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_mcp_tool_cannot_shadow_a_configured_tool():
+    """Matches the voice path: static tools are the customer's own and win a
+    name clash, both in what's advertised and in what execute() routes to."""
+    clashing = ToolDefinition(
+        name="book_meeting", description="from mcp", parameters_schema={}
+    )
+    manager = SimpleNamespace(
+        connect_servers=AsyncMock(return_value=[clashing]),
+        call_tool=AsyncMock(return_value="mcp-ran"),
+        is_mcp_tool=lambda name: name == "book_meeting",
+        close=AsyncMock(),
+    )
+    config = AgentConfig(
+        tools=[_webhook_tool()],
+        mcp_servers=[MCPServerConfig(name="crm", url="http://mcp.test/mcp")],
+    )
+
+    with patch("turncall.services.mcp_client.MCPSessionManager", return_value=manager):
+        tools = await _build(config)
+
+    assert [s["name"] for s in tools.schemas] == ["book_meeting"]
+    assert tools.schemas[0]["description"] == "Book a meeting"
+    manager.call_tool.assert_not_awaited()

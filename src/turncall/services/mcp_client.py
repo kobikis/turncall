@@ -26,7 +26,7 @@ class MCPToolRef:
 
     server_name: str
     tool_name: str
-    session: ClientSession
+    session: Any
 
 
 @dataclass
@@ -129,23 +129,49 @@ class MCPSessionManager:
             allowed = set(server.tool_filter)
             mcp_tools = [t for t in mcp_tools if t.name in allowed]
 
-        # Apply max tools limit
+        return self._register_discovered(
+            mcp_tools, server_name=server.name, session=session, settings=settings
+        )
+
+    def _register_discovered(
+        self,
+        mcp_tools: list[Tool],
+        *,
+        server_name: str,
+        session: Any,
+        settings: Any,
+    ) -> list[ToolDefinition]:
+        """Convert discovered tools and claim their names.
+
+        The ref map is keyed by bare tool name, so a second server exposing a
+        name the first already claimed would overwrite the route while both
+        stayed advertised. First server wins; the loser is skipped and logged
+        rather than silently shadowing.
+        """
         max_tools = settings.mcp.max_tools_per_server
         if len(mcp_tools) > max_tools:
             logger.warning(
                 "mcp_tools_truncated",
-                server=server.name,
+                server=server_name,
                 total=len(mcp_tools),
                 max=max_tools,
             )
             mcp_tools = mcp_tools[:max_tools]
 
-        # Convert to TurnCall ToolDefinition + register refs
         tools: list[ToolDefinition] = []
         for mcp_tool in mcp_tools:
-            tool_def = _mcp_tool_to_definition(mcp_tool, server.name)
+            tool_def = _mcp_tool_to_definition(mcp_tool, server_name)
+            claimed = self._tool_refs.get(tool_def.name)
+            if claimed is not None:
+                logger.warning(
+                    "mcp_tool_name_collision",
+                    tool=tool_def.name,
+                    server=server_name,
+                    claimed_by=claimed.server_name,
+                )
+                continue
             self._tool_refs[tool_def.name] = MCPToolRef(
-                server_name=server.name,
+                server_name=server_name,
                 tool_name=mcp_tool.name,
                 session=session,
             )
@@ -161,6 +187,18 @@ class MCPSessionManager:
         """Create an MCP ClientSession for the given transport."""
         if server.transport == "stdio":
             return await self._create_stdio_session(server, settings)
+
+        # An MCP url is an outbound target picked by whoever can write the
+        # agent config, reached from inside the network — the same SSRF
+        # surface the custom-LLM and S2S gateway endpoints are gated on.
+        from turncall.services.url_allowlist import check_url_allowed
+
+        check_url_allowed(
+            server.url or "",
+            settings.byom.allowed_url_patterns,
+            label=f"MCP server '{server.name}' url",
+        )
+
         if server.transport == "sse":
             return await self._create_sse_session(server)
         return await self._create_http_session(server)

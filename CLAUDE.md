@@ -462,6 +462,9 @@ Connect agents to MCP servers for auto-discovered tools. Tools are fetched at ca
 - `webhooks/media_stream.py` — MCP discovery before pipeline start (Twilio)
 - `services/chat_tools.py` — webhook + MCP tools for text turns (per-message connect/close)
 - `services/tool_webhook.py` — the shared webhook POST + HMAC signing, used by both paths
+- `services/url_allowlist.py` — `check_url_allowed()`: MCP urls + BYOM/S2S base_urls share one SSRF gate (`BYOM_ALLOWED_URL_PATTERNS`; empty = allow all)
+
+Tool names are flat and unique: precedence is built-in > agent `tools` > MCP (server order); a collision is skipped + logged. `handoff_to_agent` swaps the prompt and the target's `tools` (via `LLMSetToolsFrame`) but does **not** re-connect MCP servers mid-call.
 
 Tools run on voice **and** text. Built-ins are voice-only — all four resolve through `call_control` against a live `call_id`. Text turns cap at `_MAX_TOOL_ROUNDS` (5), then re-ask with the tools withheld so a reply always goes out. Anthropic/Bedrock text tool calling is not implemented (different dialects); `complete_text` logs a warning rather than dropping tools silently.
 
