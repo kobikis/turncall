@@ -2,7 +2,7 @@
 
 Two mechanisms, both on by default:
 - Observers: log latency/turn/LLM/transcription/startup. Attached per-call to the
-  PipelineTask, so they cover cascade *and* S2S.
+  PipelineWorker, so they cover cascade *and* S2S.
 - Tracing: conversation→turn→STT/LLM/TTS spans exported to an OTLP backend. Set up
   once at startup; the call_id is the trace's conversation_id.
 """

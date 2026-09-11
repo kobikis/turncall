@@ -33,7 +33,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     # OpenTelemetry tracing (ADR-0010) — set up once; per-call spans are enabled
-    # on the PipelineTask. No-ops cleanly if disabled / no OTLP endpoint in prod.
+    # on the PipelineWorker. No-ops cleanly if disabled / no OTLP endpoint in prod.
     from turncall.orchestrator.telemetry import init_tracing
 
     init_tracing(
