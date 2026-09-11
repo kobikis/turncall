@@ -217,3 +217,75 @@ async def test_a_failing_tool_is_reported_back_not_raised():
 
     assert out.text == "I couldn't reach the calendar."
     assert "CRM timed out" in client.post.call_args.kwargs["json"]["messages"][-1]["content"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_calls_in_one_round_run_concurrently():
+    """Awaiting them in turn makes the reply wait for the sum of their
+    latencies rather than the slowest — on SMS that competes with the
+    provider's delivery timeout."""
+    import asyncio
+
+    running = 0
+    peak = 0
+
+    async def _slow(_name, _args):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.02)
+        running -= 1
+        return "{}"
+
+    client = _client(
+        _wants(
+            ("c1", "book_meeting", {}),
+            ("c2", "book_meeting", {}),
+            ("c3", "book_meeting", {}),
+        ),
+        _reply("all done"),
+    )
+    with patch("turncall.services.llm_text.get_http_client", return_value=client):
+        out = await complete_text(
+            _config(),
+            [{"role": "user", "content": "go"}],
+            tools=_TOOLS,
+            execute_tool=_slow,
+        )
+
+    assert out.text == "all done"
+    assert peak == 3, f"tool calls ran {peak} at a time, expected 3"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_results_keep_request_order():
+    """tool_call_id pairing is positional in the loop, so order matters even
+    when the calls finish out of order."""
+    import asyncio
+
+    async def _varied(_name, args):
+        await asyncio.sleep(args["delay"])
+        return args["tag"]
+
+    client = _client(
+        _wants(
+            ("c1", "book_meeting", {"delay": 0.03, "tag": "first"}),
+            ("c2", "book_meeting", {"delay": 0.0, "tag": "second"}),
+        ),
+        _reply("ok"),
+    )
+    with patch("turncall.services.llm_text.get_http_client", return_value=client):
+        await complete_text(
+            _config(),
+            [{"role": "user", "content": "go"}],
+            tools=_TOOLS,
+            execute_tool=_varied,
+        )
+
+    sent = client.post.call_args.kwargs["json"]["messages"][-2:]
+    assert [(m["tool_call_id"], m["content"]) for m in sent] == [
+        ("c1", "first"),
+        ("c2", "second"),
+    ]

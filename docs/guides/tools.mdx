@@ -143,7 +143,7 @@ Unset secret = unsigned POST (backward compatible).
 
 ## Tool Invocation Recording
 
-All tool calls (webhook + MCP + built-in) are recorded in the `tool_invocations` table with:
+Tool calls made **during a voice call** (webhook + MCP + built-in) are recorded in the `tool_invocations` table with:
 - Input arguments
 - Output result
 - Status (success/error)
@@ -155,6 +155,14 @@ Query invocations via the API:
 curl http://localhost:8090/v1/tools/invocations/CALL_ID \
   -H "Authorization: Bearer tc_xxx"
 ```
+
+<Warning>
+  Tool calls in **text** sessions (SMS, Chat API, WhatsApp text) are not
+  recorded. The table is keyed by call id and a chat session has none, and the
+  stored chat history keeps only the customer and assistant text — so a text
+  tool call leaves no trace on either side. Log what you need from your own
+  webhook endpoint until that changes.
+</Warning>
 
 ## Validate Tool Schema
 
