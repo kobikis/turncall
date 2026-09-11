@@ -38,7 +38,7 @@ See [Providers](/guides/providers#aws-bedrock), [Speech-to-Speech](/guides/s2s#a
 
 OpenAI shuts down `gpt-4o-transcribe` on 2027-02-26 and `gpt-transcribe` replaces it. LiveAvatar has deprecated VP8.
 
-**Deepgram transcripts are no longer profanity-filtered.** Deepgram's filter rewrites the words it matches rather than tagging them, so one false positive silently altered a transcript you store, analyse, and receive in the `call.ended` payload. Transcripts now carry what the caller actually said. There is no per-agent setting to turn the filter back on — [open an issue](https://github.com/kobikis/turncall/issues) if you need one.
+**Deepgram transcripts are no longer profanity-filtered.** Deepgram's filter rewrites the words it matches rather than tagging them, so one false positive silently altered a transcript you store, analyse, and receive in the `call.ended` payload. Transcripts now carry what the caller actually said. Set `stt.extra.profanity_filter: true` on an agent to turn the filter back on.
 
 **OpenAI STT no longer clips the last word.** Segment-based STT now hears 0.5s of trailing silence before transcribing, so the final word of an utterance is transcribed instead of dropped or garbled. The padding is sent to the provider, so it counts toward your STT usage.
 
