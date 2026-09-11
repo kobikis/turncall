@@ -37,6 +37,19 @@ class CallContext:
     mcp_manager: Any | None = None  # MCPSessionManager (optional)
 
 
+def _overflow(extra: dict[str, Any], *managed: str) -> dict[str, Any]:
+    """Keys from a customer's `extra` that we don't already set ourselves.
+
+    Pipecat merges `extra` over the declared fields — `given_fields()` does
+    `result.update(self.extra)` last — so a key naming a setting we manage
+    would silently beat it. Only Deepgram STT has a promotion step that
+    protects explicit fields; the other services don't, so filter instead of
+    relying on it. Overflow means the keys we don't manage; the rest belong
+    in their own config field.
+    """
+    return {k: v for k, v in extra.items() if k not in managed}
+
+
 def _create_stt_service(
     config: AgentConfig, openai_api_key: str, *, sample_rate: int = 8000
 ) -> Any:
@@ -63,7 +76,14 @@ def _create_stt_service(
                 interim_results=True,
                 punctuate=True,
                 smart_format=True,
-                extra=config.stt.extra,
+                extra=_overflow(
+                    config.stt.extra,
+                    "model",
+                    "language",
+                    "interim_results",
+                    "punctuate",
+                    "smart_format",
+                ),
             ),
         )
         stt._sample_rate = sample_rate
@@ -81,7 +101,7 @@ def _create_stt_service(
             settings=ElevenLabsSTTService.Settings(
                 model=config.stt.model or "scribe_v1",
                 language=config.stt.language or "en",
-                extra=config.stt.extra,
+                extra=_overflow(config.stt.extra, "model", "language"),
             ),
         )
         stt._sample_rate = sample_rate
@@ -93,7 +113,7 @@ def _create_stt_service(
         return OpenAISTTService(
             api_key=openai_api_key,
             settings=OpenAISTTService.Settings(
-                model=config.stt.model, extra=config.stt.extra
+                model=config.stt.model, extra=_overflow(config.stt.extra, "model")
             ),
         )
 
@@ -111,7 +131,7 @@ def _create_stt_service(
             settings=CartesiaSTTService.Settings(
                 model=config.stt.model or "ink-whisper",
                 language=config.stt.language or "en",
-                extra=config.stt.extra,
+                extra=_overflow(config.stt.extra, "model", "language"),
             ),
         )
         stt._sample_rate = sample_rate

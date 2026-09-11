@@ -60,3 +60,33 @@ class TestOtherProvidersExtra:
             "sk-test",
         )
         assert svc._settings.given_fields()["made_up_key"] == "z"
+
+
+@pytest.mark.unit
+class TestExtraCannotOverrideManagedSettings:
+    """Only Deepgram promotes; the rest let `extra` win, so we filter.
+
+    Without the filter, `extra: {"model": ...}` would beat `stt.model` on
+    OpenAI, ElevenLabs and Cartesia, because `given_fields()` merges `extra`
+    last and those services have no promotion step.
+    """
+
+    def test_openai_extra_cannot_override_model(self) -> None:
+        svc = _create_stt_service(
+            _config(provider="openai", model="gpt-transcribe", extra={"model": "HIJACKED"}),
+            "sk-test",
+        )
+        assert svc._settings.given_fields()["model"] == "gpt-transcribe"
+
+    def test_cartesia_extra_cannot_override_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CARTESIA_API_KEY", "sk-cartesia-test")
+        svc = _create_stt_service(
+            _config(provider="cartesia", model="ink-whisper", extra={"model": "HIJACKED"}),
+            "sk-test",
+        )
+        assert svc._settings.given_fields()["model"] == "ink-whisper"
+
+    def test_profanity_filter_still_survives_the_filter(self) -> None:
+        """The key this PR exists for is not one we manage, so it passes."""
+        svc = _create_stt_service(_config(extra={"profanity_filter": True}), "sk-test")
+        assert svc._settings.profanity_filter is True
