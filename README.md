@@ -492,7 +492,7 @@ each one needs — several run with no phone number and no tunnel.
 | Component | Technology |
 |-----------|-----------|
 | Framework | FastAPI + Uvicorn |
-| Voice Pipeline | Pipecat 1.8 |
+| Voice Pipeline | Pipecat 1.9 |
 | Database | PostgreSQL + SQLAlchemy async + Alembic |
 | Cache | Redis |
 | Telephony | Twilio Voice + Media Streams |
