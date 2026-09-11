@@ -56,6 +56,10 @@ OpenAI shuts down `gpt-4o-transcribe` on 2027-02-26 and `gpt-transcribe` replace
 
 **Fixed: a Deepgram voice was being sent to other providers.** `tts.model` and `tts.voice` both default to `aura-2-helena-en` — a Deepgram Aura voice — whatever provider you set. An agent that chose Cartesia, OpenAI or ElevenLabs without also naming a model and voice sent that Aura name to the wrong provider. Each provider now falls back to its own default: `tts-1`/`alloy` for OpenAI, `eleven_flash_v2_5`/`Rachel` for ElevenLabs, `sonic-3.6` for Cartesia. Cartesia voice ids are account-specific, so an unset Cartesia voice now logs a warning naming the setting rather than sending something wrong.
 
+## Knowledge retrieval is guidance, not a system prompt
+
+**Chunks retrieved in `auto` mode are now attached as `developer` rather than a second `system` message.** They are guidance for the turn, not the agent's instructions, and a `system` message mid-conversation was already being downgraded to `user` by every provider except OpenAI — so this is no worse anywhere and correct on OpenAI. Your agent's own `system_prompt` is unaffected.
+
 
 </Update>
 

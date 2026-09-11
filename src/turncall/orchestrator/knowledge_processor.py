@@ -85,7 +85,7 @@ class KnowledgeRetrievalProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
     async def _inject_context(self, frame: LLMMessagesUpdateFrame) -> None:
-        """Retrieve relevant chunks and inject as a system message."""
+        """Retrieve relevant chunks and inject them as developer guidance."""
         try:
             query = build_retrieval_query(frame.messages, self._last_user_text)
             async with self._session_factory() as session:
@@ -101,8 +101,14 @@ class KnowledgeRetrievalProcessor(FrameProcessor):
 
             if result.chunks:
                 context_text = format_retrieved_context(result)
-                # Prepend retrieved context as a system message
-                context_msg = {"role": "system", "content": context_text}
+                # "developer", not "system": retrieved chunks are guidance for
+                # this turn, not the agent's system prompt. Pipecat moved Mem0's
+                # memories for the same reason in 1.9, and a second "system"
+                # message mid-context is downgraded to "user" by non-OpenAI
+                # services anyway — so this is no worse anywhere and correct on
+                # OpenAI. It also keeps the context free of the "system" role,
+                # which stops working in Pipecat 2.0.
+                context_msg = {"role": "developer", "content": context_text}
                 frame.messages.insert(0, context_msg)
                 logger.debug(
                     "KB auto-retrieval: injected {n} chunks for: {q:.60}",
