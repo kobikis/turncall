@@ -77,11 +77,23 @@ async def build_chat_tools(
             logger.exception("chat_tools_mcp_connect_failed", session=str(session_id))
             mcp_tools = []
 
+    # Static tools are the customer's own, so they win a name clash — same
+    # precedence the voice path applies in _build_tools_schema.
+    shadowed = {t.name for t in mcp_tools} & webhook_tools.keys()
+    if shadowed:
+        logger.warning("chat_tools_mcp_name_collision", tools=sorted(shadowed))
+
     schemas = [_to_function_schema(t) for t in webhook_tools.values()]
-    schemas += [_to_function_schema(t) for t in mcp_tools]
+    schemas += [
+        _to_function_schema(t) for t in mcp_tools if t.name not in webhook_tools
+    ]
 
     async def execute(name: str, args: dict[str, Any]) -> str:
-        if mcp_manager is not None and mcp_manager.is_mcp_tool(name):
+        if (
+            mcp_manager is not None
+            and name not in webhook_tools
+            and mcp_manager.is_mcp_tool(name)
+        ):
             return await mcp_manager.call_tool(name, args)
 
         tool = webhook_tools.get(name)

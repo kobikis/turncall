@@ -106,3 +106,60 @@ sent.
   voice call, where the cost is paid once at the start.
 </Warning>
 
+## Server URLs are allowlisted
+
+An MCP server URL is an outbound target chosen in the agent config and reached
+from inside your network, so it goes through the same allowlist as custom LLM
+and S2S gateway endpoints: `BYOM_ALLOWED_URL_PATTERNS`.
+
+An empty list allows everything, which keeps local development and a
+self-hosted server on the same docker network working. Set it in production:
+
+```bash
+BYOM_ALLOWED_URL_PATTERNS='["https://mcp.example.com/*", "http://activepieces:80/*"]'
+```
+
+A server whose URL is rejected is skipped with a logged error; the rest of the
+agent's tools still load. `stdio` is gated separately by `MCP_STDIO_ENABLED`
+and `MCP_STDIO_ALLOWED_COMMANDS`.
+
+## Tool names must be unique
+
+Tool names are advertised flat, so a name can only belong to one place. The
+precedence is: **built-in, then the agent's own `tools`, then MCP** in server
+order. A discovered tool whose name is already taken is skipped and logged
+rather than shadowing the winner.
+
+A server may not claim a built-in name at all — `end_call`, `transfer_call`,
+`handoff_to_agent`, `send_dtmf`. Dispatch checks built-ins first, so an MCP
+tool called `end_call` would have been advertised to the model and then hung
+up the call instead of running.
+
+Two MCP servers exposing a common name — `search`, `get` — is the usual way
+this happens. Use `tool_filter` to keep each server to the tools you want, or
+rename on the server side.
+
+<Warning>
+  `handoff_to_agent` moves the prompt and the agent's own `tools`, but does
+  **not** re-connect MCP servers: the sessions belong to the agent the call
+  started as and stay open until it ends. If the target agent defines
+  `mcp_servers`, those tools are unavailable for the rest of the call, and a
+  warning is logged.
+</Warning>
+
+## Limits
+
+| Setting | Default | What it bounds |
+|---|---|---|
+| `MCP_MAX_TOOLS_PER_SERVER` | `50` | Tools taken from one server |
+| `MCP_MAX_TOOLS_TOTAL` | `100` | Tools across every server on an agent |
+| `MCP_MAX_RESPONSE_BYTES` | `1048576` | One tool result |
+
+The per-server cap doesn't compose — ten servers at it would put 500 tools in
+every request — so the total is the one that protects the context window.
+Servers are consumed in config order; once the total is reached, later ones
+contribute nothing.
+
+A result over the size cap doesn't reach the model. It gets a JSON error with
+a short preview of what the tool started to say, so it can narrow the request
+and try again rather than dying on context length.

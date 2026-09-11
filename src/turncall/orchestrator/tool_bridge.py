@@ -195,7 +195,10 @@ async def _apply_handoff_context(
         from pipecat.frames.frames import LLMUpdateSettingsFrame
         from pipecat.services.llm_service import LLMSettings
 
-        from turncall.orchestrator.pipeline_factory import _build_system_instruction
+        from turncall.orchestrator.pipeline_factory import (
+            _build_system_instruction,
+            _build_tools_schema,
+        )
 
         instruction = _build_system_instruction(config)
 
@@ -203,6 +206,32 @@ async def _apply_handoff_context(
         params.context.set_messages([])
         await params.pipeline_worker.queue_frame(
             LLMUpdateSettingsFrame(delta=LLMSettings(system_instruction=instruction))
+        )
+
+        if config.mcp_servers:
+            # MCP sessions belong to the agent the call started as — they
+            # aren't torn down and re-opened mid-call, so the target's servers
+            # stay unconnected. Better said out loud than discovered.
+            logger.warning(
+                "handoff_context: target agent's mcp servers are not connected "
+                "mid-call: {servers}",
+                servers=[s.name for s in config.mcp_servers],
+            )
+
+        # Tools live in two places: the handler registry and the advertised
+        # schema. Moving only the prompt left the model believing it was the
+        # new agent while still holding the previous one's tools, and none of
+        # its own. NOT_GIVEN clears the set when the target defines none.
+        from pipecat.frames.frames import LLMSetToolsFrame
+        from pipecat.processors.aggregators.llm_context import NOT_GIVEN
+
+        if config.tools:
+            register_tools(params.llm, list(config.tools), call_context)
+        tools_schema = _build_tools_schema(config)
+        await params.pipeline_worker.queue_frame(
+            LLMSetToolsFrame(
+                tools=tools_schema if tools_schema is not None else NOT_GIVEN
+            )
         )
 
         logger.info(

@@ -17,7 +17,11 @@ from loguru import logger
 from mcp.client.session import ClientSession
 from mcp.types import CallToolResult, Tool
 
-from turncall.domain.models import MCPServerConfig, ToolDefinition
+from turncall.domain.models import (
+    BUILTIN_TOOL_NAMES,
+    MCPServerConfig,
+    ToolDefinition,
+)
 
 
 @dataclass(frozen=True)
@@ -26,7 +30,7 @@ class MCPToolRef:
 
     server_name: str
     tool_name: str
-    session: ClientSession
+    session: Any
 
 
 @dataclass
@@ -129,23 +133,71 @@ class MCPSessionManager:
             allowed = set(server.tool_filter)
             mcp_tools = [t for t in mcp_tools if t.name in allowed]
 
-        # Apply max tools limit
+        return self._register_discovered(
+            mcp_tools, server_name=server.name, session=session, settings=settings
+        )
+
+    def _register_discovered(
+        self,
+        mcp_tools: list[Tool],
+        *,
+        server_name: str,
+        session: Any,
+        settings: Any,
+    ) -> list[ToolDefinition]:
+        """Convert discovered tools and claim their names.
+
+        The ref map is keyed by bare tool name, so a second server exposing a
+        name the first already claimed would overwrite the route while both
+        stayed advertised. First server wins; the loser is skipped and logged
+        rather than silently shadowing.
+
+        Built-in names are refused outright: tool dispatch checks those first,
+        so an MCP tool called `end_call` would be advertised to the model and
+        then hang up the call instead of running.
+        """
         max_tools = settings.mcp.max_tools_per_server
         if len(mcp_tools) > max_tools:
             logger.warning(
                 "mcp_tools_truncated",
-                server=server.name,
+                server=server_name,
                 total=len(mcp_tools),
                 max=max_tools,
             )
             mcp_tools = mcp_tools[:max_tools]
 
-        # Convert to TurnCall ToolDefinition + register refs
+        max_total = getattr(settings.mcp, "max_tools_total", 0)
+
         tools: list[ToolDefinition] = []
         for mcp_tool in mcp_tools:
-            tool_def = _mcp_tool_to_definition(mcp_tool, server.name)
+            if max_total and len(self._tool_refs) >= max_total:
+                logger.warning(
+                    "mcp_tools_total_cap_reached",
+                    server=server_name,
+                    max=max_total,
+                )
+                break
+
+            tool_def = _mcp_tool_to_definition(mcp_tool, server_name)
+            if tool_def.name in BUILTIN_TOOL_NAMES:
+                logger.warning(
+                    "mcp_tool_shadows_builtin",
+                    tool=tool_def.name,
+                    server=server_name,
+                )
+                continue
+
+            claimed = self._tool_refs.get(tool_def.name)
+            if claimed is not None:
+                logger.warning(
+                    "mcp_tool_name_collision",
+                    tool=tool_def.name,
+                    server=server_name,
+                    claimed_by=claimed.server_name,
+                )
+                continue
             self._tool_refs[tool_def.name] = MCPToolRef(
-                server_name=server.name,
+                server_name=server_name,
                 tool_name=mcp_tool.name,
                 session=session,
             )
@@ -161,6 +213,18 @@ class MCPSessionManager:
         """Create an MCP ClientSession for the given transport."""
         if server.transport == "stdio":
             return await self._create_stdio_session(server, settings)
+
+        # An MCP url is an outbound target picked by whoever can write the
+        # agent config, reached from inside the network — the same SSRF
+        # surface the custom-LLM and S2S gateway endpoints are gated on.
+        from turncall.services.url_allowlist import check_url_allowed
+
+        check_url_allowed(
+            server.url or "",
+            settings.byom.allowed_url_patterns,
+            label=f"MCP server '{server.name}' url",
+        )
+
         if server.transport == "sse":
             return await self._create_sse_session(server)
         return await self._create_http_session(server)
@@ -268,7 +332,8 @@ class MCPSessionManager:
             for block in result.content:
                 if hasattr(block, "text"):
                     parts.append(block.text)
-            return "\n".join(parts) if parts else "{}"
+            text = "\n".join(parts) if parts else "{}"
+            return _cap_response(text, tool_name, ref.server_name)
 
         except Exception as exc:
             logger.exception(
@@ -293,6 +358,45 @@ class MCPSessionManager:
         self._tool_refs.clear()
         self._connected = False
         logger.info("mcp_sessions_closed", call_id=str(self.call_id))
+
+
+# How much of an oversized result to show the model. Enough to see what the
+# tool was answering, small enough that the cap still means something.
+_PREVIEW_BYTES = 512
+
+
+def _cap_response(text: str, tool_name: str, server_name: str) -> str:
+    """Keep a runaway tool result out of the LLM context.
+
+    MCP_MAX_RESPONSE_BYTES was declared in settings and enforced nowhere, so a
+    server returning megabytes put all of it in the prompt — the cost lands on
+    every subsequent turn, and the call usually dies on context length. The
+    reply stays valid JSON so the model can read the error and react.
+    """
+    from turncall.config.settings import get_settings
+
+    max_bytes = get_settings().mcp.max_response_bytes
+    encoded = text.encode()
+    if len(encoded) <= max_bytes:
+        return text
+
+    logger.warning(
+        "mcp_response_truncated",
+        tool=tool_name,
+        server=server_name,
+        size=len(encoded),
+        max=max_bytes,
+    )
+    preview = encoded[: min(_PREVIEW_BYTES, max_bytes)].decode(errors="ignore")
+    return json.dumps(
+        {
+            "error": (
+                f"Tool result too large: {len(encoded)} bytes, "
+                f"limit {max_bytes}. Ask for less data."
+            ),
+            "preview": preview,
+        }
+    )
 
 
 def _mcp_tool_to_definition(tool: Tool, server_name: str) -> ToolDefinition:
