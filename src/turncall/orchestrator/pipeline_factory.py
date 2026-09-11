@@ -302,6 +302,17 @@ def _create_llm_service(
     raise ValueError(f"Unsupported LLM provider: {provider}")
 
 
+def _overflow(extra: dict[str, Any], *managed: str) -> dict[str, Any]:
+    """Keys from a customer's `extra` that we don't already set ourselves.
+
+    Pipecat merges `extra` *over* the declared fields — `given_fields()` does
+    `result.update(self.extra)` last, and the TTS services have no promotion
+    step — so `extra: {"voice": ...}` would silently beat `tts.voice`. Overflow
+    means the keys we don't manage; the rest belong in their own config field.
+    """
+    return {k: v for k, v in extra.items() if k not in managed}
+
+
 def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
     """Create TTS service. Supports deepgram, openai, elevenlabs, and cartesia."""
     provider = config.tts.provider
@@ -312,6 +323,7 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
     from pipecat.utils.text.transforms import strip_markdown
 
     text_transforms = [("*", strip_markdown)]
+    speed = {"speed": config.tts.speed} if config.tts.speed != 1.0 else {}
 
     if provider == "deepgram":
         from pipecat.services.deepgram.tts import DeepgramTTSService
@@ -319,7 +331,9 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
         voice = config.tts.voice or "aura-2-helena-en"
         return DeepgramTTSService(
             api_key=os.environ.get("DEEPGRAM_API_KEY", ""),
-            settings=DeepgramTTSService.Settings(voice=voice),
+            settings=DeepgramTTSService.Settings(
+                voice=voice, **speed, extra=_overflow(config.tts.extra, "voice", "speed")
+            ),
             text_transforms=text_transforms,
         )
 
@@ -333,6 +347,8 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
             settings=ElevenLabsTTSService.Settings(
                 voice=config.tts.voice or "Rachel",
                 model=config.tts.model or "eleven_flash_v2_5",
+                **speed,
+                extra=_overflow(config.tts.extra, "voice", "model", "speed"),
             ),
             text_transforms=text_transforms,
         )
@@ -345,6 +361,8 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
             settings=OpenAITTSService.Settings(
                 model=config.tts.model,
                 voice=config.tts.voice,
+                **speed,
+                extra=_overflow(config.tts.extra, "model", "voice", "speed"),
             ),
             text_transforms=text_transforms,
         )
@@ -361,6 +379,9 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
             model=config.tts.model or "sonic-3.5",
             voice=config.tts.voice,
             language=config.tts.extra.get("language", config.language),
+            extra=_overflow(
+                config.tts.extra, "model", "voice", "language", "emotion", "speed"
+            ),
         )
         if config.tts.speed != 1.0:
             tts_settings.speed = str(config.tts.speed)
