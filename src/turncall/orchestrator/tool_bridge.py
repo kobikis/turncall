@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -17,7 +18,7 @@ from loguru import logger
 
 from turncall.domain.models import BUILTIN_TOOL_NAMES, ToolDefinition
 from turncall.services import call_control
-from turncall.services.tool_webhook import post_tool_webhook
+from turncall.services.tool_webhook import classify_tool_result, post_tool_webhook
 
 if TYPE_CHECKING:
     from pipecat.services.llm_service import LLMService
@@ -42,6 +43,7 @@ async def _log_tool_result(
     function_name: str,
     args: dict[str, Any],
     result: str,
+    latency_ms: int | None = None,
 ) -> None:
     """Persist the tool invocation + call event and dispatch tool.result to
     webhook subscribers. Runs in the background; failures are logged, not raised."""
@@ -51,12 +53,15 @@ async def _log_tool_result(
             from turncall.domain.enums import CallEventType
             from turncall.storage.repositories import call_repo, tool_invocation_repo
 
+            status, output_json = classify_tool_result(result)
             await tool_invocation_repo.create_invocation(
                 session,
                 call_id=call_context.call_id,
                 tool_name=function_name,
                 input_json=args,
-                status="succeeded",
+                status=status,
+                output_json=output_json,
+                latency_ms=latency_ms,
             )
             seq = await call_repo.get_next_sequence_number(
                 session, call_context.call_id
@@ -277,6 +282,7 @@ def _register_single_tool(
             call_id=str(call_context.call_id),
         )
 
+        started = time.perf_counter()
         if function_name in BUILTIN_TOOL_NAMES:
             result = await _execute_builtin(function_name, args, call_context)
         elif (
@@ -295,7 +301,8 @@ def _register_single_tool(
         # this to continue speaking. The invocation record + tool.result webhook
         # dispatch (which can retry ~90s against a dead subscriber) run off the
         # critical path so they never sit between the caller and the response.
+        latency_ms = int((time.perf_counter() - started) * 1000)
         await params.result_callback(result)
-        _spawn(_log_tool_result(call_context, function_name, args, result))
+        _spawn(_log_tool_result(call_context, function_name, args, result, latency_ms))
 
     llm.register_function(tool_def.name, handler)
