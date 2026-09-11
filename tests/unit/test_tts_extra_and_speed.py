@@ -64,7 +64,11 @@ class TestExtra:
     ) -> None:
         monkeypatch.setenv("CARTESIA_API_KEY", "sk-cartesia-test")
         svc = _create_tts_service(
-            _config(provider="cartesia", extra={"emotion": "happy", "made_up_key": "z"}),
+            _config(
+                provider="cartesia",
+                voice="v-123",
+                extra={"emotion": "happy", "made_up_key": "z"},
+            ),
             "sk-test",
         )
         assert svc._settings.extra == {"made_up_key": "z"}
@@ -72,20 +76,31 @@ class TestExtra:
 class TestCartesiaDefaultModel:
     def test_empty_model_falls_back_to_sonic_3_6(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CARTESIA_API_KEY", "sk-cartesia-test")
-        svc = _create_tts_service(_config(provider="cartesia", model=""), "sk-test")
+        svc = _create_tts_service(_config(provider="cartesia", voice="v-123", model=""), "sk-test")
         assert svc._settings.model == "sonic-3.6"
 
-    def test_known_bug_deepgram_default_leaks_into_other_providers(
+    def test_deepgram_default_no_longer_leaks_into_other_providers(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`TTSConfig.model` defaults to a Deepgram voice whatever the provider.
-
-        So `config.tts.model or "sonic-3.6"` can never fire, and a Cartesia
-        agent that doesn't pin a model sends Cartesia an Aura voice name. The
-        same holds for ElevenLabs' `or "Rachel"` / `or "eleven_flash_v2_5"`.
-        Pinned here so that fixing the defaults shows up as a failing test
-        rather than passing unnoticed.
+        """`TTSConfig.model`/`.voice` default to a Deepgram Aura voice whatever
+        the provider, so an agent that never set them used to send Cartesia,
+        OpenAI and ElevenLabs an Aura name. Each provider now falls back to its
+        own default instead.
         """
         monkeypatch.setenv("CARTESIA_API_KEY", "sk-cartesia-test")
-        svc = _create_tts_service(_config(provider="cartesia"), "sk-test")
-        assert svc._settings.model == "aura-2-helena-en"
+        svc = _create_tts_service(_config(provider="cartesia", voice="v-123"), "sk-test")
+        assert svc._settings.model == "sonic-3.6"
+
+    def test_openai_falls_back_to_its_own_model_and_voice(self) -> None:
+        svc = _create_tts_service(_config(provider="openai"), "sk-test")
+        assert svc._settings.model == "tts-1"
+        assert svc._settings.voice == "alloy"
+
+    def test_elevenlabs_falls_back_to_its_own_model_and_voice(self) -> None:
+        svc = _create_tts_service(_config(provider="elevenlabs"), "sk-test")
+        assert svc._settings.model == "eleven_flash_v2_5"
+        assert svc._settings.voice == "Rachel"
+
+    def test_deepgram_keeps_its_own_default(self) -> None:
+        svc = _create_tts_service(_config(), "sk-test")
+        assert svc._settings.voice == "aura-2-helena-en"
