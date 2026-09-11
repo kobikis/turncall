@@ -24,6 +24,13 @@ Credentials are resolved by the server from an assumed `role_arn`, static keys, 
 
 See [Providers](/guides/providers#aws-bedrock), [Speech-to-Speech](/guides/s2s#amazon-nova-sonic), `examples/bedrock/`, and `adr/0016`.
 
+## The system prompt moved onto the model, not the conversation
+
+**Internal change, no config or API difference.** An agent's `system_prompt` — with guardrails and any prompt-mode knowledge preamble — is now set on the LLM service itself rather than inserted as the first message of the conversation. Pipecat deprecated the message form in 1.9 and stops honouring it in 2.0.
+
+Two things follow. The conversation context now begins empty, so a transcript no longer carries the instructions as a phantom first turn. And `handoff_to_agent` switches agents by updating the model's instruction instead of rewriting that message — which had to change at the same time, because the instruction is prepended to the context, so doing both would have sent the previous agent's prompt alongside the new one.
+
+
 ## Voice pipeline upgraded to Pipecat 1.9
 
 **Upgraded from 1.8.1.** No config or agent changes required.

@@ -233,17 +233,26 @@ async def _apply_handoff_context(
 
             config = AgentConfig.model_validate(target.config_blob)
 
-        # Build new system message for the target agent
-        new_messages = []
-        if config.system_prompt:
-            new_messages.append({"role": "system", "content": config.system_prompt})
+        # The prompt lives on the LLM service, not in the context, so switching
+        # agents is a settings update rather than a rewritten first message.
+        # Doing it the old way now would send both prompts: the OpenAI adapter
+        # prepends system_instruction to the context messages, so the previous
+        # agent's instructions would survive the handoff.
+        from pipecat.frames.frames import LLMUpdateSettingsFrame
+        from pipecat.services.llm_service import LLMSettings
 
-        # Reset the LLM context to the new agent's prompt
-        context = params.context
-        context.set_messages(new_messages)
+        from turncall.orchestrator.pipeline_factory import _build_system_instruction
+
+        instruction = _build_system_instruction(config)
+
+        # Clear the conversation as before: the new agent starts fresh.
+        params.context.set_messages([])
+        await params.pipeline_worker.queue_frame(
+            LLMUpdateSettingsFrame(delta=LLMSettings(system_instruction=instruction))
+        )
 
         logger.info(
-            "handoff_context: switched LLM context to agent '{name}'",
+            "handoff_context: switched system instruction to agent '{name}'",
             name=target.name,
         )
 
