@@ -8,9 +8,12 @@ from uuid import UUID
 
 from loguru import logger
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.pipeline.worker import ProcessorUnusablePolicy
+from pipecat.pipeline.worker import (
+    PipelineParams,
+    PipelineWorker,
+    ProcessorUnusablePolicy,
+)
+from pipecat.workers.runner import WorkerRunner
 
 from turncall.config import get_settings
 from turncall.domain.enums import CallEventType, CallStatus
@@ -43,8 +46,8 @@ class CallSession:
         self._pipeline = pipeline
         self._first_message = first_message
         self._pipeline_mode = pipeline_mode
-        self._task: PipelineTask | None = None
-        self._runner: PipelineRunner | None = None
+        self._task: PipelineWorker | None = None
+        self._runner: WorkerRunner | None = None
         self._running = False
 
     @property
@@ -97,12 +100,12 @@ class CallSession:
             agent_id=str(self._call_context.agent_id),
         )
 
-        self._runner = PipelineRunner()
+        self._runner = WorkerRunner()
         # Metrics on so TTS/processing timing is visible — needed to catch the
         # event-loop stalls behind transient mid-word audio cut-outs, and to feed
         # the trace spans' TTFB/token attributes.
         observers, span_attrs = await self._build_telemetry()
-        self._task = PipelineTask(
+        self._task = PipelineWorker(
             self._pipeline,
             params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
             observers=observers,
