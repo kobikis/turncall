@@ -302,6 +302,32 @@ def _create_llm_service(
     raise ValueError(f"Unsupported LLM provider: {provider}")
 
 
+# `TTSConfig.model` and `.voice` both default to a Deepgram Aura voice whatever
+# the provider is set to, so a Cartesia, OpenAI or ElevenLabs agent that never
+# set them would send that provider an Aura name. Treat exactly that value as
+# "never set" for the other three, and fall back to each provider's own.
+_AURA_DEFAULT = "aura-2-helena-en"
+_TTS_DEFAULTS: dict[str, tuple[str | None, str | None]] = {
+    "deepgram": (_AURA_DEFAULT, _AURA_DEFAULT),
+    "elevenlabs": ("eleven_flash_v2_5", "Rachel"),
+    "openai": ("tts-1", "alloy"),
+    # Cartesia voices are account-specific ids and Pipecat has no default
+    # either, so there is nothing sensible to guess; an unset voice warns.
+    "cartesia": ("sonic-3.6", None),
+}
+
+
+def _tts_model_voice(config: AgentConfig) -> tuple[str | None, str | None]:
+    """The model and voice to send, with the cross-provider default undone."""
+    provider = config.tts.provider
+    model, voice = config.tts.model, config.tts.voice
+    if provider != "deepgram":
+        model = None if model == _AURA_DEFAULT else model
+        voice = None if voice == _AURA_DEFAULT else voice
+    default_model, default_voice = _TTS_DEFAULTS.get(provider, (None, None))
+    return model or default_model, voice or default_voice
+
+
 def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
     """Create TTS service. Supports deepgram, openai, elevenlabs, and cartesia."""
     provider = config.tts.provider
@@ -312,14 +338,17 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
     from pipecat.utils.text.transforms import strip_markdown
 
     text_transforms = [("*", strip_markdown)]
+    speed = {"speed": config.tts.speed} if config.tts.speed != 1.0 else {}
+    model, voice = _tts_model_voice(config)
 
     if provider == "deepgram":
         from pipecat.services.deepgram.tts import DeepgramTTSService
 
-        voice = config.tts.voice or "aura-2-helena-en"
         return DeepgramTTSService(
             api_key=os.environ.get("DEEPGRAM_API_KEY", ""),
-            settings=DeepgramTTSService.Settings(voice=voice),
+            settings=DeepgramTTSService.Settings(
+                voice=voice, **speed, extra=_overflow(config.tts.extra, "voice", "speed")
+            ),
             text_transforms=text_transforms,
         )
 
@@ -331,8 +360,10 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
         return ElevenLabsTTSService(
             api_key=os.environ.get("ELEVENLABS_API_KEY", ""),
             settings=ElevenLabsTTSService.Settings(
-                voice=config.tts.voice or "Rachel",
-                model=config.tts.model or "eleven_flash_v2_5",
+                voice=voice,
+                model=model,
+                **speed,
+                extra=_overflow(config.tts.extra, "voice", "model", "speed"),
             ),
             text_transforms=text_transforms,
         )
@@ -343,8 +374,10 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
         return OpenAITTSService(
             api_key=openai_api_key,
             settings=OpenAITTSService.Settings(
-                model=config.tts.model,
-                voice=config.tts.voice,
+                model=model,
+                voice=voice,
+                **speed,
+                extra=_overflow(config.tts.extra, "model", "voice", "speed"),
             ),
             text_transforms=text_transforms,
         )
@@ -357,10 +390,17 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
             raise ValueError(
                 "CARTESIA_API_KEY environment variable is required for Cartesia TTS"
             )
+        if not voice:
+            # Cartesia will reject the request; say why here rather than leave
+            # the provider's error as the only clue.
+            logger.warning("Cartesia TTS has no voice set; set tts.voice to a Cartesia voice id")
         tts_settings = CartesiaTTSService.Settings(
-            model=config.tts.model or "sonic-3.5",
-            voice=config.tts.voice,
+            model=model,
+            voice=voice,
             language=config.tts.extra.get("language", config.language),
+            extra=_overflow(
+                config.tts.extra, "model", "voice", "language", "emotion", "speed"
+            ),
         )
         if config.tts.speed != 1.0:
             tts_settings.speed = str(config.tts.speed)

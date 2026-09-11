@@ -47,7 +47,7 @@ curl -X POST http://localhost:8090/v1/agents -H "Authorization: Bearer tc_..." -
     "system_prompt": "You are Acme'"'"'s receptionist. Be brief and warm.",
     "llm":  {"provider": "openai",   "model": "gpt-4o-mini"},
     "stt":  {"provider": "deepgram", "model": "nova-3-general"},
-    "tts":  {"provider": "cartesia", "model": "sonic-3.5"},
+    "tts":  {"provider": "cartesia", "model": "sonic-3.6"},
     "tools": [{"name": "transfer_call"}]
   }
 }'
