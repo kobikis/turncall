@@ -12,6 +12,8 @@ task from a fire-and-forget connection callback).
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import replace
 from typing import Any
 
 from turncall.config.settings import Settings
@@ -81,3 +83,79 @@ async def build_call_pipeline(
         first_message=config.first_message,
         pipeline_mode=config.pipeline_mode,
     )
+
+
+# Spawned pipeline tasks kept referenced so asyncio (which holds only a weak
+# ref) can't GC a running call.
+_RUNNING: set[asyncio.Task] = set()
+
+
+async def start_call_pipeline(
+    *,
+    config: AgentConfig,
+    transport: Any,
+    call_context: CallContext,
+    settings: Settings,
+    session_factory: Any,
+    **build_kwargs: Any,
+) -> None:
+    """Connect MCP servers, build the pipeline and run it — all in one task.
+
+    For the fire-and-forget callers (WebRTC, WhatsApp voice), which return from
+    a connection callback while the call keeps going. They can't do what
+    media_stream does — connect inline, then `await start()` — because an MCP
+    transport opens anyio cancel scopes that must be exited in the task that
+    entered them, and `CallSession` closes the manager during its own cleanup.
+    Connecting in the caller's task would therefore blow up at hangup.
+
+    Returns once the pipeline is built, so a build failure still reaches the
+    caller (WebRTC turns it into a 500); the run continues in the background.
+    """
+    ready = asyncio.Event()
+    failure: BaseException | None = None
+
+    async def _run() -> None:
+        nonlocal failure
+        mcp_manager: Any | None = None
+        session: CallSession | None = None
+        try:
+            mcp_tools: list[Any] = []
+            if config.mcp_servers:
+                from turncall.services.mcp_client import MCPSessionManager
+
+                mcp_manager = MCPSessionManager(
+                    call_id=call_context.call_id,
+                    project_id=call_context.project_id,
+                )
+                mcp_tools = await mcp_manager.connect_servers(config.mcp_servers)
+
+            session = await build_call_pipeline(
+                config=config,
+                transport=transport,
+                call_context=replace(call_context, mcp_manager=mcp_manager),
+                settings=settings,
+                session_factory=session_factory,
+                mcp_tools=mcp_tools or None,
+                **build_kwargs,
+            )
+        except Exception as exc:
+            failure = exc
+        finally:
+            ready.set()
+
+        if session is None:
+            # CallSession.cleanup never runs on this path, so close the MCP
+            # sessions here — in the task that opened them.
+            if mcp_manager is not None:
+                await mcp_manager.close()
+            return
+
+        await session.start()
+
+    task = asyncio.create_task(_run())
+    _RUNNING.add(task)
+    task.add_done_callback(_RUNNING.discard)
+
+    await ready.wait()
+    if failure is not None:
+        raise failure

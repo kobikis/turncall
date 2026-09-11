@@ -86,3 +86,18 @@ Add `mcp_servers` to your agent config:
   "env": {"DB_URL": "postgresql://..."}
 }
 ```
+
+## Where MCP tools are available
+
+MCP servers are connected at the start of a **voice** call — Twilio, WebRTC and
+WhatsApp voice alike — and disconnected when it ends. Discovery adds one
+`tools/list` round trip per server to call setup, so keep `timeout_seconds`
+tight and use `tool_filter` to trim a large catalogue down to the handful the
+agent actually needs.
+
+<Warning>
+  SMS and chat sessions do **not** call tools. `services/llm_text.py` sends no
+  `tools` array, so `mcp_servers` on an agent is ignored on those channels —
+  the agent will answer from its prompt and knowledge bases only.
+</Warning>
+
