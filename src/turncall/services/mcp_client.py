@@ -17,7 +17,11 @@ from loguru import logger
 from mcp.client.session import ClientSession
 from mcp.types import CallToolResult, Tool
 
-from turncall.domain.models import MCPServerConfig, ToolDefinition
+from turncall.domain.models import (
+    BUILTIN_TOOL_NAMES,
+    MCPServerConfig,
+    ToolDefinition,
+)
 
 
 @dataclass(frozen=True)
@@ -147,6 +151,10 @@ class MCPSessionManager:
         name the first already claimed would overwrite the route while both
         stayed advertised. First server wins; the loser is skipped and logged
         rather than silently shadowing.
+
+        Built-in names are refused outright: tool dispatch checks those first,
+        so an MCP tool called `end_call` would be advertised to the model and
+        then hang up the call instead of running.
         """
         max_tools = settings.mcp.max_tools_per_server
         if len(mcp_tools) > max_tools:
@@ -158,9 +166,27 @@ class MCPSessionManager:
             )
             mcp_tools = mcp_tools[:max_tools]
 
+        max_total = getattr(settings.mcp, "max_tools_total", 0)
+
         tools: list[ToolDefinition] = []
         for mcp_tool in mcp_tools:
+            if max_total and len(self._tool_refs) >= max_total:
+                logger.warning(
+                    "mcp_tools_total_cap_reached",
+                    server=server_name,
+                    max=max_total,
+                )
+                break
+
             tool_def = _mcp_tool_to_definition(mcp_tool, server_name)
+            if tool_def.name in BUILTIN_TOOL_NAMES:
+                logger.warning(
+                    "mcp_tool_shadows_builtin",
+                    tool=tool_def.name,
+                    server=server_name,
+                )
+                continue
+
             claimed = self._tool_refs.get(tool_def.name)
             if claimed is not None:
                 logger.warning(
@@ -306,7 +332,8 @@ class MCPSessionManager:
             for block in result.content:
                 if hasattr(block, "text"):
                     parts.append(block.text)
-            return "\n".join(parts) if parts else "{}"
+            text = "\n".join(parts) if parts else "{}"
+            return _cap_response(text, tool_name, ref.server_name)
 
         except Exception as exc:
             logger.exception(
@@ -331,6 +358,45 @@ class MCPSessionManager:
         self._tool_refs.clear()
         self._connected = False
         logger.info("mcp_sessions_closed", call_id=str(self.call_id))
+
+
+# How much of an oversized result to show the model. Enough to see what the
+# tool was answering, small enough that the cap still means something.
+_PREVIEW_BYTES = 512
+
+
+def _cap_response(text: str, tool_name: str, server_name: str) -> str:
+    """Keep a runaway tool result out of the LLM context.
+
+    MCP_MAX_RESPONSE_BYTES was declared in settings and enforced nowhere, so a
+    server returning megabytes put all of it in the prompt — the cost lands on
+    every subsequent turn, and the call usually dies on context length. The
+    reply stays valid JSON so the model can read the error and react.
+    """
+    from turncall.config.settings import get_settings
+
+    max_bytes = get_settings().mcp.max_response_bytes
+    encoded = text.encode()
+    if len(encoded) <= max_bytes:
+        return text
+
+    logger.warning(
+        "mcp_response_truncated",
+        tool=tool_name,
+        server=server_name,
+        size=len(encoded),
+        max=max_bytes,
+    )
+    preview = encoded[: min(_PREVIEW_BYTES, max_bytes)].decode(errors="ignore")
+    return json.dumps(
+        {
+            "error": (
+                f"Tool result too large: {len(encoded)} bytes, "
+                f"limit {max_bytes}. Ask for less data."
+            ),
+            "preview": preview,
+        }
+    )
 
 
 def _mcp_tool_to_definition(tool: Tool, server_name: str) -> ToolDefinition:

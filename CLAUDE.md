@@ -72,6 +72,8 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 | `REDIS_URL` | Yes | Redis connection string |
 | `BYOM_ENABLED` | No | Enable/disable BYOM custom providers (default: true) |
 | `BYOM_ALLOWED_URL_PATTERNS` | No | JSON list of allowed base_url patterns for BYOM |
+| `MCP_MAX_TOOLS_TOTAL` | No | Ceiling on MCP tools across **all** servers (default `100`). `MCP_MAX_TOOLS_PER_SERVER` (default `50`) is per server and doesn't compose |
+| `MCP_MAX_RESPONSE_BYTES` | No | Cap on one MCP tool result (default `1048576`). Over it, the model gets an error plus a 512-byte preview instead of the payload |
 | `GOOGLE_API_KEY` | No | Google API key (Gemini Live S2S) |
 | `ANTHROPIC_API_KEY` | No | Anthropic API key (Claude LLM). Not required if using other providers |
 | `CARTESIA_API_KEY` | No | Cartesia API key (Sonic TTS + Ink STT). Not required if using other providers |

@@ -122,6 +122,9 @@ class MCPSettings(BaseSettings):
         alias="MCP_STDIO_ALLOWED_COMMANDS",
     )
     max_tools_per_server: int = Field(default=50, alias="MCP_MAX_TOOLS_PER_SERVER")
+    # Per-server caps don't compose: ten servers at the per-server limit would
+    # put 500 tools in every request. This is the ceiling across all of them.
+    max_tools_total: int = Field(default=100, alias="MCP_MAX_TOOLS_TOTAL")
     max_response_bytes: int = Field(default=1_048_576, alias="MCP_MAX_RESPONSE_BYTES")
 
 
