@@ -482,5 +482,4 @@ def _mcp_tool_to_definition(tool: Tool, server_name: str) -> ToolDefinition:
         description=tool.description or f"MCP tool from {server_name}",
         parameters_schema=schema,
         webhook_url=None,
-        is_builtin=False,
     )

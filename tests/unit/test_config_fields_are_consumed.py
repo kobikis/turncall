@@ -30,26 +30,19 @@ from turncall.domain.models import AgentConfig
 # Fields that are genuinely read by nothing, recorded so the test stays green
 # while the gap stays visible. Removing an entry is how you claim it's wired.
 NOT_CONSUMED: dict[str, str] = {
-    "AgentConfig.silence_timeout_ms": (
-        "accepted and validated 200-5000, read nowhere — the pipeline uses "
-        "smart_turn_stop_secs instead"
-    ),
-    "AgentConfig.knowledge_bases": (
-        "vestigial: KBs attach via /agents/{id}/knowledge-bases, and the API "
-        "schema forbids the field outright"
-    ),
     "VoicemailConfig.voicemail_expected_duration_seconds": (
-        "accepted, read nowhere — the other voicemail fields do reach Pipecat"
+        "accepted and validated 5-60, read nowhere — and nothing to wire it to: "
+        "Pipecat's VoicemailDetector takes llm, voicemail_response_delay and "
+        "custom_system_prompt, none of which means 'expected greeting length'. "
+        "Mapping it onto voicemail_response_delay would put a 15s pause after "
+        "the greeting ends, which is not what the field promises. Needs either "
+        "TurnCall-side behaviour or removal on the next major"
     ),
     "AgentConfig.analysis": (
         "consumed, but through the raw blob rather than the attribute: "
         "call_analysis_trigger rebuilds it with "
         "AnalysisConfig(**agent_config_blob.get('analysis', {})). Its own "
         "fields are read normally, so only this hop is invisible here"
-    ),
-    "ToolDefinition.is_builtin": (
-        "set on construction, never read — dispatch matches BUILTIN_TOOL_NAMES "
-        "by name instead"
     ),
 }
 
