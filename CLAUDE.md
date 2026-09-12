@@ -52,7 +52,8 @@ src/turncall/
 
 ```bash
 make run              # Dev server with reload
-make test             # pytest with coverage
+make test             # pytest with coverage (hermetic — excludes `live`)
+make test-live        # real providers, needs credentials; skips what it lacks
 make lint             # ruff check
 make format           # ruff format
 make migrate          # alembic upgrade head (runs in docker; make docker-up first)

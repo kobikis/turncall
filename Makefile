@@ -18,6 +18,9 @@ test-unit: ## Run unit tests only
 test-integration: ## Run integration tests only
 	pytest -m integration -v
 
+test-live: ## Run the live suite (real providers, needs credentials)
+	pytest -m live -rs
+
 lint: ## Run linter
 	ruff check src/ tests/
 
