@@ -17,8 +17,44 @@ import httpx
 from loguru import logger
 
 from turncall.adapters.http_client import get_http_client
+from turncall.config.settings import get_settings
 from turncall.domain.models import ToolDefinition
 from turncall.events.webhook_signing import sign_payload
+
+# How much of an oversized result to show the model. Enough to see what the
+# tool was answering, small enough that the cap still means something.
+_PREVIEW_BYTES = 512
+
+
+def cap_tool_result(text: str, max_bytes: int, *, tool: str, source: str) -> str:
+    """Keep a runaway tool result out of the LLM context.
+
+    Shared by both kinds of tool: the limit is the caller's (MCP servers and
+    webhook tools have separate knobs), the behaviour is not. The reply stays
+    valid JSON so the model can read the error and ask for less instead of
+    losing the turn.
+    """
+    encoded = text.encode()
+    if len(encoded) <= max_bytes:
+        return text
+
+    logger.warning(
+        "tool_response_truncated",
+        tool=tool,
+        source=source,
+        size=len(encoded),
+        max=max_bytes,
+    )
+    preview = encoded[: min(_PREVIEW_BYTES, max_bytes)].decode(errors="ignore")
+    return json.dumps(
+        {
+            "error": (
+                f"Tool result too large: {len(encoded)} bytes, "
+                f"limit {max_bytes}. Ask for less data."
+            ),
+            "preview": preview,
+        }
+    )
 
 
 def classify_tool_result(result: str) -> tuple[str, dict[str, Any]]:
@@ -77,7 +113,12 @@ async def post_tool_webhook(
             timeout=tool_def.timeout_seconds,
         )
         response.raise_for_status()
-        return response.text
+        return cap_tool_result(
+            response.text,
+            get_settings().tools.max_response_bytes,
+            tool=tool_def.name,
+            source="webhook",
+        )
     except httpx.TimeoutException:
         logger.warning(
             "tool_webhook_timeout",

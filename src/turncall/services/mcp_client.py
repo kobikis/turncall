@@ -347,7 +347,13 @@ class MCPSessionManager:
                 for block in result.content:
                     if hasattr(block, "text"):
                         error_text += block.text
-                return json.dumps({"error": error_text or "MCP tool error"})
+                # Capped too: a failing tool can return just as much text as
+                # a succeeding one, and it lands in the same context.
+                return _cap_response(
+                    json.dumps({"error": error_text or "MCP tool error"}),
+                    tool_name,
+                    ref.server_name,
+                )
 
             # Extract text content from result
             parts: list[str] = []
@@ -382,42 +388,18 @@ class MCPSessionManager:
         logger.info("mcp_sessions_closed", call_id=str(self.call_id))
 
 
-# How much of an oversized result to show the model. Enough to see what the
-# tool was answering, small enough that the cap still means something.
-_PREVIEW_BYTES = 512
-
-
 def _cap_response(text: str, tool_name: str, server_name: str) -> str:
-    """Keep a runaway tool result out of the LLM context.
-
-    MCP_MAX_RESPONSE_BYTES was declared in settings and enforced nowhere, so a
-    server returning megabytes put all of it in the prompt — the cost lands on
-    every subsequent turn, and the call usually dies on context length. The
-    reply stays valid JSON so the model can read the error and react.
-    """
+    """Keep a runaway MCP result out of the LLM context, per
+    MCP_MAX_RESPONSE_BYTES. Webhook tools get the same treatment under their
+    own limit — the behaviour lives in tool_webhook so both stay identical."""
     from turncall.config.settings import get_settings
+    from turncall.services.tool_webhook import cap_tool_result
 
-    max_bytes = get_settings().mcp.max_response_bytes
-    encoded = text.encode()
-    if len(encoded) <= max_bytes:
-        return text
-
-    logger.warning(
-        "mcp_response_truncated",
+    return cap_tool_result(
+        text,
+        get_settings().mcp.max_response_bytes,
         tool=tool_name,
-        server=server_name,
-        size=len(encoded),
-        max=max_bytes,
-    )
-    preview = encoded[: min(_PREVIEW_BYTES, max_bytes)].decode(errors="ignore")
-    return json.dumps(
-        {
-            "error": (
-                f"Tool result too large: {len(encoded)} bytes, "
-                f"limit {max_bytes}. Ask for less data."
-            ),
-            "preview": preview,
-        }
+        source=f"mcp:{server_name}",
     )
 
 

@@ -254,9 +254,20 @@ def register_tools(
     tools: list[ToolDefinition],
     call_context: CallContext,
 ) -> None:
-    """Register tool definitions as LLM function handlers."""
+    """Register tool definitions as LLM function handlers.
+
+    Deduplicated by name, first wins — the same rule and the same order
+    `_build_tools_schema` applies when it decides what to advertise. Pipecat's
+    registry is keyed by name, so without this a duplicate silently replaced
+    the handler for a name the schema had already given to someone else.
+    """
     registered = 0
+    seen: set[str] = set()
     for tool_def in tools:
+        if tool_def.name in seen:
+            logger.warning("tool_registration_collision_skipped", tool=tool_def.name)
+            continue
+        seen.add(tool_def.name)
         try:
             _register_single_tool(llm, tool_def, call_context)
             registered += 1
@@ -287,7 +298,14 @@ def _register_single_tool(
         if function_name in BUILTIN_TOOL_NAMES:
             result = await _execute_builtin(function_name, args, call_context)
         elif (
-            call_context.mcp_manager is not None
+            # Only when this registration is not itself a webhook tool. Asking
+            # the manager by name alone sent a name the agent config had
+            # already claimed to the MCP server instead: the model was shown
+            # the customer's description and schema, and something else ran.
+            # _build_tools_schema gives static tools the name, so dispatch has
+            # to agree. chat_tools._run makes the same check.
+            not tool_def.webhook_url
+            and call_context.mcp_manager is not None
             and call_context.mcp_manager.is_mcp_tool(function_name)
         ):
             result = await call_context.mcp_manager.call_tool(function_name, args)

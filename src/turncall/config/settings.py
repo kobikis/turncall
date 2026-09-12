@@ -128,6 +128,21 @@ class MCPSettings(BaseSettings):
     max_response_bytes: int = Field(default=1_048_576, alias="MCP_MAX_RESPONSE_BYTES")
 
 
+class ToolSettings(BaseSettings):
+    """Limits on custom webhook tools. MCP has its own under MCPSettings."""
+
+    model_config = SettingsConfigDict(env_prefix="TOOL_")
+
+    # A tool result goes into the prompt and stays there for the rest of the
+    # conversation, so an oversized one is charged on every subsequent turn
+    # before it eventually ends the call on context length. Same default and
+    # behaviour as MCP_MAX_RESPONSE_BYTES, which capped only half the tools;
+    # webhook tools are the half customers actually write.
+    max_response_bytes: int = Field(
+        default=1_048_576, alias="TOOL_MAX_RESPONSE_BYTES"
+    )
+
+
 class ServerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="")
 
@@ -228,6 +243,7 @@ class Settings(BaseSettings):
     aws: AWSSettings = Field(default_factory=AWSSettings)
     pipecat: PipecatSettings = Field(default_factory=PipecatSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
+    tools: ToolSettings = Field(default_factory=ToolSettings)
 
     @property
     def is_production(self) -> bool:
