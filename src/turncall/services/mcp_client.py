@@ -289,25 +289,47 @@ class MCPSessionManager:
         return session
 
     async def _create_http_session(self, server: MCPServerConfig) -> ClientSession:
-        """Create a streamable HTTP transport session."""
-        from mcp.client.streamable_http import streamablehttp_client
+        """Create a streamable HTTP transport session.
 
-        http_transport = await self._exit_stack.enter_async_context(
-            streamablehttp_client(
-                url=server.url or "",
-                headers={
-                    **server.headers,
-                    "X-Call-Id": str(self.call_id),
-                    "X-Project-Id": str(self.project_id),
-                },
-                timeout=server.timeout_seconds,
+        `streamable_http_client` is the name both SDK lines share (mcp 1.24+
+        and all of 2.x); the older `streamablehttp_client` is 1.x-only. It
+        takes its HTTP settings as a prepared client rather than as `headers`
+        and `timeout`, so the client is ours to build and ours to close.
+        """
+        import sys
+
+        from mcp.client.streamable_http import streamable_http_client
+
+        # The client class has to come from the httpx family the SDK itself
+        # was built against — httpx on the 1.x line, httpx2 on 2.x — so take
+        # it from the transport's own module rather than importing one.
+        transport_module = sys.modules[streamable_http_client.__module__]
+        http = getattr(transport_module, "httpx2", None) or transport_module.httpx
+
+        client = await self._exit_stack.enter_async_context(
+            http.AsyncClient(
+                headers=self._transport_headers(server),
+                timeout=http.Timeout(server.timeout_seconds),
+                # Matches the client the SDK builds when given none.
+                follow_redirects=True,
             )
         )
-        read_stream, write_stream, _ = http_transport
+        streams = await self._exit_stack.enter_async_context(
+            streamable_http_client(server.url or "", http_client=client)
+        )
+        # 1.x yields (read, write, get_session_id); 2.x yields (read, write).
         session = await self._exit_stack.enter_async_context(
-            ClientSession(read_stream, write_stream)
+            ClientSession(streams[0], streams[1])
         )
         return session
+
+    def _transport_headers(self, server: MCPServerConfig) -> dict[str, str]:
+        """The customer's headers plus the call/project the request belongs to."""
+        return {
+            **server.headers,
+            "X-Call-Id": str(self.call_id),
+            "X-Project-Id": str(self.project_id),
+        }
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
         """Call an MCP tool by name. Returns the result as a string."""
@@ -320,7 +342,7 @@ class MCPSessionManager:
                 ref.tool_name, arguments
             )
 
-            if result.isError:
+            if _result_is_error(result):
                 error_text = ""
                 for block in result.content:
                     if hasattr(block, "text"):
@@ -399,9 +421,32 @@ def _cap_response(text: str, tool_name: str, server_name: str) -> str:
     )
 
 
+def _tool_input_schema(tool: Tool) -> dict[str, Any]:
+    """The tool's JSON schema, whichever way the SDK spells the field.
+
+    mcp 2.x renamed `inputSchema` to `input_schema`. Reading only the old name
+    raised AttributeError per tool, which connect_servers logs and swallows —
+    so every server quietly returned nothing at all.
+    """
+    for name in ("inputSchema", "input_schema"):
+        schema = getattr(tool, name, None)
+        if isinstance(schema, dict):
+            return schema
+    return {}
+
+
+def _result_is_error(result: CallToolResult) -> bool:
+    """Whether the call failed — `isError` on mcp 1.x, `is_error` on 2.x."""
+    for name in ("isError", "is_error"):
+        flag = getattr(result, name, None)
+        if isinstance(flag, bool):
+            return flag
+    return False
+
+
 def _mcp_tool_to_definition(tool: Tool, server_name: str) -> ToolDefinition:
     """Convert an MCP Tool to a TurnCall ToolDefinition."""
-    input_schema = tool.inputSchema or {}
+    input_schema = _tool_input_schema(tool)
     return ToolDefinition(
         name=tool.name,
         description=tool.description or f"MCP tool from {server_name}",

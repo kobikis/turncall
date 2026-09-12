@@ -29,12 +29,12 @@ dependencies = [
     "httpx>=0.27.0",
 
     # MCP (Model Context Protocol)
-    # Upper bound is load-bearing: mcp 2.x renamed Tool.inputSchema ->
-    # input_schema and CallToolResult.isError -> is_error, both of which
-    # mcp_client reads. Unpinned, the Docker image resolved 2.2.0 and every
-    # MCP server discovered zero tools — silently, since connect_servers
-    # logs and continues per server. Pipecat pins mcp[cli]<2 too.
-    "mcp>=1.27.0,<2.0.0",
+    # Both SDK lines. 2.x renamed Tool.inputSchema -> input_schema and
+    # CallToolResult.isError -> is_error, and moved streamable HTTP to a
+    # prepared-client signature; mcp_client reads whichever spelling is
+    # present and uses `streamable_http_client`, the transport name 1.24+
+    # and 2.x share. Verified against 1.28 and 2.2.0.
+    "mcp>=1.27.0,<3.0.0",
 
     # Redis
     "redis[hiredis]>=5.0.0",

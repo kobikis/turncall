@@ -163,3 +163,20 @@ contribute nothing.
 A result over the size cap doesn't reach the model. It gets a JSON error with
 a short preview of what the tool started to say, so it can narrow the request
 and try again rather than dying on context length.
+
+## SDK versions
+
+TurnCall's MCP client works against both lines of the Python SDK, `mcp>=1.27,<3`.
+The 2.x line renamed two model fields and moved streamable HTTP to a
+prepared-client signature; the client reads whichever spelling is installed, so
+upgrading the SDK doesn't change anything about your agent config.
+
+<Note>
+  Reading only one spelling failed per tool, and `connect_servers` logs and
+  continues per server — so the symptom was every MCP server returning no tools
+  at all, with nothing in the response to say why. There's an integration test
+  that opens a real server and calls a real tool over each transport — HTTP,
+  SSE and stdio — on whichever line is installed, precisely because a mocked
+  test can't see a field rename.
+</Note>
+
