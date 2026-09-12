@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from mcp.types import Tool
 
+from tests.conftest import mcp_tool
 from turncall.services.mcp_client import MCPSessionManager
 
 
@@ -29,7 +30,7 @@ def _settings(**over):
 
 
 def _tool(name: str) -> Tool:
-    return Tool(name=name, description="d", inputSchema={"type": "object"})
+    return mcp_tool(name)
 
 
 def _result(text: str) -> MagicMock:

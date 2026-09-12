@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.conftest import mcp_tool
 from turncall.domain.models import AgentConfig, ToolDefinition
 from turncall.orchestrator.pipeline_factory import _build_tools_schema, create_pipeline
 
@@ -84,15 +85,14 @@ def test_an_mcp_tool_cannot_shadow_a_configured_tool():
 def test_mcp_discovery_skips_a_name_another_server_already_claimed():
     """The ref map is keyed by bare tool name, so the second server used to
     overwrite the first — advertising a tool that routed somewhere else."""
-    from mcp.types import Tool
 
     from turncall.services.mcp_client import MCPSessionManager
 
     manager = MCPSessionManager(call_id=MagicMock(), project_id=MagicMock())
     settings = SimpleNamespace(mcp=SimpleNamespace(max_tools_per_server=50))
 
-    def _mcp_tool(name: str) -> Tool:
-        return Tool(name=name, description="d", inputSchema={"type": "object"})
+    def _mcp_tool(name: str):
+        return mcp_tool(name)
 
     first = manager._register_discovered(
         [_mcp_tool("search")], server_name="crm", session="S1", settings=settings

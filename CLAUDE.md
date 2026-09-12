@@ -458,7 +458,7 @@ Connect agents to MCP servers for auto-discovered tools. Tools are fetched at ca
 | `stdio` | `command` + `args` + `env` | Local subprocess (requires `MCP_STDIO_ENABLED=true`) |
 
 ### Key Files
-- `services/mcp_client.py` — `MCPSessionManager`: connect, discover, call, cleanup
+- `services/mcp_client.py` — `MCPSessionManager`: connect, discover, call, cleanup. Works against **both** MCP SDK lines (`mcp>=1.27,<3`): 2.x renamed `Tool.inputSchema`→`input_schema` and `CallToolResult.isError`→`is_error`, so the client reads whichever spelling is present, and uses `streamable_http_client` — the transport name 1.24+ and 2.x share — building its own HTTP client for headers/timeout from whichever httpx family the SDK was built on
 - `orchestrator/tool_bridge.py` — Routes MCP tool calls through MCP client
 - `orchestrator/pipeline_factory.py` — Merges MCP tools into pipeline at creation
 - `orchestrator/pipeline_builder.py` — `start_call_pipeline()`: MCP discovery for WebRTC + WhatsApp voice (in the task that also runs the call — MCP transports open anyio cancel scopes that must be exited where they were entered)

@@ -22,3 +22,16 @@ def app(settings: Settings) -> TestClient:
     test_app.router.lifespan_context = None  # type: ignore[assignment]
 
     return TestClient(test_app, raise_server_exceptions=False)
+
+
+def mcp_tool(name: str, schema: dict | None = None):
+    """Build an mcp Tool without hard-coding which SDK line is installed.
+
+    1.x spells the field `inputSchema`, 2.x `input_schema`. Constructing it
+    by the wrong name is a TypeError, so tests that named one would break on
+    the other — the code they cover reads both.
+    """
+    from mcp.types import Tool
+
+    field = "inputSchema" if "inputSchema" in Tool.model_fields else "input_schema"
+    return Tool(**{"name": name, "description": "d", field: schema or {"type": "object"}})

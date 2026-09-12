@@ -39,15 +39,24 @@ def test_openai_sdk_is_within_the_declared_bound() -> None:
 
 
 @pytest.mark.unit
-def test_mcp_exposes_the_field_names_mcp_client_reads() -> None:
+def test_mcp_client_reads_whichever_field_names_this_sdk_uses() -> None:
     """mcp 2.x renamed Tool.inputSchema -> input_schema and
-    CallToolResult.isError -> is_error. Both are read by services/mcp_client
-    and both failures are swallowed, so an unpinned resolve produced an image
-    where every MCP server quietly returned no tools."""
+    CallToolResult.isError -> is_error. Reading only one spelling raised
+    AttributeError per tool, which connect_servers logs and swallows — so
+    every server quietly returned nothing. Assert against the installed SDK,
+    whichever line it is, rather than pinning one set of names."""
     from mcp.types import CallToolResult, Tool
 
-    assert "inputSchema" in Tool.model_fields
-    assert "isError" in CallToolResult.model_fields
+    from turncall.services.mcp_client import _result_is_error, _tool_input_schema
+
+    schema_field = next(f for f in Tool.model_fields if f in {"inputSchema", "input_schema"})
+    error_field = next(f for f in CallToolResult.model_fields if f in {"isError", "is_error"})
+
+    tool = Tool(**{"name": "t", "description": "d", schema_field: {"type": "object"}})
+    assert _tool_input_schema(tool) == {"type": "object"}
+
+    result = CallToolResult(**{"content": [], error_field: True})
+    assert _result_is_error(result) is True
 
 
 @pytest.mark.unit
