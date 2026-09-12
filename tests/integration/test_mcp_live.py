@@ -1,4 +1,4 @@
-"""A real MCP round trip over streamable HTTP.
+"""A real MCP round trip over each transport TurnCall supports.
 
 Every other MCP test mocks the session, which is exactly how mcp 2.x shipped
 broken: it renamed the two fields the client reads, and nothing in a mocked
@@ -7,11 +7,19 @@ client to it, discovers a tool and calls it — so a transport or model change
 in either SDK line fails here instead of in a call.
 
 Runs against whichever line is installed; the client supports both.
+
+Streamable HTTP is the transport whose signature changed between the lines,
+so it carries the most risk — but SSE and stdio reach the same discovery and
+call code through different plumbing, and only a live server exercises it.
 """
 
 import socket
+import sys
 import threading
 import time
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -43,17 +51,15 @@ def _build_server():
     return server
 
 
-@pytest.fixture(scope="module")
-def mcp_server_url() -> str:
+def _serve(app_name: str) -> int:
+    """Run the probe server's ASGI app on a free port, in a daemon thread."""
     import uvicorn
 
     port = _free_port()
-    server = _build_server()
+    app = getattr(_build_server(), app_name)()
 
     def serve() -> None:
-        uvicorn.run(
-            server.streamable_http_app(), host="127.0.0.1", port=port, log_level="error"
-        )
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="error")
 
     threading.Thread(target=serve, daemon=True).start()
 
@@ -61,12 +67,19 @@ def mcp_server_url() -> str:
     while time.monotonic() < deadline:
         with socket.socket() as probe:
             if probe.connect_ex(("127.0.0.1", port)) == 0:
-                break
+                return port
         time.sleep(0.1)
-    else:  # pragma: no cover - only on a machine that can't bind a port
-        pytest.skip("MCP probe server did not start")
+    pytest.skip("MCP probe server did not start")  # pragma: no cover
 
-    return f"http://127.0.0.1:{port}/mcp"
+
+@pytest.fixture(scope="module")
+def mcp_server_url() -> str:
+    return f"http://127.0.0.1:{_serve('streamable_http_app')}/mcp"
+
+
+@pytest.fixture(scope="module")
+def mcp_sse_url() -> str:
+    return f"http://127.0.0.1:{_serve('sse_app')}/sse"
 
 
 @pytest.mark.integration
@@ -107,3 +120,79 @@ async def test_an_unknown_tool_reports_rather_than_raises(mcp_server_url: str) -
     assert "error" in await manager.call_tool("nonexistent", {})
 
     await manager.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_sse_transport_discovers_and_calls(mcp_sse_url: str) -> None:
+    """SSE keeps its `headers` and `timeout` arguments on both lines, unlike
+    streamable HTTP — but it reaches the same discovery and call code."""
+    manager = MCPSessionManager(call_id=uuid4(), project_id=uuid4())
+    config = MCPServerConfig(
+        name="probe-sse", transport="sse", url=mcp_sse_url, timeout_seconds=15
+    )
+
+    tools = await manager.connect_servers([config])
+    assert [t.name for t in tools] == ["add"]
+    assert "sum=5" in await manager.call_tool("add", {"a": 2, "b": 3})
+
+    await manager.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_stdio_transport_discovers_and_calls() -> None:
+    """stdio launches the server as a subprocess, so it exercises the command
+    allowlist as well as the transport. sys.executable rather than bare
+    "python": the allowlist matches exactly, and the interpreter running the
+    tests is the one with mcp installed."""
+    script = Path(__file__).parent / "_mcp_stdio_server.py"
+    settings = SimpleNamespace(
+        mcp=SimpleNamespace(
+            stdio_enabled=True,
+            stdio_allowed_commands=[sys.executable],
+            max_tools_per_server=50,
+            max_tools_total=100,
+            max_response_bytes=1_048_576,
+        ),
+        byom=SimpleNamespace(allowed_url_patterns=[]),
+    )
+
+    manager = MCPSessionManager(call_id=uuid4(), project_id=uuid4())
+    config = MCPServerConfig(
+        name="probe-stdio",
+        transport="stdio",
+        command=sys.executable,
+        args=[str(script)],
+        timeout_seconds=15,
+    )
+
+    with patch("turncall.config.settings.get_settings", return_value=settings):
+        tools = await manager.connect_servers([config])
+        assert [t.name for t in tools] == ["add"]
+        assert "sum=5" in await manager.call_tool("add", {"a": 2, "b": 3})
+        await manager.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_stdio_stays_shut_when_disabled() -> None:
+    """The gate is the whole point: stdio runs an executable, so it is off
+    unless an operator turns it on."""
+    settings = SimpleNamespace(
+        mcp=SimpleNamespace(
+            stdio_enabled=False,
+            stdio_allowed_commands=[sys.executable],
+            max_tools_per_server=50,
+            max_tools_total=100,
+            max_response_bytes=1_048_576,
+        ),
+        byom=SimpleNamespace(allowed_url_patterns=[]),
+    )
+    manager = MCPSessionManager(call_id=uuid4(), project_id=uuid4())
+    config = MCPServerConfig(
+        name="probe-stdio", transport="stdio", command=sys.executable, args=["-c", ""]
+    )
+
+    with patch("turncall.config.settings.get_settings", return_value=settings):
+        assert await manager.connect_servers([config]) == []
