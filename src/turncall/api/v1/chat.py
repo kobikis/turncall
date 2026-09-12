@@ -12,9 +12,14 @@ from turncall.api.v1.schemas.chat import (
     ChatSessionResponse,
     SendChatMessageRequest,
 )
+from turncall.api.v1.schemas.tools import ToolInvocationResponse
 from turncall.auth import Auth, WriteAuth
 from turncall.services.sms_chat import handle_chat_message
-from turncall.storage.repositories import sms_message_repo, sms_session_repo
+from turncall.storage.repositories import (
+    sms_message_repo,
+    sms_session_repo,
+    tool_invocation_repo,
+)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -117,6 +122,28 @@ async def list_session_messages(
         page=1,
         limit=limit,
     )
+
+
+@router.get("/sessions/{session_id}/tool-invocations")
+async def list_session_tool_invocations(
+    session_id: UUID,
+    auth: Auth,
+    session: DbSession,
+) -> dict:
+    """List tool invocations made during a chat session.
+
+    The text-channel counterpart of `GET /v1/tools/invocations/{call_id}`.
+    """
+    sess_row = await sms_session_repo.get_session_by_id(
+        session, session_id, project_id=auth.project_id
+    )
+    if sess_row is None:
+        raise NotFoundError("ChatSession", str(session_id))
+
+    invocations = await tool_invocation_repo.list_invocations_for_session(
+        session, session_id
+    )
+    return ok([ToolInvocationResponse.model_validate(i) for i in invocations])
 
 
 @router.delete("/sessions/{session_id}")

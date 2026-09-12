@@ -33,7 +33,10 @@ class ToolInvocationResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     id: UUID
-    call_id: UUID
+    # Exactly one is set: a voice call has a call_id, a text session a
+    # session_id. Branch on whichever is present.
+    call_id: UUID | None
+    session_id: UUID | None
     tool_name: str
     input_json: dict[str, Any]
     output_json: dict[str, Any] | None

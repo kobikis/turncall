@@ -12,18 +12,28 @@ from turncall.storage.models import ToolInvocationRow
 async def create_invocation(
     session: AsyncSession,
     *,
-    call_id: UUID,
+    call_id: UUID | None = None,
+    session_id: UUID | None = None,
     tool_name: str,
     input_json: dict[str, Any],
     status: str = "pending",
+    output_json: dict[str, Any] | None = None,
+    latency_ms: int | None = None,
     idempotency_key: str | None = None,
 ) -> ToolInvocationRow:
-    """Record a tool invocation."""
+    """Record a tool invocation against a voice call or a text session.
+
+    Exactly one owner: the table's CHECK rejects both or neither, so a caller
+    that forgets fails at the write rather than storing an orphan.
+    """
     row = ToolInvocationRow(
         call_id=call_id,
+        session_id=session_id,
         tool_name=tool_name,
         input_json=input_json,
         status=status,
+        output_json=output_json,
+        latency_ms=latency_ms,
         idempotency_key=idempotency_key,
     )
     session.add(row)
@@ -65,6 +75,19 @@ async def list_invocations_for_call(
     result = await session.execute(
         select(ToolInvocationRow)
         .where(ToolInvocationRow.call_id == call_id)
+        .order_by(ToolInvocationRow.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def list_invocations_for_session(
+    session: AsyncSession,
+    session_id: UUID,
+) -> list[ToolInvocationRow]:
+    """List all tool invocations for a text session (SMS, chat, WhatsApp)."""
+    result = await session.execute(
+        select(ToolInvocationRow)
+        .where(ToolInvocationRow.session_id == session_id)
         .order_by(ToolInvocationRow.created_at.asc())
     )
     return list(result.scalars().all())

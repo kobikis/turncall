@@ -138,6 +138,7 @@ POST /v1/chat              # Send message, get LLM reply (creates/resumes sessio
 GET  /v1/chat/sessions     # List sessions
 GET  /v1/chat/sessions/:id # Get session detail
 GET  /v1/chat/sessions/:id/messages  # List messages
+GET  /v1/chat/sessions/:id/tool-invocations  # Tool calls made in the session
 DELETE /v1/chat/sessions/:id         # Expire session
 ```
 
@@ -471,9 +472,11 @@ Tool names are flat and unique: precedence is built-in > agent `tools` > MCP (se
 Tools run on voice **and** text, on every LLM provider — OpenAI-compatible (`tools`/`tool_calls`), Anthropic (`input_schema` + tool_use/tool_result blocks) and Bedrock Converse (`toolSpec`/`toolUse`/`toolResult`) each have their own dialect in `llm_text.py`. Built-ins are voice-only — all four resolve through `call_control` against a live `call_id`. Calls within one round run concurrently. Text turns cap at `_MAX_TOOL_ROUNDS` (5), then re-ask with the tools withheld so a reply always goes out.
 
 ### Tool Invocation Recording
-**Voice only.** Tool calls on a call (webhook + MCP + builtin) are recorded in `tool_invocations` with input, output, status, latency_ms, and dispatched as `tool.result` events. Query via `GET /v1/tools/invocations/{call_id}`.
+All tool calls (webhook + MCP + builtin) are recorded in `tool_invocations` with input, output, status, latency_ms, and dispatched as `tool.result` events.
 
-Text sessions record **nothing**: `tool_invocations.call_id` is `NOT NULL` with an FK to `calls`, and a chat session has no call. Chat history stores customer/assistant text only, so a text tool call leaves no trace in either place. Fixing it needs a migration (nullable `call_id` + `session_id` + a CHECK that exactly one is set) and a matching read path.
+A row belongs to a **voice call** (`call_id`) or a **text session** (`session_id`) — a CHECK enforces exactly one. Read them back with `GET /v1/tools/invocations/{call_id}` or `GET /v1/chat/sessions/{session_id}/tool-invocations`.
+
+Recording runs off the reply's critical path and is best-effort: a failure is logged, never raised, so losing the audit row can't cost the caller their answer.
 
 ## Pipecat Integration
 

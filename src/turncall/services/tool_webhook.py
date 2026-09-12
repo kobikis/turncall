@@ -21,6 +21,23 @@ from turncall.domain.models import ToolDefinition
 from turncall.events.webhook_signing import sign_payload
 
 
+def classify_tool_result(result: str) -> tuple[str, dict[str, Any]]:
+    """Turn a tool's raw string result into (status, output_json).
+
+    Every executor hands back a string — JSON when the endpoint sent JSON,
+    whatever it sent otherwise — so the status has to be read back out of
+    it. The error shape is ours: post_tool_webhook and the MCP client both
+    report failures as {"error": ...}.
+    """
+    try:
+        parsed = json.loads(result)
+    except (json.JSONDecodeError, TypeError):
+        return "succeeded", {"result": result}
+    if isinstance(parsed, dict):
+        return ("failed" if "error" in parsed else "succeeded"), parsed
+    return "succeeded", {"result": parsed}
+
+
 async def post_tool_webhook(
     tool_def: ToolDefinition,
     args: dict[str, Any],

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -239,8 +240,13 @@ class ToolInvocationRow(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=new_uuid
     )
-    call_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("calls.id", ondelete="CASCADE"), nullable=False
+    # A row belongs to a voice call or to a text session, never both and never
+    # neither — the CHECK below is what makes that true rather than a comment.
+    call_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("calls.id", ondelete="CASCADE"), nullable=True
+    )
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("sms_sessions.id", ondelete="CASCADE"), nullable=True
     )
     tool_name: Mapped[str] = mapped_column(String(255), nullable=False)
     input_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
@@ -260,7 +266,14 @@ class ToolInvocationRow(Base):
         DateTime(timezone=True), default=utc_now
     )
 
-    __table_args__ = (Index("ix_tool_invocations_call_id", "call_id"),)
+    __table_args__ = (
+        Index("ix_tool_invocations_call_id", "call_id"),
+        Index("ix_tool_invocations_session_id", "session_id"),
+        CheckConstraint(
+            "num_nonnulls(call_id, session_id) = 1",
+            name="ck_tool_invocations_owner",
+        ),
+    )
 
 
 class CallEventRow(Base):

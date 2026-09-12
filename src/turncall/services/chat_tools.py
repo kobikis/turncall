@@ -14,7 +14,9 @@ cancel scopes require.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -27,7 +29,61 @@ from turncall.domain.models import (
     AgentConfig,
     ToolDefinition,
 )
-from turncall.services.tool_webhook import post_tool_webhook
+from turncall.services.tool_webhook import classify_tool_result, post_tool_webhook
+
+# Recording tasks kept referenced so asyncio (which holds only a weak ref)
+# can't GC one mid-write.
+_RECORDING: set[asyncio.Task] = set()
+
+
+async def _record_invocation(
+    tool_name: str,
+    args: dict[str, Any],
+    result: str,
+    latency_ms: int,
+    *,
+    session_id: UUID,
+    project_id: UUID,
+) -> None:
+    """Persist the invocation and dispatch tool.result, as the voice path does.
+
+    Runs off the reply's critical path: the row is small but the webhook
+    dispatch can retry for ~90s against a dead subscriber, and the customer is
+    waiting on a message. Failures are logged, never raised — losing the audit
+    row must not cost someone their reply.
+    """
+    from turncall.domain.enums import CallEventType
+    from turncall.events.dispatcher import dispatch_event
+    from turncall.storage.database import get_session_factory
+    from turncall.storage.repositories import tool_invocation_repo
+
+    status, output_json = classify_tool_result(result)
+    try:
+        async with get_session_factory()() as db:
+            await tool_invocation_repo.create_invocation(
+                db,
+                session_id=session_id,
+                tool_name=tool_name,
+                input_json=args,
+                status=status,
+                output_json=output_json,
+                latency_ms=latency_ms,
+            )
+            await db.commit()
+
+            await dispatch_event(
+                db,
+                project_id=project_id,
+                event_type=CallEventType.TOOL_RESULT,
+                payload={
+                    "tool_name": tool_name,
+                    "arguments": args,
+                    "result": result,
+                },
+                session_id=session_id,
+            )
+    except Exception:
+        logger.exception("chat_tool_record_failed", tool=tool_name)
 
 
 @dataclass(frozen=True)
@@ -88,7 +144,7 @@ async def build_chat_tools(
         _to_function_schema(t) for t in mcp_tools if t.name not in webhook_tools
     ]
 
-    async def execute(name: str, args: dict[str, Any]) -> str:
+    async def _run(name: str, args: dict[str, Any]) -> str:
         if (
             mcp_manager is not None
             and name not in webhook_tools
@@ -107,6 +163,25 @@ async def build_chat_tools(
         return await post_tool_webhook(
             tool, args, project_id=project_id, session_id=session_id
         )
+
+    async def execute(name: str, args: dict[str, Any]) -> str:
+        started = time.perf_counter()
+        result = await _run(name, args)
+        latency_ms = int((time.perf_counter() - started) * 1000)
+
+        task = asyncio.create_task(
+            _record_invocation(
+                name,
+                args,
+                result,
+                latency_ms,
+                session_id=session_id,
+                project_id=project_id,
+            )
+        )
+        _RECORDING.add(task)
+        task.add_done_callback(_RECORDING.discard)
+        return result
 
     async def aclose() -> None:
         if mcp_manager is not None:
