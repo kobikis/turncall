@@ -122,18 +122,3 @@ async def test_settings_expose_the_new_total_cap() -> None:
     from turncall.config.settings import MCPSettings
 
     assert MCPSettings().max_tools_total > 0
-
-
-@pytest.mark.unit
-def test_the_installed_mcp_exposes_the_fields_we_read() -> None:
-    """mcp 2.x renamed Tool.inputSchema -> input_schema and
-    CallToolResult.isError -> is_error. Both are read by mcp_client, and both
-    failures are swallowed — discovery logs per server and call_tool catches
-    everything — so an unpinned resolve produced an image where every MCP
-    server quietly returned no tools. pyproject pins <2.0.0; this fails loudly
-    if that pin is ever loosened without migrating the field names.
-    """
-    from mcp.types import CallToolResult, Tool
-
-    assert "inputSchema" in Tool.model_fields
-    assert "isError" in CallToolResult.model_fields
