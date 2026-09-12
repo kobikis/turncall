@@ -70,7 +70,11 @@ def classify_tool_result(result: str) -> tuple[str, dict[str, Any]]:
     except (json.JSONDecodeError, TypeError):
         return "succeeded", {"result": result}
     if isinstance(parsed, dict):
-        return ("failed" if "error" in parsed else "succeeded"), parsed
+        # Truthiness, not key presence. `{"error": null}` is the ordinary
+        # "nothing went wrong" shape from an endpoint that always includes the
+        # field, and reading it as a failure mislabelled every successful call
+        # such an endpoint made.
+        return ("failed" if parsed.get("error") else "succeeded"), parsed
     return "succeeded", {"result": parsed}
 
 
