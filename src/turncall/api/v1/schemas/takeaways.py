@@ -17,7 +17,9 @@ def _validate_json_schema(schema: dict[str, Any]) -> None:
 
 class CreateTakeawayRequest(BaseModel):
     # Name keys the result in call.ended payloads — keep it identifier-shaped.
-    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    name: str = Field(
+        ..., min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$"
+    )
     description: str | None = Field(default=None, max_length=2000)
     schema_: dict[str, Any] = Field(..., alias="schema")
     prompt: str | None = Field(default=None, max_length=4000)

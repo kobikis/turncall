@@ -29,7 +29,9 @@ async def test_tts_service_strips_markdown(provider, monkeypatch):
     applied = None
     for aggregation_type, transform in service._text_transforms:
         assert aggregation_type == "*" or isinstance(aggregation_type, AggregationType)
-        result = await transform("You owe **$5** for `item-3`", AggregationType.SENTENCE)
+        result = await transform(
+            "You owe **$5** for `item-3`", AggregationType.SENTENCE
+        )
         if result == "You owe $5 for item-3":
             applied = transform
     assert applied is not None, "strip_markdown not wired into the TTS text path"

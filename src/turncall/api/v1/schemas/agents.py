@@ -189,6 +189,7 @@ class AnalysisSchema(BaseModel):
                 msg = f"takeaway_ids entries must be UUIDs, got {t!r}"
                 raise ValueError(msg) from exc
         return self
+
     model: str | None = Field(
         default=None,
         max_length=100,

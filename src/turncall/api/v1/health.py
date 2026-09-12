@@ -11,7 +11,6 @@ from turncall.storage.redis import get_redis
 router = APIRouter(tags=["health"])
 
 
-
 @router.get("/health")
 async def health_check() -> dict[str, Any]:
     """Check service health including database and Redis connectivity."""

@@ -290,7 +290,9 @@ async def enrich_chunks(
     ]
     skipped = len(chunks) - len(to_enrich)
     if skipped > 0:
-        logger.info("enrichment capped: {n} chunks kept filename-only prefix", n=skipped)
+        logger.info(
+            "enrichment capped: {n} chunks kept filename-only prefix", n=skipped
+        )
     return enriched + fallback[len(to_enrich) :]
 
 

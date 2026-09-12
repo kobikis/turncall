@@ -18,9 +18,15 @@ class TestRoleRank:
 
     def test_escalation_guard_logic(self) -> None:
         # The endpoint forbids body.role.rank > auth.role.rank.
-        assert ProjectRole.ADMIN.rank > ProjectRole.DEVELOPER.rank  # dev cannot mint admin
-        assert not ProjectRole.VIEWER.rank > ProjectRole.DEVELOPER.rank  # dev may mint viewer
-        assert not ProjectRole.ADMIN.rank > ProjectRole.ADMIN.rank  # admin may mint admin
+        assert (
+            ProjectRole.ADMIN.rank > ProjectRole.DEVELOPER.rank
+        )  # dev cannot mint admin
+        assert (
+            not ProjectRole.VIEWER.rank > ProjectRole.DEVELOPER.rank
+        )  # dev may mint viewer
+        assert (
+            not ProjectRole.ADMIN.rank > ProjectRole.ADMIN.rank
+        )  # admin may mint admin
 
 
 @pytest.mark.unit
@@ -31,11 +37,19 @@ class TestSanitizeConfig:
             "llm": {"provider": "openai", "model": "gpt-4o", "api_key": "sk-secret"},
             "server_url": {"url": "https://x", "secret": "sig-secret"},
             "tools": [
-                {"name": "book", "webhook_url": "https://x", "webhook_secret": "tool-secret"},
+                {
+                    "name": "book",
+                    "webhook_url": "https://x",
+                    "webhook_secret": "tool-secret",
+                },
                 {"name": "end_call"},  # no secret — untouched
             ],
             "mcp_servers": [
-                {"name": "crm", "headers": {"Authorization": "Bearer tok"}, "env": {"KEY": "v"}},
+                {
+                    "name": "crm",
+                    "headers": {"Authorization": "Bearer tok"},
+                    "env": {"KEY": "v"},
+                },
             ],
         }
 
@@ -85,9 +99,7 @@ class TestRevokeProjectScoping:
 
         session = AsyncMock()
         session.execute = fake_execute
-        await api_key_repo.revoke_api_key(
-            session, uuid.uuid4(), project_id=project_id
-        )
+        await api_key_repo.revoke_api_key(session, uuid.uuid4(), project_id=project_id)
         return captured["sql"]
 
     async def test_scoped_query_filters_project(self) -> None:
@@ -111,9 +123,7 @@ class TestKeyCreationEndpoint:
         from turncall.auth.context import AuthContext
         from turncall.auth.dependencies import resolve_auth_context
 
-        ctx = AuthContext(
-            project_id=uuid.uuid4(), api_key_id=uuid.uuid4(), role=role
-        )
+        ctx = AuthContext(project_id=uuid.uuid4(), api_key_id=uuid.uuid4(), role=role)
         app.app.dependency_overrides[resolve_auth_context] = lambda: ctx
         app.app.dependency_overrides[get_session] = lambda: AsyncMock()
         return ctx

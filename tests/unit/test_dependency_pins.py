@@ -49,8 +49,12 @@ def test_mcp_client_reads_whichever_field_names_this_sdk_uses() -> None:
 
     from turncall.services.mcp_client import _result_is_error, _tool_input_schema
 
-    schema_field = next(f for f in Tool.model_fields if f in {"inputSchema", "input_schema"})
-    error_field = next(f for f in CallToolResult.model_fields if f in {"isError", "is_error"})
+    schema_field = next(
+        f for f in Tool.model_fields if f in {"inputSchema", "input_schema"}
+    )
+    error_field = next(
+        f for f in CallToolResult.model_fields if f in {"isError", "is_error"}
+    )
 
     tool = Tool(**{"name": "t", "description": "d", schema_field: {"type": "object"}})
     assert _tool_input_schema(tool) == {"type": "object"}

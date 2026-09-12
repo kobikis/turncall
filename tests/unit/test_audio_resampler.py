@@ -29,7 +29,9 @@ def test_resampler_routing() -> None:
 
         # mic input 16k -> service 24k
         await r.process_frame(
-            InputAudioRawFrame(audio=b"\x00\x00" * 1600, sample_rate=16000, num_channels=1),
+            InputAudioRawFrame(
+                audio=b"\x00\x00" * 1600, sample_rate=16000, num_channels=1
+            ),
             FrameDirection.DOWNSTREAM,
         )
         assert isinstance(out[-1], InputAudioRawFrame)
@@ -37,14 +39,18 @@ def test_resampler_routing() -> None:
 
         # service TTS 24k -> pipeline 16k
         await r.process_frame(
-            TTSAudioRawFrame(audio=b"\x00\x00" * 2400, sample_rate=24000, num_channels=1),
+            TTSAudioRawFrame(
+                audio=b"\x00\x00" * 2400, sample_rate=24000, num_channels=1
+            ),
             FrameDirection.DOWNSTREAM,
         )
         assert isinstance(out[-1], TTSAudioRawFrame)
         assert out[-1].sample_rate == 16000
 
         # already-correct rate passes through the same object untouched
-        f = InputAudioRawFrame(audio=b"\x00\x00" * 2400, sample_rate=24000, num_channels=1)
+        f = InputAudioRawFrame(
+            audio=b"\x00\x00" * 2400, sample_rate=24000, num_channels=1
+        )
         await r.process_frame(f, FrameDirection.DOWNSTREAM)
         assert out[-1] is f
 
@@ -68,7 +74,9 @@ def test_empty_resample_drops_frame() -> None:
         r._in_resampler.resample = empty  # type: ignore[assignment]
 
         await r.process_frame(
-            InputAudioRawFrame(audio=b"\x00\x00" * 1600, sample_rate=16000, num_channels=1),
+            InputAudioRawFrame(
+                audio=b"\x00\x00" * 1600, sample_rate=16000, num_channels=1
+            ),
             FrameDirection.DOWNSTREAM,
         )
         assert out == []  # nothing emitted; samples stay buffered for next call

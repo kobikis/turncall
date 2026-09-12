@@ -52,7 +52,9 @@ def test_failed_without_telephony_event_is_pipeline_error():
 
 
 def test_completed_fallback_is_customer_ended():
-    reason = infer_ended_reason("completed", {"transcript.final"}, assistant_ended=False)
+    reason = infer_ended_reason(
+        "completed", {"transcript.final"}, assistant_ended=False
+    )
     assert reason == EndedReason.CUSTOMER_ENDED_CALL
 
 

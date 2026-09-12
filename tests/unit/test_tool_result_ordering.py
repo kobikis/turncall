@@ -50,7 +50,9 @@ async def test_result_callback_fires_before_background_logging() -> None:
         order.append("callback")
 
     with (
-        patch.object(tool_bridge, "_execute_webhook_tool", new=AsyncMock(return_value='{"ok":1}')),
+        patch.object(
+            tool_bridge, "_execute_webhook_tool", new=AsyncMock(return_value='{"ok":1}')
+        ),
         patch.object(tool_bridge, "_log_tool_result", new=slow_log),
     ):
         tool_bridge.register_tools(_LLM(), [tool], call_context)

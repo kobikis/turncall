@@ -216,7 +216,10 @@ async def test_a_failing_tool_is_reported_back_not_raised():
         )
 
     assert out.text == "I couldn't reach the calendar."
-    assert "CRM timed out" in client.post.call_args.kwargs["json"]["messages"][-1]["content"]
+    assert (
+        "CRM timed out"
+        in client.post.call_args.kwargs["json"]["messages"][-1]["content"]
+    )
 
 
 @pytest.mark.unit

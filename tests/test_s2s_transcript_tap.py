@@ -36,7 +36,9 @@ async def test_assistant_tap_excludes_user_transcription() -> None:
         await tap.process_frame(frame, FrameDirection.DOWNSTREAM)
 
     # user speech — must NOT be logged as assistant
-    await feed(TranscriptionFrame(text="I need a room", user_id="customer", timestamp="t"))
+    await feed(
+        TranscriptionFrame(text="I need a room", user_id="customer", timestamp="t")
+    )
     # S2S pushes each assistant token as BOTH an LLMTextFrame (a plain TextFrame
     # here) and a TTSTextFrame — the TTSTextFrame must be ignored, else doubling.
     await feed(TextFrame(text="Sure, "))

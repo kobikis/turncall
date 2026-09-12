@@ -27,7 +27,11 @@ async def test_unbinds_each_number_then_sweeps_then_soft_deletes():
         SimpleNamespace(external_number_sid="PN2"),
     ]
     with (
-        patch.object(pd.phone_number_repo, "list_for_project", new=AsyncMock(return_value=numbers)),
+        patch.object(
+            pd.phone_number_repo,
+            "list_for_project",
+            new=AsyncMock(return_value=numbers),
+        ),
         patch.object(pd, "_clear_twilio_number", new=AsyncMock()) as clear,
         patch.object(pd, "_sweep_storage", new=AsyncMock()) as sweep,
         patch.object(pd.project_repo, "soft_delete_project", new=AsyncMock()) as soft,
@@ -46,9 +50,15 @@ async def test_unbind_failure_aborts_before_soft_delete():
     pid = uuid.uuid4()
     numbers = [SimpleNamespace(external_number_sid="PN1")]
     with (
-        patch.object(pd.phone_number_repo, "list_for_project", new=AsyncMock(return_value=numbers)),
         patch.object(
-            pd, "_clear_twilio_number", new=AsyncMock(side_effect=RuntimeError("twilio down"))
+            pd.phone_number_repo,
+            "list_for_project",
+            new=AsyncMock(return_value=numbers),
+        ),
+        patch.object(
+            pd,
+            "_clear_twilio_number",
+            new=AsyncMock(side_effect=RuntimeError("twilio down")),
         ),
         patch.object(pd, "_sweep_storage", new=AsyncMock()) as sweep,
         patch.object(pd.project_repo, "soft_delete_project", new=AsyncMock()) as soft,
@@ -89,7 +99,9 @@ def _session_factory():
 @pytest.mark.asyncio
 async def test_purge_disabled_when_retention_zero():
     factory, _ = _session_factory()
-    with patch.object(pd.project_repo, "list_purgeable_project_ids", new=AsyncMock()) as lst:
+    with patch.object(
+        pd.project_repo, "list_purgeable_project_ids", new=AsyncMock()
+    ) as lst:
         n = await pd.purge_soft_deleted_projects(factory, _settings(), retention_days=0)
     assert n == 0
     lst.assert_not_called()  # never even queries
@@ -102,12 +114,16 @@ async def test_purge_hard_deletes_each_aged_project():
     factory, session = _session_factory()
     with (
         patch.object(
-            pd.project_repo, "list_purgeable_project_ids", new=AsyncMock(return_value=ids)
+            pd.project_repo,
+            "list_purgeable_project_ids",
+            new=AsyncMock(return_value=ids),
         ),
         patch.object(pd, "_sweep_storage", new=AsyncMock()) as sweep,
         patch.object(pd.project_repo, "hard_delete_project", new=AsyncMock()) as hard,
     ):
-        n = await pd.purge_soft_deleted_projects(factory, _settings(), retention_days=30)
+        n = await pd.purge_soft_deleted_projects(
+            factory, _settings(), retention_days=30
+        )
     assert n == 2
     assert hard.await_count == 2  # each aged project hard-deleted
     assert sweep.await_count == 2  # belt-and-suspenders storage sweep
@@ -119,9 +135,15 @@ async def test_purge_hard_deletes_each_aged_project():
 async def test_purge_noop_when_nothing_aged():
     factory, _session = _session_factory()
     with (
-        patch.object(pd.project_repo, "list_purgeable_project_ids", new=AsyncMock(return_value=[])),
+        patch.object(
+            pd.project_repo,
+            "list_purgeable_project_ids",
+            new=AsyncMock(return_value=[]),
+        ),
         patch.object(pd.project_repo, "hard_delete_project", new=AsyncMock()) as hard,
     ):
-        n = await pd.purge_soft_deleted_projects(factory, _settings(), retention_days=30)
+        n = await pd.purge_soft_deleted_projects(
+            factory, _settings(), retention_days=30
+        )
     assert n == 0
     hard.assert_not_called()

@@ -31,9 +31,7 @@ class TestResolveCallInit:
 
         assert result.agent == fake_assistant
         assert result.dynamic_config is None
-        mock_repo.get_agent_by_id.assert_called_once_with(
-            session, UUID(agent_id)
-        )
+        mock_repo.get_agent_by_id.assert_called_once_with(session, UUID(agent_id))
 
     @pytest.mark.asyncio
     async def test_resolves_inline_config(self) -> None:

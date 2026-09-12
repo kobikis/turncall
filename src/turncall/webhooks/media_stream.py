@@ -131,7 +131,9 @@ async def media_stream_websocket(websocket: WebSocket) -> None:
                 else None
             )
             if knowledge_context:
-                from turncall.services.template_renderer import prepend_knowledge_context
+                from turncall.services.template_renderer import (
+                    prepend_knowledge_context,
+                )
 
                 config = prepend_knowledge_context(config, knowledge_context)
                 logger.info("Knowledge context applied to system prompt")

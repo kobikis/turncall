@@ -48,15 +48,21 @@ class TestDeepgramExtra:
 class TestOtherProvidersExtra:
     def test_openai_extra_reaches_settings(self) -> None:
         svc = _create_stt_service(
-            _config(provider="openai", model="gpt-transcribe", extra={"made_up_key": "z"}),
+            _config(
+                provider="openai", model="gpt-transcribe", extra={"made_up_key": "z"}
+            ),
             "sk-test",
         )
         assert svc._settings.given_fields()["made_up_key"] == "z"
 
-    def test_cartesia_extra_reaches_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_cartesia_extra_reaches_settings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CARTESIA_API_KEY", "sk-cartesia-test")
         svc = _create_stt_service(
-            _config(provider="cartesia", model="ink-whisper", extra={"made_up_key": "z"}),
+            _config(
+                provider="cartesia", model="ink-whisper", extra={"made_up_key": "z"}
+            ),
             "sk-test",
         )
         assert svc._settings.given_fields()["made_up_key"] == "z"
@@ -73,15 +79,21 @@ class TestExtraCannotOverrideManagedSettings:
 
     def test_openai_extra_cannot_override_model(self) -> None:
         svc = _create_stt_service(
-            _config(provider="openai", model="gpt-transcribe", extra={"model": "HIJACKED"}),
+            _config(
+                provider="openai", model="gpt-transcribe", extra={"model": "HIJACKED"}
+            ),
             "sk-test",
         )
         assert svc._settings.given_fields()["model"] == "gpt-transcribe"
 
-    def test_cartesia_extra_cannot_override_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_cartesia_extra_cannot_override_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CARTESIA_API_KEY", "sk-cartesia-test")
         svc = _create_stt_service(
-            _config(provider="cartesia", model="ink-whisper", extra={"model": "HIJACKED"}),
+            _config(
+                provider="cartesia", model="ink-whisper", extra={"model": "HIJACKED"}
+            ),
             "sk-test",
         )
         assert svc._settings.given_fields()["model"] == "ink-whisper"

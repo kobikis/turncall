@@ -43,9 +43,7 @@ def attach_recorder(
 
     @transport.event_handler("on_client_disconnected")  # type: ignore[attr-defined]
     async def _flush_on_disconnect(*_args: object) -> None:
-        logger.info(
-            "recording_flush_on_disconnect", call_id=str(call_context.call_id)
-        )
+        logger.info("recording_flush_on_disconnect", call_id=str(call_context.call_id))
         await recorder.stop_recording()
 
     return recorder

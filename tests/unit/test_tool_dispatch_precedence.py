@@ -76,7 +76,9 @@ async def _invoke(llm: _LLM, name: str) -> str:
         out["result"] = result
 
     await llm.handlers[name](
-        SimpleNamespace(function_name=name, arguments={}, result_callback=result_callback)
+        SimpleNamespace(
+            function_name=name, arguments={}, result_callback=result_callback
+        )
     )
     return out["result"]
 

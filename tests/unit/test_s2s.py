@@ -335,7 +335,9 @@ class TestS2SPipelineConstruction:
                 voice="thunder",
             ),
         )
-        byom = BYOMSettings(enabled=True, allowed_url_patterns=["wss://gateway.example/*"])
+        byom = BYOMSettings(
+            enabled=True, allowed_url_patterns=["wss://gateway.example/*"]
+        )
 
         with pytest.raises(ValueError, match="not in allowed patterns"):
             _create_s2s_pipeline(

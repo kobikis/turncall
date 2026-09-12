@@ -35,9 +35,7 @@ def _builtin(name: str) -> ToolDefinition:
 
 
 async def _build(config: AgentConfig, **kw):
-    return await build_chat_tools(
-        config, session_id=uuid4(), project_id=uuid4(), **kw
-    )
+    return await build_chat_tools(config, session_id=uuid4(), project_id=uuid4(), **kw)
 
 
 @pytest.mark.unit

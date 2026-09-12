@@ -119,7 +119,9 @@ def main() -> None:
     )
     parser.add_argument("--model", default=None, help="Bedrock model id or ARN")
     parser.add_argument(
-        "--voice", default=None, help=f"Nova Sonic voice ({', '.join(NOVA_SONIC_VOICES)})"
+        "--voice",
+        default=None,
+        help=f"Nova Sonic voice ({', '.join(NOVA_SONIC_VOICES)})",
     )
     parser.add_argument(
         "--endpointing-sensitivity",
@@ -176,7 +178,9 @@ def main() -> None:
     print(f"\n  Mode:   {'Nova Sonic 2 (s2s)' if is_s2s else 'Bedrock LLM (cascade)'}")
     print(f"  Model:  {model}")
     print(f"  Region: {args.region or '(server default — AWS_REGION)'}")
-    print(f"  Creds:  {'assume ' + args.role_arn if args.role_arn else 'ambient chain'}")
+    print(
+        f"  Creds:  {'assume ' + args.role_arn if args.role_arn else 'ambient chain'}"
+    )
     if is_s2s:
         print(f"  Voice:  {voice}")
 

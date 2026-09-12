@@ -153,7 +153,9 @@ class TestCleanPdfText:
         from turncall.services.document_ingestion import _clean_pdf_text
 
         header = "6/30/26, 5:56 PM Bangkok Airways - Reservation"
-        pages = "\n\n".join(f"{header} {i}/4\nreal content page {i}" for i in range(1, 5))
+        pages = "\n\n".join(
+            f"{header} {i}/4\nreal content page {i}" for i in range(1, 5)
+        )
         out = _clean_pdf_text(pages)
         assert "Bangkok Airways - Reservation" not in out
         assert "real content page 2" in out

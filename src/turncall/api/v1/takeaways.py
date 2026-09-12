@@ -54,7 +54,9 @@ async def list_takeaways(auth: Auth, session: DbSession) -> dict:
 
 @router.get("/{takeaway_id}")
 async def get_takeaway(takeaway_id: UUID, auth: Auth, session: DbSession) -> dict:
-    row = await takeaway_repo.get_by_id(session, takeaway_id, project_id=auth.project_id)
+    row = await takeaway_repo.get_by_id(
+        session, takeaway_id, project_id=auth.project_id
+    )
     if row is None:
         raise NotFoundError("Takeaway", str(takeaway_id))
     return ok(TakeawayResponse.from_row(row))
@@ -68,7 +70,9 @@ async def update_takeaway(
     session: DbSession,
 ) -> dict:
     """Update a takeaway (name is immutable — it keys results in payloads)."""
-    row = await takeaway_repo.get_by_id(session, takeaway_id, project_id=auth.project_id)
+    row = await takeaway_repo.get_by_id(
+        session, takeaway_id, project_id=auth.project_id
+    )
     if row is None:
         raise NotFoundError("Takeaway", str(takeaway_id))
     values = {
@@ -91,9 +95,13 @@ async def update_takeaway(
 
 
 @router.delete("/{takeaway_id}")
-async def delete_takeaway(takeaway_id: UUID, auth: WriteAuth, session: DbSession) -> dict:
+async def delete_takeaway(
+    takeaway_id: UUID, auth: WriteAuth, session: DbSession
+) -> dict:
     """Delete a takeaway. Blocked while agents still attach it."""
-    row = await takeaway_repo.get_by_id(session, takeaway_id, project_id=auth.project_id)
+    row = await takeaway_repo.get_by_id(
+        session, takeaway_id, project_id=auth.project_id
+    )
     if row is None:
         raise NotFoundError("Takeaway", str(takeaway_id))
     refs = await takeaway_repo.count_agents_referencing(

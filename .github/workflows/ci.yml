@@ -25,6 +25,10 @@ jobs:
       # examples/ included: it is the code users copy first, and it went
       # unlinted long enough to accumulate errors nobody saw.
       - run: ruff check src/ tests/ examples/
+      # The width lives in one place. Without this the tree drifts back off
+      # the formatter and the next person's diff carries a reflow of files
+      # they never opened — which is how the 100/88 mismatch went unnoticed.
+      - run: ruff format --check src/ tests/ examples/
 
   # CONTRIBUTING.md requires a DCO sign-off; enforce it rather than just asking.
   # Plain bash so there is no third-party action in the supply chain.

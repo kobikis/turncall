@@ -65,12 +65,12 @@ async def receive_event(
     )
 
     # Pretty print
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"  RAW EVENT: {event}")
     print(f"  EVENT: {event_type}")
     print(f"  Call:  {call_id}")
     print(f"  Time:  {datetime.now(UTC).strftime('%H:%M:%S')}")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
     if event_type == "call.ended":
         _print_call_ended(payload)
@@ -103,9 +103,9 @@ async def receive_event(
 
 def _print_call_ended(payload: dict) -> None:
     """Pretty-print the comprehensive call.ended event."""
-    print(f"\n{'$'*70}")
+    print(f"\n{'$' * 70}")
     print(payload)
-    print(f"\n{'$'*70}")
+    print(f"\n{'$' * 70}")
     # Transcript
     transcript = payload.get("transcript", [])
     if transcript:

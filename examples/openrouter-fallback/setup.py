@@ -74,7 +74,9 @@ def api(method: str, path: str, data: dict | None = None, token: str = "") -> di
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Set up the OpenRouter fallback example")
+    parser = argparse.ArgumentParser(
+        description="Set up the OpenRouter fallback example"
+    )
     parser.add_argument(
         "--server-url",
         required=True,
@@ -168,7 +170,11 @@ def main() -> None:
                     "What would you like to talk about?"
                 ),
                 "llm": llm_config,
-                "stt": {"provider": "deepgram", "model": "nova-3-general", "language": "en"},
+                "stt": {
+                    "provider": "deepgram",
+                    "model": "nova-3-general",
+                    "language": "en",
+                },
                 "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"},
                 "tools": [
                     {

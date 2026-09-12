@@ -78,7 +78,9 @@ class TestDelegation:
         assert svc._delegation is None
 
     def test_backend_model_enables_responses_delegation(self) -> None:
-        svc = create_s2s_service(_config(extra={"backend_model": "gpt-6-astra"}), "sk-test")
+        svc = create_s2s_service(
+            _config(extra={"backend_model": "gpt-6-astra"}), "sk-test"
+        )
         assert svc._delegation is not None
         assert svc._delegation.settings.model == "gpt-6-astra"
 

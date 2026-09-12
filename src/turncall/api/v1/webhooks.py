@@ -41,7 +41,9 @@ async def create_webhook(
 
     # Same shape as GET (WebhookResponse) + the one-time secret, so the create
     # and list payloads no longer diverge (create used to omit project_id).
-    return ok({**WebhookResponse.from_row(row).model_dump(mode="json"), "secret": secret})
+    return ok(
+        {**WebhookResponse.from_row(row).model_dump(mode="json"), "secret": secret}
+    )
 
 
 @router.get("")

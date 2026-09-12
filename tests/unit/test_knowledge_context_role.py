@@ -43,7 +43,9 @@ class TestInjectedRole:
     async def test_injected_message_uses_developer_role(self) -> None:
         proc = _processor()
         proc._last_user_text = "what are your hours?"
-        frame = SimpleNamespace(messages=[{"role": "user", "content": "what are your hours?"}])
+        frame = SimpleNamespace(
+            messages=[{"role": "user", "content": "what are your hours?"}]
+        )
 
         result = SimpleNamespace(chunks=[SimpleNamespace(text="Open 9-5")])
         with (

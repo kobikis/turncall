@@ -28,5 +28,7 @@ def test_create_payload_covers_response_fields_plus_secret():
     # every field the GET (WebhookResponse) exposes is present...
     for field in WebhookResponse.model_fields:
         assert field in payload, f"create payload missing {field}"
-    assert payload["project_id"] == str(row.project_id)  # the field that used to be dropped
+    assert payload["project_id"] == str(
+        row.project_id
+    )  # the field that used to be dropped
     assert payload["secret"] == "s"  # ...plus the one-time secret

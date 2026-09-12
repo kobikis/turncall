@@ -165,7 +165,9 @@ async def _complete_text_anthropic(
         "chat_tool_rounds_exhausted", model=config.model, rounds=_MAX_TOOL_ROUNDS
     )
     body.pop("tools", None)
-    return CompletionResult(text=_anthropic_text(await _round()), total_tokens=total_tokens)
+    return CompletionResult(
+        text=_anthropic_text(await _round()), total_tokens=total_tokens
+    )
 
 
 async def _complete_text_bedrock(
@@ -377,7 +379,10 @@ async def _complete_text_openai(
         results = await _run_calls(
             execute_tool,
             [
-                (c.get("function", {}).get("name", ""), _decode_args(c.get("function", {})))
+                (
+                    c.get("function", {}).get("name", ""),
+                    _decode_args(c.get("function", {})),
+                )
                 for c in calls
             ],
         )
@@ -397,7 +402,9 @@ async def _complete_text_openai(
     )
     body.pop("tools", None)
     message = await _round()
-    return CompletionResult(text=message.get("content") or "", total_tokens=total_tokens)
+    return CompletionResult(
+        text=message.get("content") or "", total_tokens=total_tokens
+    )
 
 
 async def complete_text(

@@ -51,9 +51,7 @@ class TestResponseCap:
         manager._register_discovered(
             [_tool("dump")], server_name="crm", session=session, settings=settings
         )
-        with patch(
-            "turncall.config.settings.get_settings", return_value=settings
-        ):
+        with patch("turncall.config.settings.get_settings", return_value=settings):
             return await manager.call_tool("dump", {})
 
     async def test_a_normal_result_passes_through_untouched(self) -> None:

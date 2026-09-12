@@ -38,7 +38,9 @@ class TestSpeed:
         assert svc._settings.speed is None
 
     def test_openai_receives_speed(self) -> None:
-        svc = _create_tts_service(_config(provider="openai", voice="alloy", speed=0.8), "sk-test")
+        svc = _create_tts_service(
+            _config(provider="openai", voice="alloy", speed=0.8), "sk-test"
+        )
         assert svc._settings.speed == 0.8
 
     def test_elevenlabs_receives_speed(self) -> None:
@@ -72,11 +74,17 @@ class TestExtra:
             "sk-test",
         )
         assert svc._settings.extra == {"made_up_key": "z"}
+
+
 @pytest.mark.unit
 class TestCartesiaDefaultModel:
-    def test_empty_model_falls_back_to_sonic_3_6(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_empty_model_falls_back_to_sonic_3_6(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CARTESIA_API_KEY", "sk-cartesia-test")
-        svc = _create_tts_service(_config(provider="cartesia", voice="v-123", model=""), "sk-test")
+        svc = _create_tts_service(
+            _config(provider="cartesia", voice="v-123", model=""), "sk-test"
+        )
         assert svc._settings.model == "sonic-3.6"
 
     def test_deepgram_default_no_longer_leaks_into_other_providers(
@@ -88,7 +96,9 @@ class TestCartesiaDefaultModel:
         own default instead.
         """
         monkeypatch.setenv("CARTESIA_API_KEY", "sk-cartesia-test")
-        svc = _create_tts_service(_config(provider="cartesia", voice="v-123"), "sk-test")
+        svc = _create_tts_service(
+            _config(provider="cartesia", voice="v-123"), "sk-test"
+        )
         assert svc._settings.model == "sonic-3.6"
 
     def test_openai_falls_back_to_its_own_model_and_voice(self) -> None:

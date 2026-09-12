@@ -156,9 +156,7 @@ class TestAnthropicTools:
         assert out.total_tokens == 3 + 4 + 10
 
     async def test_the_cap_withholds_tools_and_forces_an_answer(self) -> None:
-        looping = [
-            _anthropic_tool_use("t", "book_meeting", {})
-        ] * _MAX_TOOL_ROUNDS
+        looping = [_anthropic_tool_use("t", "book_meeting", {})] * _MAX_TOOL_ROUNDS
         client = _client(*looping, _anthropic_text("I couldn't finish."))
 
         with patch("turncall.services.llm_text.get_http_client", return_value=client):
@@ -330,6 +328,4 @@ async def test_no_unsupported_provider_warning_remains() -> None:
             _anthropic_config(), _MESSAGES, tools=_TOOLS, execute_tool=AsyncMock()
         )
 
-    assert not any(
-        "unsupported" in str(c).lower() for c in log.warning.call_args_list
-    )
+    assert not any("unsupported" in str(c).lower() for c in log.warning.call_args_list)

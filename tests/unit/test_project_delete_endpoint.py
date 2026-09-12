@@ -44,7 +44,9 @@ def test_admin_self_delete_runs_deletion(app):
             "turncall.storage.repositories.project_repo.get_project_by_id",
             new=AsyncMock(return_value=object()),  # project exists
         ),
-        patch("turncall.services.project_deletion.delete_project", new=AsyncMock()) as run,
+        patch(
+            "turncall.services.project_deletion.delete_project", new=AsyncMock()
+        ) as run,
     ):
         r = app.delete(f"/v1/projects/{pid}", headers={"Authorization": "Bearer x"})
     assert r.status_code == 200
@@ -101,8 +103,12 @@ async def test_auth_rejects_soft_deleted_projects_key():
         key_prefix="tc_abc",
     )
     with (
-        patch.object(dep.api_key_repo, "get_api_key_by_hash", new=AsyncMock(return_value=key_row)),
-        patch.object(dep.project_repo, "get_project_by_id", new=AsyncMock(return_value=None)),
+        patch.object(
+            dep.api_key_repo, "get_api_key_by_hash", new=AsyncMock(return_value=key_row)
+        ),
+        patch.object(
+            dep.project_repo, "get_project_by_id", new=AsyncMock(return_value=None)
+        ),
     ):
         with pytest.raises(UnauthorizedError):
             await dep.resolve_auth_context(AsyncMock(), authorization="Bearer tc_live")

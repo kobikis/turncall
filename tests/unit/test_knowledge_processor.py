@@ -204,9 +204,7 @@ async def test_processor_calls_super_process_frame() -> None:
     )
     p.push_frame = AsyncMock()
 
-    with patch.object(
-        FrameProcessor, "process_frame", new=AsyncMock()
-    ) as base_pf:
+    with patch.object(FrameProcessor, "process_frame", new=AsyncMock()) as base_pf:
         # A plain object stands in for a frame we don't branch on; the point is
         # that the base method is awaited regardless of frame type.
         await p.process_frame(object(), FrameDirection.DOWNSTREAM)

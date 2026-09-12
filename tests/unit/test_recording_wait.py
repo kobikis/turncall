@@ -42,7 +42,11 @@ async def test_returns_immediately_when_completed() -> None:
 @pytest.mark.asyncio
 async def test_polls_until_terminal() -> None:
     # in_progress, in_progress, then completed.
-    seq = [_call("in_progress", None), _call("in_progress", None), _call("completed", "/r.wav")]
+    seq = [
+        _call("in_progress", None),
+        _call("in_progress", None),
+        _call("completed", "/r.wav"),
+    ]
     with (
         patch.object(trig, "RECORDING_POLL_INTERVAL_S", 0.01),
         patch.object(call_repo, "get_call_by_id", AsyncMock(side_effect=seq)),

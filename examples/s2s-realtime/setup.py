@@ -132,7 +132,7 @@ def warn_gateway_env(base_url: str) -> None:
             scheme_host = "/".join(base_url.split("/", 3)[:3])
             warnings.append(
                 f"BYOM_ALLOWED_URL_PATTERNS does not match {base_url} — calls "
-                f"will fail at pipeline start. Add \"{scheme_host}/*\" to it."
+                f'will fail at pipeline start. Add "{scheme_host}/*" to it.'
             )
     # An unset/empty allowlist means the server allows any URL (dev mode).
 
@@ -211,7 +211,9 @@ def main() -> None:
         parser.error("--base-url is only supported with --provider openai or xai")
     if args.base_url and args.provider == "openai" and not args.model:
         # An explicit gateway routes to models we can't guess; xai has a preset.
-        parser.error("--model is required with --base-url (e.g. xai/grok-voice-think-fast-1.0)")
+        parser.error(
+            "--model is required with --base-url (e.g. xai/grok-voice-think-fast-1.0)"
+        )
 
     base_url = args.base_url or DEFAULT_BASE_URLS.get(args.provider)
     model = args.model or DEFAULT_MODELS[args.provider]

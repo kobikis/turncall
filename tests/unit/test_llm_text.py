@@ -93,7 +93,10 @@ class TestCompleteText:
         )
         mock_response = httpx.Response(
             200,
-            json={"choices": [{"message": {"content": "ok"}}], "usage": {"total_tokens": 1}},
+            json={
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"total_tokens": 1},
+            },
             request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
         )
         with patch("turncall.services.llm_text.get_http_client") as mock_get:
@@ -110,7 +113,10 @@ class TestCompleteText:
         config = LLMConfig(provider="openai", model="gpt-4o-mini", api_key="k")
         mock_response = httpx.Response(
             200,
-            json={"choices": [{"message": {"content": "ok"}}], "usage": {"total_tokens": 1}},
+            json={
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"total_tokens": 1},
+            },
             request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
         )
         with patch("turncall.services.llm_text.get_http_client") as mock_get:

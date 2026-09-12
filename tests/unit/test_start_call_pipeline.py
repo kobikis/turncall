@@ -93,9 +93,7 @@ async def test_discovers_mcp_tools_and_puts_the_manager_on_the_context():
         patch.object(
             pipeline_builder, "build_call_pipeline", new=AsyncMock(return_value=session)
         ) as build,
-        patch(
-            "turncall.services.mcp_client.MCPSessionManager", return_value=manager
-        ),
+        patch("turncall.services.mcp_client.MCPSessionManager", return_value=manager),
     ):
         await pipeline_builder.start_call_pipeline(
             config=config,

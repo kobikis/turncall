@@ -39,7 +39,9 @@ def _calls_named(path: Path, name: str) -> list[ast.Call]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             func = node.func
-            fname = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+            fname = (
+                func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+            )
             if fname == name:
                 out.append(node)
     return out
