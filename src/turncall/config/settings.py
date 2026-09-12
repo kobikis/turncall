@@ -126,6 +126,13 @@ class MCPSettings(BaseSettings):
     # put 500 tools in every request. This is the ceiling across all of them.
     max_tools_total: int = Field(default=100, alias="MCP_MAX_TOOLS_TOTAL")
     max_response_bytes: int = Field(default=1_048_576, alias="MCP_MAX_RESPONSE_BYTES")
+    # Whole-discovery budget. A caller is listening to silence while this runs,
+    # and only the HTTP and SSE transports carry a timeout of their own — stdio
+    # has none, so a subprocess that reads its input and never answers held the
+    # call open with nothing to hear.
+    connect_timeout_seconds: float = Field(
+        default=10.0, alias="MCP_CONNECT_TIMEOUT_SECONDS"
+    )
 
 
 class ToolSettings(BaseSettings):

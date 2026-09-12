@@ -119,38 +119,43 @@ async def start_call_pipeline(
         mcp_manager: Any | None = None
         session: CallSession | None = None
         try:
-            mcp_tools: list[Any] = []
-            if config.mcp_servers:
-                from turncall.services.mcp_client import MCPSessionManager
+            try:
+                mcp_tools: list[Any] = []
+                if config.mcp_servers:
+                    from turncall.services.mcp_client import MCPSessionManager
 
-                mcp_manager = MCPSessionManager(
-                    call_id=call_context.call_id,
-                    project_id=call_context.project_id,
+                    mcp_manager = MCPSessionManager(
+                        call_id=call_context.call_id,
+                        project_id=call_context.project_id,
+                    )
+                    mcp_tools = await mcp_manager.connect_servers(config.mcp_servers)
+
+                session = await build_call_pipeline(
+                    config=config,
+                    transport=transport,
+                    call_context=replace(call_context, mcp_manager=mcp_manager),
+                    settings=settings,
+                    session_factory=session_factory,
+                    mcp_tools=mcp_tools or None,
+                    **build_kwargs,
                 )
-                mcp_tools = await mcp_manager.connect_servers(config.mcp_servers)
+            except Exception as exc:
+                failure = exc
+            finally:
+                # Unconditionally, cancellation included: the caller is blocked
+                # on this event and nothing else will ever release it.
+                ready.set()
 
-            session = await build_call_pipeline(
-                config=config,
-                transport=transport,
-                call_context=replace(call_context, mcp_manager=mcp_manager),
-                settings=settings,
-                session_factory=session_factory,
-                mcp_tools=mcp_tools or None,
-                **build_kwargs,
-            )
-        except Exception as exc:
-            failure = exc
+            if session is not None:
+                await session.start()
         finally:
-            ready.set()
-
-        if session is None:
-            # CallSession.cleanup never runs on this path, so close the MCP
-            # sessions here — in the task that opened them.
-            if mcp_manager is not None:
+            # Every path where CallSession.cleanup won't run — a build failure,
+            # or cancellation before start() took ownership — and in the task
+            # that opened the transports, which is what their cancel scopes
+            # require. `except Exception` alone used to skip this entirely when
+            # the build was cancelled.
+            if session is None and mcp_manager is not None:
                 await mcp_manager.close()
-            return
-
-        await session.start()
 
     task = asyncio.create_task(_run())
     _RUNNING.add(task)

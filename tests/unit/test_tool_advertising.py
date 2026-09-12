@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.conftest import mcp_tool
+from tests.conftest import mcp_settings, mcp_tool
 from turncall.domain.models import AgentConfig, ToolDefinition
 from turncall.orchestrator.pipeline_factory import _build_tools_schema, create_pipeline
 
@@ -87,7 +87,7 @@ def test_mcp_discovery_skips_a_name_another_server_already_claimed():
     from turncall.services.mcp_client import MCPSessionManager
 
     manager = MCPSessionManager(call_id=MagicMock(), project_id=MagicMock())
-    settings = SimpleNamespace(mcp=SimpleNamespace(max_tools_per_server=50))
+    settings = mcp_settings()
 
     def _mcp_tool(name: str):
         return mcp_tool(name)

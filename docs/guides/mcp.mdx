@@ -154,6 +154,7 @@ rename on the server side.
 | `MCP_MAX_TOOLS_PER_SERVER` | `50` | Tools taken from one server |
 | `MCP_MAX_TOOLS_TOTAL` | `100` | Tools across every server on an agent |
 | `MCP_MAX_RESPONSE_BYTES` | `1048576` | One tool result |
+| `MCP_CONNECT_TIMEOUT_SECONDS` | `10` | Connecting and discovering, all servers together |
 
 Custom webhook tools are capped the same way under their own
 `TOOL_MAX_RESPONSE_BYTES`.
@@ -162,6 +163,10 @@ The per-server cap doesn't compose — ten servers at it would put 500 tools in
 every request — so the total is the one that protects the context window.
 Servers are consumed in config order; once the total is reached, later ones
 contribute nothing.
+
+Discovery is also bounded in time. Past `MCP_CONNECT_TIMEOUT_SECONDS` the agent
+starts with no MCP tools at all rather than keeping the caller waiting — an
+unreachable server costs you its tools, never the call.
 
 A result over the size cap doesn't reach the model. It gets a JSON error with
 a short preview of what the tool started to say, so it can narrow the request
