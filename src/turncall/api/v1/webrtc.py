@@ -27,7 +27,7 @@ from turncall.auth import Auth
 from turncall.config import get_settings
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.pipeline_builder import start_call_pipeline
-from turncall.orchestrator.pipeline_factory import CallContext
+from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
 from turncall.orchestrator.transport_factory import (
     STUN_SERVERS,
     create_whatsapp_transport,
@@ -213,7 +213,7 @@ async def webrtc_connect(
     call_context = CallContext(
         call_id=call.id,
         project_id=auth.project_id,
-        agent_id=agent_id_for_call or UUID(int=0),
+        agent_id=agent_id_for_call or DYNAMIC_AGENT_ID,
         call_sid="webrtc",
         stream_sid="webrtc",
         session_factory=session_factory,

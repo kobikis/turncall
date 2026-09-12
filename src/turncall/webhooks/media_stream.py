@@ -14,7 +14,7 @@ from loguru import logger
 from turncall.config import get_settings
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.pipeline_builder import build_call_pipeline
-from turncall.orchestrator.pipeline_factory import CallContext
+from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
 from turncall.storage.database import create_session_factory, get_engine
 
 router = APIRouter()
@@ -154,7 +154,7 @@ async def media_stream_websocket(websocket: WebSocket) -> None:
         call_context = CallContext(
             call_id=UUID(call_id_str),
             project_id=UUID(project_id_str),
-            agent_id=UUID(agent_id_str),
+            agent_id=call_row.active_agent_id or DYNAMIC_AGENT_ID,
             call_sid=call_sid,
             stream_sid=stream_sid,
             session_factory=session_factory,
