@@ -5,6 +5,7 @@ from turncall.domain.enums import CallStatus, EndedReason
 # Raw event_type strings used as termination signals (not all are in CallEventType)
 _VOICEMAIL_EVENT = "voicemail.detected"
 _TRANSFER_EVENT = "call.transferred"
+_MAX_DURATION_EVENT = "call.max_duration_reached"
 _TELEPHONY_FAIL_EVENT = "call.failed"
 
 # Defines which states can transition to which other states
@@ -124,6 +125,13 @@ def infer_ended_reason(
         return EndedReason.VOICEMAIL
     if _TRANSFER_EVENT in event_types:
         return EndedReason.TRANSFERRED
+    # Below voicemail and transfer — those say what became of the call, and a
+    # transferred call that later hit the cap still left by transfer. Above
+    # assistant_ended and the status checks: the event exists only when the cap
+    # actually fired, and without a branch of its own the call reported
+    # `customer_ended_call`, which is the one thing it certainly was not.
+    if _MAX_DURATION_EVENT in event_types:
+        return EndedReason.MAX_DURATION_REACHED
     if assistant_ended:
         return EndedReason.ASSISTANT_ENDED_CALL
     if status == CallStatus.NO_ANSWER:

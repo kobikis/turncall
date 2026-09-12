@@ -34,13 +34,6 @@ NOT_CONSUMED: dict[str, str] = {
         "accepted and validated 200-5000, read nowhere — the pipeline uses "
         "smart_turn_stop_secs instead"
     ),
-    "AgentConfig.interruption_enabled": (
-        "accepted, read nowhere — barge-in cannot actually be turned off"
-    ),
-    "AgentConfig.max_call_duration_seconds": (
-        "accepted and validated 60-14400, read nowhere — nothing caps a call "
-        "at the configured duration"
-    ),
     "AgentConfig.knowledge_bases": (
         "vestigial: KBs attach via /agents/{id}/knowledge-bases, and the API "
         "schema forbids the field outright"

@@ -40,14 +40,17 @@ class CallSession:
         *,
         first_message: str | None = None,
         pipeline_mode: str = "cascade",
+        max_call_duration_seconds: int | None = None,
     ) -> None:
         self._call_context = call_context
         self._transport = transport
         self._pipeline = pipeline
         self._first_message = first_message
         self._pipeline_mode = pipeline_mode
+        self._max_call_duration_seconds = max_call_duration_seconds
         self._task: PipelineWorker | None = None
         self._runner: WorkerRunner | None = None
+        self._duration_guard: asyncio.Task | None = None
         self._running = False
 
     @property
@@ -135,6 +138,8 @@ class CallSession:
             if self._task is not None:
                 await self._task.cancel()
 
+        self._duration_guard = self._start_duration_guard()
+
         try:
             await self._update_call_status(CallStatus.IN_PROGRESS)
             # Note: call.started event is fired by the inbound handler
@@ -185,6 +190,11 @@ class CallSession:
             await self._update_call_status(CallStatus.FAILED)
         finally:
             self._running = False
+            # Before finalizing: a call that ended on its own must not have the
+            # guard fire minutes later against a worker that is already gone.
+            if self._duration_guard is not None:
+                self._duration_guard.cancel()
+                self._duration_guard = None
             try:
                 await self._finalize_call()
             except Exception:
@@ -201,6 +211,39 @@ class CallSession:
             # on_client_disconnected guarantees we reach here promptly instead of
             # hanging in the runner.
             logger.info("call_session_ended", call_id=str(self.call_id))
+
+    def _start_duration_guard(self) -> asyncio.Task | None:
+        """Hang up when the call outlives `max_call_duration_seconds`.
+
+        The field was accepted and validated 60-14400 and read by nothing, so
+        nothing ever ended a call at the configured duration: a stuck one ran
+        until the carrier or an idle timeout stopped it, billed the whole way.
+
+        Cancelling the worker is how a hangup already ends a call here — see
+        the disconnect handler above — so run() returns and the `finally` in
+        start() finalizes as usual.
+        """
+        budget = self._max_call_duration_seconds
+        if not budget:
+            return None
+
+        async def _guard() -> None:
+            await asyncio.sleep(budget)
+            logger.warning(
+                "call_max_duration_reached",
+                call_id=str(self.call_id),
+                seconds=budget,
+            )
+            # Recorded before the hangup: _finalize_call reads the event log to
+            # derive ended_reason, and this is the only trace of why.
+            await self._log_event(
+                CallEventType.CALL_MAX_DURATION_REACHED,
+                {"max_call_duration_seconds": budget},
+            )
+            if self._task is not None:
+                await self._task.cancel()
+
+        return asyncio.create_task(_guard())
 
     async def _finalize_call(self) -> None:
         """Finalize the call on the completing edge of the pipeline.

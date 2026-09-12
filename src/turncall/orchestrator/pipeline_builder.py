@@ -82,6 +82,7 @@ async def build_call_pipeline(
         pipeline=pipeline,
         first_message=config.first_message,
         pipeline_mode=config.pipeline_mode,
+        max_call_duration_seconds=config.max_call_duration_seconds,
     )
 
 
