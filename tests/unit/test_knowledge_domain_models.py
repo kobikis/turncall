@@ -55,35 +55,32 @@ class TestKnowledgeBaseAttachment:
 
 
 @pytest.mark.unit
-class TestAgentConfigWithKnowledgeBases:
-    def test_default_empty_knowledge_bases(self) -> None:
-        config = AgentConfig()
-        assert config.knowledge_bases == []
+class TestAgentConfigNoLongerCarriesAttachments:
+    """`AgentConfig.knowledge_bases` was vestigial: attachments live in the
+    agent_knowledge_bases table and are loaded by load_agent_kb_attachments, and
+    the API schema forbade the field outright, so nothing could ever set it."""
 
-    def test_with_knowledge_bases(self) -> None:
-        config = AgentConfig(
-            knowledge_bases=[
-                KnowledgeBaseAttachment(knowledge_base_id="kb-1", mode="prompt"),
-                KnowledgeBaseAttachment(knowledge_base_id="kb-2", mode="auto"),
-            ]
+    def test_the_field_is_gone(self) -> None:
+        assert "knowledge_bases" not in AgentConfig.model_fields
+
+    def test_a_stored_config_carrying_the_old_key_still_loads(self) -> None:
+        """Pydantic ignores unknown keys, so a config_blob written while the
+        field existed is not a migration problem. Worth pinning rather than
+        assuming — this is stored customer data."""
+        config = AgentConfig.model_validate(
+            {
+                "system_prompt": "hello",
+                "knowledge_bases": [{"knowledge_base_id": "kb-1", "top_k": 3}],
+            }
         )
-        assert len(config.knowledge_bases) == 2
-        assert config.knowledge_bases[0].mode == KnowledgeRetrievalMode.PROMPT
-        assert config.knowledge_bases[1].mode == KnowledgeRetrievalMode.AUTO
 
-    def test_serialization_preserves_kb(self) -> None:
-        config = AgentConfig(
-            system_prompt="test",
-            knowledge_bases=[
-                KnowledgeBaseAttachment(knowledge_base_id="kb-1", top_k=3),
-            ],
-        )
-        data = config.model_dump()
-        assert len(data["knowledge_bases"]) == 1
-        assert data["knowledge_bases"][0]["top_k"] == 3
+        assert config.system_prompt == "hello"
 
-        restored = AgentConfig.model_validate(data)
-        assert restored.knowledge_bases[0].knowledge_base_id == "kb-1"
+    def test_the_attachment_model_itself_survives(self) -> None:
+        """Retrieval still uses it — only the AgentConfig field went."""
+        att = KnowledgeBaseAttachment(knowledge_base_id="kb-1", mode="prompt")
+
+        assert att.mode == KnowledgeRetrievalMode.PROMPT
 
 
 @pytest.mark.unit

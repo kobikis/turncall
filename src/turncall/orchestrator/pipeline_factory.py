@@ -504,6 +504,28 @@ def _build_guardrails_section(config: AgentConfig) -> str:
     )
 
 
+def _build_vad_analyzer(
+    config: AgentConfig, *, sample_rate: int, pipecat_settings: Any | None = None
+) -> Any:
+    """Silero VAD, carrying the two settings that used to be decoration.
+
+    `silence_timeout_ms` (200-5000, documented and in the OpenAPI spec) and
+    `PIPECAT_VAD_CONFIDENCE_THRESHOLD` were both read by nothing: the analyzer
+    was built bare and Pipecat's defaults decided how long a pause ends a turn
+    and how sure the detector has to be. Built in one place so the cascade and
+    S2S pipelines can't drift apart on it.
+    """
+    from pipecat.audio.vad.silero import SileroVADAnalyzer
+    from pipecat.audio.vad.vad_analyzer import VADParams
+
+    params: dict[str, Any] = {"stop_secs": config.silence_timeout_ms / 1000}
+    confidence = getattr(pipecat_settings, "vad_confidence_threshold", None)
+    if confidence is not None:
+        params["confidence"] = confidence
+
+    return SileroVADAnalyzer(sample_rate=sample_rate, params=VADParams(**params))
+
+
 def _build_turn_strategies(config: AgentConfig, *, smart_turn: bool) -> Any | None:
     """The user's turn strategies: when a turn starts (barge-in) and when it
     ends (smart turn).
@@ -774,13 +796,16 @@ def create_pipeline(
     context = LLMContext(**kwargs)
 
     # VAD + turn detection configuration (Pipecat 1.0: VAD lives on the user aggregator)
-    from pipecat.audio.vad.silero import SileroVADAnalyzer
     from pipecat.processors.aggregators.llm_response_universal import (
         LLMUserAggregatorParams,
     )
 
     user_params_kwargs: dict[str, Any] = {
-        "vad_analyzer": SileroVADAnalyzer(sample_rate=audio_sample_rate),
+        "vad_analyzer": _build_vad_analyzer(
+            config,
+            sample_rate=audio_sample_rate,
+            pipecat_settings=pipecat_settings,
+        ),
     }
 
     turn_strategies = _build_turn_strategies(config, smart_turn=True)
@@ -1103,13 +1128,12 @@ def _create_s2s_pipeline(
     # Pipecat 1.0: VAD lives on the user aggregator (needed for pipecat_vad turn detection)
     s2s_user_params = None
     if config.s2s.turn_detection == "pipecat_vad":
-        from pipecat.audio.vad.silero import SileroVADAnalyzer
         from pipecat.processors.aggregators.llm_response_universal import (
             LLMUserAggregatorParams,
         )
 
         s2s_user_params = LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(sample_rate=audio_sample_rate),
+            vad_analyzer=_build_vad_analyzer(config, sample_rate=audio_sample_rate),
         )
 
     # realtime_service_mode: trailing context writes + auto-swapped turn

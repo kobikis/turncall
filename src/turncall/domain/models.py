@@ -103,7 +103,6 @@ class ToolDefinition(DomainModel):
     webhook_secret: str | None = None
     timeout_seconds: int = 10
     max_retries: int = 1
-    is_builtin: bool = False
 
 
 # --- Agent Config ---
@@ -261,7 +260,6 @@ class AgentConfig(DomainModel):
     avatar: AvatarConfig = Field(default_factory=AvatarConfig)
     transport: str = "twilio"  # "twilio" | "webrtc" | "both"
     server_url: ServerUrlConfig = Field(default_factory=ServerUrlConfig)
-    knowledge_bases: list["KnowledgeBaseAttachment"] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

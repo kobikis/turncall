@@ -111,7 +111,9 @@ class TestMCPToolConversion:
         assert result.parameters_schema["properties"]["phone"]["type"] == "string"
         assert result.parameters_schema["required"] == ["phone"]
         assert result.webhook_url is None
-        assert result.is_builtin is False
+        # `is_builtin` is gone — dispatch matches BUILTIN_TOOL_NAMES by
+        # name, and a discovered tool could never have set it anyway.
+        assert "is_builtin" not in type(result).model_fields
 
     def test_no_description(self) -> None:
         mcp_tool = MagicMock()
