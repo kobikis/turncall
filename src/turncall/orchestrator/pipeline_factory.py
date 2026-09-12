@@ -504,6 +504,68 @@ def _build_guardrails_section(config: AgentConfig) -> str:
     )
 
 
+def _build_turn_strategies(config: AgentConfig, *, smart_turn: bool) -> Any | None:
+    """The user's turn strategies: when a turn starts (barge-in) and when it
+    ends (smart turn).
+
+    Both land on one `UserTurnStrategies`, so they are built together —
+    assigning it twice would drop whichever went first, and losing smart turn
+    that way would be invisible.
+
+    Returns None when the agent asked for neither, leaving Pipecat's defaults
+    alone. `smart_turn=False` for S2S, which has no cascade turn analyzer.
+    """
+    strategies: dict[str, Any] = {}
+
+    # Barge-in. `interruption_enabled: false` was accepted, validated and read
+    # by nothing, so the caller could always talk over the agent whatever the
+    # config said. Pipecat spells the control `enable_interruptions` on the
+    # turn-start strategy: it decides whether speech mid-response broadcasts
+    # an interruption.
+    if not config.interruption_enabled:
+        from pipecat.turns.user_start import (
+            TranscriptionUserTurnStartStrategy,
+            VADUserTurnStartStrategy,
+        )
+
+        # Both of Pipecat's defaults, not just the VAD one. `UserTurnStrategies`
+        # fills `start` with the pair when given none, and supplying a list
+        # replaces it wholesale — passing only the VAD strategy would turn off
+        # barge-in and silently drop transcription-driven turn start with it.
+        strategies["start"] = [
+            VADUserTurnStartStrategy(enable_interruptions=False),
+            TranscriptionUserTurnStartStrategy(enable_interruptions=False),
+        ]
+        logger.info("Barge-in disabled: the caller cannot interrupt the agent")
+
+    if smart_turn and config.smart_turn_detection:
+        try:
+            from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
+            from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
+                LocalSmartTurnAnalyzerV3,
+            )
+            from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
+                TurnAnalyzerUserTurnStopStrategy,
+            )
+
+            turn_analyzer = LocalSmartTurnAnalyzerV3(
+                params=SmartTurnParams(stop_secs=config.smart_turn_stop_secs),
+            )
+            strategies["stop"] = [
+                TurnAnalyzerUserTurnStopStrategy(turn_analyzer=turn_analyzer)
+            ]
+            logger.info("Smart turn detection enabled (LocalSmartTurnV3)")
+        except Exception:
+            logger.warning("Smart turn detection unavailable, using VAD-only")
+
+    if not strategies:
+        return None
+
+    from pipecat.turns.user_turn_strategies import UserTurnStrategies
+
+    return UserTurnStrategies(**strategies)
+
+
 def _build_system_instruction(
     config: AgentConfig,
     *,
@@ -721,30 +783,9 @@ def create_pipeline(
         "vad_analyzer": SileroVADAnalyzer(sample_rate=audio_sample_rate),
     }
 
-    # Smart turn detection: ML model that understands conversational pauses
-    if config.smart_turn_detection:
-        try:
-            from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-            from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
-                LocalSmartTurnAnalyzerV3,
-            )
-            from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
-                TurnAnalyzerUserTurnStopStrategy,
-            )
-            from pipecat.turns.user_turn_strategies import UserTurnStrategies
-
-            turn_analyzer = LocalSmartTurnAnalyzerV3(
-                params=SmartTurnParams(stop_secs=config.smart_turn_stop_secs),
-            )
-            stop_strategy = TurnAnalyzerUserTurnStopStrategy(
-                turn_analyzer=turn_analyzer
-            )
-            user_params_kwargs["user_turn_strategies"] = UserTurnStrategies(
-                stop=[stop_strategy]
-            )
-            logger.info("Smart turn detection enabled (LocalSmartTurnV3)")
-        except Exception:
-            logger.warning("Smart turn detection unavailable, using VAD-only")
+    turn_strategies = _build_turn_strategies(config, smart_turn=True)
+    if turn_strategies is not None:
+        user_params_kwargs["user_turn_strategies"] = turn_strategies
 
     context_aggregator = LLMContextAggregatorPair(
         context=context,
@@ -1028,6 +1069,19 @@ def _create_s2s_pipeline(
     Pipeline is much simpler than cascade:
       transport.input → [VAD] → S2S_LLM → transport.output → context_agg → observability
     """
+    if not config.interruption_enabled:
+        # Cascade only, deliberately. Supplying `user_turn_strategies` here
+        # would discard what realtime_service_mode auto-swaps in for OpenAI
+        # Realtime and Gemini Live — Pipecat replaces the whole set rather than
+        # merging — and on server-side turn detection the provider owns
+        # turn-taking outright. Better said than silently half-applied.
+        logger.warning(
+            "interruption_enabled=false is not applied on S2S (turn_detection="
+            "'{td}'): the realtime service owns turn-taking. Use "
+            "pipeline_mode='cascade' to disable barge-in.",
+            td=config.s2s.turn_detection,
+        )
+
     from turncall.orchestrator.s2s_config import create_s2s_service
 
     # A gateway base_url is an attacker-influenceable outbound target — gate it

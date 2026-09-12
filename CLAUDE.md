@@ -521,7 +521,14 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 
 `ended_reason` (derived, not stored): `customer_ended_call`, `assistant_ended_call`,
 `customer_did_not_answer`, `customer_busy`, `voicemail`, `transferred`,
-`pipeline_error`, `telephony_failed`, `unknown`.
+`max_duration_reached`, `pipeline_error`, `telephony_failed`, `unknown`.
+
+`max_duration_reached` comes from `max_call_duration_seconds`: a watchdog on the
+`CallSession` records `call.max_duration_reached` and cancels the worker, so the
+call finalizes the same way a hangup does. Without its own reason it read back
+as `customer_ended_call`. `interruption_enabled: false` turns off barge-in via
+the user turn-start strategies — **cascade only**; on S2S the realtime service
+owns turn-taking and the setting is warned about rather than half-applied.
 
 Key files: `events/webhook_delivery.py` (envelope + signing + retry),
 `events/dispatcher.py` (agent_id/event_id resolution), `domain/call_state.py`
