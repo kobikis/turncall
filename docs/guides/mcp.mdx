@@ -155,6 +155,9 @@ rename on the server side.
 | `MCP_MAX_TOOLS_TOTAL` | `100` | Tools across every server on an agent |
 | `MCP_MAX_RESPONSE_BYTES` | `1048576` | One tool result |
 
+Custom webhook tools are capped the same way under their own
+`TOOL_MAX_RESPONSE_BYTES`.
+
 The per-server cap doesn't compose — ten servers at it would put 500 tools in
 every request — so the total is the one that protects the context window.
 Servers are consumed in config order; once the total is reached, later ones
