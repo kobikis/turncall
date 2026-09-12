@@ -175,7 +175,8 @@ upgrading the SDK doesn't change anything about your agent config.
   Reading only one spelling failed per tool, and `connect_servers` logs and
   continues per server — so the symptom was every MCP server returning no tools
   at all, with nothing in the response to say why. There's an integration test
-  that opens a real server and calls a real tool, on whichever line is
-  installed, precisely because a mocked test can't see a field rename.
+  that opens a real server and calls a real tool over each transport — HTTP,
+  SSE and stdio — on whichever line is installed, precisely because a mocked
+  test can't see a field rename.
 </Note>
 
