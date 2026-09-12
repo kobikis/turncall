@@ -80,3 +80,43 @@ async def test_the_models_that_forced_the_fix_still_reject_one(
 
     assert caught.value.code == 400
     assert "temperature" in caught.value.read().decode()
+
+
+class TestTheExtraEscapeHatch:
+    """The way around the withholding rule has to actually work — it used to
+    raise TypeError on the first LLM turn, which is worse than the bug #38
+    fixed, because the docs sent people to it."""
+
+    async def test_a_temperature_in_extra_completes(self, anthropic_key: str) -> None:
+        from pipecat.processors.aggregators.llm_context import LLMContext
+
+        service = _service(anthropic_key)
+        service._settings.extra = _extra({"temperature": 0.25})
+
+        reply = await service.run_inference(
+            LLMContext(messages=[{"role": "user", "content": "Say hi."}])
+        )
+
+        assert reply and reply.strip()
+
+    async def test_it_actually_reaches_the_model(self, anthropic_key: str) -> None:
+        """A 200 on a model that tolerates temperature proves nothing — it
+        could have been dropped silently. A model that *rejects* one is the
+        only way to see it arrive."""
+        from pipecat.processors.aggregators.llm_context import LLMContext
+
+        service = _service(anthropic_key, model="claude-sonnet-5")
+        service._settings.extra = _extra({"temperature": 0.25})
+
+        with pytest.raises(Exception) as caught:
+            await service.run_inference(
+                LLMContext(messages=[{"role": "user", "content": "Say hi."}])
+            )
+
+        assert "temperature" in str(caught.value).lower(), caught.value
+
+
+def _extra(raw: dict) -> dict:
+    from turncall.orchestrator.pipeline_factory import _anthropic_extra_body
+
+    return _anthropic_extra_body(raw)
