@@ -76,6 +76,26 @@ Define tools with a `webhook_url` — TurnCall POSTs to your server when the LLM
 }
 ```
 
+### Sync and async tools
+
+`execution_mode` decides what happens when the caller interrupts while a tool
+is still running.
+
+| | Behaviour |
+|---|---|
+| `sync` (default) | The in-flight call is cancelled the moment the caller speaks over the agent |
+| `async` | The call runs to completion and its result is delivered whenever it arrives |
+
+Use `async` for work that is slower than the conversation — a CRM lookup, an
+availability check against a slow system — so a caller saying "actually, make
+that Tuesday" doesn't throw away a request already in flight.
+
+<Note>
+  Voice only. A text turn is request/response: there is no ongoing conversation
+  to deliver a late result into, so `execution_mode` is ignored on SMS, the
+  Chat API and WhatsApp text.
+</Note>
+
 ### Webhook Payload
 
 Your server receives:

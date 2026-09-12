@@ -431,13 +431,15 @@ Optional `webhook_secret`: when set, each POST is HMAC-signed (`X-TurnCall-Signa
   "name": "snake_case_name",
   "description": "When/why the LLM should invoke this",
   "parameters_schema": {"type": "object", "properties": {...}, "required": [...]},
-  "execution_mode": "sync",
+  "execution_mode": "sync",          // "async" survives an interruption (voice only)
   "webhook_url": "https://...",
   "webhook_secret": "optional — HMAC-sign tool POSTs",
   "timeout_seconds": 10,
   "max_retries": 1
 }
 ```
+
+`execution_mode` (voice only): `sync` (default) cancels an in-flight call when the caller talks over the agent; `async` lets it finish and delivers the result when it arrives — for a lookup slower than the conversation. Maps to Pipecat's `cancel_on_interruption`. Text turns are request/response, so the field is ignored there.
 
 ### MCP Tools (Model Context Protocol)
 Connect agents to MCP servers for auto-discovered tools. Tools are fetched at call start via `tools/list` and registered alongside webhook/builtin tools.

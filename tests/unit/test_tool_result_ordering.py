@@ -25,8 +25,11 @@ async def test_result_callback_fires_before_background_logging() -> None:
     captured = {}
 
     class _LLM:
-        def register_function(self, name, fn):
+        def register_function(self, name, fn, **options):
+            # Mirrors the real signature: cancel_on_interruption, timeout_secs
+            # and cancellable_by_llm are all keyword-only options.
             captured["handler"] = fn
+            captured["options"] = options
 
     tool = ToolDefinition(
         name="book",

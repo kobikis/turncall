@@ -16,6 +16,7 @@ from uuid import UUID
 
 from loguru import logger
 
+from turncall.domain.enums import ToolExecutionMode
 from turncall.domain.models import BUILTIN_TOOL_NAMES, ToolDefinition
 from turncall.services import call_control
 from turncall.services.tool_webhook import classify_tool_result, post_tool_webhook
@@ -305,4 +306,14 @@ def _register_single_tool(
         await params.result_callback(result)
         _spawn(_log_tool_result(call_context, function_name, args, result, latency_ms))
 
-    llm.register_function(tool_def.name, handler)
+    # execution_mode="async" means the call outlives an interruption: its
+    # result is delivered whenever it arrives instead of being cancelled the
+    # moment the caller talks over the agent. Pipecat spells that
+    # cancel_on_interruption=False, and its own _function_is_async() reads the
+    # same flag back. Sync stays the default — a built-in acting on the call
+    # itself must not survive the caller changing their mind.
+    llm.register_function(
+        tool_def.name,
+        handler,
+        cancel_on_interruption=tool_def.execution_mode != ToolExecutionMode.ASYNC,
+    )
