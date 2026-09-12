@@ -186,6 +186,7 @@ async def _complete_text_bedrock(
     import boto3
 
     from turncall.services.aws_credentials import resolve_aws_credentials
+    from turncall.services.bedrock_models import is_anthropic_model
 
     credentials = resolve_aws_credentials(aws)
 
@@ -197,13 +198,17 @@ async def _complete_text_bedrock(
         if m.get("role") != "system"
     ]
 
+    inference_config: dict[str, Any] = {"maxTokens": config.max_tokens}
+    # Claude on Bedrock gets no temperature, matching _complete_text_anthropic
+    # and the voice path: current models reject it outright. Every other vendor
+    # Bedrock fronts still takes one.
+    if not is_anthropic_model(config.model):
+        inference_config["temperature"] = config.temperature
+
     kwargs: dict[str, Any] = {
         "modelId": config.model,
         "messages": conversation,
-        "inferenceConfig": {
-            "maxTokens": config.max_tokens,
-            "temperature": config.temperature,
-        },
+        "inferenceConfig": inference_config,
     }
     if system_parts:
         kwargs["system"] = [{"text": "\n\n".join(system_parts)}]

@@ -118,12 +118,15 @@ class TestCredentialsReachTheServices:
     indistinguishable from config that was never set."""
 
     def test_bedrock_llm_receives_credentials_and_settings(self) -> None:
+        # A Meta model, deliberately: Bedrock fronts several vendors and only
+        # Anthropic's reject a temperature. Proving the value arrives needs a
+        # model that still accepts one.
         from turncall.orchestrator.pipeline_factory import _create_llm_service
 
         config = AgentConfig(
             llm=LLMConfig(
                 provider="bedrock",
-                model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                model="meta.llama3-3-70b-instruct-v1:0",
                 temperature=0.25,
                 max_tokens=999,
                 extra={"thinking": {"type": "enabled"}},
@@ -142,7 +145,7 @@ class TestCredentialsReachTheServices:
         assert params["region_name"] == "ap-southeast-2"
 
         settings = service._settings
-        assert settings.model == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        assert settings.model == "meta.llama3-3-70b-instruct-v1:0"
         assert settings.temperature == 0.25
         assert settings.max_tokens == 999
         # llm.extra is Bedrock's passthrough — how Anthropic extended thinking

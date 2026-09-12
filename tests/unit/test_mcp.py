@@ -209,7 +209,7 @@ class TestMCPSessionManager:
         active = 0
         peak = 0
 
-        async def fake_discover(server, session, settings):
+        async def fake_discover(server, session):
             nonlocal active, peak
             active += 1
             peak = max(peak, active)
