@@ -301,14 +301,22 @@ def _create_llm_service(
         from pipecat.services.aws.llm import AWSBedrockLLMService
 
         from turncall.services.aws_credentials import resolve_aws_credentials
+        from turncall.services.bedrock_models import is_anthropic_model
 
         credentials = resolve_aws_credentials(config.aws)
         settings_kwargs: dict[str, Any] = {
             "model": config.llm.model,
             **si,
-            "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        # No temperature for Claude on Bedrock, for the reason the direct
+        # Anthropic branch above gives: current models answer 400
+        # "`temperature` is deprecated for this model." and the call dies on
+        # its first LLM turn. Bedrock is a gateway, so the deprecation is the
+        # model's, not the endpoint's — but only Anthropic's models have it,
+        # and Meta/Mistral/Amazon still want the value.
+        if not is_anthropic_model(config.llm.model):
+            settings_kwargs["temperature"] = temperature
         if config.llm.extra:
             # Bedrock's passthrough for model-specific parameters — how
             # Anthropic extended thinking is reached here. reasoning_effort

@@ -79,23 +79,14 @@ class MCPSessionManager:
                     call_id=str(self.call_id),
                 )
 
-        # Phase 2 — initialize + discover CONCURRENTLY. These are pure JSON-RPC
-        # round-trips on already-open sessions (no context entry/exit), so
-        # running them in gather children carries no cancel-scope hazard and
-        # collapses the per-server handshake latency into one round.
-        async def _discover(
-            server: MCPServerConfig, session: ClientSession
-        ) -> list[ToolDefinition]:
+        # Phase 2 — handshake + list_tools CONCURRENTLY. These are pure
+        # JSON-RPC round-trips on already-open sessions (no context entry/exit),
+        # so running them in gather children carries no cancel-scope hazard and
+        # collapses the per-server handshake latency into one round. They only
+        # *fetch*; nothing is claimed here.
+        async def _fetch(server: MCPServerConfig, session: ClientSession) -> list[Tool]:
             try:
-                tools = await self._discover_tools(server, session, settings)
-                logger.info(
-                    "mcp_server_connected",
-                    server=server.name,
-                    transport=server.transport,
-                    tools=len(tools),
-                    call_id=str(self.call_id),
-                )
-                return tools
+                return await self._discover_tools(server, session)
             except Exception:
                 logger.exception(
                     "mcp_server_discover_failed",
@@ -104,13 +95,34 @@ class MCPSessionManager:
                 )
                 return []
 
-        results = await asyncio.gather(
-            *(_discover(server, session) for server, session in opened)
+        fetched = await asyncio.gather(
+            *(_fetch(server, session) for server, session in opened)
         )
 
+        # Phase 3 — claim names SERIALLY, in the agent's configured order.
+        # gather returns results in the order they were passed, not the order
+        # they completed, so zipping them back onto `opened` restores it.
+        # Claiming inside the gather children made "first server wins" mean
+        # "fastest server wins": which server owned a shared name, and which
+        # one the total-tools cap cut off, could differ from one call to the
+        # next with no config change. Registration is synchronous, so this
+        # loop stays a single uninterrupted pass.
         self._connected = True
         all_tools: list[ToolDefinition] = []
-        for tools in results:
+        for (server, session), mcp_tools in zip(opened, fetched, strict=True):
+            tools = self._register_discovered(
+                mcp_tools,
+                server_name=server.name,
+                session=session,
+                settings=settings,
+            )
+            logger.info(
+                "mcp_server_connected",
+                server=server.name,
+                transport=server.transport,
+                tools=len(tools),
+                call_id=str(self.call_id),
+            )
             all_tools.extend(tools)
         return all_tools
 
@@ -118,24 +130,21 @@ class MCPSessionManager:
         self,
         server: MCPServerConfig,
         session: ClientSession,
-        settings: Any,
-    ) -> list[ToolDefinition]:
-        """Handshake + tool discovery on an already-open session (Phase 2)."""
-        # Initialize the MCP protocol
+    ) -> list[Tool]:
+        """Handshake + list_tools on an already-open session (Phase 2).
+
+        Returns what the server advertises, filtered by `tool_filter`. Naming
+        them is Phase 3's job — see connect_servers.
+        """
         await session.initialize()
-
-        # Discover tools
         result = await session.list_tools()
-        mcp_tools = result.tools
+        mcp_tools: list[Tool] = result.tools
 
-        # Apply tool filter
         if server.tool_filter:
             allowed = set(server.tool_filter)
             mcp_tools = [t for t in mcp_tools if t.name in allowed]
 
-        return self._register_discovered(
-            mcp_tools, server_name=server.name, session=session, settings=settings
-        )
+        return mcp_tools
 
     def _register_discovered(
         self,
