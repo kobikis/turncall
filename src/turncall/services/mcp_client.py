@@ -42,10 +42,11 @@ class MCPSessionManager:
 
     call_id: UUID
     project_id: UUID
-    _sessions: dict[str, ClientSession] = field(default_factory=dict)
+    # Open sessions are held by the exit stack, which closes them, and by
+    # _tool_refs, which routes calls to them. There is no third list — one
+    # used to exist alongside a _connected flag, both written and never read.
     _tool_refs: dict[str, MCPToolRef] = field(default_factory=dict)
     _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack)
-    _connected: bool = False
 
     async def connect_servers(
         self,
@@ -102,7 +103,6 @@ class MCPSessionManager:
         for server in servers:
             try:
                 session = await self._create_session(server, settings)
-                self._sessions[server.name] = session
                 opened.append((server, session))
             except Exception:
                 logger.exception(
@@ -139,7 +139,6 @@ class MCPSessionManager:
         # one the total-tools cap cut off, could differ from one call to the
         # next with no config change. Registration is synchronous, so this
         # loop stays a single uninterrupted pass.
-        self._connected = True
         all_tools: list[ToolDefinition] = []
         for (server, session), mcp_tools in zip(opened, fetched, strict=True):
             tools = self._register_discovered(
@@ -422,9 +421,7 @@ class MCPSessionManager:
             await self._exit_stack.aclose()
         except Exception:
             logger.exception("mcp_cleanup_error", call_id=str(self.call_id))
-        self._sessions.clear()
         self._tool_refs.clear()
-        self._connected = False
         logger.info("mcp_sessions_closed", call_id=str(self.call_id))
 
 
@@ -467,16 +464,23 @@ def _result_is_error(result: CallToolResult) -> bool:
 
 
 def _mcp_tool_to_definition(tool: Tool, server_name: str) -> ToolDefinition:
-    """Convert an MCP Tool to a TurnCall ToolDefinition."""
-    input_schema = _tool_input_schema(tool)
+    """Convert an MCP Tool to a TurnCall ToolDefinition.
+
+    The server's schema is passed through rather than rebuilt from `type`,
+    `properties` and `required`. Rebuilding dropped everything else —
+    `$defs`, `additionalProperties`, `oneOf`, a top-level `description` — and
+    `$defs` is the one that breaks things: a property holding
+    `{"$ref": "#/$defs/Address"}` arrived pointing at nothing, and providers
+    reject an unresolvable `$ref` outright. Only the two keys a function
+    schema must have are filled in when the server omits them.
+    """
+    schema = dict(_tool_input_schema(tool))
+    schema.setdefault("type", "object")
+    schema.setdefault("properties", {})
     return ToolDefinition(
         name=tool.name,
         description=tool.description or f"MCP tool from {server_name}",
-        parameters_schema={
-            "type": input_schema.get("type", "object"),
-            "properties": input_schema.get("properties", {}),
-            "required": input_schema.get("required", []),
-        },
+        parameters_schema=schema,
         webhook_url=None,
         is_builtin=False,
     )
