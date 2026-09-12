@@ -48,3 +48,12 @@ def test_mcp_exposes_the_field_names_mcp_client_reads() -> None:
 
     assert "inputSchema" in Tool.model_fields
     assert "isError" in CallToolResult.model_fields
+
+
+@pytest.mark.unit
+def test_anthropic_sdk_major_is_one_of_the_two_pipecat_supports() -> None:
+    """pipecat 1.10 widened anthropic to <2. The 1.x line moved temperature,
+    top_k and top_p out of the Messages API parameters and into extra_body,
+    and requires an explicit region on a supplied Bedrock client — which
+    aws_credentials.bedrock_kwargs() passes. Anything past 2 is unchecked."""
+    assert md.version("anthropic").split(".")[0] in {"0", "1"}
