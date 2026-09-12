@@ -21,7 +21,7 @@ from turncall.config import get_settings
 from turncall.domain.enums import CallDirection, CallEventType
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.pipeline_builder import start_call_pipeline
-from turncall.orchestrator.pipeline_factory import CallContext
+from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
 from turncall.orchestrator.transport_factory import create_whatsapp_transport
 from turncall.storage.database import create_session_factory, get_engine
 from turncall.storage.repositories import (
@@ -330,12 +330,10 @@ async def _start_voice_pipeline(
         )
         await db.commit()
 
-    from uuid import UUID as _UUID
-
     call_context = CallContext(
         call_id=call.id,
         project_id=phone_row.project_id,
-        agent_id=agent_id_for_call or _UUID(int=0),
+        agent_id=agent_id_for_call or DYNAMIC_AGENT_ID,
         call_sid=f"whatsapp:{whatsapp_call_id}",
         stream_sid=f"whatsapp:{whatsapp_call_id}",
         session_factory=session_factory,

@@ -23,6 +23,14 @@ from turncall.config.settings import BYOMSettings, PipecatSettings
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.observability import ObservabilityProcessor
 
+# A call whose agent came from call-init as an inline config (ADR-0008: the
+# response carries `agent` rather than `agent_id`) has no agent row to point at.
+# Every transport substitutes this sentinel so the pipeline can still build —
+# anything that looks the agent up by it simply finds nothing, which is the
+# truth. Without it a transport has to invent its own placeholder, and one of
+# them invented a string and fed it to UUID().
+DYNAMIC_AGENT_ID = UUID(int=0)
+
 
 @dataclass(frozen=True)
 class CallContext:
