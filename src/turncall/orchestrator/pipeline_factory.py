@@ -242,13 +242,24 @@ def _create_llm_service(
         from pipecat.services.anthropic.llm import AnthropicLLMService
 
         resolved_key = config.llm.api_key or anthropic_api_key
+        # No temperature. Anthropic rejects it on current models — a
+        # claude-sonnet-5 request carrying one answers 400 "`temperature` is
+        # deprecated for this model.", which makes the service unusable and
+        # ends the call on its first LLM turn. TurnCall's 0.7 is its own
+        # default rather than a value the agent asked for, so it broke every
+        # Anthropic call for a knob nobody set. The text path in llm_text.py
+        # never sent one; this matches it. An older model that still accepts
+        # temperature can be given one through `llm.extra`.
+        anthropic_extra = _overflow(
+            config.llm.extra, "model", "max_tokens", "system_instruction"
+        )
         return AnthropicLLMService(
             api_key=resolved_key,
             settings=AnthropicLLMService.Settings(
                 model=config.llm.model,
                 **si,
-                temperature=temperature,
                 max_tokens=max_tokens,
+                **({"extra": anthropic_extra} if anthropic_extra else {}),
             ),
         )
 

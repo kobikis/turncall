@@ -108,7 +108,7 @@ Set `"extra": {"profanity_filter": true}` if you want it on.
 | `base_url` | For `custom_openai` | OpenAI-compatible API base URL |
 | `api_key` | No | API key for `custom_openai` (masked in responses) |
 | `fallback_models` | For `openrouter` | Ordered list of fallback models (voice only) |
-| `temperature` | No | 0.0–2.0 (default: 0.7) |
+| `temperature` | No | 0.0–2.0 (default: 0.7). **Not sent to `anthropic`** — current Claude models reject it and the call fails; set one via `llm.extra` if your model still accepts it |
 | `max_tokens` | No | 1–128000 (default: 1024) |
 | `extra` | No | Provider passthrough. On `bedrock` it becomes `additionalModelRequestFields` — how Anthropic extended thinking is reached |
 
