@@ -12,21 +12,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from mcp.types import Tool
 
-from tests.conftest import mcp_tool
+from tests.conftest import mcp_settings, mcp_tool
 from turncall.services.mcp_client import MCPSessionManager
 
 
 def _settings(**over):
-    mcp = SimpleNamespace(
-        max_tools_per_server=50,
-        max_tools_total=100,
-        max_response_bytes=1000,
-        stdio_enabled=False,
-        stdio_allowed_commands=[],
-    )
-    for k, v in over.items():
-        setattr(mcp, k, v)
-    return SimpleNamespace(mcp=mcp, byom=SimpleNamespace(allowed_url_patterns=[]))
+    # A small response cap is what most of this file is about; the rest comes
+    # from MCPSettings' declared defaults.
+    return mcp_settings(**{"max_response_bytes": 1000, **over})
 
 
 def _tool(name: str) -> Tool:

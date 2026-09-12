@@ -37,3 +37,28 @@ def mcp_tool(name: str, schema: dict | None = None):
     return Tool(
         **{"name": name, "description": "d", field: schema or {"type": "object"}}
     )
+
+
+def mcp_settings(*, allowed_url_patterns: list[str] | None = None, **mcp_over):
+    """A Settings stand-in for the MCP tests.
+
+    Built from MCPSettings' own field definitions rather than hand-listed, so a
+    field added there can't leave these stubs behind — which is exactly what
+    happened when `connect_timeout_seconds` arrived and four separately
+    hand-rolled SimpleNamespaces all raised AttributeError.
+
+    Declared defaults only, never the environment: these tests assert on
+    specific limits, and a developer's .env must not change the answer.
+    """
+    from types import SimpleNamespace
+
+    from turncall.config.settings import MCPSettings
+
+    declared = {
+        name: field.get_default(call_default_factory=True)
+        for name, field in MCPSettings.model_fields.items()
+    }
+    return SimpleNamespace(
+        mcp=SimpleNamespace(**{**declared, **mcp_over}),
+        byom=SimpleNamespace(allowed_url_patterns=allowed_url_patterns or []),
+    )

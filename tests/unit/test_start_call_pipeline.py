@@ -171,3 +171,92 @@ async def test_build_failure_propagates_and_closes_mcp():
         )
 
     manager.close.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancellation_during_build_still_closes_mcp():
+    """`except Exception` doesn't catch CancelledError, so the close that sat
+    after the try never ran and the MCP sessions leaked. Cleanup belongs in a
+    finally — and in this task, which is where the transports were opened."""
+    manager = AsyncMock()
+    manager.connect_servers = AsyncMock(return_value=[])
+    reached_build = asyncio.Event()
+
+    async def hang(*_a, **_k):
+        reached_build.set()
+        await asyncio.sleep(30)
+
+    with (
+        patch.object(
+            pipeline_builder, "build_call_pipeline", new=AsyncMock(side_effect=hang)
+        ),
+        patch("turncall.services.mcp_client.MCPSessionManager", return_value=manager),
+    ):
+        config = AgentConfig(
+            mcp_servers=[
+                MCPServerConfig(name="crm", transport="http", url="https://x/mcp")
+            ]
+        )
+        start = asyncio.create_task(
+            pipeline_builder.start_call_pipeline(
+                config=config,
+                transport=SimpleNamespace(),
+                call_context=_ctx(),
+                settings=_settings(),
+                session_factory="SF",
+            )
+        )
+        await asyncio.wait_for(reached_build.wait(), timeout=2)
+
+        # Cancel the spawned run the way a hangup mid-build would.
+        inner = next(t for t in pipeline_builder._RUNNING if not t.done())
+        inner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await inner
+
+        start.cancel()
+
+    manager.close.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancellation_during_build_releases_the_caller():
+    """The caller blocks on `ready`. If cancellation skipped the set(), the
+    WebRTC connect request would hang forever — worse than the leak above."""
+    manager = AsyncMock()
+    manager.connect_servers = AsyncMock(return_value=[])
+    reached_build = asyncio.Event()
+
+    async def hang(*_a, **_k):
+        reached_build.set()
+        await asyncio.sleep(30)
+
+    with (
+        patch.object(
+            pipeline_builder, "build_call_pipeline", new=AsyncMock(side_effect=hang)
+        ),
+        patch("turncall.services.mcp_client.MCPSessionManager", return_value=manager),
+    ):
+        config = AgentConfig(
+            mcp_servers=[
+                MCPServerConfig(name="crm", transport="http", url="https://x/mcp")
+            ]
+        )
+        start = asyncio.create_task(
+            pipeline_builder.start_call_pipeline(
+                config=config,
+                transport=SimpleNamespace(),
+                call_context=_ctx(),
+                settings=_settings(),
+                session_factory="SF",
+            )
+        )
+        await asyncio.wait_for(reached_build.wait(), timeout=2)
+
+        inner = next(t for t in pipeline_builder._RUNNING if not t.done())
+        inner.cancel()
+
+        # The caller must come back rather than wait on an event nobody sets.
+        await asyncio.wait_for(start, timeout=2)

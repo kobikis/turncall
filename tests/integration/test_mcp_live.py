@@ -18,12 +18,12 @@ import sys
 import threading
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 
+from tests.conftest import mcp_settings
 from turncall.domain.models import MCPServerConfig
 from turncall.services.mcp_client import MCPSessionManager
 
@@ -147,16 +147,7 @@ async def test_stdio_transport_discovers_and_calls() -> None:
     "python": the allowlist matches exactly, and the interpreter running the
     tests is the one with mcp installed."""
     script = Path(__file__).parent / "_mcp_stdio_server.py"
-    settings = SimpleNamespace(
-        mcp=SimpleNamespace(
-            stdio_enabled=True,
-            stdio_allowed_commands=[sys.executable],
-            max_tools_per_server=50,
-            max_tools_total=100,
-            max_response_bytes=1_048_576,
-        ),
-        byom=SimpleNamespace(allowed_url_patterns=[]),
-    )
+    settings = mcp_settings(stdio_enabled=True, stdio_allowed_commands=[sys.executable])
 
     manager = MCPSessionManager(call_id=uuid4(), project_id=uuid4())
     config = MCPServerConfig(
@@ -179,15 +170,8 @@ async def test_stdio_transport_discovers_and_calls() -> None:
 async def test_stdio_stays_shut_when_disabled() -> None:
     """The gate is the whole point: stdio runs an executable, so it is off
     unless an operator turns it on."""
-    settings = SimpleNamespace(
-        mcp=SimpleNamespace(
-            stdio_enabled=False,
-            stdio_allowed_commands=[sys.executable],
-            max_tools_per_server=50,
-            max_tools_total=100,
-            max_response_bytes=1_048_576,
-        ),
-        byom=SimpleNamespace(allowed_url_patterns=[]),
+    settings = mcp_settings(
+        stdio_enabled=False, stdio_allowed_commands=[sys.executable]
     )
     manager = MCPSessionManager(call_id=uuid4(), project_id=uuid4())
     config = MCPServerConfig(

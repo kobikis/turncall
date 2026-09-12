@@ -6,19 +6,19 @@ the same kind of target, reached the same way, from the same process, and was
 the only one of the three with no check at all.
 """
 
-from types import SimpleNamespace
-
 import pytest
 
+from tests.conftest import mcp_settings
 from turncall.domain.models import MCPServerConfig
 from turncall.services.mcp_client import MCPSessionManager
 from turncall.services.url_allowlist import check_url_allowed
 
 
 def _settings(patterns: list[str]):
-    return SimpleNamespace(
-        byom=SimpleNamespace(allowed_url_patterns=patterns),
-        mcp=SimpleNamespace(stdio_enabled=False, stdio_allowed_commands=[]),
+    return mcp_settings(
+        allowed_url_patterns=patterns,
+        stdio_enabled=False,
+        stdio_allowed_commands=[],
     )
 
 

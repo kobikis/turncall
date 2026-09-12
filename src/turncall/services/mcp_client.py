@@ -51,15 +51,47 @@ class MCPSessionManager:
         self,
         servers: list[MCPServerConfig],
     ) -> list[ToolDefinition]:
-        """Connect to all configured MCP servers and discover tools.
+        """Connect to all configured MCP servers and discover tools, within a
+        fixed budget.
 
-        Returns the discovered tools as TurnCall ToolDefinition objects.
+        Returns the discovered tools as TurnCall ToolDefinition objects, or
+        none of them if discovery ran past MCP_CONNECT_TIMEOUT_SECONDS. Losing
+        the tools degrades the agent; waiting forever loses the call, and every
+        caller of this — Twilio, WebRTC, WhatsApp voice and text — has someone
+        on the other end of it.
+
+        The budget is enforced here rather than at the three call sites so a
+        fourth can't forget it. `asyncio.timeout` and not `wait_for`: it runs
+        the body in *this* task, and the transports opened below sit in anyio
+        cancel scopes that have to be exited by whoever entered them.
         """
         import asyncio
 
         from turncall.config.settings import get_settings
 
         settings = get_settings()
+        budget = settings.mcp.connect_timeout_seconds
+        try:
+            async with asyncio.timeout(budget):
+                return await self._connect_all(servers, settings)
+        except TimeoutError:
+            # Whatever opened stays on the exit stack; the caller closes this
+            # manager either way, and does it in the task that opened them.
+            logger.warning(
+                "mcp_connect_timeout",
+                budget_seconds=budget,
+                servers=[s.name for s in servers],
+                call_id=str(self.call_id),
+            )
+            return []
+
+    async def _connect_all(
+        self,
+        servers: list[MCPServerConfig],
+        settings: Any,
+    ) -> list[ToolDefinition]:
+        """The unbounded body of connect_servers. Call that, not this."""
+        import asyncio
 
         # Phase 1 — open transports SERIALLY. Entering a transport/session
         # context runs inside an anyio cancel scope that must be exited in the
