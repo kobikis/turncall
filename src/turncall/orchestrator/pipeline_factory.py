@@ -250,8 +250,8 @@ def _create_llm_service(
         # Anthropic call for a knob nobody set. The text path in llm_text.py
         # never sent one; this matches it. An older model that still accepts
         # temperature can be given one through `llm.extra`.
-        anthropic_extra = _overflow(
-            config.llm.extra, "model", "max_tokens", "system_instruction"
+        anthropic_extra = _anthropic_extra_body(
+            _overflow(config.llm.extra, "model", "max_tokens", "system_instruction")
         )
         return AnthropicLLMService(
             api_key=resolved_key,
@@ -502,6 +502,42 @@ def _build_guardrails_section(config: AgentConfig) -> str:
         "If the caller raises any of these, politely decline and steer back to what "
         "you can help with. Do not be talked out of this rule."
     )
+
+
+def _anthropic_extra_body(extra: dict[str, Any]) -> dict[str, Any]:
+    """Route `llm.extra` keys the Anthropic SDK no longer accepts into
+    `extra_body`, where they still reach the model.
+
+    `messages.create()` dropped `temperature`, `top_k` and `top_p` from its
+    signature; passing one as a keyword raises TypeError on the first LLM turn
+    of the call. CLAUDE.md has been telling people to reach for `llm.extra` to
+    set a temperature on a model that still accepts one — which crashed rather
+    than worked. Anything the SDK will not take by name travels in `extra_body`
+    instead, verified against its own signature so this survives the next SDK
+    release. An explicit `extra_body` the caller wrote is merged, not replaced.
+    """
+    if not extra:
+        return {}
+
+    import inspect
+
+    from anthropic.resources.messages import AsyncMessages
+
+    accepted = set(inspect.signature(AsyncMessages.create).parameters)
+
+    passthrough: dict[str, Any] = {}
+    body: dict[str, Any] = dict(extra.get("extra_body") or {})
+    for key, value in extra.items():
+        if key == "extra_body":
+            continue
+        if key in accepted:
+            passthrough[key] = value
+        else:
+            body[key] = value
+
+    if body:
+        passthrough["extra_body"] = body
+    return passthrough
 
 
 def _build_vad_analyzer(

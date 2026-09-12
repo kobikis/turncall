@@ -235,6 +235,14 @@ class TestAnthropicTemperature:
         assert not _sends_temperature(svc)
 
     def test_llm_extra_is_the_way_back_for_models_that_accept_it(self) -> None:
+        """Through `extra_body`, not as a top-level field.
+
+        This test used to assert `given_fields()["temperature"] == 0.2` and
+        passed the whole time the feature was broken: the SDK dropped
+        `temperature` from `messages.create()`, so that flat key raised
+        TypeError on the first LLM turn. Asserting the settings object rather
+        than the call is what hid it.
+        """
         config = _agent_config(provider="anthropic", model="claude-3-5-haiku-20241022")
         config = config.model_copy(
             update={
@@ -243,7 +251,7 @@ class TestAnthropicTemperature:
         )
         svc = _create_llm_service(config, "", anthropic_api_key="sk-ant-test")
 
-        assert svc._settings.given_fields()["temperature"] == 0.2
+        assert svc._settings.given_fields()["extra_body"] == {"temperature": 0.2}
 
     def test_other_providers_still_get_a_temperature(self) -> None:
         """The fix is Anthropic-specific — nothing else changes."""
