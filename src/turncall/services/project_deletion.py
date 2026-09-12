@@ -43,25 +43,33 @@ async def _sweep_storage(
         aws_region=settings.storage.aws_region,
     )
     doc_keys = (
-        await session.execute(
-            select(DocumentRow.storage_key)
-            .join(
-                KnowledgeBaseRow,
-                DocumentRow.knowledge_base_id == KnowledgeBaseRow.id,
+        (
+            await session.execute(
+                select(DocumentRow.storage_key)
+                .join(
+                    KnowledgeBaseRow,
+                    DocumentRow.knowledge_base_id == KnowledgeBaseRow.id,
+                )
+                .where(KnowledgeBaseRow.project_id == project_id)
             )
-            .where(KnowledgeBaseRow.project_id == project_id)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     # Recording keys are deterministic (recordings/{call_id}.wav) — no need to
     # parse recording_url back into a storage key.
     rec_ids = (
-        await session.execute(
-            select(CallRow.id).where(
-                CallRow.project_id == project_id,
-                CallRow.recording_url.is_not(None),
+        (
+            await session.execute(
+                select(CallRow.id).where(
+                    CallRow.project_id == project_id,
+                    CallRow.recording_url.is_not(None),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     keys = [k for k in doc_keys if k] + [f"recordings/{cid}.wav" for cid in rec_ids]
     for key in keys:

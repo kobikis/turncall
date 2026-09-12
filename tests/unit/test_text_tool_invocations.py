@@ -129,9 +129,7 @@ async def test_a_recording_failure_never_costs_the_reply(monkeypatch):
     """The row is best-effort: losing the audit trail must not lose the SMS."""
 
     async def fake_post(self, url, **kw):
-        return httpx.Response(
-            200, text='{"ok": 1}', request=httpx.Request("POST", url)
-        )
+        return httpx.Response(200, text='{"ok": 1}', request=httpx.Request("POST", url))
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
 

@@ -160,8 +160,10 @@ def main() -> None:
         '"briefing": {"from_summary": true}}\'\n'
     )
 
-    print("Watch events with: python examples/events-webhook/setup.py "
-          f"--api-key {api_key} --events call.transferred transfer.answered call.ended")
+    print(
+        "Watch events with: python examples/events-webhook/setup.py "
+        f"--api-key {api_key} --events call.transferred transfer.answered call.ended"
+    )
 
 
 if __name__ == "__main__":

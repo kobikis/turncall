@@ -64,13 +64,9 @@ async def _handoff(target_config: AgentConfig):
             "turncall.storage.repositories.agent_repo.get_agent_by_id",
             new=AsyncMock(return_value=agent),
         ),
-        patch(
-            "turncall.orchestrator.tool_bridge.register_tools"
-        ) as register,
+        patch("turncall.orchestrator.tool_bridge.register_tools") as register,
     ):
-        await _apply_handoff_context(
-            {"agent_id": str(uuid4())}, call_context, params
-        )
+        await _apply_handoff_context({"agent_id": str(uuid4())}, call_context, params)
 
     return params, register
 
@@ -125,6 +121,6 @@ async def test_mcp_servers_on_the_target_are_reported_not_silently_ignored():
     with patch("turncall.orchestrator.tool_bridge.logger") as log:
         await _handoff(config)
 
-    assert any(
-        "mcp" in str(c).lower() for c in log.warning.call_args_list
-    ), "a target agent's MCP servers going unconnected must be visible"
+    assert any("mcp" in str(c).lower() for c in log.warning.call_args_list), (
+        "a target agent's MCP servers going unconnected must be visible"
+    )

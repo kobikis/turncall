@@ -94,6 +94,6 @@ class TestTwilioStatusMapping:
 
     def test_mapping_values_are_valid_call_statuses(self) -> None:
         for twilio_status, internal_status in TWILIO_STATUS_MAP.items():
-            assert isinstance(
-                internal_status, CallStatus
-            ), f"Mapping for '{twilio_status}' is not a CallStatus"
+            assert isinstance(internal_status, CallStatus), (
+                f"Mapping for '{twilio_status}' is not a CallStatus"
+            )

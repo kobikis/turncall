@@ -237,8 +237,7 @@ class MCPSessionManager:
         """Create a stdio transport session (local subprocess)."""
         if not settings.mcp.stdio_enabled:
             msg = (
-                "stdio MCP transport is disabled. "
-                "Set MCP_STDIO_ENABLED=true to enable."
+                "stdio MCP transport is disabled. Set MCP_STDIO_ENABLED=true to enable."
             )
             raise ValueError(msg)
 

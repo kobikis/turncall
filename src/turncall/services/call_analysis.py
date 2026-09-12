@@ -355,9 +355,7 @@ async def extract_takeaway(
                 "result": data,
                 "valid": True,
                 "model": effective_llm.model,
-                "duration_ms": int(
-                    (datetime.now(UTC) - start).total_seconds() * 1000
-                ),
+                "duration_ms": int((datetime.now(UTC) - start).total_seconds() * 1000),
             }
         except (json.JSONDecodeError, jsonschema.ValidationError) as exc:
             last_error = str(exc)[:500]

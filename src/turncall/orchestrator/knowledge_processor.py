@@ -34,7 +34,9 @@ async def load_agent_kb_attachments(
         async with session_factory() as session:
             return await knowledge_repo.get_agent_kb_attachments(session, agent_id)
     except Exception:
-        logger.exception("kb_attachments_load_failed for agent {aid}", aid=str(agent_id))
+        logger.exception(
+            "kb_attachments_load_failed for agent {aid}", aid=str(agent_id)
+        )
         return []
 
 
@@ -142,7 +144,11 @@ def build_retrieval_query(
         "",
     )
     last_assistant = next(
-        (_text(m) for m in reversed(messages) if m.get("role") == "assistant" and _text(m)),
+        (
+            _text(m)
+            for m in reversed(messages)
+            if m.get("role") == "assistant" and _text(m)
+        ),
         "",
     )
     query = "\n".join(p for p in (prev_user, last_assistant, current) if p)

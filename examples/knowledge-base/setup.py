@@ -274,7 +274,11 @@ def main() -> None:
                 ),
                 "first_message": "Hi! I'm the Acme Corp support agent. How can I help you today?",
                 "llm": {"provider": "openai", "model": "gpt-4o-mini"},
-                "stt": {"provider": "deepgram", "model": "nova-3-general", "language": "en"},
+                "stt": {
+                    "provider": "deepgram",
+                    "model": "nova-3-general",
+                    "language": "en",
+                },
                 "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"},
             },
         },

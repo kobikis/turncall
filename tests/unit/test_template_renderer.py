@@ -46,9 +46,7 @@ class TestRenderAgentConfig:
         config = AgentConfig(
             system_prompt="You are helping {{name}} with account {{account_id}}",
         )
-        rendered = render_agent_config(
-            config, {"name": "Alice", "account_id": "X-99"}
-        )
+        rendered = render_agent_config(config, {"name": "Alice", "account_id": "X-99"})
         assert "Alice" in rendered.system_prompt
         assert "X-99" in rendered.system_prompt
 

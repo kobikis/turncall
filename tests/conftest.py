@@ -34,4 +34,6 @@ def mcp_tool(name: str, schema: dict | None = None):
     from mcp.types import Tool
 
     field = "inputSchema" if "inputSchema" in Tool.model_fields else "input_schema"
-    return Tool(**{"name": name, "description": "d", field: schema or {"type": "object"}})
+    return Tool(
+        **{"name": name, "description": "d", field: schema or {"type": "object"}}
+    )

@@ -69,9 +69,7 @@ async def test_concurrent_call_events_get_distinct_sequence_numbers() -> None:
             return seq
 
     try:
-        results = await asyncio.gather(
-            *[write_one(i) for i in range(CONCURRENCY)]
-        )
+        results = await asyncio.gather(*[write_one(i) for i in range(CONCURRENCY)])
     except IntegrityError:  # pragma: no cover - this is the bug we're guarding
         pytest.fail("sequence_number collision under concurrency")
     finally:

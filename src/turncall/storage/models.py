@@ -566,6 +566,7 @@ class AgentKnowledgeBaseRow(Base):
         Index("ix_agent_kb_knowledge_base_id", "knowledge_base_id"),
     )
 
+
 class TakeawayRow(Base):
     """A reusable post-call structured-output definition (Takeaway, ADR-0013).
 

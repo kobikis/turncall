@@ -238,9 +238,7 @@ def main() -> None:
 
    curl -H "Authorization: Bearer {api_key}" \\
         {base}/v1/calls/{{call_id}}
-""".format(
-            api_key=api_key[:12] + "...", base=base
-        )
+""".format(api_key=api_key[:12] + "...", base=base)
     )
 
     # 6. Show example with different scale types

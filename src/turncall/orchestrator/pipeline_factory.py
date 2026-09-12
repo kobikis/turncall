@@ -368,7 +368,9 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
         return DeepgramTTSService(
             api_key=os.environ.get("DEEPGRAM_API_KEY", ""),
             settings=DeepgramTTSService.Settings(
-                voice=voice, **speed, extra=_overflow(config.tts.extra, "voice", "speed")
+                voice=voice,
+                **speed,
+                extra=_overflow(config.tts.extra, "voice", "speed"),
             ),
             text_transforms=text_transforms,
         )
@@ -414,7 +416,9 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
         if not voice:
             # Cartesia will reject the request; say why here rather than leave
             # the provider's error as the only clue.
-            logger.warning("Cartesia TTS has no voice set; set tts.voice to a Cartesia voice id")
+            logger.warning(
+                "Cartesia TTS has no voice set; set tts.voice to a Cartesia voice id"
+            )
         tts_settings = CartesiaTTSService.Settings(
             model=model,
             voice=voice,
@@ -587,7 +591,9 @@ def _create_avatar_service(avatar: Any) -> Any:
 
         key = os.environ.get("HEYGEN_LIVE_AVATAR_API_KEY", "")
         if not key:
-            logger.warning("Avatar enabled but HEYGEN_LIVE_AVATAR_API_KEY unset; skipping")
+            logger.warning(
+                "Avatar enabled but HEYGEN_LIVE_AVATAR_API_KEY unset; skipping"
+            )
             return None
         logger.info("Avatar enabled: HeyGen {aid}", aid=avatar.avatar_id)
         return HeyGenVideoService(
@@ -744,7 +750,9 @@ def create_pipeline(
     )
 
     customer_tap = TranscriptTapProcessor(call_context=call_context)
-    assistant_tap = AssistantTranscriptTapProcessor(call_context=call_context, llm_service=llm)
+    assistant_tap = AssistantTranscriptTapProcessor(
+        call_context=call_context, llm_service=llm
+    )
     observability = ObservabilityProcessor(call_context=call_context)
 
     # Voicemail detection (for outbound calls)
@@ -939,9 +947,7 @@ def create_pipeline(
     # transports.
     from turncall.orchestrator.call_recorder import attach_recorder
 
-    recorder = attach_recorder(
-        transport, call_context, sample_rate=audio_sample_rate
-    )
+    recorder = attach_recorder(transport, call_context, sample_rate=audio_sample_rate)
 
     # Build pipeline (Pipecat 1.0: VAD is handled by the user aggregator)
     # customer_tap after STT: captures user speech before aggregator consumes it
@@ -1075,9 +1081,7 @@ def _create_s2s_pipeline(
     # driven by on_client_disconnected (hangup sends no end frame downstream).
     from turncall.orchestrator.call_recorder import attach_recorder
 
-    recorder = attach_recorder(
-        transport, call_context, sample_rate=audio_sample_rate
-    )
+    recorder = attach_recorder(transport, call_context, sample_rate=audio_sample_rate)
 
     # Audio resamplers: Twilio sends 8kHz but S2S services expect 24kHz.
     # Two separate instances: input (8k→24k before LLM) and output (24k→8k after LLM).

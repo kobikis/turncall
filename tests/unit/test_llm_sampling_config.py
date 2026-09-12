@@ -30,7 +30,10 @@ class TestCascadeSamplingSettings:
         """max_tokens only — see TestAnthropicTemperature for why the
         temperature is deliberately not passed through."""
         config = _agent_config(
-            provider="anthropic", model="claude-3-5-haiku-20241022", temperature=0.2, max_tokens=333
+            provider="anthropic",
+            model="claude-3-5-haiku-20241022",
+            temperature=0.2,
+            max_tokens=333,
         )
         svc = _create_llm_service(config, "", anthropic_api_key="sk-ant-test")
         assert svc._settings.max_tokens == 333
@@ -81,7 +84,9 @@ class TestClassifierOverride:
 @pytest.mark.unit
 class TestReasoningEffort:
     def test_openai_folds_effort_into_extra_body(self) -> None:
-        config = _agent_config(provider="openai", model="o4-mini", reasoning_effort="high")
+        config = _agent_config(
+            provider="openai", model="o4-mini", reasoning_effort="high"
+        )
         svc = _create_llm_service(config, "sk-test")
         assert svc._settings.extra == {"extra_body": {"reasoning_effort": "high"}}
 
@@ -117,7 +122,9 @@ class TestReasoningEffort:
         # The voicemail classifier passes reasoning_effort=None to suppress the
         # agent's setting, even when the agent has one.
         config = _agent_config(provider="openai", reasoning_effort="high")
-        svc = _create_llm_service(config, "sk-test", temperature=0.1, reasoning_effort=None)
+        svc = _create_llm_service(
+            config, "sk-test", temperature=0.1, reasoning_effort=None
+        )
         assert svc._settings.extra == {}
 
 
@@ -206,7 +213,10 @@ class TestAnthropicTemperature:
 
     def test_no_temperature_is_sent(self) -> None:
         config = _agent_config(
-            provider="anthropic", model="claude-sonnet-5", temperature=0.7, max_tokens=512
+            provider="anthropic",
+            model="claude-sonnet-5",
+            temperature=0.7,
+            max_tokens=512,
         )
         svc = _create_llm_service(config, "", anthropic_api_key="sk-ant-test")
 
@@ -227,7 +237,9 @@ class TestAnthropicTemperature:
     def test_llm_extra_is_the_way_back_for_models_that_accept_it(self) -> None:
         config = _agent_config(provider="anthropic", model="claude-3-5-haiku-20241022")
         config = config.model_copy(
-            update={"llm": config.llm.model_copy(update={"extra": {"temperature": 0.2}})}
+            update={
+                "llm": config.llm.model_copy(update={"extra": {"temperature": 0.2}})
+            }
         )
         svc = _create_llm_service(config, "", anthropic_api_key="sk-ant-test")
 

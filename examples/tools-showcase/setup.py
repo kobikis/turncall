@@ -125,7 +125,11 @@ def main() -> None:
                     "offer to create a ticket."
                 ),
                 "first_message": "You've been connected to billing. How can I help?",
-                "stt": {"provider": "deepgram", "model": "nova-3-general", "language": "en"},
+                "stt": {
+                    "provider": "deepgram",
+                    "model": "nova-3-general",
+                    "language": "en",
+                },
                 "llm": {"provider": "openai", "model": "gpt-4o-mini"},
                 "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"},
                 "tools": [
@@ -322,8 +326,7 @@ def main() -> None:
                                 "digits": {
                                     "type": "string",
                                     "description": (
-                                        "Digits to send (0-9, *, #). "
-                                        "Example: '1234#'"
+                                        "Digits to send (0-9, *, #). Example: '1234#'"
                                     ),
                                 },
                             },
@@ -413,7 +416,11 @@ def main() -> None:
                         "timeout_seconds": 10,
                     },
                 ],
-                "stt": {"provider": "deepgram", "model": "nova-3-general", "language": "en"},
+                "stt": {
+                    "provider": "deepgram",
+                    "model": "nova-3-general",
+                    "language": "en",
+                },
                 "llm": {"provider": "openai", "model": "gpt-4o-mini"},
                 "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"},
                 "silence_timeout_ms": 1200,

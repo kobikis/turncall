@@ -66,20 +66,23 @@ def _clear_otel_env():
 
 
 def test_tracing_disabled_flag():
-    assert telemetry.init_tracing(
-        enabled=False, service_name="t", is_production=False
-    ) is False
+    assert (
+        telemetry.init_tracing(enabled=False, service_name="t", is_production=False)
+        is False
+    )
 
 
 def test_tracing_prod_without_endpoint_self_disables():
     # No console fallback in prod — must stay off without an OTLP endpoint.
-    assert telemetry.init_tracing(
-        enabled=True, service_name="t", is_production=True
-    ) is False
+    assert (
+        telemetry.init_tracing(enabled=True, service_name="t", is_production=True)
+        is False
+    )
     assert telemetry.is_tracing_active() is False
 
 
 def test_tracing_dev_without_endpoint_uses_console():
-    assert telemetry.init_tracing(
-        enabled=True, service_name="t", is_production=False
-    ) is True
+    assert (
+        telemetry.init_tracing(enabled=True, service_name="t", is_production=False)
+        is True
+    )

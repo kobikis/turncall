@@ -138,9 +138,7 @@ class ToolSettings(BaseSettings):
     # before it eventually ends the call on context length. Same default and
     # behaviour as MCP_MAX_RESPONSE_BYTES, which capped only half the tools;
     # webhook tools are the half customers actually write.
-    max_response_bytes: int = Field(
-        default=1_048_576, alias="TOOL_MAX_RESPONSE_BYTES"
-    )
+    max_response_bytes: int = Field(default=1_048_576, alias="TOOL_MAX_RESPONSE_BYTES")
 
 
 class ServerSettings(BaseSettings):

@@ -85,12 +85,12 @@ async def call_init(request: Request) -> JSONResponse:
     turncall_number = message.get("phoneNumber", {}).get("number", "")
     call_type = message.get("call", {}).get("type", "unknown")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("  Agent REQUEST")
     print(f"  Customer: {customer_number}")
     print(f"  TurnCall Number: {turncall_number}")
     print(f"  Call Type: {call_type}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Look up customer
     customer = CUSTOMERS.get(customer_number)

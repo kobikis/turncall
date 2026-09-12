@@ -118,9 +118,7 @@ def test_the_inert_list_does_not_outlive_its_entries() -> None:
     """An entry that has since been wired up should be removed, or the list
     stops meaning anything."""
     source = _consumer_source()
-    now_consumed = [
-        key for key in NOT_CONSUMED if f".{key.split('.')[-1]}" in source
-    ]
+    now_consumed = [key for key in NOT_CONSUMED if f".{key.split('.')[-1]}" in source]
     assert not now_consumed, (
         f"these are consumed now — drop them from NOT_CONSUMED: {now_consumed}"
     )

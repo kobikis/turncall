@@ -15,7 +15,9 @@ from turncall.services.llm_text import complete_text
 @pytest.mark.unit
 class TestFallbackModelsValidation:
     def test_rejected_on_non_openrouter_provider(self) -> None:
-        with pytest.raises(ValidationError, match="fallback_models requires provider 'openrouter'"):
+        with pytest.raises(
+            ValidationError, match="fallback_models requires provider 'openrouter'"
+        ):
             LLMConfigSchema(provider="openai", fallback_models=["openai/gpt-4o"])
 
     def test_accepted_on_openrouter(self) -> None:
@@ -27,7 +29,9 @@ class TestFallbackModelsValidation:
         assert cfg.fallback_models == ["openai/gpt-4o"]
 
     def test_openrouter_without_fallbacks_is_valid(self) -> None:
-        cfg = LLMConfigSchema(provider="openrouter", model="anthropic/claude-3.5-sonnet")
+        cfg = LLMConfigSchema(
+            provider="openrouter", model="anthropic/claude-3.5-sonnet"
+        )
         assert cfg.fallback_models == []
 
     def test_empty_fallbacks_on_other_provider_ok(self) -> None:
@@ -62,14 +66,14 @@ class TestOpenRouterFactory:
         }
 
     def test_no_fallbacks_sends_no_extra_body(self) -> None:
-        config = _agent_config(provider="openrouter", model="anthropic/claude-3.5-sonnet")
+        config = _agent_config(
+            provider="openrouter", model="anthropic/claude-3.5-sonnet"
+        )
         svc = _create_llm_service(config, "", openrouter_api_key="sk-or-test")
         assert svc._settings.extra == {}
 
     def test_per_agent_key_overrides_env(self) -> None:
-        config = _agent_config(
-            provider="openrouter", model="x", api_key="sk-or-agent"
-        )
+        config = _agent_config(provider="openrouter", model="x", api_key="sk-or-agent")
         svc = _create_llm_service(config, "", openrouter_api_key="sk-or-env")
         assert svc._client.api_key == "sk-or-agent"
 
@@ -95,7 +99,9 @@ class TestOpenRouterTextPath:
                 "choices": [{"message": {"content": "ok"}}],
                 "usage": {"total_tokens": 7},
             },
-            request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
+            request=httpx.Request(
+                "POST", "https://openrouter.ai/api/v1/chat/completions"
+            ),
         )
         with patch("turncall.services.llm_text.get_http_client") as mock_get:
             mock_client = AsyncMock()

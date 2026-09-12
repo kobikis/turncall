@@ -16,7 +16,9 @@ async def test_batches_over_the_limit():
     async def fake_create(*, input, model):
         calls.append(len(input))
         # one vector per input item, in order
-        return MagicMock(data=[MagicMock(embedding=[float(i)]) for i in range(len(input))])
+        return MagicMock(
+            data=[MagicMock(embedding=[float(i)]) for i in range(len(input))]
+        )
 
     client = MagicMock()
     client.embeddings.create = AsyncMock(side_effect=fake_create)
@@ -34,7 +36,9 @@ async def test_batches_over_the_limit():
 async def test_small_input_single_batch():
     client = MagicMock()
     client.embeddings.create = AsyncMock(
-        return_value=MagicMock(data=[MagicMock(embedding=[1.0]), MagicMock(embedding=[2.0])])
+        return_value=MagicMock(
+            data=[MagicMock(embedding=[1.0]), MagicMock(embedding=[2.0])]
+        )
     )
     with patch.object(document_ingestion, "_openai_client", return_value=client):
         out = await document_ingestion.generate_embeddings(["a", "b"], api_key="k")

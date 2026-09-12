@@ -12,7 +12,9 @@ from turncall.adapters.storage.s3 import S3StorageAdapter
 def _client_raising(code: str):
     err = ClientError({"Error": {"Code": code}}, "HeadObject")
     cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=MagicMock(head_object=AsyncMock(side_effect=err)))
+    cm.__aenter__ = AsyncMock(
+        return_value=MagicMock(head_object=AsyncMock(side_effect=err))
+    )
     cm.__aexit__ = AsyncMock(return_value=False)
     return cm
 

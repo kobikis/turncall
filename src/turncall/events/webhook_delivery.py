@@ -157,7 +157,5 @@ async def deliver_to_subscribers(
             logger.opt(exception=r).error(
                 "webhook_delivery_unexpected for {url}", url=url
             )
-            out.append(
-                DeliveryResult(success=False, attempts=0, error=str(r))
-            )
+            out.append(DeliveryResult(success=False, attempts=0, error=str(r)))
     return out

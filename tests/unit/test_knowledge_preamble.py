@@ -41,7 +41,9 @@ async def test_tool_mode_adds_awareness_hint():
 
 
 async def test_prompt_mode_injects_full_text(monkeypatch):
-    monkeypatch.setattr(retrieval, "get_full_text_context", AsyncMock(return_value="MENU TEXT"))
+    monkeypatch.setattr(
+        retrieval, "get_full_text_context", AsyncMock(return_value="MENU TEXT")
+    )
     out = await build_knowledge_preamble(
         _factory, [{"knowledge_base_id": str(uuid4()), "mode": "prompt"}]
     )
@@ -51,7 +53,9 @@ async def test_prompt_mode_injects_full_text(monkeypatch):
 
 
 async def test_prompt_and_auto_combined(monkeypatch):
-    monkeypatch.setattr(retrieval, "get_full_text_context", AsyncMock(return_value="MENU"))
+    monkeypatch.setattr(
+        retrieval, "get_full_text_context", AsyncMock(return_value="MENU")
+    )
     out = await build_knowledge_preamble(
         _factory,
         [

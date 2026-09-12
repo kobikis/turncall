@@ -215,18 +215,14 @@ class CallSession:
         async with self._call_context.session_factory() as session:
             from turncall.storage.repositories import call_repo
 
-            call = await call_repo.get_call_by_id(
-                session, self._call_context.call_id
-            )
+            call = await call_repo.get_call_by_id(session, self._call_context.call_id)
             if not call or call.status in ("completed", "failed"):
                 return
 
             ended_at = datetime.now(UTC)
             duration_ms = None
             if call.started_at is not None:
-                duration_ms = int(
-                    (ended_at - call.started_at).total_seconds() * 1000
-                )
+                duration_ms = int((ended_at - call.started_at).total_seconds() * 1000)
             await call_repo.update_call_status(
                 session,
                 self._call_context.call_id,
@@ -239,9 +235,7 @@ class CallSession:
             if call.active_agent_id:
                 from turncall.storage.repositories import agent_repo
 
-                agent = await agent_repo.get_agent_by_id(
-                    session, call.active_agent_id
-                )
+                agent = await agent_repo.get_agent_by_id(session, call.active_agent_id)
                 if agent is not None:
                     from turncall.services.call_analysis_trigger import (
                         trigger_post_call_analysis,
@@ -270,9 +264,7 @@ class CallSession:
                 # the Twilio status callback (which may not be configured, can fail
                 # signature, and doesn't exist for WebRTC/WhatsApp).
                 started_at = (
-                    datetime.now(UTC)
-                    if status == CallStatus.IN_PROGRESS
-                    else None
+                    datetime.now(UTC) if status == CallStatus.IN_PROGRESS else None
                 )
                 await call_repo.update_call_status(
                     session,

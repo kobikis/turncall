@@ -140,7 +140,9 @@ async def _process_chat_message(
     # any session/message side effects. (Internal callers like post-call analysis
     # use complete_text directly and are allowed.) See ADR-0003.
     if agent_config.llm.provider == "openrouter":
-        raise ValueError("openrouter provider is voice-only (not supported for SMS/chat)")
+        raise ValueError(
+            "openrouter provider is voice-only (not supported for SMS/chat)"
+        )
 
     # 1. Resolve or create session
     session_row, is_new = await _resolve_or_create_session(

@@ -16,8 +16,8 @@ class TestBuildRetrievalQuery:
             {"role": "user", "content": "and what time?"},
         ]
         q = build_retrieval_query(messages, "and what time?")
-        assert "flight date" in q          # previous user turn
-        assert "13 July 2026" in q         # entities from the agent's reply
+        assert "flight date" in q  # previous user turn
+        assert "13 July 2026" in q  # entities from the agent's reply
         assert q.strip().endswith("and what time?")  # recency last
 
     def test_single_turn_is_just_the_utterance(self) -> None:

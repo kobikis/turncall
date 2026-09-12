@@ -70,7 +70,13 @@ async def test_registers_static_plus_mcp_tools():
     pipeline.processors_with_metrics.return_value = [object(), llm]
 
     cfg = AgentConfig(
-        tools=[{"name": "end_call", "description": "e", "parameters_schema": {"type": "object"}}]
+        tools=[
+            {
+                "name": "end_call",
+                "description": "e",
+                "parameters_schema": {"type": "object"},
+            }
+        ]
     )
 
     with (

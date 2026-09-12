@@ -138,8 +138,8 @@ def main() -> None:
                     "voice": "f9836c6e-a0bd-460e-9d3c-f7299fa60f94",
                     "extra": {
                         "emotion": ["positivity:high", "relaxation:highest"],
-                        "language": "en"
-                },
+                        "language": "en",
+                    },
                 },
             },
         },
@@ -176,8 +176,7 @@ def main() -> None:
                     "is unclear. Confirm before transferring."
                 ),
                 "first_message": (
-                    "Thank you for calling the dental clinic! "
-                    "How can I help you today?"
+                    "Thank you for calling the dental clinic! How can I help you today?"
                 ),
                 "tools": [
                     {

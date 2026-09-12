@@ -65,8 +65,12 @@ def api(method: str, path: str, data: dict | None = None, token: str = "") -> di
 def main() -> None:
     parser = argparse.ArgumentParser(description="Set up the video avatar example")
     parser.add_argument("--provider", choices=["heygen", "tavus"], default="heygen")
-    parser.add_argument("--avatar-id", default=DEFAULT_AVATAR_ID, help="HeyGen LiveAvatar ID")
-    parser.add_argument("--replica-id", help="Tavus replica ID (required for --provider tavus)")
+    parser.add_argument(
+        "--avatar-id", default=DEFAULT_AVATAR_ID, help="HeyGen LiveAvatar ID"
+    )
+    parser.add_argument(
+        "--replica-id", help="Tavus replica ID (required for --provider tavus)"
+    )
     # --sandbox / --no-sandbox (HeyGen). Some avatars are production-only and 400
     # in sandbox mode ("not supported in sandbox mode"); production may charge credits.
     parser.add_argument(
@@ -95,7 +99,9 @@ def main() -> None:
     print(f"\n  {detail}")
 
     print("\n1. Creating project...")
-    project_id = api("POST", "/v1/projects", {"name": "video-avatar-demo"})["data"]["id"]
+    project_id = api("POST", "/v1/projects", {"name": "video-avatar-demo"})["data"][
+        "id"
+    ]
     print(f"   Project: {project_id}")
 
     print("\n2. Creating API key...")

@@ -55,9 +55,13 @@ async def test_legacy_key_authenticates_and_upgrades_in_place():
     with (
         # HMAC lookup misses, legacy lookup hits
         patch.object(
-            dep.api_key_repo, "get_api_key_by_hash", new=AsyncMock(side_effect=[None, row])
+            dep.api_key_repo,
+            "get_api_key_by_hash",
+            new=AsyncMock(side_effect=[None, row]),
         ),
-        patch.object(dep.project_repo, "get_project_by_id", new=AsyncMock(return_value=object())),
+        patch.object(
+            dep.project_repo, "get_project_by_id", new=AsyncMock(return_value=object())
+        ),
     ):
         ctx = await dep.resolve_auth_context(session, authorization=f"Bearer {raw}")
     assert ctx.project_id == row.project_id
@@ -73,8 +77,12 @@ async def test_peppered_key_authenticates_without_upgrade():
     row.key_hash = api_keys.hash_api_key(raw)
     session = AsyncMock()
     with (
-        patch.object(dep.api_key_repo, "get_api_key_by_hash", new=AsyncMock(return_value=row)),
-        patch.object(dep.project_repo, "get_project_by_id", new=AsyncMock(return_value=object())),
+        patch.object(
+            dep.api_key_repo, "get_api_key_by_hash", new=AsyncMock(return_value=row)
+        ),
+        patch.object(
+            dep.project_repo, "get_project_by_id", new=AsyncMock(return_value=object())
+        ),
     ):
         await dep.resolve_auth_context(session, authorization=f"Bearer {raw}")
     session.flush.assert_not_called()  # already peppered — no upgrade

@@ -64,7 +64,7 @@ def _setup_project(
             "name": "events-demo-agent",
             "config": {
                 "system_prompt": (
-                    "You are a helpful support agent. " "Be professional and concise."
+                    "You are a helpful support agent. Be professional and concise."
                 ),
                 "first_message": "Hello! How can I help you today?",
                 "llm": {"provider": "openai", "model": "gpt-4o-mini"},

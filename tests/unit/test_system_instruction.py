@@ -68,7 +68,9 @@ class TestItReachesTheService:
             system_prompt="hi",
             llm=LLMConfig(provider="anthropic", model="claude-3-5-haiku-20241022"),
         )
-        svc = _create_llm_service(cfg, "", anthropic_api_key="sk-ant", system_instruction="Ada")
+        svc = _create_llm_service(
+            cfg, "", anthropic_api_key="sk-ant", system_instruction="Ada"
+        )
         assert svc._settings.system_instruction == "Ada"
 
     def test_empty_leaves_the_provider_default(self) -> None:

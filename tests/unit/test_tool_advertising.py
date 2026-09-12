@@ -30,9 +30,7 @@ def test_s2s_advertises_mcp_tools():
     session for the whole call — and never told the model the tools existed."""
     config = AgentConfig(pipeline_mode="s2s")
 
-    with patch(
-        "turncall.orchestrator.pipeline_factory._create_s2s_pipeline"
-    ) as s2s:
+    with patch("turncall.orchestrator.pipeline_factory._create_s2s_pipeline") as s2s:
         create_pipeline(
             config=config,
             transport=MagicMock(),

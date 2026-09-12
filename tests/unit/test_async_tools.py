@@ -30,8 +30,11 @@ def _tool(name: str = "check_stock", **over) -> ToolDefinition:
 
 def _ctx():
     return SimpleNamespace(
-        call_id=uuid4(), project_id=uuid4(), agent_id=uuid4(),
-        session_factory=MagicMock(), mcp_manager=None,
+        call_id=uuid4(),
+        project_id=uuid4(),
+        agent_id=uuid4(),
+        session_factory=MagicMock(),
+        mcp_manager=None,
     )
 
 
