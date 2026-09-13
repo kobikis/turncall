@@ -165,6 +165,7 @@ async def webrtc_connect(
         template_variables,
         request_metadata,
         knowledge_context,
+        dynamic_config,
     ) = await _resolve_agent(session, auth, agent_id_str, server_url, server_url_secret)
 
     # Apply template variables and knowledge context
@@ -189,6 +190,12 @@ async def webrtc_connect(
         **({"template_variables": template_variables} if template_variables else {}),
         **({"metadata": request_metadata} if request_metadata else {}),
         **({"knowledge_context": knowledge_context} if knowledge_context else {}),
+        # An inline agent leaves no agent row, so this is the only record of
+        # what the call ran with. Everything after the hangup reads it back:
+        # post-call analysis, and — since that trigger is what dispatches
+        # call.ended — the webhook and every Automation hanging off it.
+        # Stored raw, before rendering, to match the other transports.
+        **({"dynamic_config": dynamic_config} if dynamic_config else {}),
     }
 
     async with session_factory() as db_session:
@@ -293,10 +300,12 @@ async def _resolve_agent(
     agent_id_str: str | None,
     server_url: str | None,
     server_url_secret: str | None,
-) -> tuple[AgentConfig, UUID | None, dict, dict, str | None]:
+) -> tuple[AgentConfig, UUID | None, dict, dict, str | None, dict | None]:
     """Resolve agent config from agent_id or server_url.
 
-    Returns (config, agent_id, template_variables, metadata, knowledge_context).
+    Returns (config, agent_id, template_variables, metadata, knowledge_context,
+    dynamic_config). The last is the inline agent as call-init sent it, or None
+    for a stored agent — the caller persists it on the call row.
     """
     agent = None
     dynamic_config = None
@@ -353,4 +362,5 @@ async def _resolve_agent(
         template_variables,
         request_metadata,
         knowledge_context,
+        dynamic_config,
     )
