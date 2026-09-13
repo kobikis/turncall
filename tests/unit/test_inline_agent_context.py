@@ -85,3 +85,41 @@ def test_no_transport_reinvents_the_sentinel(label: str, path: Path) -> None:
             f"{label} ({path.name}): uses its own UUID(int=0) instead of the "
             "shared DYNAMIC_AGENT_ID"
         )
+
+
+def _function(path: Path, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    for node in ast.walk(ast.parse(path.read_text())):
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == name
+        ):
+            return node
+    raise AssertionError(f"{path.name}: no function named {name}")
+
+
+@pytest.mark.unit
+def test_the_inbound_webhook_never_dereferences_a_possibly_absent_agent() -> None:
+    """`agent` is None whenever call-init returned an inline config, and the
+    handler runs on past that. A bare `agent.id` in a *log line* is what crashed
+    every inbound call with integrations attached — the resolved
+    `agent_id_for_call` is the safe form, and `agent.name if agent else ...` the
+    safe idiom where the object itself is wanted.
+    """
+    fn = _function(_SRC / "webhooks" / "twilio_handlers.py", "inbound_voice_webhook")
+    bare = [
+        f"agent.{node.attr}"
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "agent"
+        # `agent.x if agent else y` guards itself.
+        and not any(
+            isinstance(p, ast.IfExp)
+            for p in ast.walk(fn)
+            if isinstance(p, ast.IfExp) and node in ast.walk(p)
+        )
+    ]
+    assert bare == [], (
+        f"inbound_voice_webhook dereferences {bare} unguarded — a call running an "
+        "inline agent has no agent row and this crashes the webhook"
+    )

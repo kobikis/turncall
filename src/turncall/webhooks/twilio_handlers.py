@@ -345,7 +345,9 @@ async def inbound_voice_webhook(
     logger.info(
         "twilio_inbound_connected",
         call_id=str(call.id),
-        agent_id=str(agent.id),
+        # Not agent.id: a call whose agent came from call-init as an inline
+        # config has no agent row, and this line used to crash the webhook.
+        agent_id=str(agent_id_for_call) if agent_id_for_call else "dynamic",
         call_sid=call_sid,
     )
 
@@ -520,20 +522,23 @@ async def status_callback(
         )
 
     # Trigger post-call processing when call completes
-    if new_status == CallStatus.COMPLETED and call.active_agent_id:
+    if new_status == CallStatus.COMPLETED:
         try:
-            agent = await agent_repo.get_agent_by_id(session, call.active_agent_id)
-            if agent:
-                from turncall.services.call_analysis_trigger import (
-                    trigger_post_call_analysis,
-                )
-                from turncall.storage.database import get_session_factory
+            from turncall.services.call_analysis_trigger import (
+                config_for_call,
+                trigger_post_call_analysis,
+            )
+            from turncall.storage.database import get_session_factory
 
+            # Not gated on active_agent_id: a call running an inline agent has
+            # none, and this is what dispatches call.ended.
+            config = await config_for_call(session, call)
+            if config is not None:
                 trigger_post_call_analysis(
                     get_session_factory(),
                     call.id,
                     call.project_id,
-                    agent.config_blob,
+                    config,
                 )
         except Exception:
             logger.exception("analysis_trigger_error", call_id=str(call.id))

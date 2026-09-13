@@ -275,21 +275,21 @@ class CallSession:
             )
             await session.commit()
 
-            if call.active_agent_id:
-                from turncall.storage.repositories import agent_repo
+            from turncall.services.call_analysis_trigger import (
+                config_for_call,
+                trigger_post_call_analysis,
+            )
 
-                agent = await agent_repo.get_agent_by_id(session, call.active_agent_id)
-                if agent is not None:
-                    from turncall.services.call_analysis_trigger import (
-                        trigger_post_call_analysis,
-                    )
-
-                    trigger_post_call_analysis(
-                        self._call_context.session_factory,
-                        call.id,
-                        call.project_id,
-                        agent.config_blob,
-                    )
+            # Not gated on active_agent_id: a call running an inline agent has
+            # none, and this is what dispatches call.ended.
+            config = await config_for_call(session, call)
+            if config is not None:
+                trigger_post_call_analysis(
+                    self._call_context.session_factory,
+                    call.id,
+                    call.project_id,
+                    config,
+                )
 
     async def stop(self) -> None:
         """Gracefully stop the pipeline."""

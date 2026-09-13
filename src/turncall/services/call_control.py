@@ -104,25 +104,24 @@ async def end_call(
 
     # Trigger post-call processing (transcript, recording, analysis, webhook)
     # The comprehensive call.ended webhook is dispatched after analysis completes.
-    if call.active_agent_id:
-        try:
-            from turncall.storage.repositories import agent_repo
+    try:
+        from turncall.services.call_analysis_trigger import (
+            config_for_call,
+            trigger_post_call_analysis,
+        )
+        from turncall.storage.database import get_session_factory
 
-            agent = await agent_repo.get_agent_by_id(session, call.active_agent_id)
-            if agent:
-                from turncall.services.call_analysis_trigger import (
-                    trigger_post_call_analysis,
-                )
-                from turncall.storage.database import get_session_factory
-
-                trigger_post_call_analysis(
-                    get_session_factory(),
-                    call_id,
-                    call.project_id,
-                    agent.config_blob,
-                )
-        except Exception:
-            logger.exception("analysis_trigger_error", call_id=str(call_id))
+        # Not gated on active_agent_id: a call running an inline agent has none.
+        config = await config_for_call(session, call)
+        if config is not None:
+            trigger_post_call_analysis(
+                get_session_factory(),
+                call_id,
+                call.project_id,
+                config,
+            )
+    except Exception:
+        logger.exception("analysis_trigger_error", call_id=str(call_id))
 
     return ControlResult(success=True, message="Call ended")
 
