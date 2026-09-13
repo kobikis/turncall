@@ -123,3 +123,54 @@ def test_the_inbound_webhook_never_dereferences_a_possibly_absent_agent() -> Non
         f"inbound_voice_webhook dereferences {bare} unguarded — a call running an "
         "inline agent has no agent row and this crashes the webhook"
     )
+
+
+# --- the config the call ran with has to survive the call ---------------------
+#
+# An inline agent leaves no agent row, so the only record of what the call ran
+# with is `metadata_json["dynamic_config"]`. Everything after the hangup reads it
+# back through `config_for_call`: post-call analysis, and — because the analysis
+# trigger is what dispatches `call.ended` — the webhook itself, and therefore
+# every end-of-call Automation hanging off it. Twilio and WhatsApp store it.
+# WebRTC resolved it, used it, and dropped it, so a browser call with an inline
+# agent finalized silently and no `call.ended` ever went out.
+
+
+def _metadata_keys(path: Path) -> set[str]:
+    """Every string key of every dict literal in a file. Blunt on purpose: the
+    three transports assemble their metadata differently (inline `**{...} if`
+    spreads, separate locals) and the invariant is only that the key is written
+    somewhere on the path that builds it."""
+    tree = ast.parse(path.read_text())
+    return {
+        key.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Dict)
+        for key in node.keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    }
+
+
+# Not VOICE_PATHS: the file that builds the CallContext is not always the one
+# that creates the call row. Twilio answers the inbound webhook in one request
+# and opens the media stream in another.
+CALL_ROW_PATHS = [
+    ("twilio", _SRC / "webhooks" / "twilio_handlers.py"),
+    ("whatsapp", _SRC / "webhooks" / "whatsapp_handlers.py"),
+    ("webrtc", _SRC / "api" / "v1" / "webrtc.py"),
+]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "label,path", CALL_ROW_PATHS, ids=[p[0] for p in CALL_ROW_PATHS]
+)
+def test_every_transport_persists_the_inline_config(label: str, path: Path) -> None:
+    src = path.read_text()
+    if "dynamic_config" not in src:
+        pytest.skip(f"{label} does not resolve an inline agent")
+    assert "dynamic_config" in _metadata_keys(path), (
+        f"{label} resolves an inline agent config but never stores it under "
+        '"dynamic_config" — the call finalizes with nothing to analyse and '
+        "dispatches no call.ended."
+    )
