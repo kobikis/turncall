@@ -1,7 +1,9 @@
 """Tests for post-call structured analysis."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -417,3 +419,59 @@ class TestAnalysisTrigger:
             task.cancel()
 
         asyncio.run(run())
+
+
+@pytest.mark.unit
+class TestConfigForCall:
+    """Which config a finished call is processed with.
+
+    Post-call processing is what dispatches `call.ended`, so a call that resolves
+    to no config gets no webhook — and every Automation hanging off that event
+    silently never fires.
+    """
+
+    async def test_an_agents_config_when_it_has_one(self) -> None:
+        from turncall.services.call_analysis_trigger import config_for_call
+
+        agent_id = uuid4()
+        call = SimpleNamespace(active_agent_id=agent_id, metadata_json={})
+        agent = SimpleNamespace(config_blob={"system_prompt": "stored"})
+
+        with patch(
+            "turncall.storage.repositories.agent_repo.get_agent_by_id",
+            AsyncMock(return_value=agent),
+        ):
+            assert await config_for_call(AsyncMock(), call) == {
+                "system_prompt": "stored"
+            }
+
+    async def test_the_inline_config_when_there_is_no_agent_row(self) -> None:
+        from turncall.services.call_analysis_trigger import config_for_call
+
+        inline = {"system_prompt": "inline"}
+        call = SimpleNamespace(
+            active_agent_id=None, metadata_json={"dynamic_config": inline}
+        )
+
+        assert await config_for_call(AsyncMock(), call) == inline
+
+    async def test_nothing_when_there_is_neither(self) -> None:
+        from turncall.services.call_analysis_trigger import config_for_call
+
+        call = SimpleNamespace(active_agent_id=None, metadata_json={})
+        assert await config_for_call(AsyncMock(), call) is None
+
+    async def test_a_deleted_agent_falls_back_to_the_inline_config(self) -> None:
+        """The agent row is gone but the call still ran with something."""
+        from turncall.services.call_analysis_trigger import config_for_call
+
+        inline = {"system_prompt": "inline"}
+        call = SimpleNamespace(
+            active_agent_id=uuid4(), metadata_json={"dynamic_config": inline}
+        )
+
+        with patch(
+            "turncall.storage.repositories.agent_repo.get_agent_by_id",
+            AsyncMock(return_value=None),
+        ):
+            assert await config_for_call(AsyncMock(), call) == inline

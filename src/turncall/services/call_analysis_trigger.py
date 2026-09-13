@@ -323,6 +323,24 @@ async def _extract_takeaways(
 _POST_CALL_TASKS: set[asyncio.Task] = set()
 
 
+async def config_for_call(session: AsyncSession, call: Any) -> dict[str, Any] | None:
+    """The agent config a call actually ran with.
+
+    Usually the agent's, by id. A call whose agent arrived from call-init as an
+    inline config has no agent row at all, and its config is the one stored on
+    the call — without this it gets no post-call processing, and therefore no
+    `call.ended` webhook, which is the event the whole post-call path hangs off.
+    """
+    if call.active_agent_id:
+        from turncall.storage.repositories import agent_repo
+
+        agent = await agent_repo.get_agent_by_id(session, call.active_agent_id)
+        if agent is not None:
+            return agent.config_blob
+    dynamic = (call.metadata_json or {}).get("dynamic_config")
+    return dynamic if isinstance(dynamic, dict) else None
+
+
 def trigger_post_call_analysis(
     session_factory: async_sessionmaker[AsyncSession],
     call_id: UUID,

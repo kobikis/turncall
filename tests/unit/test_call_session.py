@@ -110,7 +110,7 @@ class TestFinalizeCall:
             update_status.assert_not_awaited()
             trigger.assert_not_called()
 
-    async def test_no_agent_skips_analysis(self) -> None:
+    async def test_no_agent_and_no_inline_config_skips_analysis(self) -> None:
         call_id = uuid4()
         cs = _make_call_session(call_id)
         call = SimpleNamespace(
@@ -119,6 +119,7 @@ class TestFinalizeCall:
             status="in_progress",
             started_at=datetime.now(UTC),
             active_agent_id=None,
+            metadata_json={},
         )
 
         with (
@@ -139,6 +140,42 @@ class TestFinalizeCall:
 
             update_status.assert_awaited_once()
             trigger.assert_not_called()
+
+    async def test_an_inline_agent_still_gets_post_call_processing(self) -> None:
+        """A call whose agent came from call-init has no agent row. Skipping it
+        here skips the call.ended webhook too, which is the event the whole
+        post-call path — analysis, transcript, Automations — hangs off."""
+        call_id = uuid4()
+        cs = _make_call_session(call_id)
+        inline = {"system_prompt": "hi", "analysis": {"enabled": True}}
+        call = SimpleNamespace(
+            id=call_id,
+            project_id=uuid4(),
+            status="in_progress",
+            started_at=datetime.now(UTC),
+            active_agent_id=None,
+            metadata_json={"dynamic_config": inline},
+        )
+
+        with (
+            patch(
+                "turncall.storage.repositories.call_repo.get_call_by_id",
+                AsyncMock(return_value=call),
+            ),
+            patch(
+                "turncall.storage.repositories.call_repo.update_call_status",
+                AsyncMock(),
+            ),
+            patch(
+                "turncall.services.call_analysis_trigger.trigger_post_call_analysis",
+                MagicMock(),
+            ) as trigger,
+        ):
+            await cs._finalize_call()
+
+            trigger.assert_called_once()
+            # It runs with the config the call actually ran with.
+            assert trigger.call_args.args[3] == inline
 
     async def test_missing_call_is_noop(self) -> None:
         cs = _make_call_session(uuid4())
