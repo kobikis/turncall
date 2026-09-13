@@ -11,6 +11,23 @@ and is not part of this repository's history.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A WebRTC call running an inline agent now produces a `call.ended`.** An
+  agent that arrives whole in a call-init response has no row in `agents`, so
+  everything after the hangup reads the config off the call itself. Twilio and
+  WhatsApp recorded it there; WebRTC resolved it, ran on it, and discarded it —
+  so every browser call with an inline agent finalized with the right status,
+  duration and transcript, and then went quiet: no post-call analysis, no
+  `call.ended` webhook, and nothing downstream of it. A structural test now
+  holds all three transports to the same two rules. See `adr/0017`.
+
+### Documentation
+
+- **`adr/0017` — calls without an agent row.** Why the zero-UUID sentinel
+  exists, why it is never written to `active_agent_id`, and what a null
+  `agent_id` on an event does and does not mean.
+
 ## [1.1.0]
 
 ### Added
