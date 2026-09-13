@@ -3,7 +3,16 @@ title: Changelog
 description: "Latest updates and improvements to TurnCall"
 ---
 
-<Update label="Unreleased" description="Unreleased" tags={["Feature"]}>
+<Update label="Unreleased" description="Unreleased" tags={["Fix"]}>
+
+## Fixed
+
+**A WebRTC call running an inline agent now produces a `call.ended`.** An agent
+that arrives whole in a call-init response has no stored row, so everything
+after the hangup reads the configuration off the call record. Twilio and
+WhatsApp wrote it there; WebRTC did not — so browser calls using an inline agent
+finalized correctly and then emitted no `call.ended` at all, taking post-call
+analysis with them. Nothing to change on your side.
 
 </Update>
 

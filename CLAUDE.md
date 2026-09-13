@@ -239,7 +239,7 @@ Inbound call → resolve phone number → routing_target_type == "webhook"?
   → POST call-init to server_url
   → Parse response: agent_id | inline agent | variables | metadata | knowledge_context
   → Fire call.initializing event (informational)
-  → Store metadata + knowledge_context on call record
+  → Store metadata + knowledge_context + dynamic_config on call record
   → Apply template variables → prepend knowledge_context to system_prompt
   → Fire call.started event
   → Start pipeline
@@ -254,6 +254,26 @@ Inbound call → resolve phone number → routing_target_type == "webhook"?
   "dynamic_data": {"knowledge_context": "Customer has open ticket #456..."}
 }
 ```
+
+### An inline agent has no agent row
+
+`agent` (inline config) instead of `agent_id` means there is nothing in `agents`
+to point at, so `calls.active_agent_id` stays **null** for the whole call and
+every event carries `agent_id: null`. Two rules hold it together, and every voice
+transport obeys both (`adr/0017`):
+
+- `CallContext(agent_id=... or DYNAMIC_AGENT_ID)` — the zero-UUID sentinel from
+  `orchestrator/pipeline_factory.py`, never a locally invented one, and never
+  written to `active_agent_id`.
+- the config is stored raw as `metadata_json["dynamic_config"]` by whatever
+  creates the call row. `services/call_analysis_trigger.config_for_call()` is
+  the only reader — post-call code must go through it rather than
+  `agent.config_blob`, **log lines included**.
+
+Dropping either is silent: the first ends the call before the pipeline starts,
+the second skips post-call processing, and since that trigger dispatches
+`call.ended`, it skips the webhook too. `tests/unit/test_inline_agent_context.py`
+guards both structurally.
 
 ### Key Files
 - `services/call_init_resolver.py` — Shared response parser (frozen dataclass result)
@@ -507,7 +527,7 @@ Subscribers (`POST /v1/webhooks`) receive a signed envelope per event:
   "project_id": "uuid",
   "call_id": "uuid | null",
   "session_id": "uuid | null",   // set on sms/chat events
-  "agent_id": "uuid | null",     // resolved from the call's active agent (handoff-aware)
+  "agent_id": "uuid | null",     // the call's active agent (handoff-aware); null for an inline agent
   "event_id": "uuid",            // unique; stable across retries → dedupe key
   "timestamp": "ISO-8601",
   "payload": { /* event-specific */ }

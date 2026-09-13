@@ -131,7 +131,8 @@ The agent attributed to a webhook event, carried in the [[event envelope]] (a
 sibling of `call_id`, not a payload key). For call events it is resolved centrally
 in `dispatch_event` from the call's current `active_agent_id` (so a [[handoff]] is
 reflected); sms/chat events pass it explicitly. Always present, `null` when no
-agent is resolved yet. See ADR-0007.
+agent is resolved yet — and `null` for the whole call when it runs an
+[[inline agent]], which is not a gap to be filled. See ADR-0007.
 
 **ended_reason** (vs **status**):
 The granular *why* a call ended (`customer_ended_call`, `assistant_ended_call`,
@@ -140,6 +141,26 @@ which is the coarse *outcome* (`completed`/`failed`/`no_answer`/`busy`). Derived
 — not stored — at [[`call.ended`]] build time from `status` plus the call's
 recorded event types (first match in a fixed precedence wins). See ADR-0008.
 _Avoid_: kebab-case values; treating it as a stored column.
+
+## Agent resolution
+
+**Inline agent** (vs **stored agent**):
+An agent a call runs that exists only for that call — its whole configuration
+arrives in the [[call-init]] response instead of an id, so there is no row in
+`agents` and nothing that survives the call. The point of it is credentials that
+*must not* be stored: a header minted for one call and expiring within the hour.
+A [[stored agent]] is the ordinary case, addressed by id and reusable.
+_Avoid_: "dynamic agent" (that is the sentinel's name, not the concept),
+"anonymous agent", "temporary agent"
+
+**No agent row**:
+What an [[inline agent]] means everywhere downstream: `active_agent_id` is null,
+[[agent_id (on events)]] is null, per-agent listings do not contain the call, and
+knowledge-base attachments resolve to none. Not an error state and not
+incomplete data — the honest answer to "which stored agent was this", which is
+"none of them". The configuration the call actually ran with is recorded on the
+call itself, so post-call work has something to read. See ADR-0017.
+_Avoid_: treating it as an unresolved agent, or filling the null with a sentinel
 
 ## Call transfer
 

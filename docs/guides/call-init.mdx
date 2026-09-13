@@ -131,7 +131,7 @@ Reject unverified requests — call-init decides which agent answers a real call
 | Field | Purpose |
 |-------|---------|
 | `agent_id` | Load existing agent by UUID |
-| `agent` | Inline agent config (alternative to `agent_id`) |
+| `agent` | Inline agent config (alternative to `agent_id`) — see below |
 | `variables` | Template variables rendered into `{{placeholders}}` in prompts |
 | `metadata` | Stored on call record for analytics |
 | `dynamic_data.knowledge_context` | Prepended to system prompt as runtime context |
@@ -146,6 +146,30 @@ Reject unverified requests — call-init decides which agent answers a real call
   <Step title="call.started event fires" />
   <Step title="Pipeline starts with the resolved configuration" />
 </Steps>
+
+## Returning an inline agent
+
+`agent` and `agent_id` are alternatives, not a merge: an inline `agent`
+**replaces** the configuration for that call rather than overriding parts of a
+stored one. Send the whole config, not a patch.
+
+Because an inline agent is not a stored agent, it has no row to point at, and
+that is visible to you:
+
+<Warning>
+  Every event for such a call carries `agent_id: null`, and the call does not
+  appear in per-agent listings. This is the correct answer to "which stored
+  agent ran this call" — `null` means *none of them*, not *not resolved yet*.
+</Warning>
+
+Everything else still works. The configuration the call ran with is recorded on
+the call itself, so post-call analysis, the transcript and the `call.ended`
+webhook are unaffected. Correlate such calls through `call_id`, or through
+`metadata` you returned in the call-init response — that is what it is for.
+
+Knowledge bases attached to a *stored* agent do not apply, since there is no
+agent to have attached them to. Use `dynamic_data.knowledge_context` for
+per-call context, which is the mechanism an inline agent should be using anyway.
 
 <Tip>
   For persistent, searchable knowledge, use the [Knowledge Base API](/guides/knowledge-base) instead of `knowledge_context`. Use `knowledge_context` for per-call dynamic data like CRM records or open tickets.
