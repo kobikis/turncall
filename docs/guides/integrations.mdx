@@ -22,14 +22,41 @@ what mints their credentials and puts a Console on top.
 
 ## How it fits together
 
+```mermaid
+flowchart LR
+    Admin["👤 Workspace admin"] -->|"authorizes once"| Consent["🔐 Provider consent screen"]
+    Consent --> PD[("Pipedream<br/>holds the tokens")]
+
+    subgraph Builder["Builder — holds one encrypted client credential"]
+        direction TB
+        Cfg["⚙️ Agent · Configuration tab<br/>attach an app, choose when it runs"]
+    end
+
+    PD -.->|"which accounts exist, never the tokens"| Cfg
+
+    Cfg --> During["🗣️ During a call<br/>the app's tools, offered to the model"]
+    Cfg --> After["📤 When a call ends<br/>one action, decided up front"]
+
+    During --> Maybe["The model calls it —<br/>or decides not to"]
+    After --> Always["call.ended arrives<br/>delivered at least once<br/>runs at most once"]
+
+    Maybe --> Apps["💬 Slack<br/>📅 Google Calendar"]
+    Always --> Apps
+
+    classDef client fill:#dbeafe,stroke:#60a5fa,stroke-width:1.5px,color:#1e3a8a
+    classDef vendor fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#334155
+    classDef core fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#14532d
+    classDef store fill:#fef3c7,stroke:#fbbf24,stroke-width:1.5px,color:#78350f
+    class Admin client
+    class Consent,Apps vendor
+    class Cfg,During,After core
+    class PD store
+    style Builder fill:#f8fafc,stroke:#cbd5e1,color:#0f172a
 ```
-Workspace admin authorizes Slack once  ──►  held by Pipedream, never by TurnCall
-                                              │
-Agent attaches it, and chooses when ──────────┤
-                                              │
-        during a call ──► mcp_servers entry, credentials minted per call
-    when a call ends ──► one action, run by the agent's own backend
-```
+
+The two paths out of that diagram are the whole design: one is a *capability* the
+model may or may not use, the other is a *guarantee* that fires because an event
+arrived. Choosing between them is the question this feature asks you.
 
 TurnCall never holds the third party's tokens. The builder stores one encrypted
 Pipedream client credential; everything a call needs is minted for that call and
@@ -139,6 +166,30 @@ Attaching an app mid-call adds an `mcp_servers` entry to the agent's config for
 that call, with an `Authorization` header minted at call time. It reaches the
 call through [call-init](/guides/call-init) as an **inline agent** — the only
 path that can carry a credential without storing one.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Caller
+    participant T as TurnCall
+    participant B as Builder
+    participant P as Pipedream
+
+    C->>T: Calls the number
+    T->>B: POST call-init
+    B->>P: Mint an access token
+    P-->>B: Token · expires in 1h
+    B-->>T: Inline agent config<br/>mcp_servers + Authorization header
+    T->>P: tools/list over MCP
+    P-->>T: The app's pinned tools
+    Note over T,P: The agent is live. Tools resolve<br/>as this workspace, for this call only.
+    C->>T: Hangs up
+    T->>B: call.ended
+    B->>P: Run the end-of-call action
+```
+
+Nothing in that exchange is stored. The token outlives the call by less than an
+hour, and the agent's own config never contains one.
 
 That has a visible consequence, which the call-init guide covers in full: such a
 call has no stored agent, so every event for it carries `agent_id: null`.
