@@ -543,3 +543,19 @@ Key files: `events/webhook_delivery.py` (envelope + signing + retry),
 - Errors: `{"success": false, "error": "...", "code": "..."}`
 - Project-scoped: all queries filtered by API key's project
 - TwiML: single `callId` param + `statusCallback`
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues in `kobikis/turncall`, via the `gh` CLI.
+
+### Triage labels
+
+The five canonical roles under their default names: `needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, `wontfix`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` and `adr/` at the repo root — not `docs/adr/`, which
+is where the sibling builder repo puts its ADRs.
