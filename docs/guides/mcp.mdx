@@ -6,6 +6,13 @@ icon: "plug"
 
 TurnCall supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io) for connecting agents to external tool servers. Tools are auto-discovered at call start via `tools/list` and registered alongside webhook and built-in tools.
 
+<Tip>
+  For Slack and Google Calendar specifically, the [Agent Builder](/guides/agent-builder)
+  can handle the authorization for you and run an action after a call ends — see
+  [Connected apps](/guides/integrations). Everything below is the manual path,
+  and stays the escape hatch for anything else.
+</Tip>
+
 ## Configuration
 
 Add `mcp_servers` to your agent config:

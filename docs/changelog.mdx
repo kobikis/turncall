@@ -3,16 +3,64 @@ title: Changelog
 description: "Latest updates and improvements to TurnCall"
 ---
 
-<Update label="Unreleased" description="Unreleased" tags={["Fix"]}>
+<Update label="Unreleased" description="Unreleased" tags={["Feature", "Update", "Fix"]}>
+
+## Added
+
+**Tool calling on SMS, chat and WhatsApp text.** Text conversations could not
+call tools at all — an agent that books meetings on a phone call would claim it
+had booked one over SMS. Works on every provider family: OpenAI-compatible,
+Anthropic and Bedrock Converse each have their own dialect. Calls within a round
+run concurrently, and the loop re-asks with tools withheld after five rounds so a
+reply always goes out. Built-ins stay voice-only.
+
+**Text tool calls are recorded.** `GET /v1/chat/sessions/{id}/tool-invocations`.
+`output_json` and `latency_ms` are populated on both voice and text, and a tool
+returning `{"error": ...}` is recorded as failed rather than succeeded.
+
+**`execution_mode: "async"`** lets a slow tool outlive an interruption instead of
+being cancelled by it. Voice only.
+
+**`max_call_duration_seconds`** now caps a call, with its own `ended_reason` of
+`max_duration_reached`. **`interruption_enabled: false`** turns off barge-in on
+cascade. **`silence_timeout_ms`** sets the VAD stop window. All three were
+documented and did nothing.
+
+**New limits you can set:** `MCP_MAX_TOOLS_TOTAL`, `MCP_CONNECT_TIMEOUT_SECONDS`
+and `TOOL_MAX_RESPONSE_BYTES`.
+
+## Changed
+
+**Pipecat 1.10**, the `openai` 3 SDK, and support for both `mcp` SDK lines
+(`>=1.27,<3`).
+
+**Claude is sent no `temperature`**, on the direct Anthropic path and through
+Bedrock — current models reject it with a 400 that ends the call. Set one
+deliberately on an older model with `llm.extra`.
+
+**MCP tool-name precedence follows your configured server order** rather than
+whichever server answered the handshake first.
 
 ## Fixed
 
-**A WebRTC call running an inline agent now produces a `call.ended`.** An agent
-that arrives whole in a call-init response has no stored row, so everything
-after the hangup reads the configuration off the call record. Twilio and
-WhatsApp wrote it there; WebRTC did not — so browser calls using an inline agent
-finalized correctly and then emitted no `call.ended` at all, taking post-call
-analysis with them. Nothing to change on your side.
+**MCP servers now connect on WebRTC and WhatsApp voice**, and S2S advertises the
+tools it was already holding sessions for. A tool name claimed by two servers no
+longer makes the request invalid, and the tool that runs is the one the model was
+shown. `handoff_to_agent` now swaps tools with the prompt.
+
+**An inline agent from call-init** crashed Twilio calls, and on every transport
+skipped post-call processing — which is what dispatches `call.ended`, so such a
+call completed and told nobody.
+
+**Tool results are capped** before they enter the context, for webhook tools as
+well as MCP.
+
+## Security
+
+**The BYOM/MCP URL allowlist could be talked past.** `*` in an `fnmatch` pattern
+spans `/`, so `https://*.trusted.com/*` also accepted
+`https://evil.com/x.trusted.com/y`. A pattern naming a host must now match the
+URL's host on its own. MCP urls go through the gate too — they had none.
 
 </Update>
 
