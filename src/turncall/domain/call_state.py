@@ -6,6 +6,7 @@ from turncall.domain.enums import CallStatus, EndedReason
 _VOICEMAIL_EVENT = "voicemail.detected"
 _TRANSFER_EVENT = "call.transferred"
 _MAX_DURATION_EVENT = "call.max_duration_reached"
+_CUSTOMER_SILENT_EVENT = "call.customer_silent"
 _TELEPHONY_FAIL_EVENT = "call.failed"
 
 # Defines which states can transition to which other states
@@ -132,6 +133,12 @@ def infer_ended_reason(
     # `customer_ended_call`, which is the one thing it certainly was not.
     if _MAX_DURATION_EVENT in event_types:
         return EndedReason.MAX_DURATION_REACHED
+    # Above assistant_ended for the same reason as the cap: ending the call is
+    # how the idle guard gives up, so this *is* an assistant-initiated hangup —
+    # and reported as one it says the agent chose to leave, not that the caller
+    # went quiet and was let go. The event exists only when the guard fired.
+    if _CUSTOMER_SILENT_EVENT in event_types:
+        return EndedReason.CUSTOMER_SILENT
     if assistant_ended:
         return EndedReason.ASSISTANT_ENDED_CALL
     if status == CallStatus.NO_ANSWER:

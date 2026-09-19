@@ -33,6 +33,8 @@ Canonical set (`domain.enums.EndedReason`):
 |---|---|
 | `voicemail` | a `voicemail.detected` event was recorded |
 | `transferred` | a `call.transferred` event was recorded |
+| `max_duration_reached` | a `call.max_duration_reached` event was recorded |
+| `customer_silent` | a `call.customer_silent` event was recorded (the idle guard gave up) |
 | `assistant_ended_call` | the `end_call` tool fired (a `call.ended` event with `source == "control"`) |
 | `customer_did_not_answer` | `status == no_answer` |
 | `customer_busy` | `status == busy` |
@@ -49,6 +51,21 @@ completes resolves to `voicemail`, not `customer_ended_call`).
 `silence_timed_out` and `max_duration_exceeded` are **omitted** — TurnCall has no
 termination path that produces them, so the enum value would
 be dead. Add them if/when those termination paths exist.
+
+**Both paths now exist, and both values were added under different names.**
+`max_duration_reached` came with the `max_call_duration_seconds` watchdog;
+`customer_silent` comes with the idle guard (`user_idle_timeout_ms`). The names
+diverge from this section's guesses deliberately: `silence_timed_out` names the
+mechanism, and this ADR's own rule is that the value says what happened to the
+call. `customer_silent` joins the `customer_*` family, where the subject is the
+customer and the verb is what they did — next to `customer_did_not_answer`,
+which is the different thing of never picking up at all.
+
+Both sit **above** `assistant_ended` in the precedence order, for the same
+reason. Each ends the call by cancelling the pipeline worker, which is
+assistant-initiated by mechanism; reported as `assistant_ended_call` they would
+claim the agent chose to leave the conversation. The marker event exists only
+when that guard actually fired, so the branch cannot misfire.
 
 ## Consequences
 

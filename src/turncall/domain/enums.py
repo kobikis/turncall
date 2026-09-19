@@ -32,6 +32,7 @@ class EndedReason(StrEnum):
     PIPELINE_ERROR = "pipeline_error"
     TELEPHONY_FAILED = "telephony_failed"
     MAX_DURATION_REACHED = "max_duration_reached"
+    CUSTOMER_SILENT = "customer_silent"
     CUSTOMER_ENDED_CALL = "customer_ended_call"
     UNKNOWN = "unknown"
 
@@ -84,6 +85,7 @@ class CallEventType(StrEnum):
     TRANSFER_ANSWERED = "transfer.answered"
     CALL_AGENT_HANDOFF = "call.agent_handoff"
     CALL_MAX_DURATION_REACHED = "call.max_duration_reached"
+    CALL_CUSTOMER_SILENT = "call.customer_silent"
 
     # Transcripts
     TRANSCRIPT_PARTIAL = "transcript.partial"

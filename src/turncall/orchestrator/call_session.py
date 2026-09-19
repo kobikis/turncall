@@ -41,6 +41,7 @@ class CallSession:
         first_message: str | None = None,
         pipeline_mode: str = "cascade",
         max_call_duration_seconds: int | None = None,
+        idle_message: str = "",
     ) -> None:
         self._call_context = call_context
         self._transport = transport
@@ -48,6 +49,8 @@ class CallSession:
         self._first_message = first_message
         self._pipeline_mode = pipeline_mode
         self._max_call_duration_seconds = max_call_duration_seconds
+        self._idle_message = idle_message
+        self._idle_strikes = 0
         self._task: PipelineWorker | None = None
         self._runner: WorkerRunner | None = None
         self._duration_guard: asyncio.Task | None = None
@@ -139,6 +142,7 @@ class CallSession:
                 await self._task.cancel()
 
         self._duration_guard = self._start_duration_guard()
+        self._arm_idle_guard()
 
         try:
             await self._update_call_status(CallStatus.IN_PROGRESS)
@@ -211,6 +215,110 @@ class CallSession:
             # on_client_disconnected guarantees we reach here promptly instead of
             # hanging in the runner.
             logger.info("call_session_ended", call_id=str(self.call_id))
+
+    def _arm_idle_guard(self) -> None:
+        """React when the caller goes quiet after the agent has spoken.
+
+        The timer itself is Pipecat's: `LLMUserAggregatorParams.user_idle_timeout`
+        (set in the pipeline factory from `user_idle_timeout_ms`) starts on
+        BotStoppedSpeaking and cancels when anyone speaks. It only tells us the
+        caller has gone quiet; what to do about it is ours.
+
+        Two strikes. The first speaks `idle_message`, the second ends the call —
+        what a phone system is expected to do, and the point of the feature: a
+        silent line otherwise bills until `max_call_duration_seconds` or the
+        carrier gives up.
+
+        The aggregator is found by walking the pipeline, the way
+        `pipeline_builder` finds the LLM service to register tools on.
+        """
+        from pipecat.processors.aggregators.llm_response_universal import (
+            LLMUserAggregator,
+        )
+
+        aggregator = next(
+            (
+                p
+                for p in self._pipeline.processors_with_metrics()
+                if isinstance(p, LLMUserAggregator)
+            ),
+            None,
+        )
+        if aggregator is None:
+            logger.warning("idle_guard_no_aggregator", call_id=str(self.call_id))
+            return
+
+        @aggregator.event_handler("on_user_turn_started")  # type: ignore[misc]
+        async def _reset_strikes(*_args: object) -> None:
+            # Without this a caller who pauses once, speaks, then pauses again
+            # is hung up on the second pause — the strikes have to count
+            # consecutive silences, not silences per call.
+            self._idle_strikes = 0
+
+        @aggregator.event_handler("on_user_turn_idle")  # type: ignore[misc]
+        async def _on_idle(*_args: object) -> None:
+            self._idle_strikes += 1
+            logger.info(
+                "user_idle",
+                call_id=str(self.call_id),
+                strike=self._idle_strikes,
+            )
+            if self._idle_strikes == 1:
+                await self._speak_idle_prompt()
+                return
+            await self._end_for_silence()
+
+    async def _speak_idle_prompt(self) -> None:
+        """Ask if the caller is still there.
+
+        Cascade speaks the configured line through TTS. S2S has no TTS stage —
+        none of the realtime services handle a TTSSpeakFrame — so the model is
+        asked to check in and says it in its own words, the same split
+        `start()` already makes for the first message.
+        """
+        if self._task is None:
+            return
+
+        if self._pipeline_mode == "s2s":
+            from pipecat.frames.frames import LLMMessagesAppendFrame
+
+            await self._task.queue_frame(
+                LLMMessagesAppendFrame(
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": (
+                                "The caller has gone quiet. Briefly check "
+                                "whether they are still there."
+                            ),
+                        }
+                    ],
+                    run_llm=True,
+                )
+            )
+            return
+
+        from pipecat.frames.frames import TTSSpeakFrame
+
+        await self._task.queue_frame(
+            TTSSpeakFrame(text=self._idle_message, append_to_context=False)
+        )
+
+    async def _end_for_silence(self) -> None:
+        """Give up on a caller who never came back.
+
+        Recorded before the hangup for the same reason as the duration cap:
+        `_finalize_call` derives ended_reason from the event log, and without
+        this event the call reads as `assistant_ended_call` — true of the
+        mechanism, wrong about what happened. See ADR-0008.
+        """
+        logger.info("call_customer_silent", call_id=str(self.call_id))
+        await self._log_event(
+            CallEventType.CALL_CUSTOMER_SILENT,
+            {"strikes": self._idle_strikes},
+        )
+        if self._task is not None:
+            await self._task.cancel()
 
     def _start_duration_guard(self) -> asyncio.Task | None:
         """Hang up when the call outlives `max_call_duration_seconds`.
