@@ -27,3 +27,8 @@ def openai_key() -> str:
 @pytest.fixture
 def anthropic_key() -> str:
     return require("ANTHROPIC_API_KEY")
+
+
+@pytest.fixture
+def google_key() -> str:
+    return require("GOOGLE_API_KEY")

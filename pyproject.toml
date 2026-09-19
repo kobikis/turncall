@@ -66,7 +66,7 @@ dependencies = [
     # pins aiobotocore==2.25.1 and has no 3.x-compatible release — declaring it
     # makes the project uninstallable. AWSBedrockLLMService works fine on
     # aiobotocore 2.25.1, which aioboto3 already provides. See adr/0016.
-    "pipecat-ai[openai,deepgram,elevenlabs,silero,webrtc,webrtc-video,local-smart-turn,google,anthropic,cartesia,heygen,tavus,aws-nova-sonic,tracing,mcp]>=1.10.0,<2.0.0",
+    "pipecat-ai[openai,deepgram,elevenlabs,silero,webrtc,webrtc-video,local-smart-turn,google,anthropic,cartesia,heygen,tavus,aws-nova-sonic,tracing,mcp]>=1.11.0,<2.0.0",
     # OTLP span exporter (pipecat[tracing] ships otel api/sdk but not an exporter).
     # See ADR-0010.
     "opentelemetry-exporter-otlp>=1.43.0",
