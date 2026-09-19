@@ -27,6 +27,7 @@ Each file names the gap it closes, from the open-items list:
 | `test_live_bedrock.py` | Claude on Bedrock — blocked on account model access |
 | `test_live_gemini_live.py` | Gemini Live S2S under google-genai 2.x |
 | `test_live_nova_sonic.py` | Nova Sonic S2S under aws-sdk-bedrock-runtime 0.9 / smithy 0.8 |
+| `test_live_deepgram_keyterms.py` | Deepgram still splits `keyterm`/`keywords` by model |
 
 They are not a substitute for a real phone call. Nothing here carries audio over
 a carrier, so transport-level faults still need a human with a handset.

@@ -6655,6 +6655,13 @@
             "title": "Language",
             "default": "en"
           },
+          "keyterms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Keyterms"
+          },
           "extra": {
             "additionalProperties": true,
             "type": "object",

@@ -11,6 +11,7 @@ class STTConfigSchema(BaseModel):
     provider: str = "deepgram"
     model: str = "nova-3-general"
     language: str | None = "en"
+    keyterms: list[str] = Field(default_factory=list)
     extra: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -19,6 +20,25 @@ class STTConfigSchema(BaseModel):
         if self.provider not in supported:
             msg = f"Unsupported STT provider: {self.provider}. Supported: {supported}"
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def normalize_keyterms(self) -> "STTConfigSchema":
+        """Drop blanks and duplicates, keeping the order given.
+
+        A blank keyterm is a repeated query parameter with no content on the
+        providers that send them as such. Deduplicating matters because
+        Cartesia caps a connection at 100 terms and spends the budget in the
+        order it receives them.
+        """
+        seen: set[str] = set()
+        cleaned: list[str] = []
+        for term in self.keyterms:
+            stripped = term.strip()
+            if stripped and stripped not in seen:
+                seen.add(stripped)
+                cleaned.append(stripped)
+        self.keyterms = cleaned
         return self
 
 
