@@ -55,6 +55,17 @@ than [[Bedrock]]'s converse endpoint, which is why it carries a separate provide
 rather than being a Bedrock model id. Its sessions expire at roughly six minutes and roll
 over transparently — ordinary phone calls exercise that path. See ADR-0016.
 
+## Speech recognition
+
+**Keyterms** (`stt.keyterms`):
+Vocabulary hints given to the recognizer so it favours words it would otherwise
+mangle — product names, SKUs, surnames. One TurnCall concept; each provider
+names it differently (`keyterm`, `keywords`, `keyterms`) and Deepgram picks
+between two of its own by model. Say "keyterms" for the platform field and name
+the provider's parameter only when discussing that provider's API. _Avoid_:
+"keywords" as the general term — on Deepgram it is a specific parameter that is
+an error on Nova-3.
+
 ## Call quality of service
 
 **Soft cut** (vs **hard disconnect**):

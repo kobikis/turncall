@@ -59,6 +59,12 @@ class STTConfig(DomainModel):
     provider: str = "deepgram"
     model: str = "nova-3-general"
     language: str | None = "en"
+    # Vocabulary hints — product names, SKUs, surnames. Every provider supports
+    # these and every provider spells them differently (`keyterm`, `keywords`,
+    # `keyterms`), and on Deepgram the wrong spelling is a 400 that kills the
+    # call rather than a knob that does nothing. One field; the mapping to each
+    # provider's dialect lives in the pipeline factory.
+    keyterms: list[str] = Field(default_factory=list)
     extra: dict[str, Any] = Field(default_factory=dict)
 
 

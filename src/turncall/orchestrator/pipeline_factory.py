@@ -58,6 +58,38 @@ def _overflow(extra: dict[str, Any], *managed: str) -> dict[str, Any]:
     return {k: v for k, v in extra.items() if k not in managed}
 
 
+# Deepgram splits vocabulary hints across two mutually exclusive parameters and
+# rejects the wrong one outright: `keyterm` is Nova-3 and Flux only ("`keyterm`
+# is only supported for Nova-3 and Flux"), `keywords` is everything else
+# ("Keywords are not supported for Nova-3"). Both are a 400 at connect, so the
+# model decides the spelling, not the caller.
+_DEEPGRAM_KEYTERM_MODELS = ("nova-3", "flux")
+
+
+def _keyterm_kwargs(provider: str, model: str, keyterms: list[str]) -> dict[str, Any]:
+    """The one `keyterms` field, in the provider's own dialect.
+
+    Four providers, four spellings. Returns the settings kwarg to merge, or
+    nothing at all when there are no keyterms to send — an empty list must not
+    become an empty parameter.
+    """
+    if not keyterms:
+        return {}
+    if provider == "deepgram":
+        if str(model).startswith(_DEEPGRAM_KEYTERM_MODELS):
+            return {"keyterm": keyterms}
+        return {"keywords": keyterms}
+    if provider == "cartesia":
+        # Honored by ink-2 and ink-preview only; Pipecat warns and drops them
+        # for other models, and truncates past 100 terms / 1200 characters.
+        return {"keyterm": keyterms}
+    if provider == "openai":
+        return {"keywords": keyterms}
+    if provider == "elevenlabs":
+        return {"keyterms": keyterms}
+    return {}
+
+
 def _create_stt_service(
     config: AgentConfig, openai_api_key: str, *, sample_rate: int = 8000
 ) -> Any:
@@ -68,8 +100,14 @@ def _create_stt_service(
     level — and Deepgram promotes a key matching a declared field onto that
     field. That promotion is how `profanity_filter` stays reachable now that
     Pipecat 1.9 no longer sends it by default.
+
+    `stt.keyterms` wins over the same key in `extra`: whichever dialect the
+    provider wants is filtered back out of the overflow, so a leftover
+    `extra: {"keyterm": [...]}` cannot quietly override the managed field or
+    reach a provider that would 400 on it.
     """
     provider = config.stt.provider
+    keyterm_kwargs = _keyterm_kwargs(provider, config.stt.model, config.stt.keyterms)
 
     if provider == "deepgram":
         from pipecat.services.deepgram.stt import DeepgramSTTService
@@ -84,6 +122,7 @@ def _create_stt_service(
                 interim_results=True,
                 punctuate=True,
                 smart_format=True,
+                **keyterm_kwargs,
                 extra=_overflow(
                     config.stt.extra,
                     "model",
@@ -91,6 +130,7 @@ def _create_stt_service(
                     "interim_results",
                     "punctuate",
                     "smart_format",
+                    *keyterm_kwargs,
                 ),
             ),
         )
@@ -109,7 +149,8 @@ def _create_stt_service(
             settings=ElevenLabsSTTService.Settings(
                 model=config.stt.model or "scribe_v1",
                 language=config.stt.language or "en",
-                extra=_overflow(config.stt.extra, "model", "language"),
+                **keyterm_kwargs,
+                extra=_overflow(config.stt.extra, "model", "language", *keyterm_kwargs),
             ),
         )
         stt._sample_rate = sample_rate
@@ -121,7 +162,9 @@ def _create_stt_service(
         return OpenAISTTService(
             api_key=openai_api_key,
             settings=OpenAISTTService.Settings(
-                model=config.stt.model, extra=_overflow(config.stt.extra, "model")
+                model=config.stt.model,
+                **keyterm_kwargs,
+                extra=_overflow(config.stt.extra, "model", *keyterm_kwargs),
             ),
         )
 
@@ -139,7 +182,8 @@ def _create_stt_service(
             settings=CartesiaSTTService.Settings(
                 model=config.stt.model or "ink-whisper",
                 language=config.stt.language or "en",
-                extra=_overflow(config.stt.extra, "model", "language"),
+                **keyterm_kwargs,
+                extra=_overflow(config.stt.extra, "model", "language", *keyterm_kwargs),
             ),
         )
         stt._sample_rate = sample_rate
