@@ -542,8 +542,19 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 `transcript` (`[{role, text, timestamp}]`).
 
 `ended_reason` (derived, not stored): `customer_ended_call`, `assistant_ended_call`,
-`customer_did_not_answer`, `customer_busy`, `voicemail`, `transferred`,
+`customer_did_not_answer`, `customer_busy`, `customer_silent`, `voicemail`, `transferred`,
 `max_duration_reached`, `pipeline_error`, `telephony_failed`, `unknown`.
+
+`customer_silent` comes from `user_idle_timeout_ms` (default `10000`, `0`
+disables): after the agent stops speaking, a caller who stays quiet that long
+hears `idle_message` ("Are you still there?"), and a second consecutive silence
+ends the call. Speaking again resets the count. Cascade speaks the line through
+TTS; S2S has no TTS stage, so the model is asked to check in and words it
+itself. Like `max_duration_reached` it records a marker event
+(`call.customer_silent`) and is inferred **above** `assistant_ended` — ending
+the call is how the guard gives up, so without its own branch it would read as
+`assistant_ended_call`. Not to be confused with `silence_timeout_ms`, the VAD
+stop window inside a turn; see CONTEXT.md, "the three timeouts".
 
 `max_duration_reached` comes from `max_call_duration_seconds`: a watchdog on the
 `CallSession` records `call.max_duration_reached` and cancels the worker, so the

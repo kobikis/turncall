@@ -254,6 +254,12 @@ class AgentConfig(DomainModel):
     guardrails: dict[str, Any] = Field(default_factory=dict)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     silence_timeout_ms: int = 800
+    # How long the caller may stay quiet after the agent stops speaking before
+    # the idle guard reacts. Distinct from silence_timeout_ms, which is the VAD
+    # stop window inside a turn. 0 disables. See CONTEXT.md, "the three
+    # timeouts".
+    user_idle_timeout_ms: int = 10000
+    idle_message: str = "Are you still there?"
     interruption_enabled: bool = True
     smart_turn_detection: bool = True  # Use ML-based turn detection (LocalSmartTurnV3)
     smart_turn_stop_secs: float = 1.0  # Max silence before forcing end-of-turn

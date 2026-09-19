@@ -474,6 +474,23 @@ class AgentConfigSchema(BaseModel):
     guardrails: GuardrailsSchema = Field(default_factory=GuardrailsSchema)
     analysis: AnalysisSchema = Field(default_factory=AnalysisSchema)
     silence_timeout_ms: int = Field(default=800, ge=200, le=5000)
+    user_idle_timeout_ms: int = Field(
+        default=10000,
+        ge=0,
+        le=300000,
+        description=(
+            "Silence after the agent stops speaking before the idle guard "
+            "reacts: first it speaks idle_message, then it ends the call. "
+            "0 disables. Not silence_timeout_ms, which is the VAD stop window "
+            "inside a turn."
+        ),
+    )
+    idle_message: str = Field(
+        default="Are you still there?",
+        max_length=500,
+        description="Spoken on the first idle timeout. Cascade speaks it "
+        "verbatim; S2S has no TTS stage, so the model is asked to check in.",
+    )
     interruption_enabled: bool = True
     smart_turn_detection: bool = Field(
         default=True, description="Use ML-based turn detection (SmartTurnV3)"

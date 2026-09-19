@@ -92,6 +92,34 @@ them — Twilio paces audio in hard realtime, so a late frame becomes a gap, the
 resumes. Caused by event-loop jitter (blocking I/O or CPU work on the loop), not
 by the resampler. The mechanism behind a recovering mid-word [[soft cut]].
 
+**The three timeouts**:
+Three unrelated durations, all of which someone will call "the silence timeout".
+Name which one is meant.
+- **Turn silence** (`silence_timeout_ms`, 800ms): the VAD stop window *inside* a
+  turn — how much quiet ends the caller's sentence. Tuning this changes how
+  eagerly the agent replies.
+- **User idle** (`user_idle_timeout_ms`, 10s): how long the caller may stay
+  quiet *after the agent has finished speaking* before the idle guard reacts —
+  first the [[idle nudge]], then [[customer_silent]]. `0` disables it.
+- **Pipeline idle** (300s, Pipecat's own): how long the whole pipeline may see
+  no activity before the runner gives up. Not configurable per agent, and
+  reached only when something is already wrong.
+_Avoid_: "silence timeout" unqualified, and "idle timeout" for the first of the
+three.
+
+**Idle nudge**:
+What the agent says on the first [[user idle|the three timeouts]] expiry —
+"Are you still there?". Cascade speaks `idle_message` verbatim through TTS; S2S
+has no TTS stage, so the model is asked to check in and phrases it itself. One
+nudge only: the second consecutive silence ends the call.
+
+**customer_silent**:
+The [[ended_reason]] for a call the idle guard gave up on — the caller stopped
+responding and never came back. Distinct from `customer_did_not_answer`, which
+is a call that was never picked up, and from `customer_ended_call`, which is a
+caller who hung up. The strikes count *consecutive* silences: a caller who
+pauses, answers, then pauses again starts over.
+
 ## Call recording
 
 **Call recording** (app-side):

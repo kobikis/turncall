@@ -894,6 +894,9 @@ def create_pipeline(
             sample_rate=audio_sample_rate,
             pipecat_settings=pipecat_settings,
         ),
+        # Pipecat counts in seconds; 0 disables, which is also our "off".
+        # CallSession registers the handler that reacts to it.
+        "user_idle_timeout": config.user_idle_timeout_ms / 1000,
     }
 
     turn_strategies = _build_turn_strategies(config, smart_turn=True)
@@ -1214,15 +1217,23 @@ def _create_s2s_pipeline(
     context = LLMContext(**context_kwargs)
 
     # Pipecat 1.0: VAD lives on the user aggregator (needed for pipecat_vad turn detection)
-    s2s_user_params = None
-    if config.s2s.turn_detection == "pipecat_vad":
-        from pipecat.processors.aggregators.llm_response_universal import (
-            LLMUserAggregatorParams,
-        )
+    from pipecat.processors.aggregators.llm_response_universal import (
+        LLMUserAggregatorParams,
+    )
 
-        s2s_user_params = LLMUserAggregatorParams(
-            vad_analyzer=_build_vad_analyzer(config, sample_rate=audio_sample_rate),
-        )
+    # Built unconditionally, where it used to be built only for pipecat_vad:
+    # the idle guard is carried by these params, and `server_vad` is the
+    # default, so leaving them None there would have quietly disabled it on
+    # most S2S agents. Passing None only meant `LLMUserAggregatorParams()`, so
+    # supplying one with no analyzer is the same thing plus the timeout.
+    s2s_user_params = LLMUserAggregatorParams(
+        user_idle_timeout=config.user_idle_timeout_ms / 1000,
+        **(
+            {"vad_analyzer": _build_vad_analyzer(config, sample_rate=audio_sample_rate)}
+            if config.s2s.turn_detection == "pipecat_vad"
+            else {}
+        ),
+    )
 
     # realtime_service_mode: trailing context writes + auto-swapped turn
     # strategies for realtime S2S services (OpenAI Realtime / Gemini Live).

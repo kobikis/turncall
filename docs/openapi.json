@@ -5401,6 +5401,21 @@
             "title": "Silence Timeout Ms",
             "default": 800
           },
+          "user_idle_timeout_ms": {
+            "type": "integer",
+            "maximum": 300000.0,
+            "minimum": 0.0,
+            "title": "User Idle Timeout Ms",
+            "description": "Silence after the agent stops speaking before the idle guard reacts: first it speaks idle_message, then it ends the call. 0 disables. Not silence_timeout_ms, which is the VAD stop window inside a turn.",
+            "default": 10000
+          },
+          "idle_message": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Idle Message",
+            "description": "Spoken on the first idle timeout. Cascade speaks it verbatim; S2S has no TTS stage, so the model is asked to check in.",
+            "default": "Are you still there?"
+          },
           "interruption_enabled": {
             "type": "boolean",
             "title": "Interruption Enabled",
