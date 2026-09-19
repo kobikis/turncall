@@ -91,21 +91,26 @@ Python 3.12+ is only needed for host development.
     previous step, then click **Start Call** and talk.
 
     Audio goes over WebRTC straight to your own machine — speech → Deepgram →
-    GPT-4o-mini → Deepgram TTS → speech, in roughly 800 ms.
+    GPT-4o-mini → Deepgram TTS → speech, in roughly 800 ms of processing.
   </Step>
 </Steps>
 
 ## Talk to it
 
 That's the whole loop, with no telephony involved: **speech → Deepgram →
-GPT-4o-mini → Deepgram TTS → speech**, in roughly 800 ms.
+GPT-4o-mini → Deepgram TTS → speech**, in roughly 800 ms of processing. The
+pause you'll hear is longer than that: the agent also waits out
+`silence_timeout_ms` (800 ms by default) before it accepts your turn is over.
+See [Latency](/architecture#latency).
 
 Things worth trying before you add a phone number:
 
 - Change `system_prompt` on the agent and reconnect — the personality is one field.
 - Swap `tts.provider` to `cartesia` or `elevenlabs` for a different voice.
 - Set `pipeline_mode: "s2s"` to route through OpenAI Realtime instead, which
-  drops latency to roughly 300 ms. See [Speech-to-Speech](/guides/s2s).
+  drops the processing leg to roughly 300 ms. See [Speech-to-Speech](/guides/s2s).
+- Lower `silence_timeout_ms` from 800 to around 300 if your callers speak
+  cleanly — it comes straight off the pause before every reply.
 - Point `llm.provider` at `ollama` to run the model locally, so nothing but
   audio transcription leaves your machine.
 

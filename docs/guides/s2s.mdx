@@ -4,7 +4,7 @@ description: "Ultra-low latency with OpenAI Realtime, Gemini Live and Amazon Nov
 icon: "bolt"
 ---
 
-Speech-to-Speech (S2S) mode skips separate STT and TTS stages — the model handles audio natively for ultra-low latency (~300ms).
+Speech-to-Speech (S2S) mode skips separate STT and TTS stages — the model handles audio natively, cutting processing to roughly 300ms. The caller-perceived pause also includes `silence_timeout_ms` (800ms by default), which applies on both pipeline modes.
 
 ## Configuration
 
