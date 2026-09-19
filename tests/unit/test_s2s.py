@@ -373,3 +373,44 @@ class TestS2SPipelineConstruction:
             except Exception:  # noqa: S110
                 pass  # Cascade may fail without real transport
             mock_s2s.assert_not_called()
+
+
+@pytest.mark.unit
+class TestGeminiSentinelSwap:
+    """`S2SConfig` defaults to OpenAI's model and voice for every provider, so
+    each non-OpenAI path has to swap the sentinels for its own. The aws and
+    openai_live paths did; the google path did not, and a `provider: google`
+    agent that named no model sent `gpt-realtime-2.1` to Gemini — which closes
+    the socket with 1008 at connect.
+    """
+
+    @staticmethod
+    def _service(**s2s_overrides):
+        from turncall.domain.models import AgentConfig, S2SConfig
+        from turncall.orchestrator.s2s_config import create_s2s_service
+
+        config = AgentConfig(
+            name="gemini",
+            system_prompt="x",
+            pipeline_mode="s2s",
+            s2s=S2SConfig(provider="google", **s2s_overrides),
+        )
+        return create_s2s_service(config, openai_api_key="", google_api_key="k")
+
+    def test_the_default_model_becomes_a_gemini_model(self) -> None:
+        assert "gemini" in str(self._service()._settings.model)
+
+    def test_the_default_voice_stops_being_openais(self) -> None:
+        """Gemini tolerates an unknown voice name and substitutes its own, so
+        this was never fatal — but the config claimed a voice nobody heard."""
+        assert self._service()._settings.voice == "Charon"
+
+    def test_an_explicit_model_is_passed_through_untouched(self) -> None:
+        """ADR-0016's rule: a wrong value the agent actually chose is reported
+        by the provider, not silently replaced."""
+        service = self._service(model="gemini-3.1-flash-live-preview")
+
+        assert service._settings.model == "gemini-3.1-flash-live-preview"
+
+    def test_an_explicit_voice_is_passed_through_untouched(self) -> None:
+        assert self._service(voice="Puck")._settings.voice == "Puck"

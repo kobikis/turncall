@@ -103,26 +103,56 @@ async def test_pipecat_builds_a_gemini_live_service(google_key: str) -> None:
     assert type(service).__name__ == "GeminiLiveLLMService"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="known gap: _create_gemini_live does not swap the sentinel model; "
-    "fix is its own change, not part of the 1.11 upgrade",
-)
-async def test_a_default_google_agent_names_a_gemini_model() -> None:
-    """`S2SConfig.model` defaults to `gpt-realtime-2.1` for every provider. The
-    aws and openai_live paths swap that sentinel for a model of their own; the
-    google path does not, so an agent that sets `provider: google` and no model
-    sends OpenAI's model name to Gemini.
+async def test_the_model_a_default_google_agent_gets_is_one_google_serves(
+    google_key: str,
+) -> None:
+    """The swap in `_create_gemini_live` picks a model name; only Google can
+    say whether that name is real and still served for bidiGenerateContent.
 
-    Marked `xfail(strict=True)`: it records the gap without reddening CI, and
-    turns into a failure the moment someone fixes it — which is the prompt to
-    delete the marker.
+    `gemini-2.0-flash-live-001` was a reasonable-looking choice that the API
+    now closes with 1008, which is exactly the failure this catches.
     """
-    from turncall.domain.models import S2SConfig
+    from google import genai
+    from google.genai import types
 
-    default_model = S2SConfig(provider="google").model
+    from turncall.domain.models import AgentConfig, S2SConfig
+    from turncall.orchestrator.s2s_config import create_s2s_service
 
-    assert "gemini" in default_model, (
-        f"a default google S2S agent still names {default_model!r}; "
-        "_create_gemini_live passes s2s.model through without a swap"
+    service = create_s2s_service(
+        AgentConfig(
+            name="gemini-default",
+            system_prompt="You are terse.",
+            pipeline_mode="s2s",
+            s2s=S2SConfig(provider="google"),
+        ),
+        openai_api_key="",
+        google_api_key=google_key,
     )
+    model = str(service._settings.model)
+    voice = str(service._settings.voice)
+
+    client = genai.Client(api_key=google_key)
+    config = types.LiveConnectConfig(
+        response_modalities=["AUDIO"],
+        speech_config=types.SpeechConfig(
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)
+            )
+        ),
+    )
+
+    async with client.aio.live.connect(model=model, config=config) as session:
+        await session.send_client_content(
+            turns=types.Content(role="user", parts=[types.Part(text="Hello")]),
+            turn_complete=True,
+        )
+
+        async def _first_audio() -> bytes:
+            async for message in session.receive():
+                if message.data:
+                    return message.data
+            return b""
+
+        audio = await asyncio.wait_for(_first_audio(), timeout=30)
+
+    assert audio, f"{model} with voice {voice} produced no audio"
