@@ -94,7 +94,7 @@ TurnCall gates `call.ended` on both the recording and the analysis being ready:
 }
 ```
 
-Envelope identifiers live at the top level; event-specific data sits under `payload`. Use `event_id` as an idempotency key — it is stable across delivery retries and shared across subscribers, so you can dedupe redeliveries. `agent_id` reflects the agent that handled the event (handoff-aware). In the payload, `ended_reason` reports *why* the call ended — one of `customer_ended_call`, `assistant_ended_call`, `customer_did_not_answer`, `customer_busy`, `voicemail`, `transferred`, `pipeline_error`, `telephony_failed`, or `unknown` — and is more granular than the coarse `status`. `metadata` echoes back the custom fields you attached at [call-init](/guides/call-init) for CRM correlation.
+Envelope identifiers live at the top level; event-specific data sits under `payload`. Use `event_id` as an idempotency key — it is stable across delivery retries and shared across subscribers, so you can dedupe redeliveries. `agent_id` reflects the agent that handled the event (handoff-aware). In the payload, `ended_reason` reports *why* the call ended — one of `customer_ended_call`, `assistant_ended_call`, `customer_did_not_answer`, `customer_busy`, `customer_silent`, `voicemail`, `transferred`, `max_duration_reached`, `pipeline_error`, `telephony_failed`, or `unknown` — and is more granular than the coarse `status`. `metadata` echoes back the custom fields you attached at [call-init](/guides/call-init) for CRM correlation.
 
 If you need the recording earlier than `call.ended`, subscribe to [`recording.ready`](/guides/server-events), which fires as soon as the file lands in storage.
 
