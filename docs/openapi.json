@@ -6656,7 +6656,7 @@
           "model": {
             "type": "string",
             "title": "Model",
-            "default": "nova-3-general"
+            "default": ""
           },
           "language": {
             "anyOf": [

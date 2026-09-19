@@ -90,6 +90,41 @@ def _keyterm_kwargs(provider: str, model: str, keyterms: list[str]) -> dict[str,
     return {}
 
 
+# The STT mirror of `_AURA_DEFAULT` / `_TTS_DEFAULTS` below: one provider's
+# model name sat in a provider-agnostic field as the default for all of them.
+# TTS has resolved this since it was written; STT never did.
+#
+# `STTConfig.model` defaulted to `nova-3-general` — Deepgram's model — for
+# every provider, and the `or "<default>"` fallbacks the branches carried
+# could never fire against a truthy value. So an agent that named no model
+# sent Deepgram's model name to whichever provider it had chosen, and all
+# three others reject it outright:
+#
+#   openai      404 The model `nova-3-general` does not exist
+#   elevenlabs  400 unsupported_model: 'nova-3-general' is not a valid model
+#   cartesia    400 invalid model
+#
+# A dead STT stage: the caller is heard by nothing. The field's default is now
+# empty, but `model_dump()` persisted the old one into every config_blob
+# already written, so the legacy value is also treated as unset on the three
+# providers that cannot serve it. Anything else the agent chose passes through
+# untouched, and a wrong one is reported by the provider (adr/0016).
+_NOVA_DEFAULT = "nova-3-general"
+_STT_DEFAULTS: dict[str, str] = {
+    "deepgram": _NOVA_DEFAULT,
+    "openai": "gpt-transcribe",
+    "elevenlabs": "scribe_v1",
+    "cartesia": "ink-whisper",
+}
+
+
+def _stt_model(provider: str, configured: str) -> str:
+    """The model to send, resolving an unset or legacy-sentinel value."""
+    if configured and not (configured == _NOVA_DEFAULT and provider != "deepgram"):
+        return configured
+    return _STT_DEFAULTS.get(provider, configured)
+
+
 def _create_stt_service(
     config: AgentConfig, openai_api_key: str, *, sample_rate: int = 8000
 ) -> Any:
@@ -107,7 +142,8 @@ def _create_stt_service(
     reach a provider that would 400 on it.
     """
     provider = config.stt.provider
-    keyterm_kwargs = _keyterm_kwargs(provider, config.stt.model, config.stt.keyterms)
+    model = _stt_model(provider, config.stt.model)
+    keyterm_kwargs = _keyterm_kwargs(provider, model, config.stt.keyterms)
 
     if provider == "deepgram":
         from pipecat.services.deepgram.stt import DeepgramSTTService
@@ -117,7 +153,7 @@ def _create_stt_service(
             sample_rate=sample_rate,
             encoding="linear16",
             settings=DeepgramSTTService.Settings(
-                model=config.stt.model or "nova-3-general",
+                model=model,
                 language=config.stt.language or "en",
                 interim_results=True,
                 punctuate=True,
@@ -147,7 +183,7 @@ def _create_stt_service(
             aiohttp_session=get_aiohttp_session(),
             sample_rate=sample_rate,
             settings=ElevenLabsSTTService.Settings(
-                model=config.stt.model or "scribe_v1",
+                model=model,
                 language=config.stt.language or "en",
                 **keyterm_kwargs,
                 extra=_overflow(config.stt.extra, "model", "language", *keyterm_kwargs),
@@ -162,7 +198,7 @@ def _create_stt_service(
         return OpenAISTTService(
             api_key=openai_api_key,
             settings=OpenAISTTService.Settings(
-                model=config.stt.model,
+                model=model,
                 **keyterm_kwargs,
                 extra=_overflow(config.stt.extra, "model", *keyterm_kwargs),
             ),
@@ -180,7 +216,7 @@ def _create_stt_service(
             api_key=api_key,
             sample_rate=sample_rate,
             settings=CartesiaSTTService.Settings(
-                model=config.stt.model or "ink-whisper",
+                model=model,
                 language=config.stt.language or "en",
                 **keyterm_kwargs,
                 extra=_overflow(config.stt.extra, "model", "language", *keyterm_kwargs),

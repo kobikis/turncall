@@ -18,7 +18,11 @@ class TestSTTConfigValidation:
     def test_default_config_is_valid(self) -> None:
         config = STTConfigSchema()
         assert config.provider == "deepgram"
-        assert config.model == "nova-3-general"
+        # Empty, not `nova-3-general`: that is Deepgram's model, and as the
+        # default of a provider-agnostic field it was stamped into every
+        # agent's config_blob and sent to whichever provider they chose. The
+        # provider's own default is resolved in the pipeline factory.
+        assert config.model == ""
 
     def test_unsupported_provider_rejected(self) -> None:
         with pytest.raises(ValidationError, match="Unsupported STT provider"):

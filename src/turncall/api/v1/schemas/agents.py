@@ -9,7 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class STTConfigSchema(BaseModel):
     provider: str = "deepgram"
-    model: str = "nova-3-general"
+    # Empty = the chosen provider's own default. Not `nova-3-general`: that is
+    # Deepgram's model, and stamping it into every agent's config_blob sent it
+    # to OpenAI, ElevenLabs and Cartesia too, each of which 400s on it.
+    model: str = ""
     language: str | None = "en"
     keyterms: list[str] = Field(default_factory=list)
     extra: dict[str, Any] = Field(default_factory=dict)

@@ -28,6 +28,7 @@ Each file names the gap it closes, from the open-items list:
 | `test_live_gemini_live.py` | Gemini Live S2S under google-genai 2.x |
 | `test_live_nova_sonic.py` | Nova Sonic S2S under aws-sdk-bedrock-runtime 0.9 / smithy 0.8 |
 | `test_live_deepgram_keyterms.py` | Deepgram still splits `keyterm`/`keywords` by model |
+| `test_live_stt_defaults.py` | every STT provider's default model is one it still serves |
 
 They are not a substitute for a real phone call. Nothing here carries audio over
 a carrier, so transport-level faults still need a human with a handset.

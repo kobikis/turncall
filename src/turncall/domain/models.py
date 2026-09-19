@@ -57,7 +57,11 @@ class ApiKey(DomainModel):
 
 class STTConfig(DomainModel):
     provider: str = "deepgram"
-    model: str = "nova-3-general"
+    # Empty means "the provider's own default", resolved in the pipeline
+    # factory. It used to default to `nova-3-general`, which is Deepgram's
+    # model — every other provider rejects it with a 400, so an agent that
+    # named no model had no working STT at all.
+    model: str = ""
     language: str | None = "en"
     # Vocabulary hints — product names, SKUs, surnames. Every provider supports
     # these and every provider spells them differently (`keyterm`, `keywords`,
