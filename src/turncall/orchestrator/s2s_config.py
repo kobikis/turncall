@@ -19,6 +19,8 @@ _OPENAI_DEFAULT_VOICE = "alloy"
 _NOVA_SONIC_MODEL = "amazon.nova-2-sonic-v1:0"
 _NOVA_SONIC_VOICE = "matthew"
 _OPENAI_LIVE_MODEL = "gpt-live-1"
+_GEMINI_LIVE_MODEL = "gemini-3.8-live"
+_GEMINI_LIVE_VOICE = "Charon"
 
 
 def _build_s2s_system_prompt(config: AgentConfig) -> str:
@@ -125,9 +127,24 @@ def _create_gemini_live(config: AgentConfig, api_key: str) -> Any:
 
     s2s = config.s2s
 
+    # S2SConfig defaults to OpenAI's model and voice whatever the provider, so
+    # a `provider: google` agent that names neither arrives here holding
+    # `gpt-realtime-2.1` and `alloy`. Swap the sentinels for Gemini's own, the
+    # way the aws and openai_live paths already do — an explicitly chosen value
+    # is passed through untouched, so a wrong one is reported by Google rather
+    # than silently replaced (ADR-0016's rule).
+    #
+    # The model matters most: Gemini closes the socket with 1008
+    # ("models/gpt-realtime-2.1 is not found ... for bidiGenerateContent"), so
+    # the call died at connect. The voice is tolerated — Gemini ignores an
+    # unknown name and uses its default — but sending `alloy` claims a voice
+    # the caller will not hear.
+    model = _GEMINI_LIVE_MODEL if s2s.model == _OPENAI_DEFAULT_MODEL else s2s.model
+    voice = _GEMINI_LIVE_VOICE if s2s.voice == _OPENAI_DEFAULT_VOICE else s2s.voice
+
     settings_kwargs: dict[str, Any] = {
-        "model": s2s.model,
-        "voice": s2s.voice,
+        "model": model,
+        "voice": voice,
     }
     # Only pass sampling knobs when set — unset keeps Gemini's own defaults.
     if s2s.temperature is not None:
@@ -152,8 +169,8 @@ def _create_gemini_live(config: AgentConfig, api_key: str) -> Any:
 
     logger.info(
         "S2S service created: provider=google model={model} voice={voice} turn={turn}",
-        model=s2s.model,
-        voice=s2s.voice,
+        model=model,
+        voice=voice,
         turn=s2s.turn_detection,
     )
     return service
