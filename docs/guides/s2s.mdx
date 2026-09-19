@@ -63,7 +63,7 @@ Set `pipeline_mode: "s2s"` in the agent config. The `stt`, `llm`, and `tts` fiel
 | Field | Required | Description |
 |-------|----------|-------------|
 | `provider` | Yes | `openai`, `google`, or `aws` |
-| `model` | No | Model name (defaults per provider). Gemini default: `models/gemini-3.1-flash-live-preview` |
+| `model` | No | Model name. Defaults per provider: `gpt-realtime-2.1` (openai), `gpt-live-1` (openai_live), `gemini-3.8-live` (google), `amazon.nova-2-sonic-v1:0` (aws) |
 | `voice` | No | Voice name (default: `alloy` / `Charon` / `matthew`) |
 | `turn_detection` | No | `server_vad` (default) or `pipecat_vad` |
 | `base_url` | No | `wss://` endpoint of an OpenAI-Realtime-compatible gateway (`openai` provider only — **rejected** on `aws`). See [Gateways](#gateways-and-third-party-models) |

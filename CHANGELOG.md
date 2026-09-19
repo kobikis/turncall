@@ -13,6 +13,27 @@ and is not part of this repository's history.
 
 ### Added
 
+- **`stt.keyterms`** — one list of vocabulary hints (product names, SKUs,
+  surnames), mapped to each provider's own spelling: `keyterm` on Cartesia,
+  `keywords` on OpenAI, `keyterms` on ElevenLabs, and on Deepgram whichever the
+  model takes — `keyterm` for `nova-3*`/`flux*`, `keywords` for everything
+  older. Deepgram answers the wrong one with `INVALID_QUERY_PARAMETER` rather
+  than ignoring it, so a hand-written `extra: {"keyterm": ...}` on a Nova-2
+  agent killed the call at connect; `keyterms` resolves per model and beats the
+  same key in `extra`. Cartesia honours them on `ink-2*`/`ink-preview*` only and
+  caps a connection at 100 terms / 1200 characters. Blanks and duplicates are
+  dropped at the API boundary.
+- **`user_idle_timeout_ms`** (default `10000`, `0` disables) ends a call the
+  caller has walked away from — the line stays open otherwise, billing, until
+  the max-duration cap. After the agent stops speaking, that much silence plays
+  `idle_message` ("Are you still there?"); a second consecutive silence ends the
+  call with a new `ended_reason` of **`customer_silent`**. Speaking again resets
+  the count. Cascade speaks the line through TTS; S2S has no TTS stage, so the
+  model is asked to check in and words it itself. Like `max_duration_reached` it
+  records a marker event (`call.customer_silent`) and is inferred **above**
+  `assistant_ended` — ending the call is how the guard gives up, so without its
+  own branch it read as `assistant_ended_call`. Not to be confused with
+  `silence_timeout_ms`, the VAD stop window inside a turn.
 - **Tool calling on SMS, chat and WhatsApp text.** Text conversations could not
   call tools at all — not MCP, not the agent's own webhook tools. An agent that
   books meetings on a phone call would claim it had booked one over SMS, or
@@ -58,7 +79,22 @@ and is not part of this repository's history.
 
 ### Changed
 
-- **Pipecat 1.10 and the `openai` 3 SDK.**
+- **Pipecat 1.11 and the `openai` 3 SDK.**
+- **`stt.model` and `llm.model` empty now mean "the provider's own default"**,
+  resolved per provider the way `_tts_model_voice` already did for TTS. Both
+  were provider-agnostic fields holding one provider's model: `stt.model`
+  defaulted to Deepgram's `nova-3-general`, which the other three answer 400 to,
+  and `llm.model` to OpenAI's `gpt-4o-mini`, which Anthropic answers
+  `404 not_found_error` to. `model_dump()` persisted those defaults into every
+  existing agent's `config_blob`, so the sentinel value is read as unset rather
+  than migrated. Unset resolves to `nova-3-general` / `gpt-transcribe` /
+  `scribe_v1` / `ink-whisper` for STT, and `gpt-4o-mini` (openai) /
+  `claude-sonnet-5` (anthropic) for LLM. An explicitly chosen value passes
+  through untouched, so a wrong one is reported by the provider rather than
+  silently replaced (ADR-0016's rule).
+  - **BREAKING:** `ollama`, `custom_openai`, `bedrock` and `openrouter` have no
+    house model — the model *is* the deployment there — so an agent naming none
+    is rejected with `422` at create rather than failing mid-call.
 - **Both MCP SDK lines are supported** (`mcp>=1.27,<3`) and the `<2` pin is
   gone. 2.x renamed `Tool.inputSchema` → `input_schema` and
   `CallToolResult.isError` → `is_error`; the client reads whichever spelling is
@@ -83,6 +119,16 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **A default `google` S2S agent sent OpenAI's model to Gemini.** `s2s.model`
+  and `s2s.voice` default to OpenAI Realtime's values whatever the provider, so
+  a `provider: google` agent naming neither arrived holding `gpt-realtime-2.1`
+  and `alloy`. Gemini closed the socket with 1008 (`models/gpt-realtime-2.1 is
+  not found for bidiGenerateContent`) and the call died at connect. Both
+  sentinels are now swapped for Gemini's own — `gemini-3.8-live` and `Charon` —
+  the way the `aws` and `openai_live` paths already did.
+- **The model reported in `call.ended` is the one that actually ran.** Post-call
+  analysis resolved its default independently of the pipeline, so the two could
+  name different models for the same call.
 - **MCP servers now connect on WebRTC and WhatsApp voice.** `mcp_servers` was
   read only by the Twilio path, so an agent with MCP tools got none of them on
   those transports — the model saw an empty tool list.

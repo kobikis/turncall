@@ -40,12 +40,39 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 | Field | Required | Description |
 |-------|----------|-------------|
 | `provider` | No | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` |
-| `model` | No | Provider default when unset. OpenAI defaults to `gpt-transcribe` — its predecessor `gpt-4o-transcribe` is withdrawn on 2027-02-26 |
+| `model` | No | Leave unset for the provider's own default: `nova-3-general` (Deepgram), `gpt-transcribe` (OpenAI — its predecessor `gpt-4o-transcribe` is withdrawn on 2027-02-26), `scribe_v1` (ElevenLabs), `ink-whisper` (Cartesia) |
 | `language` | No | BCP-47 code (default `en`) |
+| `keyterms` | No | Vocabulary hints — product names, SKUs, surnames. One list, mapped to each provider's own spelling. See [Keyterms](#keyterms) |
 | `extra` | No | Passthrough to the provider. Keys naming a setting TurnCall already manages — `model`, `language`, and Deepgram's `punctuate` / `smart_format` / `interim_results` — are ignored so they cannot silently override your config |
 
 On Deepgram, `extra` reaches the full transcription surface: `profanity_filter`,
-`diarize`, `redact`, `keyterm`, `version`, `utterance_end_ms`.
+`diarize`, `redact`, `version`, `utterance_end_ms`.
+
+### Keyterms
+
+Words a general model mishears — product names, SKUs, surnames — go in
+`stt.keyterms` as one list. TurnCall maps it to whatever the chosen provider
+calls it.
+
+```json
+"stt": {"provider": "deepgram", "keyterms": ["Xhosa", "Kubernetes", "Nguyen"]}
+```
+
+| Provider | Sent as | Notes |
+|----------|---------|-------|
+| Deepgram | `keyterm` on `nova-3*` / `flux*`, `keywords` on older models | Deepgram **400s** on the wrong one rather than ignoring it |
+| OpenAI | `keywords` | |
+| ElevenLabs | `keyterms` | |
+| Cartesia | `keyterm` | Honored on `ink-2*` / `ink-preview*` only; capped at 100 terms / 1200 characters per connection, truncated past that with a warning |
+
+Blanks and duplicates are dropped when the agent is created.
+
+<Warning>
+  Don't hand-write `extra: {"keyterm": [...]}` on Deepgram. Which spelling is
+  correct depends on the model — a Nova-2 agent sent `keyterm` gets
+  `INVALID_QUERY_PARAMETER` and the call dies at connect. `keyterms` picks the
+  right one for you, and takes precedence over the same key in `extra`.
+</Warning>
 
 <Note>
 **Transcripts are not profanity-filtered by default.** Deepgram's filter
@@ -104,13 +131,21 @@ Set `"extra": {"profanity_filter": true}` if you want it on.
 | Field | Required | Description |
 |-------|----------|-------------|
 | `provider` | Yes | `openai`, `anthropic`, `ollama`, `custom_openai`, `openrouter`, or `bedrock` |
-| `model` | Yes | Model name |
+| `model` | Depends | Optional on `openai` (`gpt-4o-mini`) and `anthropic` (`claude-sonnet-5`), which have a house model. **Required** on `ollama`, `custom_openai`, `bedrock` and `openrouter` — see below |
 | `base_url` | For `custom_openai` | OpenAI-compatible API base URL |
 | `api_key` | No | API key for `custom_openai` (masked in responses) |
 | `fallback_models` | For `openrouter` | Ordered list of fallback models (voice only) |
 | `temperature` | No | 0.0–2.0 (default: 0.7). **Not sent to `anthropic`** — current Claude models reject it and the call fails; set one via `llm.extra` if your model still accepts it |
 | `max_tokens` | No | 1–128000 (default: 1024) |
 | `extra` | No | Provider passthrough. On `bedrock` it becomes `additionalModelRequestFields` — how Anthropic extended thinking is reached |
+
+<Warning>
+  **`ollama`, `custom_openai`, `bedrock` and `openrouter` reject an agent with
+  no `llm.model`** — creating one returns `422`. There is no sensible default
+  to pick: on those four the model *is* the deployment, so a guess would
+  either 404 at the provider or quietly run a model you didn't choose. Failing
+  at create beats failing mid-call.
+</Warning>
 
 ## TTS Configuration
 

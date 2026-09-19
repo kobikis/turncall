@@ -4,7 +4,7 @@ Production voice agent platform. API-only backend for real-time AI voice agents 
 
 ## Stack
 
-- **Runtime**: Python 3.12, FastAPI, Pipecat 1.10
+- **Runtime**: Python 3.12, FastAPI, Pipecat 1.11
 - **Database**: PostgreSQL (asyncpg + SQLAlchemy async + Alembic)
 - **Cache**: Redis
 - **Telephony**: Twilio Voice + Media Streams (WebSocket)

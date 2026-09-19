@@ -29,10 +29,38 @@ documented and did nothing.
 **New limits you can set:** `MCP_MAX_TOOLS_TOTAL`, `MCP_CONNECT_TIMEOUT_SECONDS`
 and `TOOL_MAX_RESPONSE_BYTES`.
 
+**`stt.keyterms`** — one list of vocabulary hints (product names, SKUs,
+surnames), mapped to whatever the chosen provider calls it: `keyterm` on
+Cartesia, `keywords` on OpenAI, `keyterms` on ElevenLabs, and on Deepgram
+whichever spelling the model takes. Deepgram 400s on the wrong one rather than
+ignoring it, so hand-writing `extra: {"keyterm": ...}` on a Nova-2 agent killed
+the call at connect; `keyterms` picks correctly and takes precedence over
+`extra`.
+
+**`user_idle_timeout_ms`** (default `10000`, `0` disables) ends a call the
+caller has walked away from. After the agent stops speaking, that much silence
+prompts `idle_message` ("Are you still there?"); a second consecutive silence
+hangs up with a new `ended_reason` of **`customer_silent`**. Speaking resets the
+count. Cascade speaks the line through TTS; S2S asks the model to check in and
+words it itself.
+
 ## Changed
 
-**Pipecat 1.10**, the `openai` 3 SDK, and support for both `mcp` SDK lines
+**Pipecat 1.11**, the `openai` 3 SDK, and support for both `mcp` SDK lines
 (`>=1.27,<3`).
+
+**`stt.model` and `llm.model` now mean "the provider's own default" when
+empty**, instead of carrying one provider's model to all of them. Unset,
+`stt.model` resolves to `nova-3-general` / `gpt-transcribe` / `scribe_v1` /
+`ink-whisper`, and `llm.model` to `gpt-4o-mini` on OpenAI or `claude-sonnet-5`
+on Anthropic. An explicit value is still passed through untouched, so a wrong
+one is reported by the provider rather than silently replaced.
+
+<Warning>
+  **Breaking:** `ollama`, `custom_openai`, `bedrock` and `openrouter` have no
+  house model — the model *is* the deployment there — so an agent that names
+  none is now rejected with `422` at create rather than failing mid-call.
+</Warning>
 
 **Claude is sent no `temperature`**, on the direct Anthropic path and through
 Bedrock — current models reject it with a 400 that ends the call. Set one
@@ -54,6 +82,17 @@ call completed and told nobody.
 
 **Tool results are capped** before they enter the context, for webhook tools as
 well as MCP.
+
+**A default `google` S2S agent sent OpenAI's model to Gemini.** `s2s.model` and
+`s2s.voice` default to OpenAI Realtime's values whatever the provider, so an
+agent naming neither reached Gemini holding `gpt-realtime-2.1` and `alloy`.
+Gemini closed the socket with a 1008 and the call died at connect. Both
+sentinels are now swapped for Gemini's own (`gemini-3.8-live`, `Charon`), the
+way the `aws` and `openai_live` paths already did.
+
+**The model reported in `call.ended` is the one that actually ran** — post-call
+analysis resolved its own default separately from the pipeline, so the two could
+disagree.
 
 ## Security
 

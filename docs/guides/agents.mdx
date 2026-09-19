@@ -105,6 +105,36 @@ TurnCall uses **Silero VAD** for barge-in (interruption handling) and **Smart Tu
 }
 ```
 
+## Callers Who Go Quiet
+
+A caller who puts the phone down without hanging up holds the line open. After
+the agent finishes speaking, `user_idle_timeout_ms` of silence prompts it to
+check in; a second consecutive silence ends the call with an `ended_reason` of
+`customer_silent`. Speaking resets the count.
+
+```json
+{
+  "user_idle_timeout_ms": 10000,
+  "idle_message": "Are you still there?"
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `user_idle_timeout_ms` | `10000` | Silence after the agent stops speaking before it nudges. `0` disables the guard entirely |
+| `idle_message` | `"Are you still there?"` | What the agent says on the first timeout |
+
+On cascade the line is spoken through TTS verbatim. S2S has no TTS stage, so
+the model is asked to check in and words it itself — expect a paraphrase rather
+than your exact string.
+
+<Note>
+  Not to be confused with `silence_timeout_ms`, which is the VAD stop window
+  *within* a turn — how long a pause must run before the agent decides you have
+  finished your sentence. That one is measured in hundreds of milliseconds;
+  this one in seconds, and only after the agent has spoken.
+</Note>
+
 ## Voicemail Detection
 
 For outbound calls, detect voicemail and leave a message:
