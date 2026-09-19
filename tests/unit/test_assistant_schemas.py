@@ -34,7 +34,7 @@ class TestLLMConfigValidation:
     def test_default_config_is_valid(self) -> None:
         config = LLMConfigSchema()
         assert config.provider == "openai"
-        assert config.model == "gpt-4o-mini"
+        assert config.model == ""
 
     def test_temperature_bounds(self) -> None:
         LLMConfigSchema(temperature=0.0)

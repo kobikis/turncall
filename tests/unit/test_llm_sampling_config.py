@@ -49,6 +49,9 @@ class TestCascadeSamplingSettings:
     def test_custom_openai_receives_settings(self) -> None:
         config = _agent_config(
             provider="custom_openai",
+            # Named explicitly: a BYOM endpoint has no house model to default
+            # to, so llm.model is required there.
+            model="local-model",
             base_url="http://localhost:9999/v1",
             temperature=1.9,
             max_tokens=42,
@@ -97,6 +100,7 @@ class TestReasoningEffort:
     def test_custom_openai_folds_effort(self) -> None:
         config = _agent_config(
             provider="custom_openai",
+            model="local-model",
             base_url="http://localhost:9999/v1",
             reasoning_effort="low",
         )

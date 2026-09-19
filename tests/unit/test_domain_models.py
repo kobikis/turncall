@@ -58,7 +58,10 @@ class TestDomainModelSerialization:
     def test_assistant_config_defaults(self) -> None:
         config = AgentConfig()
         assert config.stt.provider == "deepgram"
-        assert config.llm.model == "gpt-4o-mini"
+        # Empty, not `gpt-4o-mini`: a provider-agnostic field holding one
+        # provider's model sent it to all of them. Resolved per provider in
+        # services/llm_models.py.
+        assert config.llm.model == ""
         assert config.tts.provider == "deepgram"
         assert config.silence_timeout_ms == 800
         assert config.interruption_enabled is True

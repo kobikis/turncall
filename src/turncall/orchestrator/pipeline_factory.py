@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from turncall.config.settings import BYOMSettings, PipecatSettings
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.observability import ObservabilityProcessor
+from turncall.services.llm_models import resolve_llm_model
 
 # A call whose agent came from call-init as an inline config (ADR-0008: the
 # response carries `agent` rather than `agent_id`) has no agent row to point at.
@@ -293,12 +294,18 @@ def _create_llm_service(
     # a prompt keeps the provider default instead of an empty string.
     si = {"system_instruction": system_instruction} if system_instruction else {}
 
+    # One provider's model sat in a provider-agnostic field as the default for
+    # all of them; see services/llm_models.py. Resolved once here so every
+    # branch below — and `is_anthropic_model`, which reads the name to decide
+    # whether Bedrock gets a temperature — sees the same value.
+    model = resolve_llm_model(provider, config.llm.model)
+
     if provider == "openrouter":
         # OpenRouter is OpenAI-compatible; fallback_models ride in extra_body as
         # the `models` array (primary first), tried in order on rate-limit/error.
         # See ADR-0003. reasoning_effort folds into the same extra_body.
         models = (
-            {"models": [config.llm.model, *config.llm.fallback_models]}
+            {"models": [model, *config.llm.fallback_models]}
             if config.llm.fallback_models
             else None
         )
@@ -306,7 +313,7 @@ def _create_llm_service(
             api_key=config.llm.api_key or openrouter_api_key,
             base_url="https://openrouter.ai/api/v1",
             settings=OpenAILLMService.Settings(
-                model=config.llm.model,
+                model=model,
                 **si,
                 extra=_openai_extra_body(effort, models),
                 temperature=temperature,
@@ -318,7 +325,7 @@ def _create_llm_service(
         return OpenAILLMService(
             api_key=openai_api_key,
             settings=OpenAILLMService.Settings(
-                model=config.llm.model,
+                model=model,
                 **si,
                 extra=_openai_extra_body(effort),
                 temperature=temperature,
@@ -344,7 +351,7 @@ def _create_llm_service(
         return AnthropicLLMService(
             api_key=resolved_key,
             settings=AnthropicLLMService.Settings(
-                model=config.llm.model,
+                model=model,
                 **si,
                 max_tokens=max_tokens,
                 **({"extra": anthropic_extra} if anthropic_extra else {}),
@@ -360,7 +367,7 @@ def _create_llm_service(
         return OLLamaLLMService(
             base_url=base_url,
             settings=OLLamaLLMService.Settings(
-                model=config.llm.model,
+                model=model,
                 **si,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -377,7 +384,7 @@ def _create_llm_service(
             api_key=config.llm.api_key or "no-key",
             base_url=base_url,
             settings=OpenAILLMService.Settings(
-                model=config.llm.model,
+                model=model,
                 **si,
                 extra=_openai_extra_body(effort),
                 temperature=temperature,
@@ -393,7 +400,7 @@ def _create_llm_service(
 
         credentials = resolve_aws_credentials(config.aws)
         settings_kwargs: dict[str, Any] = {
-            "model": config.llm.model,
+            "model": model,
             **si,
             "max_tokens": max_tokens,
         }
@@ -403,7 +410,7 @@ def _create_llm_service(
         # its first LLM turn. Bedrock is a gateway, so the deprecation is the
         # model's, not the endpoint's — but only Anthropic's models have it,
         # and Meta/Mistral/Amazon still want the value.
-        if not is_anthropic_model(config.llm.model):
+        if not is_anthropic_model(model):
             settings_kwargs["temperature"] = temperature
         if config.llm.extra:
             # Bedrock's passthrough for model-specific parameters — how
@@ -1188,7 +1195,11 @@ def create_pipeline(
             observability,
         ]
 
-    llm_info = f"{config.llm.provider}/{config.llm.model}"
+    # The resolved model, not the configured one: an agent that named none
+    # runs something else entirely, and a log that says otherwise sends the
+    # next person looking in the wrong place. Safe to resolve again here — the
+    # service was already built from it, so it cannot raise now.
+    llm_info = f"{config.llm.provider}/{resolve_llm_model(config.llm.provider, config.llm.model)}"
     if config.llm.base_url:
         llm_info += f" @ {config.llm.base_url}"
     logger.info(

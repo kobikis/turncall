@@ -29,6 +29,7 @@ Each file names the gap it closes, from the open-items list:
 | `test_live_nova_sonic.py` | Nova Sonic S2S under aws-sdk-bedrock-runtime 0.9 / smithy 0.8 |
 | `test_live_deepgram_keyterms.py` | Deepgram still splits `keyterm`/`keywords` by model |
 | `test_live_stt_defaults.py` | every STT provider's default model is one it still serves |
+| `test_live_llm_defaults.py` | the same for LLM house models, and that the old default still 404s |
 
 They are not a substitute for a real phone call. Nothing here carries audio over
 a carrier, so transport-level faults still need a human with a handset.

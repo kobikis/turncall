@@ -47,7 +47,11 @@ class STTConfigSchema(BaseModel):
 
 class LLMConfigSchema(BaseModel):
     provider: str = "openai"
-    model: str = "gpt-4o-mini"
+    # Empty = the provider's house model. Not `gpt-4o-mini`: that is OpenAI's,
+    # and as the default of a provider-agnostic field it reached Anthropic,
+    # Bedrock, Ollama and OpenRouter too. Providers with no house model are
+    # rejected below rather than guessed at.
+    model: str = ""
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=1024, ge=1, le=128000)
     base_url: str | None = Field(default=None, max_length=2048)
@@ -89,6 +93,23 @@ class LLMConfigSchema(BaseModel):
             raise ValueError(msg)
         if self.base_url and not self.base_url.startswith(("http://", "https://")):
             msg = "base_url must start with http:// or https://"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_model_present_where_required(self) -> "LLMConfigSchema":
+        """Reject an unnamed model where there is nothing sensible to default.
+
+        A Bedrock id's availability is region-specific (adr/0016), an Ollama
+        model is whatever is pulled onto that host, a BYOM endpoint decides
+        for itself, and OpenRouter exists to route between vendors. Caught at
+        create time rather than at the first call, where it would be a dead
+        conversation instead of a 422.
+        """
+        from turncall.services.llm_models import model_is_required
+
+        if model_is_required(self.provider) and not self.model:
+            msg = f"model is required for provider '{self.provider}'"
             raise ValueError(msg)
         return self
 

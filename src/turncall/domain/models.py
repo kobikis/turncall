@@ -74,7 +74,11 @@ class STTConfig(DomainModel):
 
 class LLMConfig(DomainModel):
     provider: str = "openai"
-    model: str = "gpt-4o-mini"
+    # Empty means "the provider's house model", resolved by
+    # services/llm_models.resolve_llm_model — which raises for the providers
+    # that have none. It used to default to `gpt-4o-mini`, which is OpenAI's
+    # model: Anthropic answers `404 not_found_error: model: gpt-4o-mini`.
+    model: str = ""
     temperature: float = 0.7
     max_tokens: int = 1024
     base_url: str | None = None
