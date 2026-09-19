@@ -129,7 +129,7 @@ class TestCompleteText:
 
     @pytest.mark.asyncio
     async def test_handles_missing_usage(self) -> None:
-        config = LLMConfig(provider="ollama", api_key="test")
+        config = LLMConfig(provider="ollama", model="llama3", api_key="test")
         messages = [{"role": "user", "content": "Hi"}]
 
         mock_response = httpx.Response(

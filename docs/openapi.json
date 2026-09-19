@@ -6268,7 +6268,7 @@
           "model": {
             "type": "string",
             "title": "Model",
-            "default": "gpt-4o-mini"
+            "default": ""
           },
           "temperature": {
             "type": "number",

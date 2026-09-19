@@ -22,6 +22,7 @@ from loguru import logger
 from turncall.adapters.http_client import get_http_client
 from turncall.config.settings import get_settings
 from turncall.domain.models import AWSConfig, LLMConfig
+from turncall.services.llm_models import resolve_llm_model
 
 # Runs one tool and returns its result as a string. Owns its own errors —
 # a failure comes back as text for the model to react to, never as an
@@ -439,6 +440,13 @@ async def complete_text(
     sms_chat boundary, but allowed here for internal callers like post-call
     analysis. See ADR-0003.
     """
+    # `LLMConfig.model` used to default to OpenAI's model for every provider,
+    # and `model_dump()` persisted that into existing agents — so resolve
+    # before dispatching, and hand every branch the same value. See
+    # services/llm_models.py.
+    config = config.model_copy(
+        update={"model": resolve_llm_model(config.provider, config.model)}
+    )
 
     api_key = _resolve_api_key(config)
 

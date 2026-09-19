@@ -18,6 +18,7 @@ from typing import Any
 from loguru import logger
 
 from turncall.domain.models import AnalysisConfig, AWSConfig, LLMConfig
+from turncall.services.llm_models import resolve_llm_model
 from turncall.services.llm_text import complete_text
 
 
@@ -249,6 +250,13 @@ async def analyze_call(
             extra=llm_config.extra,
         )
 
+    # Resolved here, not just inside complete_text: the model name is reported
+    # back in the analysis result and ships in the `call.ended` payload, so an
+    # agent that named none would be recorded as having run a model it did not.
+    effective_llm = effective_llm.model_copy(
+        update={"model": resolve_llm_model(effective_llm.provider, effective_llm.model)}
+    )
+
     messages = _build_analysis_prompt(transcript, analysis_config, system_prompt)
 
     start = datetime.now(UTC)
@@ -327,6 +335,13 @@ async def extract_takeaway(
             api_key=llm_config.api_key,
             extra=llm_config.extra,
         )
+
+    # Resolved here, not just inside complete_text: the model name is reported
+    # back in the analysis result and ships in the `call.ended` payload, so an
+    # agent that named none would be recorded as having run a model it did not.
+    effective_llm = effective_llm.model_copy(
+        update={"model": resolve_llm_model(effective_llm.provider, effective_llm.model)}
+    )
 
     parts = [f"Takeaway: {name}"]
     if description:
