@@ -29,7 +29,7 @@ Define an agent via API, bind it to a phone number, and callers talk to your AI.
     Mix and match STT, LLM, and TTS providers per agent — Deepgram, OpenAI, Anthropic, ElevenLabs, Cartesia, Ollama.
   </Card>
   <Card title="Speech-to-Speech" icon="bolt">
-    Ultra-low latency (~300ms) via OpenAI Realtime, Gemini Live or Amazon Nova Sonic.
+    ~300ms processing (vs ~800ms cascade) via OpenAI Realtime, Gemini Live or Amazon Nova Sonic.
   </Card>
   <Card title="Tool Calling" icon="wrench">
     Built-in tools (transfer, handoff, DTMF) + webhook tools + MCP servers.
@@ -62,8 +62,8 @@ flowchart LR
     WhatsApp["💬 WhatsApp"] --> TC
 
     TC["TurnCall<br/>webhook / connect"] --> MODE{"pipeline_mode"}
-    MODE -->|"cascade (default)"| C["STT → turn detection → LLM → TTS<br/><b>~800 ms</b> · every stage swappable"]
-    MODE -->|"s2s"| S["OpenAI Realtime · Gemini Live<br/>Amazon Nova Sonic 2<br/><b>~300 ms</b> · one model, no seams"]
+    MODE -->|"cascade (default)"| C["STT → turn detection → LLM → TTS<br/><b>~800 ms</b> processing · every stage swappable"]
+    MODE -->|"s2s"| S["OpenAI Realtime · Gemini Live<br/>Amazon Nova Sonic 2<br/><b>~300 ms</b> processing · one model, no seams"]
     C --> OUT["🔊 Audio back"]
     S --> OUT
 

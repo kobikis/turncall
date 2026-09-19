@@ -73,10 +73,14 @@ Variables are rendered at call start via [call-init](/guides/call-init) or the A
 
 ## Pipeline Mode
 
-| Mode | Description | Latency |
-|------|-------------|---------|
-| `cascade` (default) | STT → LLM → TTS | ~800ms |
-| `s2s` | Speech-to-speech via single model | ~300ms |
+| Mode | Description | Processing | Caller-perceived turnaround |
+|------|-------------|------------|-----------------------------|
+| `cascade` (default) | STT → LLM → TTS | ~800ms | + `silence_timeout_ms` (default 800ms) |
+| `s2s` | Speech-to-speech via single model | ~300ms | + `silence_timeout_ms` (default 800ms) |
+
+Processing is the sum of each stage's time-to-first-byte. It is not what the
+caller waits — the agent must first sit through `silence_timeout_ms` of quiet
+to decide the turn has ended. See [Latency](/architecture#latency).
 
 Set `pipeline_mode` in the agent config:
 

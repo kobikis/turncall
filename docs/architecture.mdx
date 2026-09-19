@@ -95,7 +95,7 @@ sequenceDiagram
 
 Two pipeline modes, selected per agent via `pipeline_mode`.
 
-### Cascade (default, ~800ms)
+### Cascade (default, ~800ms processing)
 
 ```mermaid
 flowchart LR
@@ -124,7 +124,7 @@ flowchart LR
 
 Dashed stages are optional: **VoicemailDetector** (outbound), **KnowledgeRetrieval** (auto-mode RAG), **video avatar** (HeyGen/Tavus, WebRTC + cascade only). Transcript taps sit after STT and after the LLM to record both sides.
 
-### Speech-to-Speech (~300ms)
+### Speech-to-Speech (~300ms processing)
 
 ```mermaid
 flowchart LR
@@ -149,6 +149,45 @@ A single model handles STT + reasoning + TTS natively over one WebSocket, so the
 <Info>
   Twilio media is 8kHz μ-law on the wire; the serializer converts to/from PCM16. S2S models run at 24kHz, so an internal resampler bridges the rates.
 </Info>
+
+## Latency
+
+Two different numbers get called "latency", and conflating them is the most
+common way to be surprised by how a agent sounds on a real call.
+
+**Processing** is the sum of each stage's time-to-first-byte: how long
+speech-to-text takes to return a transcript, the model to emit its first token,
+and the voice to produce its first audio chunk. On cascade that is roughly
+**800 ms**; on S2S, where one model does all three, roughly **300 ms**.
+
+**Caller-perceived turnaround** is what someone on the phone actually
+experiences — the gap between their last syllable and your agent's first. That
+is processing *plus* the silence the pipeline must observe before it will
+believe the caller has stopped talking:
+
+```
+turnaround  ≈  silence_timeout_ms  +  processing
+            ≈  800 ms (default)    +  ~800 ms (cascade)
+```
+
+`silence_timeout_ms` defaults to **800 ms** and becomes the VAD stop window. It
+is the single largest lever you have, and it is a trade: lower it and replies
+come faster but the agent is likelier to interrupt someone who merely paused;
+raise it and the agent is more patient but feels sluggish.
+
+<Warning>
+  Pipecat's own recommended default for this window is **200 ms**, and it will
+  log a warning on every call when yours differs. TurnCall ships 800 ms
+  deliberately — it is more forgiving of hesitant callers on noisy phone lines —
+  but if your callers speak cleanly, lowering `silence_timeout_ms` to 200–300 ms
+  is the cheapest latency win available to you.
+</Warning>
+
+Both figures are engineering estimates for the default provider mix, not a
+benchmark, and they move with your choice of STT, model and voice. Measure your
+own: the pipeline emits `turn.user_bot_latency_seconds` per turn, which is the
+turnaround number, and per-service `ttfb` metrics, which sum to the processing
+number. See [Observability](/guides/observability).
 
 ## Call State Machine
 

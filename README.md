@@ -53,8 +53,14 @@ curl -X POST http://localhost:8090/v1/agents -H "Authorization: Bearer tc_..." -
 }'
 ```
 
-Bind it to a Twilio number and call. Roughly **800 ms** to first word on the
-cascade pipeline, or **~300 ms** with speech-to-speech.
+Bind it to a Twilio number and call. The cascade pipeline spends roughly
+**800 ms** in processing — speech-to-text, model and voice each contributing
+their time-to-first-byte. What a caller actually waits is that *plus* the
+silence the agent sits through to be sure they've finished talking:
+`silence_timeout_ms`, **800 ms by default**. Budget **~1.5–2 s** from "caller
+stops" to "agent starts", and lower `silence_timeout_ms` if your callers speak
+cleanly. Speech-to-speech cuts the processing leg to roughly **300 ms**; the
+silence wait applies either way.
 
 Swap any provider by changing one line — the pipeline is the same. Run the LLM
 locally through Ollama and no audio leaves your network except to the telco.
@@ -91,7 +97,7 @@ locally through Ollama and no audio leaves your network except to the telco.
 - **Video Avatar** — Optional HeyGen LiveAvatar (lip-synced video) on WebRTC cascade calls
 - **Multi-provider STT/LLM/TTS** — Deepgram, OpenAI, Anthropic Claude, ElevenLabs, Cartesia, Ollama, OpenRouter, AWS Bedrock, or any OpenAI-compatible endpoint (configurable per agent)
 - **Bring Your Own Model** — Use local LLMs via Ollama or remote endpoints (Together AI, Groq, vLLM, etc.)
-- **Speech-to-Speech** — Ultra-low latency (~300ms) via OpenAI Realtime, GPT-Live-1 (full duplex), Gemini Live or Amazon Nova Sonic 2
+- **Speech-to-Speech** — ~300ms processing (vs ~800ms cascade) via OpenAI Realtime, GPT-Live-1 (full duplex), Gemini Live or Amazon Nova Sonic 2
 - **Smart Turn Detection** — ML-based (SmartTurnV3) understands natural pauses
 - **Barge-in** — Silero VAD lets users interrupt mid-speech
 - **Voicemail Detection** — With retry backoff, beep detection, auto-message
@@ -144,8 +150,9 @@ See [QUICKSTART.md](QUICKSTART.md) for detailed setup instructions.
 ```
 Phone Call → Twilio → TurnCall webhook → TwiML with <Stream>
   → WebSocket → Pipecat Pipeline:
-    Cascade: STT → VAD+SmartTurn → [KB Retrieval] → LLM → TTS → Audio back (~800ms)
-    S2S:     VAD → OpenAI Realtime / GPT-Live-1 / Gemini Live / Nova Sonic → Audio back (~300ms)
+    Cascade: STT → VAD+SmartTurn → [KB Retrieval] → LLM → TTS → Audio back (~800ms processing)
+    S2S:     VAD → OpenAI Realtime / GPT-Live-1 / Gemini Live / Nova Sonic → Audio back (~300ms processing)
+    (caller-perceived turnaround adds silence_timeout_ms, default 800ms)
 
 Browser → POST /v1/webrtc/connect (SDP offer/answer) + PATCH (ICE trickle) → WebRTC audio → Same pipeline
 ```
@@ -266,7 +273,7 @@ turn is recorded on `transcript.final` events. See
 Skip STT/TTS entirely — the model handles audio natively:
 
 ```json
-// OpenAI Realtime (~300ms latency)
+// OpenAI Realtime (~300ms processing)
 "pipeline_mode": "s2s",
 "s2s": {"provider": "openai", "voice": "alloy"}
 
