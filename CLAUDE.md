@@ -462,6 +462,34 @@ same `AgentConfigSchema` an agent create uses (`extra="forbid"` included), runs
 with **`agent_id` null** (ADR-0017 — null is the honest answer, not missing
 data), and is snapshotted verbatim in `resolved_config`.
 
+### Scenario from a real call (#78)
+
+```
+POST /v1/eval-scenarios/from-call   {"call_id": "...", "save": false, "name": "..."}
+```
+
+Evals only find what someone thought to test; the unknown unknowns come from
+production. A call already holds a scripted scenario's shape — caller turns,
+agent replies, tool calls with their arguments — so this converts one: caller
+utterances become turns, replies become `text_contains` expectations **to
+sharpen**, and every recorded tool invocation becomes both a `function_call`
+expectation carrying the arguments actually used *and* a **mock seeded with
+what that tool really returned**, so the draft is safe under `mock_only`
+without repeating the call's side effects.
+
+`save: false` (the default) returns the draft for review; `true` stores it. The
+response says out loud that it is a draft — a generated scenario nobody edits
+asserts whatever the agent did that day, mistakes included.
+
+Two shapes that are easy to get wrong. A `function_call` expectation takes a
+**`calls:` list** (`[{name, args}]`), not top-level `name`/`args`: the parser
+ignores keys it does not know, so the wrong shape parses cleanly and asserts
+nothing. And the reply expectation must carry **content**, never a bare
+`{"event": "llm_response"}`, for the reason evals-design §1 records. A call
+that ran an inline agent takes its `default_target` from the call record, not
+an agent row (ADR-0017); one still in progress, or with no caller speech, is
+rejected.
+
 ### CLI (#77)
 
 ```bash

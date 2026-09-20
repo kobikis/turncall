@@ -4716,6 +4716,68 @@
         }
       }
     },
+    "/v1/eval-scenarios/from-call": {
+      "post": {
+        "tags": [
+          "evals"
+        ],
+        "summary": "Scenario From Call",
+        "description": "Convert a completed call into a scripted scenario draft (#78).\n\nReturned for review by default; `save: true` stores it. Either way the\ntool mocks are seeded with what those tools actually returned, so the draft\nis safe to run under `mock_only` without repeating the call's side effects.",
+        "operationId": "scenario_from_call_v1_eval_scenarios_from_call_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScenarioFromCallRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Scenario From Call V1 Eval Scenarios From Call Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/eval-runs": {
       "post": {
         "tags": [
@@ -7293,6 +7355,47 @@
         },
         "type": "object",
         "title": "STTConfigSchema"
+      },
+      "ScenarioFromCallRequest": {
+        "properties": {
+          "call_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Call Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "save": {
+            "type": "boolean",
+            "title": "Save",
+            "default": false
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Tags"
+          }
+        },
+        "type": "object",
+        "required": [
+          "call_id"
+        ],
+        "title": "ScenarioFromCallRequest",
+        "description": "Derive a scripted scenario from a call that already happened (#78)."
       },
       "SearchRequest": {
         "properties": {
