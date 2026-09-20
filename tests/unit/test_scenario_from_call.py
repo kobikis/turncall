@@ -87,6 +87,46 @@ class TestTurns:
         assert len(turns) == 1
         assert [e["text_contains"] for e in turns[0]["expect"]] == ["Hello."]
 
+    def test_a_sentence_the_stt_split_becomes_one_turn(self) -> None:
+        """From a real call: "Hi. Good morning. What" / "do you have in the
+        menu?" arrived as two transcript entries with no reply between them.
+        Kept apart they made a turn that asserts nothing followed by one
+        opening mid-sentence — neither of which the caller ever said."""
+        draft = convert.build_scenario(
+            transcript=[
+                _entry("customer", "Hi. Good morning. What", at=1),
+                _entry("customer", "do you have in the menu?", at=2),
+                _entry("assistant", "We have fresh pasta and seafood.", at=3),
+            ],
+            invocations=[],
+            name="menu",
+        )
+        turns = draft["definition"]["turns"]
+        assert [t["user"] for t in turns] == [
+            "Hi. Good morning. What do you have in the menu?"
+        ]
+        assert (
+            turns[0]["expect"][0]["text_contains"] == "We have fresh pasta and seafood."
+        )
+
+    def test_a_second_utterance_after_a_reply_is_its_own_turn(self) -> None:
+        """Merging is only for caller speech with nothing in between: once the
+        agent has answered, the next thing the caller says is a new turn."""
+        draft = convert.build_scenario(
+            transcript=[
+                _entry("customer", "Hi.", at=1),
+                _entry("assistant", "Good morning!", at=2),
+                _entry("customer", "What are your hours?", at=3),
+                _entry("assistant", "Until nine.", at=4),
+            ],
+            invocations=[],
+            name="hours",
+        )
+        assert [t["user"] for t in draft["definition"]["turns"]] == [
+            "Hi.",
+            "What are your hours?",
+        ]
+
     def test_several_replies_to_one_turn_are_all_kept(self) -> None:
         draft = convert.build_scenario(
             transcript=[
