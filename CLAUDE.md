@@ -417,6 +417,24 @@ GET    /v1/eval-runs/{id}
 DELETE /v1/eval-runs/{id}     # cancel while queued/running
 ```
 
+### Simulations (#73)
+
+A `persona:` definition runs too now, through its own result mapper — handing a
+simulation result to the scripted one would report nonsense confidently. The
+judge rules on `success` once over the whole conversation; `metrics` are scored
+per bot turn (a share of turns, so 0.8 is four replies in five) and one below
+its `min_score` fails the iteration, while one without a `min_score` reports and
+fails nothing. The entry carries `goal`, `metrics`, `ended_by`, `persona_turns`
+and `persona_claim` — the persona's own end-of-call verdict, stored with
+`advisory: true` on it, because pipecat is explicit that the **judge** decides
+and showing the two as equals teaches people to distrust the judge.
+
+A persona doesn't say the same thing twice, so one run is an anecdote: use
+`iterations`. There is still no score column — a scripted `1/1` and a simulation
+`7/10` are one representation read twice. **The persona and the judge are both
+Ollama by default**, so a simulation needs a reachable Ollama even when the
+agent's own LLM is a hosted provider.
+
 ### Rules that are easy to break
 - **The worker is never the API process.** `turncall-eval-worker`, same image,
   own entrypoint, fed by a Redis list. ADR-0004: eval load in the API's event

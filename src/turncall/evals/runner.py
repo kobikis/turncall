@@ -51,10 +51,6 @@ class TargetError(ValueError):
     """The run names a target that cannot be resolved."""
 
 
-class ScenarioKindError(ValueError):
-    """The run names a scenario kind this build cannot execute."""
-
-
 @dataclass(frozen=True)
 class ResolvedTarget:
     """What the run actually points at, snapshot included.
@@ -313,6 +309,14 @@ def _entry(iteration: int, **over: Any) -> dict[str, Any]:
         "tool_calls": [],
         "skipped": None,
         "error": None,
+        # Simulation-only (#73), null on a scripted iteration. One shape for
+        # both kinds: a reader should not have to know which it is holding to
+        # find a key, which is the same argument `skipped` is here for.
+        "goal": None,
+        "metrics": [],
+        "ended_by": None,
+        "persona_turns": None,
+        "persona_claim": None,
         **over,
     }
 
@@ -357,6 +361,113 @@ def map_script_result(
         ],
         skipped=skipped,
         tool_calls=list(tool_calls or []),
+    )
+    return IterationOutcome(passed=passed, entry=entry)
+
+
+def _metric(metric: Any) -> dict[str, Any]:
+    """One quality metric's outcome.
+
+    Reported whether or not it failed anything: a metric with no `min_score`
+    never fails a run by design, and dropping it would leave the operator who
+    asked to watch it with nothing to read.
+    """
+    return {
+        "name": metric.name,
+        # None when there was no bot turn to judge — not zero, which would read
+        # as "every turn failed".
+        "score": metric.score,
+        "passed": metric.passed,
+        "reason": metric.reason,
+        "min_score": metric.min_score,
+        # A measured metric (turns, duration, words, latency, function_calls)
+        # carries a value and no verdicts; a judged one the reverse.
+        "value": getattr(metric, "value", None),
+        "failure_kind": getattr(metric, "failure_kind", None),
+        "verdicts": [
+            {
+                "turn": v.turn,
+                "passed": v.passed,
+                "verdict": v.verdict,
+                "reason": v.reason,
+            }
+            for v in getattr(metric, "verdicts", []) or []
+        ],
+    }
+
+
+def _simulation_failures(result: Any) -> list[dict[str, Any]]:
+    """Why this iteration did not pass, goal first then each short metric."""
+    failures: list[dict[str, Any]] = []
+    if not result.succeeded:
+        failures.append(
+            {"kind": "goal", "name": "success", "reason": result.reason or ""}
+        )
+    failures.extend(
+        {"kind": "metric", "name": m.name, "reason": m.reason or ""}
+        for m in result.metrics or []
+        if not m.passed
+    )
+    return failures
+
+
+def _persona_claim(result: Any) -> dict[str, Any] | None:
+    """The simulated caller's own end-of-call verdict, marked advisory.
+
+    Pipecat is explicit that the judge decides; the persona's `end_call` claim
+    is what the tester *thinks* happened. Worth storing — it is the fastest way
+    to spot a persona that wandered off its goal — but presenting the two as
+    equals teaches people to distrust the judge, so the label travels with the
+    value rather than living in a UI that may not carry it.
+    """
+    claim = getattr(result, "end_call", None)
+    if not claim:
+        return None
+    return {
+        "success": claim.get("success"),
+        "reason": claim.get("reason", ""),
+        "advisory": True,
+    }
+
+
+def map_simulation_result(
+    result: Any,
+    *,
+    iteration: int,
+    tool_calls: list[dict[str, Any]] | None = None,
+) -> IterationOutcome:
+    """Turn pipecat's `EvalSimulationResult` into one entry of the run's results.
+
+    `error` is pipecat's own word for "the run did not complete" — a failed
+    connect, a persona LLM that died mid-conversation. That is `errored` here
+    too, counting toward neither rate: the conversation never finished, so it
+    says nothing about the agent. Everything else is a verdict, and
+    `result.passed` is pipecat's: the goal was met *and* no metric fell short.
+    """
+    if getattr(result, "error", None):
+        return errored_entry(iteration, str(result.error), tool_calls=tool_calls)
+
+    passed = bool(result.passed)
+    entry = _entry(
+        iteration,
+        passed=passed,
+        duration_ms=getattr(result, "duration_ms", 0),
+        # The persona's turns are `user`, the bot's `assistant` — already the
+        # shape a scripted transcript is built into, so one reader serves both.
+        transcript=[
+            {"role": m.get("role", ""), "content": m.get("content", "")}
+            for m in getattr(result, "messages", []) or []
+        ],
+        failures=_simulation_failures(result),
+        tool_calls=list(tool_calls or []),
+        goal={"succeeded": bool(result.succeeded), "reason": result.reason or ""},
+        metrics=[_metric(m) for m in result.metrics or []],
+        # How the conversation ended: `end_call` is the persona hanging up,
+        # `max_turns`/`max_duration`/`silence` are backstops, and a run they
+        # ended has not succeeded.
+        ended_by=getattr(result, "ended_by", None),
+        persona_turns=getattr(result, "turns", 0),
+        persona_claim=_persona_claim(result),
     )
     return IterationOutcome(passed=passed, entry=entry)
 
@@ -490,14 +601,21 @@ async def run_iterations(
                 )
             )
             break
-        outcomes.append(
-            map_script_result(
-                result,
-                iteration=iteration,
-                parsed=plan.parsed,
-                tool_calls=mocks.calls,
+        if plan.kind is EvalKind.SIMULATION:
+            outcomes.append(
+                map_simulation_result(
+                    result, iteration=iteration, tool_calls=mocks.calls
+                )
             )
-        )
+        else:
+            outcomes.append(
+                map_script_result(
+                    result,
+                    iteration=iteration,
+                    parsed=plan.parsed,
+                    tool_calls=mocks.calls,
+                )
+            )
     return outcomes
 
 
@@ -562,10 +680,6 @@ def _parse_for_run(run: Any, modality: EvalModality) -> tuple[EvalKind, Any]:
     """
     definition = dict(run.resolved_scenario.get("definition") or {})
     kind = scenario_mod.kind_of(definition)
-    if kind is not EvalKind.SCRIPTED:
-        raise ScenarioKindError(
-            f"{kind.value!r} scenarios cannot be run yet — scripted only"
-        )
     merged = scenario_mod.with_modality(definition, modality)
     return kind, scenario_mod.parse(merged, name=run.scenario_name)
 
