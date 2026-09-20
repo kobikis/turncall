@@ -105,7 +105,9 @@ class TestTurns:
         assert [t["user"] for t in turns] == [
             "Hi. Good morning. What do you have in the menu?"
         ]
-        assert turns[0]["expect"][0]["text_contains"] == "We have fresh pasta and seafood."
+        assert (
+            turns[0]["expect"][0]["text_contains"] == "We have fresh pasta and seafood."
+        )
 
     def test_a_second_utterance_after_a_reply_is_its_own_turn(self) -> None:
         """Merging is only for caller speech with nothing in between: once the
