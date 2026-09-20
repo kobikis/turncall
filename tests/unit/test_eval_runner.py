@@ -755,7 +755,23 @@ class TestExecuteRun:
             kind="script",
             iterations=iterations,
             scenario_name="greets-the-caller",
+            scenario_id=uuid4(),
+            batch_id=uuid4(),
             target={"type": "agent", "agent_id": str(uuid4())},
+            # What a finished row carries. `eval.run.completed` is built by
+            # reading the row back (#76), so a fake missing these would pass a
+            # test the real path cannot.
+            passed_count=0,
+            failed_count=0,
+            error=None,
+            results=[],
+            agent_id=None,
+            agent_version=None,
+            resolved_config={},
+            harness_config={},
+            queued_at=None,
+            started_at=None,
+            completed_at=None,
             resolved_scenario={
                 "definition": {
                     "turns": [
@@ -985,6 +1001,51 @@ class TestExecuteRun:
         execute.assert_not_awaited()
         assert finish.await_args.kwargs["status"] is EvalRunStatus.ERRORED
         assert finish.await_args.kwargs["error"] == "agent not found"
+
+    async def test_both_run_events_are_dispatched(self) -> None:
+        """#76: one event when the run starts, one comprehensive event when it
+        finishes. A subscriber should never have to poll."""
+        from turncall.domain.enums import CallEventType
+        from turncall.evals import runner as runner_mod
+
+        sent: list = []
+
+        async def capture(session, **kwargs):
+            sent.append(kwargs)
+
+        execute = AsyncMock(return_value=_script_result(turns=[_turn_result()]))
+        with patch.object(runner_mod, "_dispatch_run_event", capture):
+            await self._execute(self._run_row(), execute)
+
+        assert [e["event_type"] for e in sent] == [
+            CallEventType.EVAL_RUN_STARTED,
+            CallEventType.EVAL_RUN_COMPLETED,
+        ]
+        started = sent[0]["payload"]
+        assert started["scenario_name"] == "greets-the-caller"
+        assert started["iterations"] == 1
+        # The run id goes in the envelope, never the payload (ADR-0007).
+        assert "eval_run_id" not in started
+        assert sent[0]["run_id"] == sent[1]["run_id"]
+
+    async def test_a_run_that_cannot_start_still_announces_itself(self) -> None:
+        """Accepted and then silent is worse than failed: a subscriber waiting
+        for a terminal event would wait forever."""
+        from turncall.domain.enums import CallEventType
+        from turncall.evals import runner as runner_mod
+
+        sent: list = []
+
+        async def capture(session, **kwargs):
+            sent.append(kwargs)
+
+        run = self._run_row()
+        run.resolved_scenario = {"definition": {"turns": "nope"}}
+        with patch.object(runner_mod, "_dispatch_run_event", capture):
+            await self._execute(run, AsyncMock())
+
+        assert [e["event_type"] for e in sent] == [CallEventType.EVAL_RUN_COMPLETED]
+        assert sent[0]["agent_id"] is None, "nothing resolved, so no agent to name"
 
     async def test_a_simulation_runs_through_its_own_mapper(self) -> None:
         """#73. The definition decides which mapper reads the result: handing a

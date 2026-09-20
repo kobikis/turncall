@@ -111,6 +111,13 @@ class CallEventType(StrEnum):
     SESSION_DELETED = "session.deleted"
     CHAT_CREATED = "chat.created"
 
+    # Evals (#76). Two, not a scatter: `eval.run.completed` is comprehensive
+    # and carries the whole result, the way `call.ended` does (ADR-0006).
+    # `analysis.completed` above is the counter-example — reserved, never
+    # dispatched, and a standing source of "why does nothing arrive".
+    EVAL_RUN_STARTED = "eval.run.started"
+    EVAL_RUN_COMPLETED = "eval.run.completed"
+
     # Live control
     CONTEXT_INJECTED = "context.injected"
     DTMF_SENT = "dtmf.sent"

@@ -98,8 +98,23 @@ class TestTheRunnerScoresItAsErrored:
             kind="script",
             iterations=2,
             scenario_name="greets",
+            scenario_id=uuid4(),
+            batch_id=None,
             target={"type": "agent", "agent_id": str(uuid4())},
             resolved_scenario={"definition": {"turns": [{"user": "hi", "expect": []}]}},
+            # The fields a finished row carries: `eval.run.completed` is built
+            # by reading the row back (#76).
+            passed_count=0,
+            failed_count=0,
+            error=None,
+            results=[],
+            agent_id=None,
+            agent_version=None,
+            resolved_config={},
+            harness_config={},
+            queued_at=None,
+            started_at=None,
+            completed_at=None,
         )
 
         class _CM:
