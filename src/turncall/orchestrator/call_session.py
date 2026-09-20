@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -229,19 +230,24 @@ class CallSession:
         silent line otherwise bills until `max_call_duration_seconds` or the
         carrier gives up.
 
-        The aggregator is found by walking the pipeline, the way
-        `pipeline_builder` finds the LLM service to register tools on.
+        The aggregator is found by walking the pipeline. Use `processors`, not
+        `processors_with_metrics()`: the latter keeps only processors where
+        `can_generate_metrics()` is true, which an aggregator is not, so it
+        never returned one and the guard silently disarmed itself on every
+        call. `processors` is a property holding every child, so recurse for
+        the nested-pipeline case that `processors_with_metrics` handled itself.
         """
         from pipecat.processors.aggregators.llm_response_universal import (
             LLMUserAggregator,
         )
 
+        def _walk(processor: object) -> Iterator[object]:
+            for child in getattr(processor, "processors", []):
+                yield child
+                yield from _walk(child)
+
         aggregator = next(
-            (
-                p
-                for p in self._pipeline.processors_with_metrics()
-                if isinstance(p, LLMUserAggregator)
-            ),
+            (p for p in _walk(self._pipeline) if isinstance(p, LLMUserAggregator)),
             None,
         )
         if aggregator is None:

@@ -33,8 +33,15 @@ def _session(*, pipeline_mode: str = "cascade"):
 
     aggregator.__class__ = LLMUserAggregator
 
+    other = MagicMock()
+    other.processors = []
+    aggregator.processors = []
     pipeline = MagicMock()
-    pipeline.processors_with_metrics.return_value = [MagicMock(), aggregator]
+    # `processors`, the property holding every child — not
+    # `processors_with_metrics()`, which keeps only the metrics-capable ones
+    # and so never contained an aggregator. Mocking that call was what let
+    # these tests pass against a guard that disarmed itself on every call.
+    pipeline.processors = [other, aggregator]
 
     context = MagicMock()
     context.call_id = uuid4()
@@ -212,3 +219,89 @@ class TestTheTimerIsActuallyWired:
 
         assert aggregator is not None
         assert aggregator._params.user_idle_timeout == 0
+
+
+@pytest.mark.unit
+class TestTheGuardArmsAgainstARealPipeline:
+    """Everything above hands the guard a pipeline we built for it.
+
+    That is what hid the bug: the helper stubbed
+    `processors_with_metrics()`, so the tests agreed with the implementation
+    instead of checking it. The guard looked the aggregator up through a
+    filter that keeps only metrics-capable processors, found nothing on every
+    real call, logged `idle_guard_no_aggregator` and returned — the feature
+    never armed once in production. Build a real Pipeline here so the lookup
+    has to survive Pipecat's actual structure.
+    """
+
+    @staticmethod
+    def _real_pipeline():
+        from pipecat.pipeline.pipeline import Pipeline
+        from pipecat.processors.aggregators.llm_context import LLMContext
+        from pipecat.processors.aggregators.llm_response_universal import (
+            LLMContextAggregatorPair,
+        )
+
+        pair = LLMContextAggregatorPair(LLMContext())
+        return Pipeline([pair.user(), pair.assistant()])
+
+    def _arm(self, pipeline):
+        from turncall.orchestrator.call_session import CallSession
+
+        context = MagicMock()
+        context.call_id = uuid4()
+        session = CallSession(
+            call_context=context,
+            transport=MagicMock(),
+            pipeline=pipeline,
+            idle_message="Are you still there?",
+        )
+        session._arm_idle_guard()
+        return session
+
+    def test_it_finds_the_aggregator(self) -> None:
+        from loguru import logger
+
+        warnings: list[str] = []
+        sink = logger.add(lambda m: warnings.append(m), level="WARNING")
+        try:
+            self._arm(self._real_pipeline())
+        finally:
+            logger.remove(sink)
+
+        assert not any("idle_guard_no_aggregator" in w for w in warnings), (
+            "the guard could not find the aggregator in a real pipeline"
+        )
+
+    def test_it_finds_one_nested_in_a_sub_pipeline(self) -> None:
+        """`processors_with_metrics` recursed; a flat read of `processors`
+        would not, and the cascade pipeline nests."""
+        from loguru import logger
+        from pipecat.pipeline.pipeline import Pipeline
+
+        nested = Pipeline([self._real_pipeline()])
+
+        warnings: list[str] = []
+        sink = logger.add(lambda m: warnings.append(m), level="WARNING")
+        try:
+            self._arm(nested)
+        finally:
+            logger.remove(sink)
+
+        assert not any("idle_guard_no_aggregator" in w for w in warnings)
+
+    def test_it_still_warns_when_there_is_genuinely_none(self) -> None:
+        """The warning has to keep working, or the next silent disarm is
+        invisible again."""
+        from loguru import logger
+        from pipecat.pipeline.pipeline import Pipeline
+        from pipecat.processors.frame_processor import FrameProcessor
+
+        warnings: list[str] = []
+        sink = logger.add(lambda m: warnings.append(m), level="WARNING")
+        try:
+            self._arm(Pipeline([FrameProcessor()]))
+        finally:
+            logger.remove(sink)
+
+        assert any("idle_guard_no_aggregator" in w for w in warnings)

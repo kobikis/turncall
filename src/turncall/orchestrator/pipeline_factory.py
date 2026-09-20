@@ -636,7 +636,11 @@ def _anthropic_extra_body(extra: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_vad_analyzer(
-    config: AgentConfig, *, sample_rate: int, pipecat_settings: Any | None = None
+    config: AgentConfig,
+    *,
+    sample_rate: int,
+    pipecat_settings: Any | None = None,
+    smart_turn: bool = False,
 ) -> Any:
     """Silero VAD, carrying the two settings that used to be decoration.
 
@@ -645,11 +649,32 @@ def _build_vad_analyzer(
     was built bare and Pipecat's defaults decided how long a pause ends a turn
     and how sure the detector has to be. Built in one place so the cascade and
     S2S pipelines can't drift apart on it.
+
+    With Smart Turn on, VAD is the *fast detector* and the model is the
+    decider, so the VAD window is Pipecat's 0.2 rather than the agent's
+    `silence_timeout_ms`. The two are otherwise serial, not parallel:
+    `BaseSmartTurn.append_audio` is handed `is_speech=vad_user_speaking`, so
+    its own silence counter does not start until VAD has already waited out
+    its window. At our 800ms default that put end-of-turn 1.8s after the
+    caller stopped talking (0.8 VAD + 1.0 `smart_turn_stop_secs`) before the
+    LLM was even called. Pipecat warns about the same mismatch from the other
+    end: a VAD window at or above the STT's p99 transcript latency (0.35s on
+    Deepgram) collapses its turn-stop safety net to zero, leaving the
+    aggregator's 5s `user_turn_stop_timeout` as the only thing ending some
+    turns.
+
+    Without Smart Turn nothing else decides the turn, so `silence_timeout_ms`
+    keeps driving VAD there — including on S2S.
     """
     from pipecat.audio.vad.silero import SileroVADAnalyzer
-    from pipecat.audio.vad.vad_analyzer import VADParams
+    from pipecat.audio.vad.vad_analyzer import VAD_STOP_SECS, VADParams
 
-    params: dict[str, Any] = {"stop_secs": config.silence_timeout_ms / 1000}
+    stop_secs = (
+        VAD_STOP_SECS
+        if smart_turn and config.smart_turn_detection
+        else config.silence_timeout_ms / 1000
+    )
+    params: dict[str, Any] = {"stop_secs": stop_secs}
     confidence = getattr(pipecat_settings, "vad_confidence_threshold", None)
     if confidence is not None:
         params["confidence"] = confidence
@@ -936,6 +961,7 @@ def create_pipeline(
             config,
             sample_rate=audio_sample_rate,
             pipecat_settings=pipecat_settings,
+            smart_turn=True,
         ),
         # Pipecat counts in seconds; 0 disables, which is also our "off".
         # CallSession registers the handler that reacts to it.
@@ -1205,7 +1231,7 @@ def create_pipeline(
     logger.info(
         "Pipeline created: STT={stt}/{stt_model} LLM={llm_info} TTS={tts}/{tts_voice}",
         stt=config.stt.provider,
-        stt_model=config.stt.model,
+        stt_model=_stt_model(config.stt.provider, config.stt.model),
         llm_info=llm_info,
         tts=config.tts.provider,
         tts_voice=config.tts.voice,
