@@ -26,8 +26,14 @@ from typing import Any
 # of its audio, which a text-modality rerun never produces.
 _REPLY_EVENT = "llm_response"
 
-# What the caller's side is called in a transcript event, as the taps write it.
-_CALLER = "customer"
+# The agent's side, which the assistant tap writes literally. The caller's role
+# is *not* reliably "customer": the tap writes `frame.user_id or "customer"`,
+# and pipecat fills `user_id` from a `UserAudioRawFrame` on transports that
+# supply one (Daily, LiveKit). So the caller is defined as "not the assistant"
+# rather than by a literal that a future transport could quietly change —
+# otherwise every caller turn would be dropped and a call with plenty of speech
+# would convert to "no caller speech".
+_ASSISTANT = "assistant"
 
 
 class ConversionError(ValueError):
@@ -78,8 +84,8 @@ def build_scenario(
     without booking anything a second time. A derived scenario that needed a
     human to add mocks before it was safe would mostly be run before they did.
     """
-    spoken = [e for e in transcript if _text(e) and _role(e) in (_CALLER, "assistant")]
-    if not any(_role(e) == _CALLER for e in spoken):
+    spoken = [e for e in transcript if _text(e) and _role(e)]
+    if not any(_role(e) != _ASSISTANT for e in spoken):
         raise ConversionError("the call has no caller speech to build turns from")
 
     turns: list[dict[str, Any]] = []
@@ -88,7 +94,7 @@ def build_scenario(
     turn_started: list[datetime | None] = []
 
     for entry in spoken:
-        if _role(entry) == _CALLER:
+        if _role(entry) != _ASSISTANT:
             turns.append({"user": _text(entry), "expect": []})
             turn_started.append(_when(entry))
         elif turns:

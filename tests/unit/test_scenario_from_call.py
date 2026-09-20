@@ -99,6 +99,24 @@ class TestTurns:
         )
         assert len(draft["definition"]["turns"][0]["expect"]) == 2
 
+    def test_the_caller_is_whoever_is_not_the_assistant(self) -> None:
+        """The tap writes `frame.user_id or "customer"`, and pipecat fills
+        `user_id` from a `UserAudioRawFrame` on transports that supply one
+        (Daily, LiveKit). Keying on the literal "customer" would drop every
+        caller turn on such a transport and report a call full of speech as
+        having none."""
+        draft = convert.build_scenario(
+            transcript=[
+                _entry("participant-7f3a", "do you deliver?", at=1),
+                _entry("assistant", "We do, within five miles.", at=2),
+            ],
+            invocations=[],
+            name="delivery",
+        )
+        turns = draft["definition"]["turns"]
+        assert [t["user"] for t in turns] == ["do you deliver?"]
+        assert turns[0]["expect"][0]["text_contains"] == "We do, within five miles."
+
     def test_a_call_with_no_caller_speech_is_refused(self) -> None:
         """A voicemail or a call that never connected has nothing to script."""
         with pytest.raises(convert.ConversionError, match="no caller speech"):
