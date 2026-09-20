@@ -220,15 +220,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(takeaways_router, prefix="/v1")
 
-    from turncall.api.v1.testing import router as test_suites_router
-    from turncall.api.v1.testing import test_runs_router
     from turncall.api.v1.tools import router as tools_router
     from turncall.api.v1.webhooks import router as webhooks_router
 
     app.include_router(tools_router, prefix="/v1")
     app.include_router(webhooks_router, prefix="/v1")
-    app.include_router(test_suites_router, prefix="/v1")
-    app.include_router(test_runs_router, prefix="/v1")
 
     from turncall.api.v1.webrtc import router as webrtc_router
 
