@@ -20,10 +20,34 @@ regressions actually live. The last four merged fixes were all in it:
 | #64 | STT sent Deepgram's model name to every provider | Yes — 400 at STT connect. **Audio mode only** |
 | #65 | LLM sent OpenAI's model name to every provider | Yes — Anthropic `404 not_found_error`. Text mode is enough |
 | #63 | A default google S2S agent sent OpenAI's model to Gemini | Yes — provider rejects at connect |
-| #67 | Two silence timers ran in series (+1.8s/turn) | **Likely**, via a `within_ms` budget in audio mode — unverified, see §9 |
+| #67 | Two silence timers ran in series (+1.8s/turn) | **Yes — measured** (#72), via a `within_ms` budget in audio mode. See below |
 
-Three confirmed, one likely. All of them sit in `pipeline_factory.py`, which is
-exactly what this design exercises.
+All four, and all of them sit in `pipeline_factory.py`, which is exactly what
+this design exercises.
+
+**The #67 claim was measured while building #72, and it holds.** The same
+scenario, the same agent, the same words, twice — once with the VAD's silence
+window at 200ms and once at 2000ms, smart turn off both times, so the only
+difference is the wait #67 was about:
+
+| Silence window | Measured turn |
+|---|---|
+| 200ms | 4493ms |
+| 2000ms | 6226ms |
+
+A configured difference of 1800ms showed up as **1733ms** of measured turn
+duration — 96% of it, the remainder inside normal LLM and TTS jitter. So the
+wait lands in the number a `within_ms` budget is checked against, essentially
+one-for-one, and a budget set between the two passes one config and fails the
+other. That is the whole mechanism the #67 class needs.
+
+Two honest limits on that figure. It is **n=1 per config** — enough to show the
+wait is not being absorbed somewhere, not enough for a threshold anyone should
+tune against; the test asserts a deliberately loose `> 800ms` for that reason.
+And it is **audio only**: a loopback socket does not pace in realtime, so what
+is measured here is latency, never dead air (§9.1). Reproduce with
+`tests/live/test_live_eval_audio.py::test_the_turn_timing_claim_is_measured_not_assumed`,
+whose failure message states the finding if it ever stops holding.
 
 **Caveat found while building #70, and it changes how a scenario must be
 written.** "The provider rejects at connect" does not fail a scenario on its
@@ -232,6 +256,13 @@ An S2S pipeline has no TTS stage, so `skip_tts` has nothing to silence and there
 is no separate LLM text output for a text-mode judge to read. **S2S agents are
 expected to be audio-mode only** — the same shape as "avatar is WebRTC + cascade
 only". Verify against a real Gemini Live agent before documenting it either way.
+
+**Still unverified after #72.** Audio modality shipped and the #67 claim above
+was measured, but this one was not: it needs a Gemini Live or Nova Sonic agent
+and a real run, and there is no test for it — a probe with nothing to assert is
+not one. Until someone runs it, TurnCall neither enforces audio-only for S2S nor
+promises text works: a text-modality run against an S2S agent does whatever it
+does. This is the last open claim in this document.
 
 ## 6. Schema
 
@@ -621,11 +652,9 @@ One migration and one commit: drop both tables and `test_run_status`; delete
 4. **Audio modality.** Built in #72 — `modality: audio` runs end to end, the
    judge's transcription is surfaced beside the agent's text, and the caller's
    synthesized turns are cached under `EVAL_TTS_CACHE_DIR`. The two claims it
-   was meant to settle are **still open**: both need a live run with real
-   credentials. `tests/live/test_live_eval_audio.py` carries the turn-timing
-   measurement as an executable test whose failure message states the finding
-   either way; the S2S question has no test yet, because a probe with nothing
-   to assert is not one.
+   was meant to settle: the **#67 turn-timing claim is now measured** and holds
+   (§1 carries the numbers), and the **S2S question is still open** — it needs a
+   Gemini Live or Nova Sonic agent and a real run (§5).
 5. **Simulation kind** — persona, goal, metrics, iterations.
 6. **CLI** with the exit code.
 7. **Console**: evals tab, run detail, then the two "Save as scenario" buttons.

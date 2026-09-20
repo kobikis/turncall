@@ -16,6 +16,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from loguru import logger
 
 from turncall.domain.enums import EvalKind, EvalModality
 from turncall.domain.models import AgentConfig
@@ -152,12 +153,21 @@ async def test_the_turn_timing_claim_is_measured_not_assumed(
     )
 
     assert fast.passed and slow.passed, "both should answer; only the timing differs"
-    gap_ms = slow.turns[0].duration_ms - fast.turns[0].duration_ms
+    fast_ms, slow_ms = fast.turns[0].duration_ms, slow.turns[0].duration_ms
+    gap_ms = slow_ms - fast_ms
+    # The measurement is the point of this test, so it is reported whether it
+    # passes or fails — a number nobody can read settles nothing.
+    logger.info(
+        "turn_timing_measurement fast={fast}ms slow={slow}ms gap={gap}ms",
+        fast=fast_ms,
+        slow=slow_ms,
+        gap=gap_ms,
+    )
     # The finding this test exists to produce. Recorded in the failure message
     # so a run that disproves it says so out loud rather than just going red.
     assert gap_ms > 800, (
         "the silence window did not show up in the measured turn: "
-        f"fast={fast.turns[0].duration_ms}ms slow={slow.turns[0].duration_ms}ms. "
+        f"fast={fast_ms}ms slow={slow_ms}ms. "
         "A latency budget does NOT catch the #67 class — update evals-design §1."
     )
 
