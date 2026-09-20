@@ -4722,7 +4722,7 @@
           "evals"
         ],
         "summary": "Create Eval Run",
-        "description": "Queue a run. 202: the worker executes it, this process never does.",
+        "description": "Queue a run per scenario. 202: the worker executes them, never this\nprocess.\n\nA `tag` fans out to every scenario carrying it; the runs share one batch id\nso a single request has a single readable verdict. Each run is queued\nindependently, so one that cannot be pushed does not cost the others theirs.",
         "operationId": "create_eval_run_v1_eval_runs_post",
         "parameters": [
           {
@@ -4860,6 +4860,68 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response List Eval Runs V1 Eval Runs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/eval-runs/batches/{batch_id}": {
+      "get": {
+        "tags": [
+          "evals"
+        ],
+        "summary": "Get Eval Batch",
+        "description": "A batch's outcome without fetching every run's transcripts (#75).\n\nRoute declared before `/{run_id}` so a literal path segment is not read as\na run id \u2014 FastAPI matches in declaration order.",
+        "operationId": "get_eval_batch_v1_eval_runs_batches__batch_id__get",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Batch Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Eval Batch V1 Eval Runs Batches  Batch Id  Get"
                 }
               }
             }
@@ -6248,9 +6310,29 @@
       "CreateEvalRunRequest": {
         "properties": {
           "scenario_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Scenario Id"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
           },
           "target": {
             "$ref": "#/components/schemas/EvalTarget"
@@ -6268,10 +6350,10 @@
         },
         "type": "object",
         "required": [
-          "scenario_id",
           "target"
         ],
-        "title": "CreateEvalRunRequest"
+        "title": "CreateEvalRunRequest",
+        "description": "Run one scenario, or every scenario carrying a tag (#75).\n\nExactly one of `scenario_id` and `tag`. A tag fans out to one run per\nmatching scenario, all sharing a batch id, so one request has one readable\nverdict \u2014 which is what the CLI's single exit code is built on."
       },
       "CreateEvalScenarioRequest": {
         "properties": {

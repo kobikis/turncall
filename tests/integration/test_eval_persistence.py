@@ -12,6 +12,7 @@ Skips if Postgres isn't reachable, like the other integration tests.
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import update
@@ -347,3 +348,81 @@ async def test_the_janitor_leaves_a_freshly_queued_run_alone(factory) -> None:
     async with factory() as session:
         reread = await eval_repo.get_run(session, run_id)
         assert reread.status == EvalRunStatus.QUEUED.value
+
+
+async def test_a_batch_reads_back_without_fetching_every_run(factory) -> None:
+    """Fan-out is one run per tagged scenario sharing a batch id, and the batch
+    reads back through the same filter the CLI will use (#75). Runs in a batch
+    are independent rows: one erroring leaves the others alone."""
+    from turncall.evals.runner import batch_outcome
+
+    batch_id = uuid4()
+    async with factory() as session:
+        project = await _project(session, "eval-batch-test")
+        scenarios = []
+        for name in ("books", "cancels", "reschedules"):
+            scenarios.append(
+                await eval_repo.create_scenario(
+                    session,
+                    project_id=project.id,
+                    name=name,
+                    kind="script",
+                    definition=SCRIPTED,
+                    schema_version="pipecat-1.11",
+                    tags=["pre-publish"],
+                )
+            )
+        for scenario in scenarios:
+            await eval_repo.create_run(
+                session,
+                project_id=project.id,
+                scenario_id=scenario.id,
+                scenario_name=scenario.name,
+                kind="script",
+                target={"type": "agent", "agent_id": str(uuid4())},
+                resolved_scenario={"definition": SCRIPTED},
+                modality="text",
+                iterations=1,
+                batch_id=batch_id,
+            )
+        await session.commit()
+        project_id = project.id
+
+    async with factory() as session:
+        rows = await eval_repo.list_runs(session, project_id, batch_id=batch_id)
+        assert len(rows) == 3, "one run per tagged scenario, one batch"
+        assert {r.scenario_name for r in rows} == {"books", "cancels", "reschedules"}
+
+        # Independent: finishing one differently leaves the rest untouched.
+        await eval_repo.finish_run(
+            session,
+            rows[0].id,
+            status=EvalRunStatus.ERRORED,
+            passed_count=0,
+            failed_count=0,
+            results=[],
+            error="the judge was unreachable",
+        )
+        await eval_repo.finish_run(
+            session,
+            rows[1].id,
+            status=EvalRunStatus.PASSED,
+            passed_count=1,
+            failed_count=0,
+            results=[],
+            error=None,
+        )
+        await session.commit()
+
+    async with factory() as session:
+        rows = await eval_repo.list_runs(session, project_id, batch_id=batch_id)
+        outcome = batch_outcome(batch_id, rows)
+        # One still queued, so no verdict yet — reading one now would be a lie
+        # the caller cannot detect.
+        assert outcome["status"] is EvalRunStatus.RUNNING
+        assert outcome["counts"]["errored"] == 1
+
+        queued = await eval_repo.list_runs(
+            session, project_id, batch_id=batch_id, status="queued"
+        )
+        assert len(queued) == 1, "status filter narrows within the batch"

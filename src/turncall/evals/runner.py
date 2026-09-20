@@ -991,6 +991,50 @@ async def _finish_run(
     )
 
 
+def batch_outcome(batch_id: UUID, runs: list[Any]) -> dict[str, Any]:
+    """A batch's verdict and counts, from the run rows alone (#75).
+
+    Derived the way a run derives its own from its iterations, one level out:
+    anything still queued or running makes the batch `running`, any failed run
+    fails it, and a batch where nothing reached a verdict is `errored` rather
+    than passed — `errored` is not a kind of pass, at either level.
+
+    `passed_count`/`failed_count` are runs, not iterations: a batch of ten
+    scenarios reads 9/10, and each run still reports its own 7/10 inside.
+    """
+    counts: dict[str, int] = {}
+    for run in runs:
+        counts[run.status] = counts.get(run.status, 0) + 1
+
+    in_flight = counts.get(EvalRunStatus.QUEUED.value, 0) + counts.get(
+        EvalRunStatus.RUNNING.value, 0
+    )
+    passed = counts.get(EvalRunStatus.PASSED.value, 0)
+    failed = counts.get(EvalRunStatus.FAILED.value, 0)
+    if in_flight:
+        status = EvalRunStatus.RUNNING
+    elif failed:
+        status = EvalRunStatus.FAILED
+    elif passed:
+        status = EvalRunStatus.PASSED
+    elif counts.get(EvalRunStatus.CANCELLED.value, 0) and not counts.get(
+        EvalRunStatus.ERRORED.value, 0
+    ):
+        status = EvalRunStatus.CANCELLED
+    else:
+        status = EvalRunStatus.ERRORED
+
+    return {
+        "batch_id": batch_id,
+        "status": status,
+        "total": len(runs),
+        "counts": counts,
+        "passed_count": passed,
+        "failed_count": failed,
+        "runs": runs,
+    }
+
+
 async def execute_run(
     run_id: UUID,
     *,

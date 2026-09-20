@@ -5,6 +5,7 @@ A run is accepted with 202 and executed by `turncall-eval-worker` — never in
 this process (ADR-0004: event-loop jitter here is dead air on a live call).
 """
 
+from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter
@@ -17,6 +18,7 @@ from turncall.api.v1.schemas.evals import (
     SCHEMA_VERSION,
     CreateEvalRunRequest,
     CreateEvalScenarioRequest,
+    EvalBatchResponse,
     EvalRunResponse,
     EvalScenarioResponse,
     UpdateEvalScenarioRequest,
@@ -25,7 +27,7 @@ from turncall.auth import Auth, WriteAuth
 from turncall.config import get_settings
 from turncall.domain.enums import EvalKind, EvalRunStatus, EvalToolPolicy
 from turncall.evals import queue as eval_queue
-from turncall.evals.runner import resolved_scenario_snapshot
+from turncall.evals.runner import batch_outcome, resolved_scenario_snapshot
 from turncall.storage.repositories import eval_repo
 
 router = APIRouter(prefix="/eval-scenarios", tags=["evals"])
@@ -135,54 +137,19 @@ async def delete_eval_scenario(
     return ok({"deleted": True})
 
 
-@runs_router.post("", status_code=202)
-async def create_eval_run(
-    body: CreateEvalRunRequest,
-    auth: WriteAuth,
-    session: DbSession,
-) -> dict:
-    """Queue a run. 202: the worker executes it, this process never does."""
-    settings = get_settings()
-    if body.iterations > settings.evals.max_iterations:
-        raise BadRequestError(
-            f"iterations exceeds the limit of {settings.evals.max_iterations}"
-        )
+async def _queue_one(session: DbSession, run: Any) -> str:
+    """Push one recorded run onto the worker queue, reporting what holds.
 
-    scenario = await eval_repo.get_scenario(
-        session, body.scenario_id, project_id=auth.project_id
-    )
-    if scenario is None:
-        raise NotFoundError("EvalScenario", str(body.scenario_id))
-    batch_id = uuid4()
-    run = await eval_repo.create_run(
-        session,
-        project_id=auth.project_id,
-        scenario_id=scenario.id,
-        scenario_name=scenario.name,
-        kind=scenario.kind,
-        target=body.target.model_dump(mode="json", exclude_none=True),
-        resolved_scenario=resolved_scenario_snapshot(
-            definition=scenario.definition,
-            schema_version=scenario.schema_version,
-            tool_mocks=scenario.tool_mocks,
-            tool_policy=scenario.tool_policy,
-        ),
-        modality=body.modality.value,
-        iterations=body.iterations,
-        batch_id=batch_id,
-    )
-    await session.commit()
-
-    # The row is committed before the queue push, so a run is never executed
-    # without being recorded. If the push then fails there is nothing to execute
-    # it -- the janitor only sweeps `running`, so the row would sit at `queued`
-    # forever while the caller was told it was accepted. Record the truth
-    # instead, and report the status that actually holds.
-    status = run.status
+    The row is committed before the push, so a run is never executed without
+    being recorded. If the push then fails there is nothing to execute it — the
+    janitor only sweeps `running`, so the row would sit at `queued` forever
+    while the caller was told it was accepted.
+    """
     try:
         from turncall.storage.redis import get_redis
 
         await eval_queue.enqueue(get_redis(), run.id)
+        return run.status
     except Exception as exc:
         logger.exception("eval_enqueue_failed", run_id=str(run.id))
         # Guarded: a push can raise after the write landed (the reply read times
@@ -195,21 +162,91 @@ async def create_eval_run(
             error=f"could not be queued: {type(exc).__name__}: {exc}",
         )
         await session.commit()
-        if failed:
-            status = EvalRunStatus.ERRORED.value
+        return EvalRunStatus.ERRORED.value if failed else run.status
 
-    return ok(
+
+@runs_router.post("", status_code=202)
+async def create_eval_run(
+    body: CreateEvalRunRequest,
+    auth: WriteAuth,
+    session: DbSession,
+) -> dict:
+    """Queue a run per scenario. 202: the worker executes them, never this
+    process.
+
+    A `tag` fans out to every scenario carrying it; the runs share one batch id
+    so a single request has a single readable verdict. Each run is queued
+    independently, so one that cannot be pushed does not cost the others theirs.
+    """
+    settings = get_settings()
+    if body.iterations > settings.evals.max_iterations:
+        raise BadRequestError(
+            f"iterations exceeds the limit of {settings.evals.max_iterations}"
+        )
+
+    if body.tag:
+        scenarios = await eval_repo.list_scenarios(
+            session, auth.project_id, tag=body.tag
+        )
+        if not scenarios:
+            # An empty batch is worse than a rejection: it reports "0 failures"
+            # forever, which reads as a pass. A typo'd tag is the common case.
+            raise BadRequestError(f"no scenarios carry the tag {body.tag!r}")
+    else:
+        scenario = await eval_repo.get_scenario(
+            session, body.scenario_id, project_id=auth.project_id
+        )
+        if scenario is None:
+            raise NotFoundError("EvalScenario", str(body.scenario_id))
+        scenarios = [scenario]
+
+    batch_id = uuid4()
+    target = body.target.model_dump(mode="json", exclude_none=True)
+    created = []
+    for scenario in scenarios:
+        run = await eval_repo.create_run(
+            session,
+            project_id=auth.project_id,
+            scenario_id=scenario.id,
+            scenario_name=scenario.name,
+            kind=scenario.kind,
+            target=target,
+            resolved_scenario=resolved_scenario_snapshot(
+                definition=scenario.definition,
+                schema_version=scenario.schema_version,
+                tool_mocks=scenario.tool_mocks,
+                tool_policy=scenario.tool_policy,
+            ),
+            modality=body.modality.value,
+            iterations=body.iterations,
+            batch_id=batch_id,
+        )
+        created.append(run)
+    await session.commit()
+
+    runs = [
         {
-            "batch_id": str(batch_id),
-            "runs": [
-                {
-                    "id": str(run.id),
-                    "scenario_name": run.scenario_name,
-                    "status": status,
-                }
-            ],
+            "id": str(run.id),
+            "scenario_id": str(run.scenario_id) if run.scenario_id else None,
+            "scenario_name": run.scenario_name,
+            "status": await _queue_one(session, run),
         }
-    )
+        for run in created
+    ]
+    return ok({"batch_id": str(batch_id), "runs": runs})
+
+
+@runs_router.get("/batches/{batch_id}")
+async def get_eval_batch(batch_id: UUID, auth: Auth, session: DbSession) -> dict:
+    """A batch's outcome without fetching every run's transcripts (#75).
+
+    Route declared before `/{run_id}` so a literal path segment is not read as
+    a run id — FastAPI matches in declaration order.
+    """
+    rows = await eval_repo.list_runs(session, auth.project_id, batch_id=batch_id)
+    if not rows:
+        raise NotFoundError("EvalBatch", str(batch_id))
+    return ok(EvalBatchResponse.model_validate(batch_outcome(batch_id, rows)))
 
 
 @runs_router.get("")
