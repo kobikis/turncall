@@ -643,6 +643,10 @@ class EvalRunRow(Base):
     agent_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
     )
+    # Which version `agent_id` was, recorded because the column carries no
+    # foreign key: the agent row can be deleted and take the answer with it.
+    # NULL for an inline target, which has no version (#74).
+    agent_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     modality: Mapped[str] = mapped_column(
         Enum("text", "audio", name="eval_modality"), nullable=False
     )

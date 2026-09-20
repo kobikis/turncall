@@ -320,6 +320,7 @@ CREATE TABLE eval_runs (
   resolved_scenario   jsonb NOT NULL,   -- definition + schema_version + tool_mocks + tool_policy
   harness_config      jsonb NOT NULL,   -- judge + persona model, pipecat version
   agent_id            uuid,             -- NULL for an inline target
+  agent_version       int,              -- which version that was; NULL inline (#74)
   modality            eval_modality NOT NULL,
   iterations          int NOT NULL DEFAULT 1,
   status              eval_run_status NOT NULL DEFAULT 'queued',
@@ -450,6 +451,15 @@ project scoping are unchanged.
 {"type": "agent_name", "name": "support"}       // latest published, at run time
 {"type": "inline",     "agent": { ...config }}  // transient; also the tool sandbox (§9.2)
 ```
+
+All three built in #74. Two things the schema above does not show. A name with
+**no published version fails the run** rather than falling back to a draft:
+"test what is live" is the whole reason to target by name, and quietly testing
+an unpublished draft would answer a different question with the same green
+tick. And the run records `agent_version` alongside `agent_id` — the column
+carries no foreign key, so a deleted agent row would otherwise take the answer
+with it (`d3b8c1f4a205`). An inline target has neither: `agent_id` stays null
+per ADR-0017, and `resolved_config` is the record.
 
 ### Modality
 

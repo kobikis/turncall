@@ -157,12 +157,34 @@ class TestTarget:
         with pytest.raises(ValidationError, match="needs an 'agent_id'"):
             EvalTarget(type="agent")
 
-    def test_the_unbuilt_target_types_are_rejected_at_the_boundary(self) -> None:
-        """Better a 422 than a run that is accepted and then errors in a
-        worker the caller cannot see."""
-        for spec in ({"type": "agent_name", "name": "support"}, {"type": "inline"}):
-            with pytest.raises(ValidationError, match="not supported yet"):
-                EvalTarget(**spec)
+    def test_a_name_target_is_accepted(self) -> None:
+        """#74: resolved to whatever is published when the run executes."""
+        target = EvalTarget(type="agent_name", name="support")
+        assert target.name == "support"
+
+    def test_a_name_target_without_a_name_is_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="needs a 'name'"):
+            EvalTarget(type="agent_name")
+
+    def test_an_inline_target_carries_a_whole_config(self) -> None:
+        target = EvalTarget(
+            type="inline",
+            agent={"system_prompt": "unpublished", "llm": {"provider": "openai"}},
+        )
+        assert target.agent_id is None
+        assert target.agent["system_prompt"] == "unpublished"
+
+    def test_an_inline_target_without_a_config_is_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="needs an 'agent'"):
+            EvalTarget(type="inline")
+
+    def test_a_bad_inline_config_fails_here_not_in_the_worker(self) -> None:
+        """Validated by the same schema an agent create uses, `extra="forbid"`
+        included — a mis-nested section is a 422 rather than a field that
+        vanishes and is discovered when the run behaves oddly. Better a 422
+        than an error in a worker the caller cannot see."""
+        with pytest.raises(ValidationError, match="inline agent configuration"):
+            EvalTarget(type="inline", agent={"systemPrompt": "wrong casing"})
 
     def test_an_unknown_target_type_is_rejected(self) -> None:
         with pytest.raises(ValidationError):
