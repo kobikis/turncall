@@ -454,7 +454,11 @@ every rate, which would hide exactly the #63/#64/#65 class evals exist for.
 Everything *inside* the transport is invisible: the Twilio serializer and the
 whole ADR-0004 audio class, output underrun and dead air (loopback does not
 pace in realtime, so evals measure latency, not silence), and telephony.
-**Text mode also cannot see the agent's `first_message`** — it goes out as a
+**An eval connects no MCP servers.** It builds through `build_call_pipeline`,
+which takes no MCP manager, so an agent's MCP tools are neither contacted (the
+point of #71) nor advertised — the model never sees them, and a `tool_mocks`
+entry naming one never fires. The run warns (`eval_mock_matches_no_tool`)
+rather than failing. **Text mode also cannot see the agent's `first_message`** — it goes out as a
 `TTSSpeakFrame`, so it never becomes LLM text, and `skip_tts` silences the TTS.
 The judge is pipecat's `EvalJudge`, which is **Ollama by default** (`service:
 openai` is deprecated in pipecat 1.9 and gone in 2.0; anything else needs

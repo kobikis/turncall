@@ -115,7 +115,7 @@ async def test_a_mocked_webhook_tool_never_reaches_the_customers_endpoint() -> N
             "tool_name": "book_appointment",
             "arguments": {"when": "friday"},
             "result": result,
-            "mocked": True,
+            "outcome": "mocked",
         }
     ]
     assert mocks.refused == []
@@ -169,7 +169,8 @@ async def test_an_unmocked_tool_is_refused_not_executed() -> None:
     assert webhook.await_count == 0
     assert mocks.refused == ["book_appointment"]
     assert json.loads(result) == {"error": "unmocked tool: book_appointment"}
-    assert mocks.calls[0]["mocked"] is False
+    # Not the same thing as a tool that really ran: three outcomes, three names.
+    assert mocks.calls[0]["outcome"] == "refused"
 
 
 @pytest.mark.unit
@@ -196,7 +197,7 @@ async def test_live_executes_the_tool_and_records_it_as_real() -> None:
             "tool_name": "book_appointment",
             "arguments": {},
             "result": '{"from": "webhook"}',
-            "mocked": False,
+            "outcome": "executed",
         }
     ]
 

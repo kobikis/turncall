@@ -19,7 +19,7 @@ from loguru import logger
 from turncall.domain.enums import ToolExecutionMode
 from turncall.domain.models import BUILTIN_TOOL_NAMES, ToolDefinition
 from turncall.services import call_control
-from turncall.services.tool_mocks import intercept
+from turncall.services.tool_mocks import EXECUTED, intercept
 from turncall.services.tool_webhook import classify_tool_result, post_tool_webhook
 
 if TYPE_CHECKING:
@@ -335,7 +335,9 @@ def _register_single_tool(
         await params.result_callback(result)
         if call_context.tool_mocks is not None:
             # A `live` eval: the tool really ran, and the run's record says so.
-            call_context.tool_mocks.record(function_name, args, result, mocked=False)
+            call_context.tool_mocks.record(
+                function_name, args, result, outcome=EXECUTED
+            )
         if not call_context.is_eval:
             # No `calls` row behind an eval (ADR-0018), so
             # `tool_invocations.call_id` has nothing to point at and the write

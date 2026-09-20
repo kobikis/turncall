@@ -535,14 +535,14 @@ class TestExecuteRun:
         assert [m.live for m in seen] == [False, False]
         assert seen[0] is not seen[1], "a shared recorder would pool the calls"
 
-    async def test_an_unmocked_tool_errors_the_iteration_naming_it(self) -> None:
-        """Fail closed. The iteration is `errored`, never `failed`: nothing ran,
-        so it says nothing about the agent and must stay out of every rate."""
+    async def test_an_unmocked_tool_errors_the_run_naming_it(self) -> None:
+        """Fail closed. `errored`, never `failed`: nothing ran, so it says
+        nothing about the agent and must stay out of every rate."""
 
         async def execute(**kwargs):
             kwargs["tool_mocks"].refused.append("book_appointment")
             kwargs["tool_mocks"].record(
-                "book_appointment", {}, '{"error": "..."}', mocked=False
+                "book_appointment", {}, '{"error": "..."}', outcome="refused"
             )
             return _script_result(turns=[_turn_result()])
 
@@ -554,12 +554,51 @@ class TestExecuteRun:
         entry = kwargs["results"][0]
         assert entry["tool_calls"][0]["tool_name"] == "book_appointment"
 
+    async def test_a_mock_that_can_never_fire_is_called_out(self) -> None:
+        """An eval connects no MCP servers, so an MCP tool is never advertised
+        and a mock keyed to one means nothing — as does a typo. Silence is the
+        worst outcome: the mock reads as a tool that was simply never called."""
+        from turncall.evals import runner as runner_mod
+
+        run = self._run_row()
+        run.resolved_scenario["tool_mocks"] = {"searchCrm": {"hits": []}}
+        with patch.object(runner_mod.logger, "warning") as warn:
+            await self._execute(
+                run, AsyncMock(return_value=_script_result(turns=[_turn_result()]))
+            )
+        assert any(
+            call.args and call.args[0] == "eval_mock_matches_no_tool"
+            for call in warn.call_args_list
+        ), "a mock naming nothing the agent has must be reported"
+
+    async def test_a_refusal_condemns_the_run_even_if_others_passed(self) -> None:
+        """The run, not the iteration. A forgotten mock on a ten-iteration run
+        used to report PASSED because the other nine never reached the tool —
+        precisely the accident the policy exists to prevent. The run also stops
+        there: the rest would hit the same missing mock."""
+        calls = {"n": 0}
+
+        async def execute(**kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                kwargs["tool_mocks"].refused.append("book_appointment")
+            return _script_result(turns=[_turn_result()])
+
+        finish, _ = await self._execute(self._run_row(iterations=5), execute)
+        kwargs = finish.await_args.kwargs
+        assert calls["n"] == 2, "the remaining iterations are not paid for"
+        assert kwargs["status"] is EvalRunStatus.ERRORED
+        assert (kwargs["passed_count"], kwargs["failed_count"]) == (0, 0)
+        assert kwargs["error"] == "unmocked tool: book_appointment"
+        # What did happen is still readable per iteration.
+        assert kwargs["results"][0]["passed"] is True
+
     async def test_a_runs_results_carry_what_the_tools_did(self) -> None:
         """An eval has no `calls` row, so the run entry is the only tool record
         there is — and a mocked call has to be distinguishable from a real one."""
 
         async def execute(**kwargs):
-            kwargs["tool_mocks"].record("book", {}, '{"ok": true}', mocked=True)
+            kwargs["tool_mocks"].record("book", {}, '{"ok": true}', outcome="mocked")
             return _script_result(turns=[_turn_result()])
 
         finish, _ = await self._execute(self._run_row(), execute)
@@ -569,7 +608,7 @@ class TestExecuteRun:
                 "tool_name": "book",
                 "arguments": {},
                 "result": '{"ok": true}',
-                "mocked": True,
+                "outcome": "mocked",
             }
         ]
 

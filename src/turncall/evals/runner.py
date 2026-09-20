@@ -72,6 +72,10 @@ class IterationOutcome:
 
     passed: bool | None
     entry: dict[str, Any]
+    # The tool a `mock_only` run asked for and had no mock for. Set on this
+    # iteration, but it condemns the whole run: the scenario is misconfigured,
+    # not the agent (#71).
+    refused_tool: str | None = None
 
 
 ExecuteIteration = Callable[..., Awaitable[Any]]
@@ -332,11 +336,13 @@ def errored_entry(
     reason: str,
     *,
     tool_calls: list[dict[str, Any]] | None = None,
+    refused_tool: str | None = None,
 ) -> IterationOutcome:
     """An iteration the harness could not complete."""
     return IterationOutcome(
         passed=None,
         entry=_entry(iteration, error=reason, tool_calls=list(tool_calls or [])),
+        refused_tool=refused_tool,
     )
 
 
@@ -347,9 +353,17 @@ def derive_status(outcomes: list[IterationOutcome]) -> tuple[EvalRunStatus, int,
     anything about the agent, and reporting that as a failure is how a suite
     loses its audience. Otherwise any failed iteration fails the run, since a
     scripted scenario that fails once has found something real.
+
+    An unmocked tool errors the **run**, whatever the other iterations did
+    (#71). The agent asked for something the scenario forgot to mock, so the
+    scenario is misconfigured and no rate over it means anything — and a
+    forgotten mock that reported PASSED because four other iterations never
+    reached the tool is exactly the accident the policy exists to prevent.
     """
     passed = sum(1 for o in outcomes if o.passed is True)
     failed = sum(1 for o in outcomes if o.passed is False)
+    if any(o.refused_tool for o in outcomes):
+        return EvalRunStatus.ERRORED, 0, 0
     if passed == 0 and failed == 0:
         return EvalRunStatus.ERRORED, 0, 0
     status = EvalRunStatus.FAILED if failed else EvalRunStatus.PASSED
@@ -433,15 +447,19 @@ async def run_iterations(
         if mocks.refused:
             # Fail closed (#71): the agent asked for a tool no mock covers, so
             # nothing ran and the iteration says nothing about the agent.
-            # `errored`, not `failed` — the scenario was never finished.
+            # `errored`, not `failed` — the scenario was never finished. The
+            # run stops here: the remaining iterations would hit the same
+            # missing mock, and paying an LLM to prove it nine more times helps
+            # nobody.
             outcomes.append(
                 errored_entry(
                     iteration,
                     f"unmocked tool: {mocks.refused[0]}",
                     tool_calls=mocks.calls,
+                    refused_tool=mocks.refused[0],
                 )
             )
-            continue
+            break
         outcomes.append(
             map_script_result(
                 result,
@@ -468,6 +486,40 @@ async def _record_unrunnable(session: Any, run_id: UUID, exc: Exception) -> None
     )
     await session.commit()
     logger.warning("eval_run_unrunnable", run_id=str(run_id), error=str(exc))
+
+
+def _warn_unmatched_mocks(
+    tool_mocks: dict[str, Any], target: ResolvedTarget, *, run_id: UUID
+) -> None:
+    """Say so when a mock names a tool this run can never call.
+
+    An eval builds its pipeline through `build_call_pipeline`, which takes no
+    MCP manager, so an agent's MCP servers are neither connected nor
+    discovered: nothing is contacted (which is the point), but the model is
+    never shown those tools either, and a mock keyed to one sits there meaning
+    nothing. A typo in a mock's name looks exactly the same. Silence is the
+    worst of the three, since a mock that never fires reads as a tool that was
+    never called.
+
+    ponytail: a warning, not a rejection — the agent can be edited after the
+    scenario was written, and failing a queued run over a stale mock helps
+    nobody. Advertising mocked-but-undiscovered tools to the model is the real
+    fix, and needs a schema the mock does not carry today (#74's inline targets
+    are the sanctioned way to give an eval a tool surface of its own).
+    """
+    if not tool_mocks:
+        return
+    from turncall.domain.models import BUILTIN_TOOL_NAMES
+
+    known = {t.name for t in target.config.tools} | set(BUILTIN_TOOL_NAMES)
+    unmatched = sorted(set(tool_mocks) - known)
+    if unmatched:
+        logger.warning(
+            "eval_mock_matches_no_tool",
+            run_id=str(run_id),
+            tools=unmatched,
+            mcp_servers=len(target.config.mcp_servers),
+        )
 
 
 def _parse_for_run(run: Any, modality: EvalModality) -> tuple[EvalKind, Any]:
@@ -511,6 +563,7 @@ async def _plan_run(
         return None
 
     tool_mocks, live_tools = tool_policy_of(run.resolved_scenario)
+    _warn_unmatched_mocks(tool_mocks, target, run_id=run.id)
     if live_tools and (target.config.tools or target.config.mcp_servers):
         # The scenario typed the word, so this is allowed — but a real webhook
         # fires on every iteration and the run's record should not be the only
@@ -554,9 +607,14 @@ async def _finish_run(
     status, passed, failed = derive_status(outcomes)
     error = None
     if status is EvalRunStatus.ERRORED:
-        error = next(
-            (o.entry.get("error") for o in outcomes if o.entry.get("error")),
-            "no iteration produced a verdict",
+        refused = next((o.refused_tool for o in outcomes if o.refused_tool), None)
+        error = (
+            f"unmocked tool: {refused}"
+            if refused
+            else next(
+                (o.entry.get("error") for o in outcomes if o.entry.get("error")),
+                "no iteration produced a verdict",
+            )
         )
 
     async with session_factory() as session:

@@ -534,7 +534,12 @@ Three answers, weakest first:
   nothing from pipecat, and is the difference between a feature people run and
   one they fear. **Only the voice path**: an eval builds a pipeline, so it never
   reaches `services/chat_tools.py`. That seam stays unmocked until something can
-  actually drive a text session through it.
+  actually drive a text session through it. And **no MCP server is connected at
+  all** on that path — `build_call_pipeline` takes no MCP manager — so those
+  tools are neither contacted nor advertised, and a mock naming one never fires;
+  the run warns. Giving an eval a tool surface with mocked MCP tools in it needs
+  a schema the mock does not carry, and inline targets (#74) are the sanctioned
+  way to hand a scenario its own tools meanwhile.
 
 ### 9.3 The judge is the weakest component
 

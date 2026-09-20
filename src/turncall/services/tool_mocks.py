@@ -24,6 +24,11 @@ from loguru import logger
 from turncall.config.settings import get_settings
 from turncall.services.tool_webhook import cap_tool_result
 
+# What happened to one tool call, for the iteration's record.
+MOCKED = "mocked"  # the canned response was returned, nothing was dispatched
+EXECUTED = "executed"  # `live`: the real tool ran
+REFUSED = "refused"  # no mock under `mock_only`: nothing ran, the run is errored
+
 
 def encode_mock(response: Any) -> str:
     """A mock as the string a tool handler returns.
@@ -52,11 +57,21 @@ class ToolMocks:
     calls: list[dict[str, Any]] = field(default_factory=list)
 
     def record(
-        self, name: str, args: dict[str, Any], result: str, *, mocked: bool
+        self, name: str, args: dict[str, Any], result: str, *, outcome: str
     ) -> None:
-        """Record one tool call for the iteration's results entry."""
+        """Record one tool call for the iteration's results entry.
+
+        Three outcomes, not two: a `refused` call and one that really executed
+        under `live` are opposites, and a single `mocked: false` flag made them
+        identical in the only record an eval has.
+        """
         self.calls.append(
-            {"tool_name": name, "arguments": args, "result": result, "mocked": mocked}
+            {
+                "tool_name": name,
+                "arguments": args,
+                "result": result,
+                "outcome": outcome,
+            }
         )
 
 
@@ -80,7 +95,7 @@ def intercept(mocks: ToolMocks | None, name: str, args: dict[str, Any]) -> str |
             tool=name,
             source="mock",
         )
-        mocks.record(name, args, result, mocked=True)
+        mocks.record(name, args, result, outcome=MOCKED)
         return result
 
     if mocks.live:
@@ -91,6 +106,6 @@ def intercept(mocks: ToolMocks | None, name: str, args: dict[str, Any]) -> str |
     # with it — a refused side effect is not a verdict about the agent.
     reason = f"unmocked tool: {name}"
     mocks.refused.append(name)
-    mocks.record(name, args, json.dumps({"error": reason}), mocked=False)
+    mocks.record(name, args, json.dumps({"error": reason}), outcome=REFUSED)
     logger.warning("eval_unmocked_tool_refused", tool=name)
     return json.dumps({"error": reason})

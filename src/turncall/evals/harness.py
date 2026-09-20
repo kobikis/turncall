@@ -98,7 +98,7 @@ async def run_iteration(
     settings: Any,
     session_factory: Any,
     run_id: UUID,
-    tool_mocks: Any = None,
+    tool_mocks: Any,
 ) -> Any:
     """Run one scenario-iteration end to end and return pipecat's result.
 
@@ -128,7 +128,9 @@ async def run_iteration(
         session_factory=session_factory,
         eval_run_id=run_id,
         # The scenario's mocks + policy, short-circuited in the tool bridge
-        # before anything is dispatched (#71).
+        # before anything is dispatched (#71). Required, not defaulted: a
+        # caller that forgot it would run the agent's real tools, which is the
+        # one thing this slice exists to prevent.
         tool_mocks=tool_mocks,
     )
 
