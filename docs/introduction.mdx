@@ -34,6 +34,9 @@ Define an agent via API, bind it to a phone number, and callers talk to your AI.
   <Card title="Tool Calling" icon="wrench">
     Built-in tools (transfer, handoff, DTMF) + webhook tools + MCP servers.
   </Card>
+  <Card title="Connected Apps" icon="puzzle-piece">
+    Slack and Google Calendar on an agent without handling a token — during a call, or when one ends.
+  </Card>
   <Card title="Knowledge Base (RAG)" icon="book">
     Upload documents with three retrieval modes: prompt, auto, and tool.
   </Card>
@@ -46,8 +49,17 @@ Define an agent via API, bind it to a phone number, and callers talk to your AI.
   <Card title="Post-Call Analysis" icon="chart-bar">
     Automatic summary, sentiment, success evaluation, and structured extraction.
   </Card>
+  <Card title="Takeaways" icon="clipboard-check">
+    Define a JSON schema once, attach it to any agent, and get it filled from every call.
+  </Card>
+  <Card title="Evals" icon="vial">
+    Behavioural tests that run against the real pipeline — scripted or simulated, text or audio, with tools mocked. Gate a PR on whether your agent still behaves.
+  </Card>
   <Card title="Server Events" icon="arrows-left-right">
     Bidirectional hooks — call-init, function-call, call-end, transcript updates.
+  </Card>
+  <Card title="Observability" icon="chart-line">
+    OpenTelemetry traces and pipeline observers — per-stage latency, turn timing, startup.
   </Card>
 </CardGroup>
 
