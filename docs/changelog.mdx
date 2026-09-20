@@ -28,9 +28,16 @@ comprehensive: status, counts, every iteration's transcript and failures, and
 the configuration snapshots. The envelope gains a nullable `eval_run_id` beside
 `call_id` and `session_id`; existing subscribers are unaffected.
 
-**Derive a scenario from a real call** — `POST /v1/eval-scenarios/from-call`
-turns a finished call into a draft, seeding each tool mock with what that tool
-actually returned.
+**Derive a scenario from a real conversation** — `POST
+/v1/eval-scenarios/from-call` turns a finished call into a draft, and
+`POST /v1/eval-scenarios/from-session` does the same for an SMS, chat or
+WhatsApp conversation. Each tool mock is seeded with what that tool actually
+returned.
+
+**`POST /v1/webrtc/connect` returns the call id** beside `sdp` and `type`. A
+browser that had just held a conversation could not say which call it was, so it
+could not fetch the transcript, link the recording, or convert it. Additive — a
+client reading only `sdp`/`type` sees no change.
 
 **Tool calling on SMS, chat and WhatsApp text.** Text conversations could not
 call tools at all — an agent that books meetings on a phone call would claim it

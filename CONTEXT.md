@@ -305,6 +305,18 @@ to a tool no mock covers: refused, and the iteration errored naming it. See ADR-
 _Avoid_: "test suite" — the name of the dead stub this replaced (#69), and of the
 abstraction Vapi retired in favour of Simulations. Grouping is `tags` and [[batch]].
 
+**Derived scenario** (a **draft**):
+A [[scenario]] converted from a conversation that already happened, rather than written:
+`from-call` for a voice call, `from-session` for an SMS, chat or WhatsApp one. Caller
+utterances become turns, agent replies become expectations, and each recorded tool
+invocation becomes both a `function_call` expectation carrying the arguments actually
+used and a [[tool mock]] seeded with what that tool really returned — so the draft runs
+safely under `mock_only` without repeating the call's side effects. It is a **draft** and
+the response says so: unedited, it asserts whatever the agent did that day, mistakes
+included. Evals only find what someone thought to test; the unknown unknowns come from
+production, which is why this loop exists at all.
+_Avoid_: "recorded test", or any wording that implies the expectations were reviewed.
+
 **Run events**:
 `eval.run.started` and `eval.run.completed`, the only two an eval dispatches. The
 completed one is comprehensive — the whole result, including the three snapshots

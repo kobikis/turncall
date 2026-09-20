@@ -97,7 +97,7 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 | `PIPECAT_ENABLE_OBSERVERS` / `PIPECAT_ENABLE_TRACING` / `PIPECAT_TRACE_INCLUDE_PII` | No | Observability toggles (all default `true`). PII = caller phone numbers on spans. See `adr/0010` |
 | `API_KEY_HASH_SECRET` | Prod | Pepper for the HMAC-SHA256 hashing of API keys — a DB leak alone can't brute-force keys without it. **Set a strong value once and don't rotate** (rotating invalidates peppered keys; pre-pepper keys keep working via dual-read + upgrade-on-use). Default `change-me-in-production` gives no real protection until set |
 | `EVAL_TTS_CACHE_DIR` | No | Where the caller's synthesized turns are cached in audio runs (default `./storage/eval-tts-cache`). Pipecat's own default lives under `$HOME`, which a container loses on recreate — every repeat run would then re-synthesize every caller turn. Mount it |
-| `EVAL_MAX_CONCURRENT_RUNS` | No | Scenario-iterations the eval worker runs at once (default `4`). The worker runs the bot pipeline **and** the harness — which itself runs a persona LLM, a TTS, an STT and the judge — so in audio mode one run is roughly double a real call's service load in one event loop. A starting point, not a measurement. `EVAL_MAX_RUN_DURATION_SECONDS` (default `900`) is the janitor's cutoff for reclaiming a run a crashed worker left claimed, as `errored`; `EVAL_JANITOR_INTERVAL_SECONDS` (`60`) and `EVAL_MAX_ITERATIONS` (`50`) bound the sweep and one request's paid LLM work. See `adr/0018` |
+| `EVAL_MAX_CONCURRENT_RUNS` | No | Scenario-iterations the eval worker runs at once (default `4`). The worker runs the bot pipeline **and** the harness — which itself runs a persona LLM, a TTS, an STT and the judge — so in audio mode one run is roughly double a real call's service load in one event loop. A starting point, not a measurement. `EVAL_MAX_RUN_DURATION_SECONDS` (default `900`) is the janitor's cutoff for reclaiming a run a crashed worker left claimed, as `errored`; `EVAL_MAX_QUEUED_SECONDS` (`3600`) is the same cutoff for a run **nothing ever claimed** — the API committed the row then died before the queue push — and is longer, because waiting behind a backlog is normal where running for 15 minutes is not. `EVAL_JANITOR_INTERVAL_SECONDS` (`60`) and `EVAL_MAX_ITERATIONS` (`50`) bound the sweep and one request's paid LLM work. See `adr/0018` |
 | `PROJECT_PURGE_RETENTION_DAYS` | No | Days a soft-deleted project (ADR-0011) is kept before the hourly purge job hard-deletes it (cascade). Default `30`; `0` disables |
 | `PLATFORM_API_KEY` | Prod | Privileged credential gating the unauthenticated bootstrap endpoints — project creation + first-API-key creation. Only the builder holds it; presented as the `X-Platform-Key` header. Empty default fails **closed** (rejects all bootstrap calls), so set it wherever those endpoints must work. TurnCall stays identity-free — this is a caller check, not a user |
 
@@ -462,10 +462,11 @@ same `AgentConfigSchema` an agent create uses (`extra="forbid"` included), runs
 with **`agent_id` null** (ADR-0017 — null is the honest answer, not missing
 data), and is snapshotted verbatim in `resolved_config`.
 
-### Scenario from a real call (#78)
+### Scenario from a real conversation (#78, #87)
 
 ```
-POST /v1/eval-scenarios/from-call   {"call_id": "...", "save": false, "name": "..."}
+POST /v1/eval-scenarios/from-call      {"call_id": "...",    "save": false, "name": "..."}
+POST /v1/eval-scenarios/from-session   {"session_id": "...", "save": false, "name": "..."}
 ```
 
 Evals only find what someone thought to test; the unknown unknowns come from
@@ -480,6 +481,18 @@ without repeating the call's side effects.
 `save: false` (the default) returns the draft for review; `true` stores it. The
 response says out loud that it is a draft — a generated scenario nobody edits
 asserts whatever the agent did that day, mistakes included.
+
+Both routes share one converter: `build_scenario` takes a normalised
+`Utterance`, and each source brings its own reader
+(`utterances_from_call_events` for `{role, text}` event payloads,
+`utterances_from_session_messages` for the `role`/`content` columns) — so it is
+source-agnostic by construction rather than by claim. A `system` message is
+dropped: neither party said it, and a scripted scenario has nowhere to put it.
+Consecutive caller utterances are merged, because one sentence the STT split in
+two is one turn, not two. A session names its agent directly so its
+`default_target` needs none of the inline-config reading a call record requires.
+`POST /v1/webrtc/connect` returns `call_id` beside `sdp`/`type` (additive) so a
+browser that just held a WebRTC conversation can convert it.
 
 Two shapes that are easy to get wrong. A `function_call` expectation takes a
 **`calls:` list** (`[{name, args}]`), not top-level `name`/`args`: the parser
@@ -604,8 +617,9 @@ all.
 
 ### Config
 `EVAL_MAX_CONCURRENT_RUNS` (4), `EVAL_MAX_RUN_DURATION_SECONDS` (900, the
-janitor's cutoff), `EVAL_JANITOR_INTERVAL_SECONDS` (60), `EVAL_MAX_ITERATIONS`
-(50).
+janitor's cutoff for a claimed run), `EVAL_MAX_QUEUED_SECONDS` (3600, the same
+for one never claimed), `EVAL_JANITOR_INTERVAL_SECONDS` (60),
+`EVAL_MAX_ITERATIONS` (50), `EVAL_TTS_CACHE_DIR`.
 
 ### Key Files
 - `evals/harness.py` — the bridge: real pipeline one end, pipecat's session the other
