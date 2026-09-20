@@ -25,9 +25,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # hatchling builds the wheel from src/, so both must be present. The BuildKit pip
 # cache mount keeps wheels across builds (outside image layers) so a code change
 # doesn't re-download the heavy pipecat/ML stack. Prod deps only — no [dev].
+# Optional extras for this build. The eval worker passes `evals-audio` (Kokoro
+# speaks the caller, Moonshine transcribes the bot for the judge, ~66MB); the
+# API image takes none, since nothing on the call path ever loads them.
+ARG INSTALL_EXTRAS=""
+
 COPY pyproject.toml ./
 COPY src/ src/
-RUN --mount=type=cache,target=/root/.cache/pip pip install .
+RUN --mount=type=cache,target=/root/.cache/pip     if [ -n "$INSTALL_EXTRAS" ]; then pip install ".[$INSTALL_EXTRAS]";     else pip install .; fi
 
 # Pipecat's TTS services sentence-split with NLTK; bake the tokenizer data into
 # the venv so the runtime never hits "Resource punkt_tab not found" mid-call.
@@ -45,6 +50,12 @@ WORKDIR /app
 # PyAV/OpenCV (pulled by aiortc for WebRTC) dlopen these at runtime — not bundled
 # in their wheels. Without them WebRTC connect fails. libxcb1 + libGL + glib are
 # the standard headless video cluster.
+# Deliberately NOT libportaudio2: the evals-audio extra pulls moonshine, which
+# depends on sounddevice, whose import raises "PortAudio library not found"
+# without it — but only its mic-capture module imports sounddevice, and nothing
+# a server runs does. Verified in this image: moonshine_voice, MoonshineSTTService
+# and KokoroTTSService all import clean. Don't add it on the strength of the
+# dependency alone.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libxcb1 libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*

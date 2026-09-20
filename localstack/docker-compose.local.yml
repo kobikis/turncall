@@ -82,6 +82,10 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        # Audio-modality runs need the caller's voice and the bot-audio STT
+        # (#72). Only this image installs them.
+        INSTALL_EXTRAS: evals-audio
     command: ["turncall-eval-worker"]
     env_file:
       - ../.env
@@ -95,7 +99,13 @@ services:
       PYTHONPATH: /app/src
     volumes:
       - ../src:/app/src
+      # EVAL_TTS_CACHE_DIR defaults inside here, so the caller's synthesized
+      # turns survive a recreate along with everything else in storage/.
       - ../storage:/app/storage
+      # Kokoro and Moonshine download ~350MB of models on first use, into the
+      # app user's cache. Without this volume that download happens again on
+      # every container recreate.
+      - eval_model_cache:/home/app/.cache
     networks:
       - turncall_nw
     depends_on:
@@ -112,3 +122,4 @@ networks:
 volumes:
   pgdata:
   redisdata:
+  eval_model_cache:
