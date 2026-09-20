@@ -95,9 +95,11 @@ by the resampler. The mechanism behind a recovering mid-word [[soft cut]].
 **The three timeouts**:
 Three unrelated durations, all of which someone will call "the silence timeout".
 Name which one is meant.
-- **Turn silence** (`silence_timeout_ms`, 800ms): the VAD stop window *inside* a
-  turn — how much quiet ends the caller's sentence. Tuning this changes how
-  eagerly the agent replies.
+- **Turn silence** (`silence_timeout_ms`, 800ms): how much quiet ends the
+  caller's sentence. Tuning this changes how eagerly the agent replies. It is
+  the VAD stop window only when Smart Turn is off; with Smart Turn on the
+  model decides the turn and VAD drops to its own 0.2s, because the two waits
+  run in series rather than together.
 - **User idle** (`user_idle_timeout_ms`, 10s): how long the caller may stay
   quiet *after the agent has finished speaking* before the idle guard reacts —
   first the [[idle nudge]], then [[customer_silent]]. `0` disables it.

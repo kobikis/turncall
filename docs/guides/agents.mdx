@@ -79,8 +79,10 @@ Variables are rendered at call start via [call-init](/guides/call-init) or the A
 | `s2s` | Speech-to-speech via single model | ~300ms | + `silence_timeout_ms` (default 800ms) |
 
 Processing is the sum of each stage's time-to-first-byte. It is not what the
-caller waits — the agent must first sit through `silence_timeout_ms` of quiet
-to decide the turn has ended. See [Latency](/architecture#latency).
+caller waits — the agent must first decide the turn has ended. With
+`smart_turn_detection` on (the default) that decision is the model's, and VAD
+waits only 0.2s; `silence_timeout_ms` is the window when Smart Turn is off, and
+on S2S. See [Latency](/architecture#latency).
 
 Set `pipeline_mode` in the agent config:
 
@@ -129,10 +131,9 @@ the model is asked to check in and words it itself — expect a paraphrase rathe
 than your exact string.
 
 <Note>
-  Not to be confused with `silence_timeout_ms`, which is the VAD stop window
-  *within* a turn — how long a pause must run before the agent decides you have
-  finished your sentence. That one is measured in hundreds of milliseconds;
-  this one in seconds, and only after the agent has spoken.
+  Not to be confused with `silence_timeout_ms`, the pause *within* a turn that
+  decides you have finished your sentence. That one is measured in hundreds of
+  milliseconds; this one in seconds, and only after the agent has spoken.
 </Note>
 
 ## Voicemail Detection
