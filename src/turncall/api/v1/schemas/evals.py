@@ -132,27 +132,45 @@ class EvalScenarioResponse(BaseModel):
 
 
 class EvalTarget(BaseModel):
-    """What a run points at.
+    """What a run points at (#74).
 
-    Slice #70 accepts `agent` only; `agent_name` (latest published) and
-    `inline` are #74, and are rejected at the boundary rather than accepted and
-    then failed by the worker.
+    Three forms, and the difference between the first two matters: an agent row
+    is one immutable version, so `agent` pins a version forever — a scenario
+    targeting it silently stops testing production the moment the next version
+    is published. `agent_name` resolves to whatever is published at run time.
+    `inline` has no row at all, which is how a prompt or model change is
+    evaluated *before* publishing it, and the sandbox a scenario is pointed at
+    when its tools have real side effects.
     """
 
     type: str = Field(..., pattern="^(agent|agent_name|inline)$")
     agent_id: UUID | None = None
     name: str | None = None
+    environment: str | None = None
     agent: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_target(self) -> "EvalTarget":
-        if self.type != "agent":
-            raise ValueError(
-                f"target type {self.type!r} is not supported yet — use "
-                "{'type': 'agent', 'agent_id': ...}"
-            )
-        if self.agent_id is None:
-            raise ValueError("target type 'agent' needs an 'agent_id'")
+        if self.type == "agent":
+            if self.agent_id is None:
+                raise ValueError("target type 'agent' needs an 'agent_id'")
+            return self
+        if self.type == "agent_name":
+            if not self.name:
+                raise ValueError("target type 'agent_name' needs a 'name'")
+            return self
+        if not self.agent:
+            raise ValueError("target type 'inline' needs an 'agent' configuration")
+        # Validated exactly as an agent create is — same schema, same
+        # `extra="forbid"`, so a mis-nested section is a 422 here rather than a
+        # silently dropped field discovered when the run behaves oddly. The
+        # worker checks again, but by then nobody is watching.
+        from turncall.api.v1.schemas.agents import AgentConfigSchema
+
+        try:
+            AgentConfigSchema.model_validate(self.agent)
+        except Exception as exc:
+            raise ValueError(f"inline agent configuration is invalid: {exc}") from exc
         return self
 
 

@@ -435,6 +435,23 @@ A persona doesn't say the same thing twice, so one run is an anecdote: use
 Ollama by default**, so a simulation needs a reachable Ollama even when the
 agent's own LLM is a hosted provider.
 
+### Targets (#74)
+
+```jsonc
+{"type": "agent",      "agent_id": "uuid"}   // an agent row IS a version — pins it
+{"type": "agent_name", "name": "support"}    // whatever is published at run time
+{"type": "inline",     "agent": {...}}       // no row at all; the tool sandbox
+```
+
+Pinning by id stops testing production the moment the next version is
+published — that is what `agent_name` is for. A name with nothing published
+**fails the run**; it never falls back to a draft. The run records
+`agent_version` next to `agent_id` because that column has no foreign key and
+the row can be deleted. An inline config is validated at the boundary by the
+same `AgentConfigSchema` an agent create uses (`extra="forbid"` included), runs
+with **`agent_id` null** (ADR-0017 — null is the honest answer, not missing
+data), and is snapshotted verbatim in `resolved_config`.
+
 ### Rules that are easy to break
 - **The worker is never the API process.** `turncall-eval-worker`, same image,
   own entrypoint, fed by a Redis list. ADR-0004: eval load in the API's event

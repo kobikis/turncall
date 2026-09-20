@@ -188,6 +188,7 @@ async def start_run(
     resolved_config: dict[str, Any],
     agent_id: UUID | None,
     harness_config: dict[str, Any],
+    agent_version: int | None = None,
 ) -> None:
     """Claim a queued run, recording the two snapshots only now knowable.
 
@@ -202,6 +203,7 @@ async def start_run(
             started_at=_utc_now(),
             resolved_config=resolved_config,
             agent_id=agent_id,
+            agent_version=agent_version,
             harness_config=harness_config,
         )
     )
