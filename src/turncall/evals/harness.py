@@ -39,7 +39,21 @@ _BOT_STOP_TIMEOUT_S = 15.0
 
 
 class PipelineFailed(RuntimeError):
-    """The agent's pipeline stopped, so the iteration proves nothing."""
+    """The pipeline raised, so the iteration proves nothing about the agent.
+
+    Narrow on purpose. This is *our* fault — an exception escaping into
+    `CallSession.start()` — not the agent's configuration being wrong.
+
+    A provider rejecting at connect (a model name that does not exist, a key
+    that is refused) must NOT come through here. Pipecat's
+    `ProcessorUnusablePolicy.END` ends such a pipeline gracefully rather than
+    raising, the harness times out with nothing to match, and the run scores
+    `failed`. That is exactly right and is the feature's headline use case:
+    evals-design.md section 1 justifies the whole thing on #63, #64 and #65,
+    all of which are provider-rejects-at-connect. Scoring those `errored` would
+    render them grey as "couldn't run", keep them out of every rate, and let
+    the regression through — the opposite of what this is for.
+    """
 
 
 def _free_port() -> int:
@@ -130,11 +144,11 @@ async def run_iteration(
     finally:
         await _stop_bot(bot, run_id)
 
-    # A pipeline that died — an unusable LLM, a bad key, a provider 400 — leaves
-    # the harness timing out with nothing to match, which reads as the agent
-    # falling short. It is not: nobody learned anything about the agent, so the
-    # iteration has to be `errored`. Raised after the result so a run that
-    # completed anyway is still scored on its own terms.
+    # A pipeline that *raised* is a platform fault, so the iteration proves
+    # nothing and is errored. A pipeline that a provider refused is not: see
+    # PipelineFailed's docstring for why that has to stay `failed`. Checked
+    # after the result so a run that completed anyway is scored on its own
+    # terms.
     if session.failure is not None and not getattr(result, "passed", False):
         raise PipelineFailed(
             f"the agent pipeline stopped: {type(session.failure).__name__}: "

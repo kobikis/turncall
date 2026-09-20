@@ -29,11 +29,12 @@ def _target(
     prompt: str,
     first_message: str | None = None,
     tools: list | None = None,
+    model: str = "gpt-4o-mini",
 ):
     blob = {
         "system_prompt": prompt,
         "first_message": first_message,
-        "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+        "llm": {"provider": "openai", "model": model},
         # Smart turn loads a local ONNX model and needs audio to do anything;
         # a text-mode run has none, so keep the build cheap.
         "smart_turn_detection": False,
@@ -275,3 +276,63 @@ async def test_a_function_call_assertion_fails_when_the_tool_is_not_called(
         "missing_function_call",
         "timeout",
     )
+
+
+async def test_a_provider_that_refuses_the_model_fails_the_run(
+    openai_key: str, session_factory
+) -> None:
+    """The regression class the whole feature is justified on.
+
+    evals-design.md section 1 rests the case for evals on #63, #64 and #65 --
+    each a provider name or model name reaching the wrong service and being
+    rejected at connect. For an eval to catch those, such a run must score
+    **failed**, loudly, in the pass rate.
+
+    It must specifically NOT be `errored`: section 8 renders errored grey as
+    "couldn't run" and keeps it out of every rate, so an errored verdict here
+    would let exactly these regressions through while looking like an
+    infrastructure hiccup. Pipecat ends an unusable service's pipeline
+    gracefully rather than raising, which is what keeps this on the failed
+    side, so this test pins behaviour that is easy to "fix" in the wrong
+    direction.
+
+    The assertion is on *content* deliberately. A bare ``{"event":
+    "llm_response"}`` does not reliably catch this: after the provider's 404
+    pipecat still emits an empty ``llm_response``, which satisfies an
+    expectation that asks only for the event. Observed both ways on the same
+    config -- once a timeout, once a pass -- so a scenario meant to catch the
+    #65 class has to assert what the agent said, not merely that it said
+    something.
+    """
+    from uuid import uuid4
+
+    from turncall.evals.harness import PipelineFailed
+
+    definition = {
+        "turns": [
+            {
+                "user": "What is the capital of France? Answer with just the city.",
+                "expect": [
+                    {
+                        "event": "llm_response",
+                        "text_contains": "Paris",
+                        "within_ms": 12000,
+                    }
+                ],
+            }
+        ]
+    }
+    # The #65 shape: a model name the provider does not have. AgentConfig is
+    # frozen, so it goes in through the config the same way a real agent's would.
+    target = _target(uuid4(), "You are terse.", model="definitely-not-a-real-model")
+
+    try:
+        result, _parsed = await _run(definition, target, session_factory)
+    except PipelineFailed as exc:  # pragma: no cover - the wrong direction
+        raise AssertionError(
+            "a refused model must fail the run, not error it -- errored is "
+            f"rendered 'couldn't run' and kept out of the rate: {exc}"
+        ) from exc
+
+    assert not result.passed, "a model the provider refuses must fail the eval"
+    assert result.failures, "the failure has to say something"

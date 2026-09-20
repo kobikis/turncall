@@ -56,10 +56,12 @@ class CallSession:
         self._runner: WorkerRunner | None = None
         self._duration_guard: asyncio.Task | None = None
         self._running = False
-        # The pipeline's own failure, kept rather than only logged. start()
-        # swallows it on purpose — a live call must still finalize — but an
-        # eval has to tell "the agent answered badly" from "the pipeline never
-        # ran", which is the difference between `failed` and `errored`.
+        # An exception that escaped into start(), kept rather than only logged.
+        # start() swallows it on purpose — a live call must still finalize —
+        # but an eval has to tell a platform fault from an agent result, which
+        # is the difference between `errored` and `failed`. Note this is NOT
+        # how a refused provider shows up: pipecat ends that pipeline
+        # gracefully, and an eval is supposed to score it `failed`.
         self._failure: BaseException | None = None
 
     @property

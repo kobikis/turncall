@@ -25,6 +25,20 @@ regressions actually live. The last four merged fixes were all in it:
 Three confirmed, one likely. All of them sit in `pipeline_factory.py`, which is
 exactly what this design exercises.
 
+**Caveat found while building #70, and it changes how a scenario must be
+written.** "The provider rejects at connect" does not fail a scenario on its
+own. After the 404, pipecat still emits an *empty* `llm_response`, so an
+expectation asking only for the event — `{"event": "llm_response"}` — can pass
+with the agent's LLM entirely broken. Observed both ways on one config: once a
+timeout, once a pass. A scenario meant to catch this class must assert
+**content** (`text_contains`, `matches`, or `eval:`), not merely that the event
+arrived. Pinned by a live test.
+
+The verdict is `failed`, not `errored`, and must stay that way: `errored`
+renders grey as "couldn't run" (§8) and is excluded from every rate, so scoring
+a refused provider that way would let precisely these regressions through. See
+`adr/0018`.
+
 ## 2. Vocabulary
 
 Terms to add to `CONTEXT.md` as they settle. Listed here so they are used

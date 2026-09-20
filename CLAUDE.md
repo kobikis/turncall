@@ -433,6 +433,14 @@ DELETE /v1/eval-runs/{id}     # cancel while queued/running
   every call-scoped side effect — status writes, call_events, transcript taps,
   and `call.ended` (which is also what triggers post-call analysis).
 
+### Writing a scenario that actually catches a provider regression
+Assert **content**, not just the event. After a provider 404 pipecat still
+emits an empty `llm_response`, so `{"event": "llm_response"}` alone can pass
+with the LLM completely broken — seen both ways on one config. Use
+`text_contains`/`matches`/`eval:`. Such a run scores **`failed`**, never
+`errored`; errored means the harness could not complete and is kept out of
+every rate, which would hide exactly the #63/#64/#65 class evals exist for.
+
 ### Known coverage limits
 Everything *inside* the transport is invisible: the Twilio serializer and the
 whole ADR-0004 audio class, output underrun and dead air (loopback does not
