@@ -149,6 +149,19 @@ class ScenarioFromCallRequest(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=32)
 
 
+class ScenarioFromSessionRequest(BaseModel):
+    """Derive a scenario from a text conversation (#87).
+
+    The same idea as `from-call` for SMS, the Chat API and WhatsApp text — and
+    the source a manual test in a console produces, which had no route in.
+    """
+
+    session_id: UUID
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    save: bool = False
+    tags: list[str] = Field(default_factory=list, max_length=32)
+
+
 class ScenarioDraftResponse(BaseModel):
     """A draft, and a sentence saying that is what it is."""
 

@@ -21,10 +21,72 @@ T0 = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
 
 
 def _entry(role: str, text: str, *, at: int = 0):
+    """One normalised utterance. The per-source readers are tested separately
+    (TestReaders) — these tests are about the conversion, whatever fed it."""
+    return convert.Utterance(role=role, text=text, at=T0 + timedelta(seconds=at))
+
+
+def _call_event(role: str, text: str, *, at: int = 0):
+    """A `transcript.final` call event, as the taps write it."""
     return SimpleNamespace(
         payload={"role": role, "text": text},
         internal_timestamp=T0 + timedelta(seconds=at),
     )
+
+
+def _message(role: str, content: str, *, at: int = 0):
+    """An `sms_messages` row — SMS, the Chat API, WhatsApp text."""
+    return SimpleNamespace(
+        role=role, content=content, created_at=T0 + timedelta(seconds=at)
+    )
+
+
+class TestReaders:
+    """Two sources, one conversation shape (#87). A voice call stores
+    `{role, text}` payloads on call events; a text session stores `role` and
+    `content` columns. Without a reader each, a session could never become a
+    scenario — which is what blocked deriving one from a manual test."""
+
+    def test_call_events_are_read(self) -> None:
+        got = convert.utterances_from_call_events(
+            [_call_event("customer", "  hello  ", at=1)]
+        )
+        assert got == [
+            convert.Utterance("customer", "hello", T0 + timedelta(seconds=1))
+        ]
+
+    def test_session_messages_are_read(self) -> None:
+        got = convert.utterances_from_session_messages(
+            [_message("customer", "hello", at=1)]
+        )
+        assert got == [
+            convert.Utterance("customer", "hello", T0 + timedelta(seconds=1))
+        ]
+
+    def test_a_system_message_is_not_something_either_party_said(self) -> None:
+        """A scripted scenario has nowhere to put it."""
+        got = convert.utterances_from_session_messages(
+            [
+                _message("system", "You are a helpful assistant.", at=0),
+                _message("customer", "hi", at=1),
+            ]
+        )
+        assert [u.role for u in got] == ["customer"]
+
+    def test_a_session_converts_the_same_way_a_call_does(self) -> None:
+        draft = convert.build_scenario(
+            transcript=convert.utterances_from_session_messages(
+                [
+                    _message("customer", "do you deliver?", at=1),
+                    _message("assistant", "We do, within five miles.", at=2),
+                ]
+            ),
+            invocations=[],
+            name="delivery",
+        )
+        turns = draft["definition"]["turns"]
+        assert turns[0]["user"] == "do you deliver?"
+        assert turns[0]["expect"][0]["text_contains"] == "We do, within five miles."
 
 
 def _invocation(name: str, args: dict, output, *, at: int = 0):

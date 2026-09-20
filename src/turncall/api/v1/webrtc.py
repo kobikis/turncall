@@ -266,6 +266,13 @@ async def webrtc_connect(
         )
 
     logger.info("WebRTC call started: call={call_id}", call_id=str(call.id))
+    # The call id rides back with the answer (#87). Additive: a client reading
+    # `sdp`/`type` is unaffected, and without it a browser that just held a
+    # conversation cannot say which call that was — so it cannot fetch the
+    # transcript, link to the recording, or derive a scenario from it. The id
+    # was only ever logged.
+    if isinstance(answer, dict):
+        answer = {**answer, "call_id": str(call.id)}
     return JSONResponse(content=answer)
 
 

@@ -24,6 +24,7 @@ from turncall.api.v1.schemas.evals import (
     EvalScenarioResponse,
     ScenarioDraftResponse,
     ScenarioFromCallRequest,
+    ScenarioFromSessionRequest,
     UpdateEvalScenarioRequest,
 )
 from turncall.auth import Auth, WriteAuth
@@ -297,7 +298,9 @@ async def scenario_from_call(
     name = body.name or f"call-{str(body.call_id)[:8]}"
     try:
         draft = convert.build_scenario(
-            transcript=transcript, invocations=invocations, name=name
+            transcript=convert.utterances_from_call_events(transcript),
+            invocations=invocations,
+            name=name,
         )
     except convert.ConversionError as exc:
         raise BadRequestError(str(exc)) from exc
@@ -331,6 +334,90 @@ async def scenario_from_call(
         )
         await session.commit()
         saved_id = row.id
+
+    return ok(
+        ScenarioDraftResponse(
+            name=name,
+            definition=draft["definition"],
+            tool_mocks=draft["tool_mocks"],
+            tool_policy=EvalToolPolicy.MOCK_ONLY,
+            default_target=target,
+            schema_version=SCHEMA_VERSION,
+            note=convert.summarise(draft),
+            saved=body.save,
+            scenario_id=saved_id,
+        )
+    )
+
+
+@router.post("/from-session", status_code=201)
+async def scenario_from_session(
+    body: ScenarioFromSessionRequest, auth: WriteAuth, session: DbSession
+) -> dict:
+    """Convert a finished text conversation into a scripted scenario draft (#87).
+
+    The voice equivalent is `/from-call`. Both produce the same draft and both
+    default to review rather than save, because a derived scenario asserts
+    whatever the agent did that day — mistakes included.
+    """
+    from turncall.services import scenario_from_call as convert
+    from turncall.storage.repositories import (
+        sms_message_repo,
+        sms_session_repo,
+        tool_invocation_repo,
+    )
+
+    row = await sms_session_repo.get_session_by_id(
+        session, body.session_id, project_id=auth.project_id
+    )
+    if row is None:
+        raise NotFoundError("Session", str(body.session_id))
+
+    messages = await sms_message_repo.list_messages_for_session(
+        session, body.session_id, limit=1000
+    )
+    invocations = await tool_invocation_repo.list_invocations_for_session(
+        session, body.session_id
+    )
+
+    name = body.name or f"session-{str(body.session_id)[:8]}"
+    try:
+        draft = convert.build_scenario(
+            transcript=convert.utterances_from_session_messages(messages),
+            invocations=invocations,
+            name=name,
+        )
+    except convert.ConversionError as exc:
+        raise BadRequestError(str(exc)) from exc
+
+    try:
+        validate(draft["definition"], name=name)
+    except ScenarioError as exc:
+        raise BadRequestError(f"the derived scenario does not parse: {exc}") from exc
+
+    # A session names its agent directly — there is no call record and no
+    # inline-config case to read around.
+    target = {"type": "agent", "agent_id": str(row.agent_id)} if row.agent_id else None
+
+    saved_id = None
+    if body.save:
+        from turncall.evals.scenario import kind_of
+
+        stored = await eval_repo.create_scenario(
+            session,
+            project_id=auth.project_id,
+            name=name,
+            kind=kind_of(draft["definition"]).value,
+            definition=draft["definition"],
+            schema_version=SCHEMA_VERSION,
+            description=f"Derived from session {body.session_id}",
+            tool_mocks=draft["tool_mocks"],
+            tool_policy=EvalToolPolicy.MOCK_ONLY.value,
+            tags=body.tags,
+            default_target=target,
+        )
+        await session.commit()
+        saved_id = stored.id
 
     return ok(
         ScenarioDraftResponse(

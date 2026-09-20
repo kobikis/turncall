@@ -4778,6 +4778,68 @@
         }
       }
     },
+    "/v1/eval-scenarios/from-session": {
+      "post": {
+        "tags": [
+          "evals"
+        ],
+        "summary": "Scenario From Session",
+        "description": "Convert a finished text conversation into a scripted scenario draft (#87).\n\nThe voice equivalent is `/from-call`. Both produce the same draft and both\ndefault to review rather than save, because a derived scenario asserts\nwhatever the agent did that day \u2014 mistakes included.",
+        "operationId": "scenario_from_session_v1_eval_scenarios_from_session_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScenarioFromSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Scenario From Session V1 Eval Scenarios From Session Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/eval-runs": {
       "post": {
         "tags": [
@@ -7396,6 +7458,47 @@
         ],
         "title": "ScenarioFromCallRequest",
         "description": "Derive a scripted scenario from a call that already happened (#78)."
+      },
+      "ScenarioFromSessionRequest": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "save": {
+            "type": "boolean",
+            "title": "Save",
+            "default": false
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Tags"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id"
+        ],
+        "title": "ScenarioFromSessionRequest",
+        "description": "Derive a scenario from a text conversation (#87).\n\nThe same idea as `from-call` for SMS, the Chat API and WhatsApp text \u2014 and\nthe source a manual test in a console produces, which had no route in."
       },
       "SearchRequest": {
         "properties": {
