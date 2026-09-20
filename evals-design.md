@@ -687,7 +687,11 @@ One migration and one commit: drop both tables and `test_run_status`; delete
    dependency this adds in practice — pipecat's persona LLM *and* judge both
    default to Ollama, so a simulation needs one reachable even when the agent
    under test runs on a hosted provider (§9.3).
-6. **CLI** with the exit code.
+6. **CLI** with the exit code. Built in #77: `turncall eval run|list|show`,
+   argparse and httpx against the public API — no privileged path, no second
+   file format. It added one thing to the API rather than working around it:
+   `POST /v1/eval-runs` now accepts an inline `scenario`, which is what makes a
+   local file runnable *unchanged*.
 7. **Console**: evals tab, run detail, then the two "Save as scenario" buttons.
 8. **ADRs and `CONTEXT.md`** as each decision closes.
 

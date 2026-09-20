@@ -5,6 +5,7 @@ A run is accepted with 202 and executed by `turncall-eval-worker` — never in
 this process (ADR-0004: event-loop jitter here is dead air on a live call).
 """
 
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -184,7 +185,24 @@ async def create_eval_run(
             f"iterations exceeds the limit of {settings.evals.max_iterations}"
         )
 
-    if body.tag:
+    if body.scenario is not None:
+        # Supplied inline (#77), not stored: nothing is written to
+        # `eval_scenarios`, the run's `scenario_id` stays null, and the
+        # snapshot is the record. Same shape as an inline agent (ADR-0017).
+        scenarios = [
+            SimpleNamespace(
+                id=None,
+                name=body.scenario.name,
+                kind=body.scenario.kind.value,
+                definition=body.scenario.definition,
+                schema_version=SCHEMA_VERSION,
+                tool_mocks=body.scenario.tool_mocks or {},
+                tool_policy=(
+                    body.scenario.tool_policy or EvalToolPolicy.MOCK_ONLY
+                ).value,
+            )
+        ]
+    elif body.tag:
         scenarios = await eval_repo.list_scenarios(
             session, auth.project_id, tag=body.tag
         )

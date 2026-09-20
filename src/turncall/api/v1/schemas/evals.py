@@ -179,16 +179,48 @@ class EvalTarget(BaseModel):
         return self
 
 
-class CreateEvalRunRequest(BaseModel):
-    """Run one scenario, or every scenario carrying a tag (#75).
+class InlineScenario(BaseModel):
+    """A scenario supplied on the run instead of stored first (#77).
 
-    Exactly one of `scenario_id` and `tag`. A tag fans out to one run per
-    matching scenario, all sharing a batch id, so one request has one readable
-    verdict — which is what the CLI's single exit code is built on.
+    This is what a local file holds, and why the CLI needs no format of its
+    own: the file is the API request body, validated by the same parser a
+    stored scenario is. Nothing is written to `eval_scenarios` — the run's
+    `scenario_id` is null and its `resolved_scenario` snapshot is the record,
+    which is the same shape ADR-0017 uses for an inline agent.
+    """
+
+    name: str = Field(..., min_length=1, max_length=255)
+    definition: dict[str, Any]
+    tool_mocks: dict[str, Any] | None = None
+    tool_policy: EvalToolPolicy | None = None
+
+    @field_validator("tool_mocks")
+    @classmethod
+    def check_mocks(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _validated_mocks(value)
+
+    @model_validator(mode="after")
+    def validate_definition(self) -> "InlineScenario":
+        _validated_kind(self.definition, self.name)
+        return self
+
+    @property
+    def kind(self) -> EvalKind:
+        return _validated_kind(self.definition, self.name)
+
+
+class CreateEvalRunRequest(BaseModel):
+    """Run one stored scenario, every scenario carrying a tag (#75), or a
+    scenario supplied inline (#77).
+
+    Exactly one of the three. A tag fans out to one run per matching scenario,
+    all sharing a batch id, so one request has one readable verdict — which is
+    what the CLI's single exit code is built on.
     """
 
     scenario_id: UUID | None = None
     tag: str | None = Field(default=None, min_length=1, max_length=64)
+    scenario: InlineScenario | None = None
     target: EvalTarget
     # `text` stays the default: it is the mode people run per PR — no STT, no
     # TTS, no local models, a fraction of the time. `audio` is the one that
@@ -198,8 +230,11 @@ class CreateEvalRunRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_selection(self) -> "CreateEvalRunRequest":
-        if bool(self.scenario_id) == bool(self.tag):
-            raise ValueError("pass exactly one of 'scenario_id' and 'tag'")
+        chosen = sum(
+            1 for v in (self.scenario_id, self.tag, self.scenario) if v is not None
+        )
+        if chosen != 1:
+            raise ValueError("pass exactly one of 'scenario_id', 'tag' and 'scenario'")
         return self
 
 
