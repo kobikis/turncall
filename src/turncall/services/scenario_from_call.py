@@ -19,6 +19,7 @@ becomes a mock — are testable without a database.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -40,16 +41,50 @@ class ConversionError(ValueError):
     """The call cannot become a scenario, and the reason is the caller's to fix."""
 
 
-def _text(entry: Any) -> str:
-    return (entry.payload or {}).get("text", "").strip()
+@dataclass(frozen=True)
+class Utterance:
+    """One thing somebody said, whatever it was stored as.
+
+    A voice call keeps these as `transcript.final` call events with a
+    `{role, text}` payload; a text session keeps them as `sms_messages` rows
+    with `role`/`content` columns. Same conversation, two schemas — so the
+    conversion takes this and each source brings a reader (#87). Without it the
+    converter would have to know about call events, and a session could never
+    become a scenario.
+    """
+
+    role: str
+    text: str
+    at: datetime | None
 
 
-def _role(entry: Any) -> str:
-    return (entry.payload or {}).get("role", "")
+def utterances_from_call_events(events: list[Any]) -> list[Utterance]:
+    """`transcript.final` call events, as the taps write them."""
+    return [
+        Utterance(
+            role=(e.payload or {}).get("role", ""),
+            text=((e.payload or {}).get("text") or "").strip(),
+            at=getattr(e, "internal_timestamp", None),
+        )
+        for e in events
+    ]
 
 
-def _when(entry: Any) -> datetime | None:
-    return getattr(entry, "internal_timestamp", None)
+def utterances_from_session_messages(messages: list[Any]) -> list[Utterance]:
+    """`sms_messages` rows — SMS, the Chat API and WhatsApp text.
+
+    `system` rows are skipped: they are not something either party said, and a
+    scripted scenario has nowhere to put them.
+    """
+    return [
+        Utterance(
+            role=m.role,
+            text=(m.content or "").strip(),
+            at=getattr(m, "created_at", None),
+        )
+        for m in messages
+        if m.role != "system"
+    ]
 
 
 def _decoded(raw: Any) -> Any:
@@ -68,7 +103,7 @@ def _decoded(raw: Any) -> Any:
 
 def build_scenario(
     *,
-    transcript: list[Any],
+    transcript: list[Utterance],
     invocations: list[Any],
     name: str,
 ) -> dict[str, Any]:
@@ -84,8 +119,8 @@ def build_scenario(
     without booking anything a second time. A derived scenario that needed a
     human to add mocks before it was safe would mostly be run before they did.
     """
-    spoken = [e for e in transcript if _text(e) and _role(e)]
-    if not any(_role(e) != _ASSISTANT for e in spoken):
+    spoken = [e for e in transcript if e.text and e.role]
+    if not any(e.role != _ASSISTANT for e in spoken):
         raise ConversionError("the call has no caller speech to build turns from")
 
     turns: list[dict[str, Any]] = []
@@ -94,7 +129,7 @@ def build_scenario(
     turn_started: list[datetime | None] = []
 
     for entry in spoken:
-        if _role(entry) != _ASSISTANT:
+        if entry.role != _ASSISTANT:
             if turns and not turns[-1]["expect"]:
                 # Consecutive caller entries with no reply between them are one
                 # turn of speech that the STT reported in pieces. Seen in real
@@ -103,10 +138,10 @@ def build_scenario(
                 # opening mid-sentence. Joining them reproduces what the caller
                 # actually said, which is the whole promise of deriving from a
                 # call.
-                turns[-1]["user"] = f"{turns[-1]['user']} {_text(entry)}".strip()
+                turns[-1]["user"] = f"{turns[-1]['user']} {entry.text}".strip()
                 continue
-            turns.append({"user": _text(entry), "expect": []})
-            turn_started.append(_when(entry))
+            turns.append({"user": entry.text, "expect": []})
+            turn_started.append(entry.at)
         elif turns:
             # The agent's actual words become the assertion to sharpen. Not a
             # bare `{"event": "llm_response"}`: after a provider 404 pipecat
@@ -115,7 +150,7 @@ def build_scenario(
             # (evals-design §1). Content, then, even though the human will trim
             # it to the phrase that matters.
             turns[-1]["expect"].append(
-                {"event": _REPLY_EVENT, "text_contains": _text(entry)}
+                {"event": _REPLY_EVENT, "text_contains": entry.text}
             )
         # An assistant greeting before the caller says anything belongs to no
         # turn: `first_message` goes out as a TTSSpeakFrame and is invisible to
