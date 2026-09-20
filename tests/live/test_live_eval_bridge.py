@@ -24,7 +24,12 @@ from turncall.evals.runner import ResolvedTarget, map_script_result
 pytestmark = [pytest.mark.live, pytest.mark.asyncio]
 
 
-def _target(project_id, prompt: str, first_message: str | None = None):
+def _target(
+    project_id,
+    prompt: str,
+    first_message: str | None = None,
+    tools: list | None = None,
+):
     blob = {
         "system_prompt": prompt,
         "first_message": first_message,
@@ -32,6 +37,7 @@ def _target(project_id, prompt: str, first_message: str | None = None):
         # Smart turn loads a local ONNX model and needs audio to do anything;
         # a text-mode run has none, so keep the build cheap.
         "smart_turn_detection": False,
+        "tools": tools or [],
     }
     return ResolvedTarget(
         project_id=project_id,
@@ -176,4 +182,96 @@ async def test_a_first_message_is_invisible_to_a_text_mode_eval(
     assert result.failures[0].kind == "timeout"
     assert result.events_seen == [], (
         "a first_message that starts producing events is a change worth noticing"
+    )
+
+
+# Discard port: the LLM's call still fires the `function_call` event, which is
+# what the assertion is about, but nothing reachable receives the webhook. This
+# is exactly the hazard #71 exists to remove -- an agent with a real
+# webhook_url would have booked something here.
+_NOWHERE = "http://127.0.0.1:9/never"
+
+_BOOK_TOOL = {
+    "name": "book_appointment",
+    "description": "Book an appointment for the caller on a given day.",
+    "parameters_schema": {
+        "type": "object",
+        "properties": {"day": {"type": "string"}},
+        "required": ["day"],
+    },
+    "webhook_url": _NOWHERE,
+    "timeout_seconds": 2,
+    "max_retries": 0,
+}
+
+
+async def test_a_function_call_assertion_sees_the_tool_the_agent_called(
+    openai_key: str, session_factory
+) -> None:
+    """User story 2: assert the agent calls a specific tool at a specific point,
+    so a prompt change cannot silently break a workflow.
+
+    The plumbing is pipecat's -- `required_report_level()` makes the harness ask
+    the bot to report calls -- but it runs through *our* tool bridge, so this is
+    the check that the two actually meet.
+    """
+    from uuid import uuid4
+
+    definition = {
+        "turns": [
+            {
+                "user": "Please book me an appointment for Friday.",
+                "expect": [
+                    {
+                        "event": "function_call",
+                        "name": "book_appointment",
+                        "within_ms": 30000,
+                    }
+                ],
+            }
+        ]
+    }
+    target = _target(
+        uuid4(),
+        "You are a receptionist. Use the book_appointment tool when asked to book.",
+        tools=[_BOOK_TOOL],
+    )
+    result, _parsed = await _run(definition, target, session_factory)
+    assert result.passed, [str(f) for f in result.failures]
+
+
+async def test_a_function_call_assertion_fails_when_the_tool_is_not_called(
+    openai_key: str, session_factory
+) -> None:
+    """The half that matters for story 2: the assertion has to be capable of
+    failing, or it protects nothing."""
+    from uuid import uuid4
+
+    definition = {
+        "turns": [
+            {
+                "user": "What are your opening hours?",
+                "expect": [
+                    {
+                        "event": "function_call",
+                        "name": "book_appointment",
+                        "within_ms": 15000,
+                    }
+                ],
+            }
+        ]
+    }
+    target = _target(
+        uuid4(),
+        "You are a receptionist. We are open 9 to 5. Only use the "
+        "book_appointment tool if the caller explicitly asks to book.",
+        tools=[_BOOK_TOOL],
+    )
+    result, parsed = await _run(definition, target, session_factory)
+
+    assert not result.passed
+    outcome = map_script_result(result, iteration=1, parsed=parsed)
+    assert outcome.entry["failures"][0]["kind"] in (
+        "missing_function_call",
+        "timeout",
     )
