@@ -21,8 +21,11 @@ from typing import Any
 
 from loguru import logger
 
+from turncall.config.settings import get_settings
+from turncall.services.tool_webhook import cap_tool_result
 
-def _encode(response: Any) -> str:
+
+def encode_mock(response: Any) -> str:
     """A mock as the string a tool handler returns.
 
     Authors write mocks as JSON objects, but a tool result is a string to the
@@ -67,7 +70,16 @@ def intercept(mocks: ToolMocks | None, name: str, args: dict[str, Any]) -> str |
         return None
 
     if name in mocks.responses:
-        result = _encode(mocks.responses[name])
+        # Capped like any other tool result: a mock reaches the model by the
+        # same route a webhook's answer does, and stays in the context for the
+        # rest of the conversation. Skipping the cap here would make the mock
+        # the one way past a limit every other path honours.
+        result = cap_tool_result(
+            encode_mock(mocks.responses[name]),
+            get_settings().tools.max_response_bytes,
+            tool=name,
+            source="mock",
+        )
         mocks.record(name, args, result, mocked=True)
         return result
 

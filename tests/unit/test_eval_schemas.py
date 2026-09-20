@@ -100,6 +100,45 @@ class TestToolMocksAndPolicy:
             is None
         )
 
+    def test_a_key_that_is_not_a_tool_name_is_rejected(self) -> None:
+        """The key is matched against a tool name at dispatch; one that cannot
+        be a tool name would sit in the row mocking nothing."""
+        with pytest.raises(ValidationError, match="is not a tool name"):
+            CreateEvalScenarioRequest(
+                name="books", definition=SCRIPTED, tool_mocks={"not a name": {}}
+            )
+
+    def test_an_mcp_style_camelcase_name_is_still_accepted(self) -> None:
+        """An MCP server names its own tools, and camelCase is common there."""
+        body = CreateEvalScenarioRequest(
+            name="books", definition=SCRIPTED, tool_mocks={"bookAppointment": {}}
+        )
+        assert body.tool_mocks == {"bookAppointment": {}}
+
+    def test_a_mock_over_the_tool_result_limit_is_rejected(self) -> None:
+        """A mock is handed to the model as a tool result and occupies the
+        context for the rest of the conversation, so it is held to the same
+        limit a real one is. Truncating it silently would make the scenario
+        mean something other than what it says."""
+        with pytest.raises(ValidationError, match="over the"):
+            CreateEvalScenarioRequest(
+                name="books",
+                definition=SCRIPTED,
+                tool_mocks={"book": "z" * 2_000_000},
+            )
+
+    def test_too_many_mocks_are_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="more than"):
+            CreateEvalScenarioRequest(
+                name="books",
+                definition=SCRIPTED,
+                tool_mocks={f"tool_{i}": {} for i in range(65)},
+            )
+
+    def test_an_update_is_bounded_the_same_way(self) -> None:
+        with pytest.raises(ValidationError, match="is not a tool name"):
+            UpdateEvalScenarioRequest(tool_mocks={"not a name": {}})
+
     def test_an_unknown_policy_is_rejected(self) -> None:
         with pytest.raises(ValidationError):
             CreateEvalScenarioRequest(

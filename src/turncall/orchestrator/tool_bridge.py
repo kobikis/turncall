@@ -49,12 +49,6 @@ async def _log_tool_result(
 ) -> None:
     """Persist the tool invocation + call event and dispatch tool.result to
     webhook subscribers. Runs in the background; failures are logged, not raised."""
-    if call_context.is_eval:
-        # No `calls` row behind an eval (ADR-0018), so `tool_invocations.call_id`
-        # has nothing to point at and the write is a foreign-key error every
-        # time. The iteration's tool record is `ToolMocks.calls` instead, which
-        # is what reaches the run's results.
-        return
     payload = {"tool_name": function_name, "arguments": args, "result": result}
     try:
         async with call_context.session_factory() as session:
@@ -342,7 +336,16 @@ def _register_single_tool(
         if call_context.tool_mocks is not None:
             # A `live` eval: the tool really ran, and the run's record says so.
             call_context.tool_mocks.record(function_name, args, result, mocked=False)
-        _spawn(_log_tool_result(call_context, function_name, args, result, latency_ms))
+        if not call_context.is_eval:
+            # No `calls` row behind an eval (ADR-0018), so
+            # `tool_invocations.call_id` has nothing to point at and the write
+            # is a foreign-key error every time. The iteration's tool record is
+            # `ToolMocks.calls` instead, which is what reaches the run's
+            # results. Decided here rather than inside the coroutine so an eval
+            # does not spawn a task per tool call to do nothing.
+            _spawn(
+                _log_tool_result(call_context, function_name, args, result, latency_ms)
+            )
 
     # execution_mode="async" means the call outlives an interruption: its
     # result is delivered whenever it arrives instead of being cancelled the

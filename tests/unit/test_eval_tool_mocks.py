@@ -240,3 +240,48 @@ async def test_a_real_call_has_no_mocks_and_dispatches_normally() -> None:
     # The invocation record is spawned off the critical path; let it run.
     await asyncio.sleep(0)
     assert log.await_count == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_oversized_mock_is_capped_like_any_other_tool_result() -> None:
+    """A mock reaches the model by the route a webhook's answer does and sits
+    in the context for the rest of the conversation. The boundary rejects one
+    this big; rows stored before that check existed still have to be capped."""
+    from turncall.services import tool_mocks as mocks_mod
+
+    mocks = ToolMocks(responses={"lookup": "x" * 5000})
+    llm = _LLM()
+    small = SimpleNamespace(tools=SimpleNamespace(max_response_bytes=1000))
+
+    with patch.object(mocks_mod, "get_settings", lambda: small):
+        tool_bridge.register_tools(llm, [_webhook_tool("lookup")], _context(mocks))
+        result = await _invoke(llm, "lookup")
+
+    parsed = json.loads(result)
+    assert "5000 bytes" in parsed["error"] and "limit 1000" in parsed["error"]
+    assert parsed["preview"] == "x" * 512
+    # What the model was actually handed, not what the scenario wrote.
+    assert mocks.calls[0]["result"] == result
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_eval_spawns_no_invocation_task() -> None:
+    """An eval has no `calls` row, so the write is a foreign-key error every
+    time. Decided before the task is created, not inside it."""
+    mocks = ToolMocks(live=True)
+    llm = _LLM()
+
+    with (
+        patch.object(
+            tool_bridge,
+            "_execute_webhook_tool",
+            new=AsyncMock(return_value='{"from": "webhook"}'),
+        ),
+        patch.object(tool_bridge, "_spawn") as spawn,
+    ):
+        tool_bridge.register_tools(llm, [_webhook_tool()], _context(mocks))
+        await _invoke(llm, "book_appointment")
+
+    assert spawn.call_count == 0

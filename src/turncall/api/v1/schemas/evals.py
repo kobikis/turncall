@@ -7,14 +7,53 @@ The kind is computed from it eagerly and stored as a column, so every reader
 switches on an explicit value rather than sniffing which key is present.
 """
 
+import re
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from turncall.config import get_settings
 from turncall.domain.enums import EvalKind, EvalModality, EvalToolPolicy
 from turncall.evals.scenario import SCHEMA_VERSION, ScenarioError, validate
+from turncall.services.tool_mocks import encode_mock
+
+# A mock is keyed by tool name. Permissive on shape because an MCP server names
+# its own tools and camelCase is common there, bounded because the key is
+# matched against a tool name and nothing longer can be one.
+_TOOL_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+
+# An agent advertising more tools than this does not exist; the cap is here so
+# a mapping cannot be used to park unbounded JSON in the scenario row.
+_MAX_MOCKS = 64
+
+
+def _validated_mocks(mocks: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Bound a `tool_mocks` mapping at the boundary.
+
+    The value is stored verbatim and later handed to a model as a tool result,
+    where it occupies the context for the rest of the conversation — so it is
+    held to the same size limit a real tool result is (`TOOL_MAX_RESPONSE_BYTES`,
+    which `tool_mocks.intercept` also applies at run time to rows stored before
+    this check existed). Rejecting here is the better half of the pair: a
+    truncated mock is a test that quietly means something else.
+    """
+    if not mocks:
+        return mocks
+    if len(mocks) > _MAX_MOCKS:
+        raise ValueError(f"tool_mocks holds more than {_MAX_MOCKS} tools")
+    limit = get_settings().tools.max_response_bytes
+    for name, response in mocks.items():
+        if not _TOOL_NAME.match(name):
+            raise ValueError(f"tool_mocks key {name!r} is not a tool name")
+        size = len(encode_mock(response).encode())
+        if size > limit:
+            raise ValueError(
+                f"the mock for {name!r} is {size} bytes, over the "
+                f"{limit}-byte tool result limit"
+            )
+    return mocks
 
 
 def _validated_kind(definition: dict[str, Any], name: str) -> EvalKind:
@@ -36,6 +75,11 @@ class CreateEvalScenarioRequest(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=32)
     default_target: dict[str, Any] | None = None
 
+    @field_validator("tool_mocks")
+    @classmethod
+    def check_mocks(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _validated_mocks(value)
+
     @model_validator(mode="after")
     def validate_definition(self) -> "CreateEvalScenarioRequest":
         _validated_kind(self.definition, self.name)
@@ -56,6 +100,11 @@ class UpdateEvalScenarioRequest(BaseModel):
     # The name keys nothing in a payload, but a run records `scenario_name` at
     # queue time, so renaming is allowed and old runs keep the old name.
     name: str | None = Field(default=None, min_length=1, max_length=255)
+
+    @field_validator("tool_mocks")
+    @classmethod
+    def check_mocks(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _validated_mocks(value)
 
     @model_validator(mode="after")
     def validate_definition(self) -> "UpdateEvalScenarioRequest":
