@@ -100,7 +100,8 @@ async def update_scenario(
     )
     await session.flush()
     row = await get_scenario(session, scenario_id)
-    assert row is not None
+    if row is None:  # pragma: no cover - the caller just read this row
+        raise LookupError(f"eval scenario {scenario_id} vanished during update")
     return row
 
 

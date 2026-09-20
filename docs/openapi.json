@@ -4458,7 +4458,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "$ref": "#/components/schemas/EvalKind"
                 },
                 {
                   "type": "null"
@@ -4825,7 +4825,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "$ref": "#/components/schemas/EvalRunStatus"
                 },
                 {
                   "type": "null"
@@ -6299,13 +6299,26 @@
             "title": "Definition"
           },
           "tool_mocks": {
-            "additionalProperties": true,
-            "type": "object",
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Tool Mocks"
           },
           "tool_policy": {
-            "$ref": "#/components/schemas/EvalToolPolicy",
-            "default": "mock_only"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvalToolPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "tags": {
             "items": {
@@ -6520,6 +6533,15 @@
         "type": "object",
         "title": "EndCallRequest"
       },
+      "EvalKind": {
+        "type": "string",
+        "enum": [
+          "script",
+          "simulation"
+        ],
+        "title": "EvalKind",
+        "description": "Which of the two kinds of scenario this is.\n\nThe values are pipecat's own (`pipecat.evals.scenario.EvalKind`), which it\ncarries into the session, the driver and the result record \u2014 so a stored\nrow and a pipecat object never need translating between them."
+      },
       "EvalModality": {
         "type": "string",
         "enum": [
@@ -6528,6 +6550,19 @@
         ],
         "title": "EvalModality",
         "description": "Whether the conversation is spoken or typed.\n\n`text` skips STT and TTS entirely, so it is fast and free and covers the\nsmallest share of a voice platform's risk; `audio` is the only mode that\nreaches the provider-connect path where most regressions have lived."
+      },
+      "EvalRunStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "passed",
+          "failed",
+          "errored",
+          "cancelled"
+        ],
+        "title": "EvalRunStatus",
+        "description": "Where a run is, and how it ended.\n\n`errored` is deliberately not a kind of `failed`: it means the harness did\nnot complete (a connect failure, a judge outage), which is neither a pass\nnor a fail and never counts toward a rate. A judge outage reading as an\nagent regression is how a suite loses its audience."
       },
       "EvalTarget": {
         "properties": {

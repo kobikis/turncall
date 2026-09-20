@@ -236,3 +236,57 @@ async def test_a_scenario_name_is_unique_within_a_project(factory) -> None:
             session, project.id, "duplicated"
         )
         assert existing is not None
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_could_not_be_queued_is_not_left_looking_queued(
+    factory,
+) -> None:
+    """The janitor only sweeps `running`, so a run that never reached the queue
+    would sit at `queued` forever while the caller was told 202 Accepted.
+
+    Exercised at the repository seam the endpoint uses, since the failure is
+    about which status the row ends up in, not about HTTP.
+    """
+    async with factory() as session:
+        project = await _project(session, "eval-enqueue-failure")
+        _scenario, run = await _scenario_and_run(session, project.id, name="orphan")
+        run_id = run.id
+        await session.commit()
+
+    # What the endpoint does when the Redis push raises.
+    async with factory() as session:
+        await eval_repo.finish_run(
+            session,
+            run_id,
+            status=EvalRunStatus.ERRORED,
+            passed_count=0,
+            failed_count=0,
+            results=[],
+            error="could not be queued: ConnectionError: connection refused",
+        )
+        await session.commit()
+
+    async with factory() as session:
+        reread = await eval_repo.get_run(session, run_id)
+        assert reread.status == EvalRunStatus.ERRORED.value
+        assert "could not be queued" in reread.error
+        assert reread.passed_count == 0 and reread.failed_count == 0
+
+    # And the janitor would never have rescued it, which is why the endpoint
+    # has to: it only looks at rows that were actually claimed.
+    async with factory() as session:
+        project = await _project(session, "eval-janitor-scope")
+        _s, queued = await _scenario_and_run(session, project.id, name="still-queued")
+        queued_id = queued.id
+        await session.commit()
+
+    async with factory() as session:
+        await eval_repo.reclaim_stalled_runs(session, max_age_seconds=0)
+        await session.commit()
+
+    async with factory() as session:
+        reread = await eval_repo.get_run(session, queued_id)
+        assert reread.status == EvalRunStatus.QUEUED.value, (
+            "the janitor must not touch queued rows — a worker may still take it"
+        )

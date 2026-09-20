@@ -11,7 +11,7 @@ from fastapi import APIRouter
 from loguru import logger
 
 from turncall.api.deps import DbSession
-from turncall.api.errors import ConflictError, NotFoundError
+from turncall.api.errors import BadRequestError, ConflictError, NotFoundError
 from turncall.api.responses import ok
 from turncall.api.v1.schemas.evals import (
     SCHEMA_VERSION,
@@ -23,6 +23,7 @@ from turncall.api.v1.schemas.evals import (
 )
 from turncall.auth import Auth, WriteAuth
 from turncall.config import get_settings
+from turncall.domain.enums import EvalKind, EvalRunStatus
 from turncall.evals import queue as eval_queue
 from turncall.evals.runner import resolved_scenario_snapshot
 from turncall.storage.repositories import eval_repo
@@ -50,8 +51,6 @@ async def create_eval_scenario(
         definition=body.definition,
         schema_version=SCHEMA_VERSION,
         description=body.description,
-        tool_mocks=body.tool_mocks,
-        tool_policy=body.tool_policy.value,
         tags=body.tags,
         default_target=body.default_target,
     )
@@ -63,10 +62,12 @@ async def create_eval_scenario(
 async def list_eval_scenarios(
     auth: Auth,
     session: DbSession,
-    kind: str | None = None,
+    kind: EvalKind | None = None,
     tag: str | None = None,
 ) -> dict:
-    rows = await eval_repo.list_scenarios(session, auth.project_id, kind=kind, tag=tag)
+    rows = await eval_repo.list_scenarios(
+        session, auth.project_id, kind=kind.value if kind else None, tag=tag
+    )
     return ok([EvalScenarioResponse.model_validate(r) for r in rows])
 
 
@@ -95,14 +96,11 @@ async def update_eval_scenario(
             "name": body.name,
             "description": body.description,
             "definition": body.definition,
-            "tool_mocks": body.tool_mocks,
             "tags": body.tags,
             "default_target": body.default_target,
         }.items()
         if v is not None
     }
-    if body.tool_policy is not None:
-        values["tool_policy"] = body.tool_policy.value
     if body.definition is not None:
         # A new definition may change the kind, and the column is what readers
         # switch on — leaving it stale would make the row lie about itself.
@@ -140,7 +138,7 @@ async def create_eval_run(
     """Queue a run. 202: the worker executes it, this process never does."""
     settings = get_settings()
     if body.iterations > settings.evals.max_iterations:
-        raise ConflictError(
+        raise BadRequestError(
             f"iterations exceeds the limit of {settings.evals.max_iterations}"
         )
 
@@ -149,6 +147,13 @@ async def create_eval_run(
     )
     if scenario is None:
         raise NotFoundError("EvalScenario", str(body.scenario_id))
+    if scenario.kind != EvalKind.SCRIPTED.value:
+        # Storing a simulation is fine -- the library is meant to be populated
+        # ahead of #73 -- but running one would score it through the scripted
+        # mapper and report nonsense.
+        raise BadRequestError(
+            f"{scenario.kind!r} scenarios cannot be run yet — scripted only"
+        )
 
     batch_id = uuid4()
     run = await eval_repo.create_run(
@@ -170,15 +175,29 @@ async def create_eval_run(
     )
     await session.commit()
 
-    # The row is committed before the queue push, so a Redis outage leaves a
-    # queued run the janitor's operator can see and requeue -- not a run that
-    # was executed but never recorded.
+    # The row is committed before the queue push, so a run is never executed
+    # without being recorded. If the push then fails there is nothing to execute
+    # it -- the janitor only sweeps `running`, so the row would sit at `queued`
+    # forever while the caller was told it was accepted. Record the truth
+    # instead, and report the status that actually holds.
+    status = run.status
     try:
         from turncall.storage.redis import get_redis
 
         await eval_queue.enqueue(get_redis(), run.id)
-    except Exception:
+    except Exception as exc:
         logger.exception("eval_enqueue_failed", run_id=str(run.id))
+        await eval_repo.finish_run(
+            session,
+            run.id,
+            status=EvalRunStatus.ERRORED,
+            passed_count=0,
+            failed_count=0,
+            results=[],
+            error=f"could not be queued: {type(exc).__name__}: {exc}",
+        )
+        await session.commit()
+        status = EvalRunStatus.ERRORED.value
 
     return ok(
         {
@@ -187,7 +206,7 @@ async def create_eval_run(
                 {
                     "id": str(run.id),
                     "scenario_name": run.scenario_name,
-                    "status": run.status,
+                    "status": status,
                 }
             ],
         }
@@ -200,14 +219,14 @@ async def list_eval_runs(
     session: DbSession,
     batch_id: UUID | None = None,
     scenario_id: UUID | None = None,
-    status: str | None = None,
+    status: EvalRunStatus | None = None,
 ) -> dict:
     rows = await eval_repo.list_runs(
         session,
         auth.project_id,
         batch_id=batch_id,
         scenario_id=scenario_id,
-        status=status,
+        status=status.value if status else None,
     )
     return ok([EvalRunResponse.model_validate(r) for r in rows])
 

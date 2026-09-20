@@ -53,7 +53,9 @@ def _expectation(matched="Hello there", event_name="llm_response", passed=True):
     )
 
 
-def _script_result(*, passed=True, skipped=None, turns=None, failures=None):
+def _script_result(
+    *, passed=True, skipped=None, turns=None, failures=None, events=None
+):
     return SimpleNamespace(
         scenario_name="greets-the-caller",
         passed=passed,
@@ -61,9 +63,14 @@ def _script_result(*, passed=True, skipped=None, turns=None, failures=None):
         duration_ms=4120,
         failures=failures or [],
         turns=turns if turns is not None else [],
-        events_seen=[],
+        events_seen=events or [],
         debug_log=[],
     )
+
+
+def _said(text, at):
+    """A bot-speech event as the harness records it (`at` is seconds)."""
+    return {"type": "llm_response", "text": text, "at": at}
 
 
 def _turn_result(index=0, status="passed", expectations=None, failures=None):
@@ -150,10 +157,11 @@ class TestMapScriptResult:
     def test_the_transcript_interleaves_the_user_and_the_bot(self) -> None:
         outcome = map_script_result(
             _script_result(
-                turns=[
-                    _turn_result(0, expectations=[_expectation("Hi, how can I help?")]),
-                    _turn_result(1, expectations=[_expectation("Sure, booking that.")]),
-                ]
+                turns=[_turn_result(0), _turn_result(1)],
+                events=[
+                    _said("Hi, how can I help?", 0.5),
+                    _said("Sure, booking that.", 1.2),
+                ],
             ),
             iteration=1,
             parsed=_parsed("hello", "book me in"),
@@ -163,6 +171,46 @@ class TestMapScriptResult:
             {"role": "assistant", "content": "Hi, how can I help?"},
             {"role": "user", "content": "book me in"},
             {"role": "assistant", "content": "Sure, booking that."},
+        ]
+
+    def test_a_failing_turn_still_records_what_the_agent_said(self) -> None:
+        """The whole point of the transcript. A failing turn matches nothing,
+        so building the bot side from `expectation.matched` made it go blank
+        exactly when someone needs to see what went wrong."""
+        failure = _failure()
+        outcome = map_script_result(
+            _script_result(
+                passed=False,
+                failures=[failure],
+                turns=[
+                    _turn_result(
+                        0, status="failed", expectations=[], failures=[failure]
+                    )
+                ],
+                events=[_said("I have no idea what you mean.", 0.4)],
+            ),
+            iteration=1,
+            parsed=_parsed("book me in"),
+        )
+        assert outcome.entry["transcript"] == [
+            {"role": "user", "content": "book me in"},
+            {"role": "assistant", "content": "I have no idea what you mean."},
+        ]
+
+    def test_speech_after_the_last_scored_turn_is_not_dropped(self) -> None:
+        """A run that stops at a failure leaves later events unassigned."""
+        outcome = map_script_result(
+            _script_result(
+                turns=[_turn_result(0)],
+                events=[_said("first", 0.2), _said("trailing", 99.0)],
+            ),
+            iteration=1,
+            parsed=_parsed("hello"),
+        )
+        assert [m["content"] for m in outcome.entry["transcript"]] == [
+            "hello",
+            "first",
+            "trailing",
         ]
 
     def test_a_non_speech_match_stays_out_of_the_transcript(self) -> None:
@@ -214,12 +262,30 @@ class TestSnapshots:
         }
 
     def test_the_harness_snapshot_names_the_judge_and_pipecat(self) -> None:
-        """The judge model decides the verdict; a silent provider-side update
-        moves the whole baseline."""
-        config = harness_config(judge_model="gpt-4o-2024-11-20")
+        """The judge decides the verdict; a silent provider-side model update
+        moves the whole baseline, so the run has to say which one answered."""
+        parsed = SimpleNamespace(
+            judge={"service": "openai", "model": "gpt-4o-2024-11-20"}
+        )
+        config = harness_config(parsed)
         assert config["judge_model"] == "gpt-4o-2024-11-20"
+        assert config["judge_service"] == "openai"
         assert config["pipecat_version"].startswith("1.")
         assert config["schema_version"]
+
+    def test_the_judge_snapshot_records_pipecats_default_too(self) -> None:
+        """Pipecat fills `judge.eval:` with ollama/gemma when a scenario names
+        nothing — which is not the judge most people assume they are running."""
+        from turncall.domain.enums import EvalModality
+        from turncall.evals.scenario import parse, with_modality
+
+        parsed = parse(
+            with_modality({"turns": [{"user": "hi", "expect": []}]}, EvalModality.TEXT),
+            name="defaulted",
+        )
+        config = harness_config(parsed)
+        assert config["judge_service"], "the run must name whatever judge ran"
+        assert config["judge_model"]
 
 
 class TestResolveTarget:
@@ -409,6 +475,46 @@ class TestExecuteRun:
         execute.assert_not_awaited()
         assert finish.await_args.kwargs["status"] is EvalRunStatus.ERRORED
         assert finish.await_args.kwargs["error"] == "agent not found"
+
+    async def test_a_simulation_is_refused_rather_than_mis_scored(self) -> None:
+        """Only the scripted result mapping exists. Running a simulation through
+        it would report nonsense confidently, which is worse than refusing."""
+        run = self._run_row()
+        run.kind = "simulation"
+        run.resolved_scenario = {
+            "definition": {
+                "persona": "a caller who lost their booking",
+                "goal": "recover it",
+                "success": "the agent finds it",
+            }
+        }
+        execute = AsyncMock()
+        finish = AsyncMock()
+        await self._execute(run, execute, finish=finish)
+        execute.assert_not_awaited()
+        assert finish.await_args.kwargs["status"] is EvalRunStatus.ERRORED
+        assert "scripted only" in finish.await_args.kwargs["error"]
+
+    async def test_an_unparseable_stored_definition_errors_before_paying(
+        self,
+    ) -> None:
+        """A definition that passed validation once can be made invalid by an
+        update; the worker must not discover that per iteration."""
+        run = self._run_row(iterations=5)
+        run.resolved_scenario = {"definition": {"turns": "nope"}}
+        execute = AsyncMock()
+        finish = AsyncMock()
+        await self._execute(run, execute, finish=finish)
+        execute.assert_not_awaited()
+        assert finish.await_args.kwargs["status"] is EvalRunStatus.ERRORED
+
+    async def test_the_judge_that_ran_is_recorded_on_the_run(self) -> None:
+        """A verdict is not comparable across time without it."""
+        execute = AsyncMock(return_value=_script_result(turns=[_turn_result()]))
+        _finish, start = await self._execute(self._run_row(), execute)
+        harness = start.await_args.kwargs["harness_config"]
+        assert harness["judge_model"], "judge_model must never be null"
+        assert harness["judge_service"]
 
     async def test_a_run_that_is_no_longer_queued_is_left_alone(self) -> None:
         """Cancelled while queued, or already claimed by another worker."""

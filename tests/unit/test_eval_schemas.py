@@ -75,13 +75,35 @@ class TestDefinitionValidation:
             UpdateEvalScenarioRequest(definition={"turns": "nope"})
 
 
-class TestDefaults:
-    def test_tool_policy_defaults_to_failing_closed(self) -> None:
-        """A scenario pointed at a real agent must not book a real appointment
-        on every iteration just because nobody set a policy."""
+class TestToolFieldsAreRejectedUntilEnforced:
+    """Accepting `tool_mocks`/`tool_policy` before #71 would be worse than not
+    having them: nothing short-circuits the tool bridge yet, so a scenario
+    would read as fail-closed while booking a real appointment ten times."""
+
+    def test_tool_mocks_are_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="not enforced yet"):
+            CreateEvalScenarioRequest(
+                name="greets",
+                definition=SCRIPTED,
+                tool_mocks={"book": {"ok": True}},
+            )
+
+    def test_tool_policy_is_rejected_even_when_it_is_the_safe_one(self) -> None:
+        """Especially then — that is the value that lies about protection."""
+        with pytest.raises(ValidationError, match="not enforced yet"):
+            CreateEvalScenarioRequest(
+                name="greets",
+                definition=SCRIPTED,
+                tool_policy=EvalToolPolicy.MOCK_ONLY,
+            )
+
+    def test_an_update_cannot_smuggle_them_in_either(self) -> None:
+        with pytest.raises(ValidationError, match="not enforced yet"):
+            UpdateEvalScenarioRequest(tool_policy=EvalToolPolicy.LIVE)
+
+    def test_a_scenario_without_them_is_fine(self) -> None:
         body = CreateEvalScenarioRequest(name="greets", definition=SCRIPTED)
-        assert body.tool_policy is EvalToolPolicy.MOCK_ONLY
-        assert body.tool_mocks == {}
+        assert body.tool_mocks is None and body.tool_policy is None
 
 
 class TestTarget:

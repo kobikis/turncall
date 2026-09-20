@@ -51,7 +51,7 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def _build_session(parsed: Any, kind: EvalKind, bot_url: str, *, audio: bool) -> Any:
+def _build_session(parsed: Any, kind: EvalKind, bot_url: str) -> Any:
     """The pipecat harness session for this scenario kind."""
     from pipecat.evals.session import EvalSessionParams
 
@@ -121,7 +121,7 @@ async def run_iteration(
 
     bot = asyncio.create_task(session.start(), name=f"eval-bot-{run_id}")
     try:
-        harness = _build_session(parsed, kind, f"ws://127.0.0.1:{port}", audio=audio)
+        harness = _build_session(parsed, kind, f"ws://127.0.0.1:{port}")
         return await harness.run()
     finally:
         await _stop_bot(bot, run_id)
@@ -130,8 +130,15 @@ async def run_iteration(
 async def _stop_bot(bot: asyncio.Task, run_id: UUID) -> None:
     """Wind the bot pipeline down, cancelling it if it will not go quietly."""
     if bot.done():
-        with contextlib.suppress(Exception):
+        # A pipeline that died before the harness finished is usually *why* the
+        # iteration failed -- an unusable LLM, a bad key, a provider 400.
+        # Swallowing it silently leaves the run scored with no way to find out.
+        try:
             bot.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("eval_bot_exited_early", run_id=str(run_id))
         return
     try:
         await asyncio.wait_for(asyncio.shield(bot), timeout=_BOT_STOP_TIMEOUT_S)

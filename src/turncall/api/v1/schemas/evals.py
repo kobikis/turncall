@@ -24,17 +24,31 @@ def _validated_kind(definition: dict[str, Any], name: str) -> EvalKind:
         raise ValueError(str(exc)) from exc
 
 
+# Until #71 lands, nothing reads `tool_mocks` or honours `tool_policy`: the
+# tool bridge has no short-circuit, so an agent's webhooks and MCP servers fire
+# for real on every iteration. Accepting the fields would be worse than not
+# having them -- a scenario would read as fail-closed while booking a real
+# appointment ten times. Rejecting them says so out loud.
+_TOOLS_NOT_ENFORCED = (
+    "tool_mocks/tool_policy are not enforced yet (#71): an agent's tools "
+    "execute for real on every iteration. Point scenarios at an agent whose "
+    "tools are safe to call, or wait for that slice."
+)
+
+
 class CreateEvalScenarioRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
     definition: dict[str, Any]
-    tool_mocks: dict[str, Any] = Field(default_factory=dict)
-    tool_policy: EvalToolPolicy = EvalToolPolicy.MOCK_ONLY
+    tool_mocks: dict[str, Any] | None = None
+    tool_policy: EvalToolPolicy | None = None
     tags: list[str] = Field(default_factory=list, max_length=32)
     default_target: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_definition(self) -> "CreateEvalScenarioRequest":
+        if self.tool_mocks or self.tool_policy is not None:
+            raise ValueError(_TOOLS_NOT_ENFORCED)
         _validated_kind(self.definition, self.name)
         return self
 
@@ -56,6 +70,8 @@ class UpdateEvalScenarioRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_definition(self) -> "UpdateEvalScenarioRequest":
+        if self.tool_mocks or self.tool_policy is not None:
+            raise ValueError(_TOOLS_NOT_ENFORCED)
         if self.definition is not None:
             _validated_kind(self.definition, self.name or "scenario")
         return self
