@@ -222,3 +222,15 @@ class EvalToolPolicy(StrEnum):
 
     MOCK_ONLY = "mock_only"
     LIVE = "live"
+
+    @classmethod
+    def resolve(cls, value: object) -> "EvalToolPolicy":
+        """The policy to apply to a value that may be absent, or stored.
+
+        One place decides the default, because deciding it twice is how the
+        two halves drift apart and the safe one stops being the default. Fails
+        closed by construction: `live` is the typed opt-in, so anything that is
+        not exactly it — missing, empty, a value a future version wrote — is
+        `mock_only`, and nothing here can raise on a stored row.
+        """
+        return cls.LIVE if str(value) == cls.LIVE.value else cls.MOCK_ONLY

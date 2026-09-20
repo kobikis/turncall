@@ -330,6 +330,7 @@ def map_script_result(
 def errored_entry(
     iteration: int,
     reason: str,
+    *,
     tool_calls: list[dict[str, Any]] | None = None,
 ) -> IterationOutcome:
     """An iteration the harness could not complete."""
@@ -355,117 +356,78 @@ def derive_status(outcomes: list[IterationOutcome]) -> tuple[EvalRunStatus, int,
     return status, passed, failed
 
 
-async def execute_run(
-    run_id: UUID,
-    *,
-    session_factory: Any,
-    settings: Any,
-    execute: ExecuteIteration | None = None,
-) -> None:
-    """Run one queued eval run to a terminal status.
+@dataclass(frozen=True)
+class IterationPlan:
+    """Everything one iteration needs, resolved once before the first runs.
 
-    Never raises: a run that blows up is recorded as `errored` with the reason,
-    because a worker that dies on a bad scenario stops serving every other one.
+    All of it already travelled together into every `execute()` call; the mocks
+    and the policy joined it in #71. Bundled so the loop takes one argument and
+    `execute_run` keeps to setting the run up and writing the verdict down.
     """
-    from turncall.storage.repositories import eval_repo
 
-    if execute is None:
-        from turncall.evals.harness import run_iteration
+    parsed: Any
+    kind: EvalKind
+    target: ResolvedTarget
+    modality: EvalModality
+    settings: Any
+    session_factory: Any
+    run_id: UUID
+    tool_mocks: dict[str, Any]
+    live_tools: bool
 
-        execute = run_iteration
+    def fresh_mocks(self) -> ToolMocks:
+        """A recorder for one iteration.
 
-    async with session_factory() as session:
-        run = await eval_repo.get_run(session, run_id)
-        if run is None:
-            logger.warning("eval_run_missing", run_id=str(run_id))
-            return
-        if run.status != EvalRunStatus.QUEUED.value:
-            # Cancelled while queued, or already claimed by another worker.
-            logger.info("eval_run_not_queued", run_id=str(run_id), status=run.status)
-            return
+        The mocks are the scenario's, so every iteration gets the same ones —
+        but what was called and what was refused belong to the iteration alone.
+        """
+        return ToolMocks(responses=self.tool_mocks, live=self.live_tools)
 
-        project_id = run.project_id
-        modality = EvalModality(run.modality)
-        kind = EvalKind.SCRIPTED
-        iterations = run.iterations
-        definition = dict(run.resolved_scenario.get("definition") or {})
-        scenario_name = run.scenario_name
+    def execute_kwargs(self) -> dict[str, Any]:
+        """What `harness.run_iteration` is called with, mocks aside."""
+        return {
+            "parsed": self.parsed,
+            "kind": self.kind,
+            "target": self.target,
+            "modality": self.modality,
+            "settings": self.settings,
+            "session_factory": self.session_factory,
+            "run_id": self.run_id,
+        }
 
-        try:
-            # The definition decides, not `run.kind`. The column is a copy made
-            # at queue time; if the two ever disagree, the mapper is chosen from
-            # what actually parses, and `map_script_result` would otherwise be
-            # handed a simulation result to read.
-            kind = scenario_mod.kind_of(definition)
-            if kind is not EvalKind.SCRIPTED:
-                raise ScenarioKindError(
-                    f"{kind.value!r} scenarios cannot be run yet — scripted only"
-                )
-            merged = scenario_mod.with_modality(definition, modality)
-            parsed = scenario_mod.parse(merged, name=scenario_name)
-            target = await resolve_target(
-                session, project_id=project_id, target=run.target
-            )
-        except Exception as exc:
-            await eval_repo.finish_run(
-                session,
-                run_id,
-                status=EvalRunStatus.ERRORED,
-                passed_count=0,
-                failed_count=0,
-                results=[],
-                error=str(exc),
-            )
-            await session.commit()
-            logger.warning("eval_run_unrunnable", run_id=str(run_id), error=str(exc))
-            return
 
-        tool_mocks = dict(run.resolved_scenario.get("tool_mocks") or {})
-        tool_policy = (
-            run.resolved_scenario.get("tool_policy") or EvalToolPolicy.MOCK_ONLY.value
-        )
-        live_tools = tool_policy == EvalToolPolicy.LIVE.value
-        if live_tools and (target.config.tools or target.config.mcp_servers):
-            # The scenario typed the word, so this is allowed — but a real
-            # webhook fires on every iteration and the run's record should not
-            # be the only place that says so.
-            logger.warning(
-                "eval_agent_has_live_tools",
-                run_id=str(run_id),
-                agent_id=str(target.agent_id),
-                tools=len(target.config.tools),
-                mcp_servers=len(target.config.mcp_servers),
-            )
+def tool_policy_of(resolved_scenario: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """The run's mocks, and whether a tool without one may execute (#71).
 
-        await eval_repo.start_run(
-            session,
-            run_id,
-            resolved_config=target.config_blob,
-            agent_id=target.agent_id,
-            harness_config=harness_config(parsed),
-        )
-        await session.commit()
+    Read off the run's snapshot rather than the scenario row: the row can be
+    edited while the run sits queued, and a run is what it was queued as.
+    `EvalToolPolicy.resolve` is the one place the fail-closed default lives.
+    """
+    policy = EvalToolPolicy.resolve(resolved_scenario.get("tool_policy"))
+    return dict(
+        resolved_scenario.get("tool_mocks") or {}
+    ), policy is EvalToolPolicy.LIVE
 
+
+async def run_iterations(
+    plan: IterationPlan, *, iterations: int, execute: ExecuteIteration
+) -> list[IterationOutcome]:
+    """Run the scenario `iterations` times and collect what each one proved.
+
+    One bad iteration never stops the rest: a run of five that lost one to a
+    judge timeout still has four verdicts, and that entry says what happened.
+    """
     outcomes: list[IterationOutcome] = []
     for iteration in range(1, iterations + 1):
-        # Fresh per iteration: the mocks are the scenario's, but what was called
-        # and what was refused belong to this iteration alone.
-        mocks = ToolMocks(responses=tool_mocks, live=live_tools)
+        mocks = plan.fresh_mocks()
         try:
-            result = await execute(
-                parsed=parsed,
-                kind=kind,
-                target=target,
-                modality=modality,
-                settings=settings,
-                session_factory=session_factory,
-                run_id=run_id,
-                tool_mocks=mocks,
-            )
+            result = await execute(**plan.execute_kwargs(), tool_mocks=mocks)
         except Exception as exc:
-            logger.exception("eval_iteration_error", run_id=str(run_id))
+            logger.exception("eval_iteration_error", run_id=str(plan.run_id))
             outcomes.append(
-                errored_entry(iteration, f"{type(exc).__name__}: {exc}", mocks.calls)
+                errored_entry(
+                    iteration, f"{type(exc).__name__}: {exc}", tool_calls=mocks.calls
+                )
             )
             continue
         if mocks.refused:
@@ -474,15 +436,120 @@ async def execute_run(
             # `errored`, not `failed` — the scenario was never finished.
             outcomes.append(
                 errored_entry(
-                    iteration, f"unmocked tool: {mocks.refused[0]}", mocks.calls
+                    iteration,
+                    f"unmocked tool: {mocks.refused[0]}",
+                    tool_calls=mocks.calls,
                 )
             )
             continue
         outcomes.append(
             map_script_result(
-                result, iteration=iteration, parsed=parsed, tool_calls=mocks.calls
+                result,
+                iteration=iteration,
+                parsed=plan.parsed,
+                tool_calls=mocks.calls,
             )
         )
+    return outcomes
+
+
+async def _record_unrunnable(session: Any, run_id: UUID, exc: Exception) -> None:
+    """A run that cannot start is `errored` before an iteration is paid for."""
+    from turncall.storage.repositories import eval_repo
+
+    await eval_repo.finish_run(
+        session,
+        run_id,
+        status=EvalRunStatus.ERRORED,
+        passed_count=0,
+        failed_count=0,
+        results=[],
+        error=str(exc),
+    )
+    await session.commit()
+    logger.warning("eval_run_unrunnable", run_id=str(run_id), error=str(exc))
+
+
+def _parse_for_run(run: Any, modality: EvalModality) -> tuple[EvalKind, Any]:
+    """The pipecat scenario this run will drive, and the kind it turned out to be.
+
+    The definition decides, not `run.kind`. The column is a copy made at queue
+    time; if the two ever disagree, the mapper is chosen from what actually
+    parses, and `map_script_result` would otherwise be handed a simulation
+    result to read.
+    """
+    definition = dict(run.resolved_scenario.get("definition") or {})
+    kind = scenario_mod.kind_of(definition)
+    if kind is not EvalKind.SCRIPTED:
+        raise ScenarioKindError(
+            f"{kind.value!r} scenarios cannot be run yet — scripted only"
+        )
+    merged = scenario_mod.with_modality(definition, modality)
+    return kind, scenario_mod.parse(merged, name=run.scenario_name)
+
+
+async def _plan_run(
+    session: Any, run: Any, *, settings: Any, session_factory: Any
+) -> IterationPlan | None:
+    """Resolve what this run will execute, and write its snapshots.
+
+    Returns None when the run cannot start — the row is already recorded as
+    `errored` by then. Everything here happens once, before the first
+    iteration: the snapshots have to describe what actually ran, and a
+    definition that stopped parsing must not be discovered per iteration.
+    """
+    from turncall.storage.repositories import eval_repo
+
+    modality = EvalModality(run.modality)
+    try:
+        kind, parsed = _parse_for_run(run, modality)
+        target = await resolve_target(
+            session, project_id=run.project_id, target=run.target
+        )
+    except Exception as exc:
+        await _record_unrunnable(session, run.id, exc)
+        return None
+
+    tool_mocks, live_tools = tool_policy_of(run.resolved_scenario)
+    if live_tools and (target.config.tools or target.config.mcp_servers):
+        # The scenario typed the word, so this is allowed — but a real webhook
+        # fires on every iteration and the run's record should not be the only
+        # place that says so.
+        logger.warning(
+            "eval_agent_has_live_tools",
+            run_id=str(run.id),
+            agent_id=str(target.agent_id),
+            tools=len(target.config.tools),
+            mcp_servers=len(target.config.mcp_servers),
+        )
+
+    await eval_repo.start_run(
+        session,
+        run.id,
+        resolved_config=target.config_blob,
+        agent_id=target.agent_id,
+        harness_config=harness_config(parsed),
+    )
+    await session.commit()
+
+    return IterationPlan(
+        parsed=parsed,
+        kind=kind,
+        target=target,
+        modality=modality,
+        settings=settings,
+        session_factory=session_factory,
+        run_id=run.id,
+        tool_mocks=tool_mocks,
+        live_tools=live_tools,
+    )
+
+
+async def _finish_run(
+    session_factory: Any, run_id: UUID, outcomes: list[IterationOutcome]
+) -> None:
+    """Write the run's verdict, its counts and every iteration's entry."""
+    from turncall.storage.repositories import eval_repo
 
     status, passed, failed = derive_status(outcomes)
     error = None
@@ -511,3 +578,47 @@ async def execute_run(
         passed=passed,
         failed=failed,
     )
+
+
+async def execute_run(
+    run_id: UUID,
+    *,
+    session_factory: Any,
+    settings: Any,
+    execute: ExecuteIteration | None = None,
+) -> None:
+    """Run one queued eval run to a terminal status.
+
+    Never raises: a run that blows up is recorded as `errored` with the reason,
+    because a worker that dies on a bad scenario stops serving every other one.
+
+    The session is closed before the first iteration and reopened to write the
+    verdict: a run can take minutes, and holding a connection through it would
+    starve the pool a worker shares with everything else it is running.
+    """
+    from turncall.storage.repositories import eval_repo
+
+    if execute is None:
+        from turncall.evals.harness import run_iteration
+
+        execute = run_iteration
+
+    async with session_factory() as session:
+        run = await eval_repo.get_run(session, run_id)
+        if run is None:
+            logger.warning("eval_run_missing", run_id=str(run_id))
+            return
+        if run.status != EvalRunStatus.QUEUED.value:
+            # Cancelled while queued, or already claimed by another worker.
+            logger.info("eval_run_not_queued", run_id=str(run_id), status=run.status)
+            return
+
+        iterations = run.iterations
+        plan = await _plan_run(
+            session, run, settings=settings, session_factory=session_factory
+        )
+        if plan is None:
+            return
+
+    outcomes = await run_iterations(plan, iterations=iterations, execute=execute)
+    await _finish_run(session_factory, run_id, outcomes)

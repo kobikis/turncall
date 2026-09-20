@@ -28,6 +28,7 @@ from turncall.evals.runner import (
     map_script_result,
     resolve_target,
     resolved_scenario_snapshot,
+    tool_policy_of,
 )
 
 pytestmark = pytest.mark.unit
@@ -276,6 +277,39 @@ class TestErroredEntry:
         assert outcome.passed is None
         assert outcome.entry["error"] == "ConnectionRefusedError: nothing listening"
         assert outcome.entry["iteration"] == 2
+
+
+class TestToolPolicyResolution:
+    """One place decides the fail-closed default — deciding it twice is how the
+    safe value stops being the default (#71)."""
+
+    def test_live_has_to_be_named_exactly(self) -> None:
+        from turncall.domain.enums import EvalToolPolicy
+
+        assert EvalToolPolicy.resolve("live") is EvalToolPolicy.LIVE
+        assert EvalToolPolicy.resolve(EvalToolPolicy.LIVE) is EvalToolPolicy.LIVE
+
+    def test_anything_else_fails_closed(self) -> None:
+        """Including a value a future version wrote: a stored row must never
+        make this raise inside a worker, and must never become `live` by
+        accident."""
+        from turncall.domain.enums import EvalToolPolicy
+
+        for value in (None, "", "mock_only", "LIVE", "whatever", 7, {"a": 1}):
+            assert EvalToolPolicy.resolve(value) is EvalToolPolicy.MOCK_ONLY
+
+    def test_the_run_reads_its_mocks_off_the_snapshot(self) -> None:
+        """The scenario row can be edited while the run sits queued; a run is
+        what it was queued as."""
+        from turncall.evals.runner import tool_policy_of
+
+        mocks, live = tool_policy_of(
+            {"tool_mocks": {"book": {"ok": True}}, "tool_policy": "live"}
+        )
+        assert (mocks, live) == ({"book": {"ok": True}}, True)
+
+    def test_a_snapshot_missing_both_is_mock_only_with_no_mocks(self) -> None:
+        assert tool_policy_of({}) == ({}, False)
 
 
 class TestSnapshots:

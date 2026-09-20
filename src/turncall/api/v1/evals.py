@@ -52,8 +52,9 @@ async def create_eval_scenario(
         schema_version=SCHEMA_VERSION,
         description=body.description,
         tool_mocks=body.tool_mocks,
-        # Fail closed when the scenario says nothing: `live` has to be typed.
-        tool_policy=(body.tool_policy or EvalToolPolicy.MOCK_ONLY).value,
+        # One place decides the fail-closed default, for the boundary and the
+        # worker alike: `live` has to be typed.
+        tool_policy=EvalToolPolicy.resolve(body.tool_policy).value,
         tags=body.tags,
         default_target=body.default_target,
     )
