@@ -6594,6 +6594,17 @@
             ],
             "title": "Name"
           },
+          "environment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Environment"
+          },
           "agent": {
             "anyOf": [
               {
@@ -6612,7 +6623,7 @@
           "type"
         ],
         "title": "EvalTarget",
-        "description": "What a run points at.\n\nSlice #70 accepts `agent` only; `agent_name` (latest published) and\n`inline` are #74, and are rejected at the boundary rather than accepted and\nthen failed by the worker."
+        "description": "What a run points at (#74).\n\nThree forms, and the difference between the first two matters: an agent row\nis one immutable version, so `agent` pins a version forever \u2014 a scenario\ntargeting it silently stops testing production the moment the next version\nis published. `agent_name` resolves to whatever is published at run time.\n`inline` has no row at all, which is how a prompt or model change is\nevaluated *before* publishing it, and the sandbox a scenario is pointed at\nwhen its tools have real side effects."
       },
       "EvalToolPolicy": {
         "type": "string",
