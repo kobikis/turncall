@@ -4383,6 +4383,621 @@
         }
       }
     },
+    "/v1/eval-scenarios": {
+      "post": {
+        "tags": [
+          "evals"
+        ],
+        "summary": "Create Eval Scenario",
+        "description": "Create a scenario. The definition is validated by round-tripping it\nthrough pipecat's parser and then stored verbatim.",
+        "operationId": "create_eval_scenario_v1_eval_scenarios_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEvalScenarioRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Eval Scenario V1 Eval Scenarios Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "evals"
+        ],
+        "summary": "List Eval Scenarios",
+        "operationId": "list_eval_scenarios_v1_eval_scenarios_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tag"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Eval Scenarios V1 Eval Scenarios Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/eval-scenarios/{scenario_id}": {
+      "get": {
+        "tags": [
+          "evals"
+        ],
+        "summary": "Get Eval Scenario",
+        "operationId": "get_eval_scenario_v1_eval_scenarios__scenario_id__get",
+        "parameters": [
+          {
+            "name": "scenario_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Scenario Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Eval Scenario V1 Eval Scenarios  Scenario Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "evals"
+        ],
+        "summary": "Update Eval Scenario",
+        "operationId": "update_eval_scenario_v1_eval_scenarios__scenario_id__put",
+        "parameters": [
+          {
+            "name": "scenario_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Scenario Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEvalScenarioRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Eval Scenario V1 Eval Scenarios  Scenario Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "evals"
+        ],
+        "summary": "Delete Eval Scenario",
+        "description": "Delete a scenario. Its runs survive, with the scenario name intact.",
+        "operationId": "delete_eval_scenario_v1_eval_scenarios__scenario_id__delete",
+        "parameters": [
+          {
+            "name": "scenario_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Scenario Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Eval Scenario V1 Eval Scenarios  Scenario Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/eval-runs": {
+      "post": {
+        "tags": [
+          "evals"
+        ],
+        "summary": "Create Eval Run",
+        "description": "Queue a run. 202: the worker executes it, this process never does.",
+        "operationId": "create_eval_run_v1_eval_runs_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEvalRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Eval Run V1 Eval Runs Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "evals"
+        ],
+        "summary": "List Eval Runs",
+        "operationId": "list_eval_runs_v1_eval_runs_get",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Batch Id"
+            }
+          },
+          {
+            "name": "scenario_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scenario Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Eval Runs V1 Eval Runs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/eval-runs/{run_id}": {
+      "get": {
+        "tags": [
+          "evals"
+        ],
+        "summary": "Get Eval Run",
+        "operationId": "get_eval_run_v1_eval_runs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Eval Run V1 Eval Runs  Run Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "evals"
+        ],
+        "summary": "Cancel Eval Run",
+        "description": "Cancel a run while it is queued or running.",
+        "operationId": "cancel_eval_run_v1_eval_runs__run_id__delete",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Cancel Eval Run V1 Eval Runs  Run Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/webrtc/connect": {
       "post": {
         "tags": [
@@ -5630,6 +6245,96 @@
         ],
         "title": "CreateApiKeyRequest"
       },
+      "CreateEvalRunRequest": {
+        "properties": {
+          "scenario_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Scenario Id"
+          },
+          "target": {
+            "$ref": "#/components/schemas/EvalTarget"
+          },
+          "modality": {
+            "$ref": "#/components/schemas/EvalModality",
+            "default": "text"
+          },
+          "iterations": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Iterations",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "scenario_id",
+          "target"
+        ],
+        "title": "CreateEvalRunRequest"
+      },
+      "CreateEvalScenarioRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "definition": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Definition"
+          },
+          "tool_mocks": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Tool Mocks"
+          },
+          "tool_policy": {
+            "$ref": "#/components/schemas/EvalToolPolicy",
+            "default": "mock_only"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Tags"
+          },
+          "default_target": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Target"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "definition"
+        ],
+        "title": "CreateEvalScenarioRequest"
+      },
       "CreateKnowledgeBaseRequest": {
         "properties": {
           "name": {
@@ -5814,6 +6519,74 @@
         },
         "type": "object",
         "title": "EndCallRequest"
+      },
+      "EvalModality": {
+        "type": "string",
+        "enum": [
+          "text",
+          "audio"
+        ],
+        "title": "EvalModality",
+        "description": "Whether the conversation is spoken or typed.\n\n`text` skips STT and TTS entirely, so it is fast and free and covers the\nsmallest share of a voice platform's risk; `audio` is the only mode that\nreaches the provider-connect path where most regressions have lived."
+      },
+      "EvalTarget": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "pattern": "^(agent|agent_name|inline)$",
+            "title": "Type"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "agent": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "title": "EvalTarget",
+        "description": "What a run points at.\n\nSlice #70 accepts `agent` only; `agent_name` (latest published) and\n`inline` are #74, and are rejected at the boundary rather than accepted and\nthen failed by the worker."
+      },
+      "EvalToolPolicy": {
+        "type": "string",
+        "enum": [
+          "mock_only",
+          "live"
+        ],
+        "title": "EvalToolPolicy",
+        "description": "What happens when the agent calls a tool with no mock (slice #71).\n\n`mock_only` is the default and fails closed: a scenario pointed at an agent\nwhose tools have real side effects must not book a real appointment on\nevery iteration. `live` is the explicit opt-in for read-only lookups."
       },
       "GuardrailsSchema": {
         "properties": {
@@ -6751,6 +7524,98 @@
         },
         "type": "object",
         "title": "UpdateAgentRequest"
+      },
+      "UpdateEvalScenarioRequest": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "definition": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition"
+          },
+          "tool_mocks": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Mocks"
+          },
+          "tool_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvalToolPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
+          },
+          "default_target": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Target"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "title": "UpdateEvalScenarioRequest"
       },
       "UpdateKnowledgeBaseRequest": {
         "properties": {

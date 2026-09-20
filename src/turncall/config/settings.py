@@ -210,6 +210,26 @@ class PipecatSettings(BaseSettings):
     otel_service_name: str = "turncall"
 
 
+class EvalSettings(BaseSettings):
+    """Agent evals (#68, ADR-0018)."""
+
+    model_config = SettingsConfigDict(env_prefix="EVAL_")
+
+    # How many scenario-iterations the worker runs at once. The worker runs the
+    # bot pipeline *and* the harness -- which itself runs a persona LLM, a TTS,
+    # an STT and the judge -- so in audio mode one run is roughly double a real
+    # call's service load in a single event loop. 4 is a starting point, not a
+    # measurement.
+    max_concurrent_runs: int = 4
+    # The janitor's cutoff: a run still `running` past this is a crashed worker,
+    # not slow work, and is swept to `errored`.
+    max_run_duration_seconds: int = 900
+    janitor_interval_seconds: int = 60
+    # Ceiling on iterations per run, so one request cannot queue an unbounded
+    # amount of paid LLM work.
+    max_iterations: int = 50
+
+
 class Settings(BaseSettings):
     """Root settings aggregating all config sections."""
 
@@ -249,6 +269,7 @@ class Settings(BaseSettings):
     pipecat: PipecatSettings = Field(default_factory=PipecatSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)
+    evals: EvalSettings = Field(default_factory=EvalSettings)
 
     @property
     def is_production(self) -> bool:

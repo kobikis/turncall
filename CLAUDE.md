@@ -96,6 +96,7 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 | `PIPECAT_VAD_CONFIDENCE_THRESHOLD` | No | Silero VAD confidence (default `0.6`). Pairs with the agent's `silence_timeout_ms`, which sets the VAD stop window when Smart Turn is off (with it on, the model decides the turn and VAD uses Pipecat's 0.2s — the two waits are serial, so charging both cost 1.8s a turn) |
 | `PIPECAT_ENABLE_OBSERVERS` / `PIPECAT_ENABLE_TRACING` / `PIPECAT_TRACE_INCLUDE_PII` | No | Observability toggles (all default `true`). PII = caller phone numbers on spans. See `adr/0010` |
 | `API_KEY_HASH_SECRET` | Prod | Pepper for the HMAC-SHA256 hashing of API keys — a DB leak alone can't brute-force keys without it. **Set a strong value once and don't rotate** (rotating invalidates peppered keys; pre-pepper keys keep working via dual-read + upgrade-on-use). Default `change-me-in-production` gives no real protection until set |
+| `EVAL_MAX_CONCURRENT_RUNS` | No | Scenario-iterations the eval worker runs at once (default `4`). The worker runs the bot pipeline **and** the harness — which itself runs a persona LLM, a TTS, an STT and the judge — so in audio mode one run is roughly double a real call's service load in one event loop. A starting point, not a measurement. `EVAL_MAX_RUN_DURATION_SECONDS` (default `900`) is the janitor's cutoff for reclaiming a run a crashed worker left claimed, as `errored`; `EVAL_JANITOR_INTERVAL_SECONDS` (`60`) and `EVAL_MAX_ITERATIONS` (`50`) bound the sweep and one request's paid LLM work. See `adr/0018` |
 | `PROJECT_PURGE_RETENTION_DAYS` | No | Days a soft-deleted project (ADR-0011) is kept before the hourly purge job hard-deletes it (cascade). Default `30`; `0` disables |
 | `PLATFORM_API_KEY` | Prod | Privileged credential gating the unauthenticated bootstrap endpoints — project creation + first-API-key creation. Only the builder holds it; presented as the `X-Platform-Key` header. Empty default fails **closed** (rejects all bootstrap calls), so set it wherever those endpoints must work. TurnCall stays identity-free — this is a caller check, not a user |
 
@@ -392,6 +393,67 @@ GET/PUT/DELETE /v1/takeaways/{id}   # delete blocked (409) while attached to age
 ```
 
 Key files: `api/v1/takeaways.py`, `storage/repositories/takeaway_repo.py`, `services/call_analysis.py` (`extract_takeaway`), `services/call_analysis_trigger.py` (`_extract_takeaways`).
+
+## Evals
+
+Automated behavioural testing for agents (#68, ADR-0018). A **scenario** is one
+saved test — **scripted** (`turns:`, fixed conversation with per-turn
+expectations) or a **simulation** (`persona:`, an LLM plays the caller). A
+**run** is one scenario x target x modality over N iterations.
+
+The engine is `pipecat.evals`, already pinned via pipecat 1.11. **Only the
+transport is swapped** — pipecat's harness is an RTVI WebSocket client and the
+bot hosts `EvalTransport`, so an eval exercises the real STT/LLM/TTS
+construction, the real VAD and smart-turn wiring, the real tool bridge and KB
+retrieval. That construction path is where #63, #64, #65 and #67 all lived.
+
+### API
+```
+POST/GET/PUT/DELETE /v1/eval-scenarios[/{id}]   # ?kind= ?tag=
+POST   /v1/eval-runs          # 202 Accepted -- the worker executes it
+GET    /v1/eval-runs          # ?batch_id= ?scenario_id= ?status=
+GET    /v1/eval-runs/{id}
+DELETE /v1/eval-runs/{id}     # cancel while queued/running
+```
+
+### Rules that are easy to break
+- **The worker is never the API process.** `turncall-eval-worker`, same image,
+  own entrypoint, fed by a Redis list. ADR-0004: eval load in the API's event
+  loop becomes dead air on a live call.
+- **`definition` is pipecat's mapping, stored verbatim**, validated by
+  round-tripping through pipecat's parser; `schema_version` records which
+  pipecat schema it targets. `tool_mocks`/`tool_policy` are TurnCall columns
+  *outside* it.
+- **`errored` is not `failed`.** The harness not completing is neither a pass
+  nor a fail and never counts toward a rate. No `score` column —
+  `passed_count`/`failed_count` out of `iterations`.
+- **Three snapshots per run**: `resolved_config`, `resolved_scenario`,
+  `harness_config`. ADR-0017's rule one level out.
+- **An eval has no `calls` row.** `CallContext.eval_run_id` / `.is_eval` gates
+  every call-scoped side effect — status writes, call_events, transcript taps,
+  and `call.ended` (which is also what triggers post-call analysis).
+
+### Known coverage limits
+Everything *inside* the transport is invisible: the Twilio serializer and the
+whole ADR-0004 audio class, output underrun and dead air (loopback does not
+pace in realtime, so evals measure latency, not silence), and telephony.
+**Text mode also cannot see the agent's `first_message`** — it goes out as a
+`TTSSpeakFrame`, so it never becomes LLM text, and `skip_tts` silences the TTS.
+The judge is pipecat's `EvalJudge`, OpenAI-family only.
+
+### Config
+`EVAL_MAX_CONCURRENT_RUNS` (4), `EVAL_MAX_RUN_DURATION_SECONDS` (900, the
+janitor's cutoff), `EVAL_JANITOR_INTERVAL_SECONDS` (60), `EVAL_MAX_ITERATIONS`
+(50).
+
+### Key Files
+- `evals/harness.py` — the bridge: real pipeline one end, pipecat's session the other
+- `evals/runner.py` — target resolution, the iteration loop, status derivation, result mapping
+- `evals/worker.py` — `turncall-eval-worker`: queue consumer, concurrency cap, janitor
+- `evals/scenario.py` — parse/validate a stored definition; modality merge
+- `orchestrator/transport_factory.py` — `create_eval_transport()`
+- `api/v1/evals.py`, `storage/repositories/eval_repo.py`
+- See `adr/0018-eval-transport-bridge-and-worker.md`
 
 ## Post-Call Analysis
 

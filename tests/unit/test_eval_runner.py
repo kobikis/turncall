@@ -1,0 +1,419 @@
+"""The eval runner's orchestration, with canned pipecat results.
+
+No pipeline and no socket: everything that needs those lives behind the
+injected `execute`, so what is covered here is target resolution, the iteration
+loop, status derivation, the counts and the result mapping.
+
+The rule under test throughout is that `errored` is not a kind of `failed`. An
+iteration whose harness did not complete is neither a pass nor a fail and never
+counts toward a rate — a judge outage reading as an agent regression is how a
+suite loses its audience.
+"""
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
+
+import pytest
+
+from turncall.domain.enums import EvalRunStatus
+from turncall.domain.models import AgentConfig
+from turncall.evals.runner import (
+    IterationOutcome,
+    ResolvedTarget,
+    TargetError,
+    derive_status,
+    errored_entry,
+    harness_config,
+    map_script_result,
+    resolve_target,
+    resolved_scenario_snapshot,
+)
+
+pytestmark = pytest.mark.unit
+
+
+def _failure(**over):
+    return SimpleNamespace(
+        turn_index=2,
+        expectation_index=0,
+        event_name="function_call",
+        kind="missing_function_call",
+        reason="expected transfer_call, got none",
+        **over,
+    )
+
+
+def _expectation(matched="Hello there", event_name="llm_response", passed=True):
+    return SimpleNamespace(
+        expectation_index=0,
+        event_name=event_name,
+        passed=passed,
+        matched=matched,
+    )
+
+
+def _script_result(*, passed=True, skipped=None, turns=None, failures=None):
+    return SimpleNamespace(
+        scenario_name="greets-the-caller",
+        passed=passed,
+        skipped=skipped,
+        duration_ms=4120,
+        failures=failures or [],
+        turns=turns if turns is not None else [],
+        events_seen=[],
+        debug_log=[],
+    )
+
+
+def _turn_result(index=0, status="passed", expectations=None, failures=None):
+    return SimpleNamespace(
+        turn_index=index,
+        status=status,
+        duration_ms=900,
+        expectations=expectations if expectations is not None else [_expectation()],
+        failures=failures or [],
+    )
+
+
+def _parsed(*user_turns):
+    return SimpleNamespace(turns=[SimpleNamespace(user=u) for u in user_turns])
+
+
+class TestDeriveStatus:
+    def test_every_iteration_passing_passes_the_run(self) -> None:
+        outcomes = [IterationOutcome(True, {}), IterationOutcome(True, {})]
+        assert derive_status(outcomes) == (EvalRunStatus.PASSED, 2, 0)
+
+    def test_one_failure_fails_the_run(self) -> None:
+        """A scripted scenario that fails once has found something real."""
+        outcomes = [IterationOutcome(True, {}), IterationOutcome(False, {})]
+        assert derive_status(outcomes) == (EvalRunStatus.FAILED, 1, 1)
+
+    def test_no_verdict_at_all_is_errored_not_failed(self) -> None:
+        outcomes = [IterationOutcome(None, {}), IterationOutcome(None, {})]
+        assert derive_status(outcomes) == (EvalRunStatus.ERRORED, 0, 0)
+
+    def test_an_errored_iteration_counts_toward_neither_rate(self) -> None:
+        """7/10 must mean seven of ten that actually ran."""
+        outcomes = [
+            IterationOutcome(True, {}),
+            IterationOutcome(None, {}),
+            IterationOutcome(False, {}),
+        ]
+        status, passed, failed = derive_status(outcomes)
+        assert (status, passed, failed) == (EvalRunStatus.FAILED, 1, 1)
+        assert passed + failed == 2, "the errored iteration must not be counted"
+
+
+class TestMapScriptResult:
+    def test_a_passing_result_maps_to_a_passed_entry(self) -> None:
+        outcome = map_script_result(
+            _script_result(turns=[_turn_result()]),
+            iteration=1,
+            parsed=_parsed("hi there"),
+        )
+        assert outcome.passed is True
+        assert outcome.entry["iteration"] == 1
+        assert outcome.entry["duration_ms"] == 4120
+        assert outcome.entry["turns"][0]["status"] == "passed"
+
+    def test_the_failing_expectation_reason_survives(self) -> None:
+        failure = _failure()
+        outcome = map_script_result(
+            _script_result(
+                passed=False,
+                failures=[failure],
+                turns=[_turn_result(status="failed", failures=[failure])],
+            ),
+            iteration=1,
+            parsed=_parsed("book me in"),
+        )
+        assert outcome.passed is False
+        assert outcome.entry["failures"][0]["reason"] == (
+            "expected transfer_call, got none"
+        )
+        assert outcome.entry["failures"][0]["kind"] == "missing_function_call"
+        assert outcome.entry["turns"][0]["failures"][0]["turn_index"] == 2
+
+    def test_a_skipped_result_is_neither_passed_nor_failed(self) -> None:
+        """Pipecat draws this line itself and so do we."""
+        outcome = map_script_result(
+            _script_result(passed=False, skipped="judge modality is text"),
+            iteration=3,
+            parsed=_parsed(),
+        )
+        assert outcome.passed is None
+        assert outcome.entry["skipped"] == "judge modality is text"
+        assert derive_status([outcome])[0] is EvalRunStatus.ERRORED
+
+    def test_the_transcript_interleaves_the_user_and_the_bot(self) -> None:
+        outcome = map_script_result(
+            _script_result(
+                turns=[
+                    _turn_result(0, expectations=[_expectation("Hi, how can I help?")]),
+                    _turn_result(1, expectations=[_expectation("Sure, booking that.")]),
+                ]
+            ),
+            iteration=1,
+            parsed=_parsed("hello", "book me in"),
+        )
+        assert outcome.entry["transcript"] == [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "Hi, how can I help?"},
+            {"role": "user", "content": "book me in"},
+            {"role": "assistant", "content": "Sure, booking that."},
+        ]
+
+    def test_a_non_speech_match_stays_out_of_the_transcript(self) -> None:
+        """A matched function_call is an assertion, not something anyone said."""
+        outcome = map_script_result(
+            _script_result(
+                turns=[
+                    _turn_result(
+                        0,
+                        expectations=[
+                            _expectation(
+                                "book_appointment(day=friday)", "function_call"
+                            )
+                        ],
+                    )
+                ]
+            ),
+            iteration=1,
+            parsed=_parsed("book me in"),
+        )
+        assert outcome.entry["transcript"] == [
+            {"role": "user", "content": "book me in"}
+        ]
+
+
+class TestErroredEntry:
+    def test_it_carries_the_reason_and_no_verdict(self) -> None:
+        outcome = errored_entry(2, "ConnectionRefusedError: nothing listening")
+        assert outcome.passed is None
+        assert outcome.entry["error"] == "ConnectionRefusedError: nothing listening"
+        assert outcome.entry["iteration"] == 2
+
+
+class TestSnapshots:
+    def test_the_scenario_snapshot_carries_the_mocks_and_the_policy(self) -> None:
+        """Mocks are part of what the test means, so a run that does not record
+        them cannot be compared with the next one."""
+        snapshot = resolved_scenario_snapshot(
+            definition={"turns": []},
+            schema_version="pipecat-1.11",
+            tool_mocks={"book": {"ok": True}},
+            tool_policy="mock_only",
+        )
+        assert snapshot == {
+            "definition": {"turns": []},
+            "schema_version": "pipecat-1.11",
+            "tool_mocks": {"book": {"ok": True}},
+            "tool_policy": "mock_only",
+        }
+
+    def test_the_harness_snapshot_names_the_judge_and_pipecat(self) -> None:
+        """The judge model decides the verdict; a silent provider-side update
+        moves the whole baseline."""
+        config = harness_config(judge_model="gpt-4o-2024-11-20")
+        assert config["judge_model"] == "gpt-4o-2024-11-20"
+        assert config["pipecat_version"].startswith("1.")
+        assert config["schema_version"]
+
+
+class TestResolveTarget:
+    async def test_an_agent_target_resolves_to_its_config(self) -> None:
+        agent_id = project_id = uuid4()
+        agent = SimpleNamespace(
+            id=agent_id, config_blob={"system_prompt": "You are a receptionist."}
+        )
+        with patch(
+            "turncall.storage.repositories.agent_repo.get_agent_by_id",
+            AsyncMock(return_value=agent),
+        ):
+            resolved = await resolve_target(
+                AsyncMock(),
+                project_id=project_id,
+                target={"type": "agent", "agent_id": str(agent_id)},
+            )
+        assert resolved.agent_id == agent_id
+        assert resolved.config.system_prompt == "You are a receptionist."
+        assert resolved.config_blob == {"system_prompt": "You are a receptionist."}
+
+    async def test_a_missing_agent_is_a_target_error(self) -> None:
+        with patch(
+            "turncall.storage.repositories.agent_repo.get_agent_by_id",
+            AsyncMock(return_value=None),
+        ):
+            with pytest.raises(TargetError, match="not found"):
+                await resolve_target(
+                    AsyncMock(),
+                    project_id=uuid4(),
+                    target={"type": "agent", "agent_id": str(uuid4())},
+                )
+
+    async def test_an_unsupported_target_type_is_rejected(self) -> None:
+        """Inline and latest-published are a later slice; a run must not be
+        accepted and then silently do the wrong thing."""
+        with pytest.raises(TargetError, match="unsupported target type"):
+            await resolve_target(
+                AsyncMock(), project_id=uuid4(), target={"type": "inline", "agent": {}}
+            )
+
+
+class TestExecuteRun:
+    """The loop, end to end, against a fake repository and a fake harness."""
+
+    @staticmethod
+    def _run_row(iterations=1, status="queued"):
+        return SimpleNamespace(
+            id=uuid4(),
+            project_id=uuid4(),
+            status=status,
+            modality="text",
+            kind="script",
+            iterations=iterations,
+            scenario_name="greets-the-caller",
+            target={"type": "agent", "agent_id": str(uuid4())},
+            resolved_scenario={
+                "definition": {
+                    "turns": [
+                        {
+                            "user": "hello",
+                            "expect": [
+                                {"event": "llm_response", "text_contains": "hi"}
+                            ],
+                        }
+                    ]
+                }
+            },
+        )
+
+    @staticmethod
+    def _session_factory():
+        session = AsyncMock()
+
+        class _CM:
+            async def __aenter__(self):
+                return session
+
+            async def __aexit__(self, *_):
+                return False
+
+        return (lambda: _CM()), session
+
+    async def _execute(self, run_row, execute, *, finish=None, start=None):
+        from turncall.evals import runner as runner_mod
+
+        factory, _session = self._session_factory()
+        finish = finish or AsyncMock()
+        start = start or AsyncMock()
+        target = ResolvedTarget(
+            project_id=run_row.project_id,
+            config=AgentConfig(),
+            config_blob={"system_prompt": "hi"},
+            agent_id=uuid4(),
+        )
+        with (
+            patch(
+                "turncall.storage.repositories.eval_repo.get_run",
+                AsyncMock(return_value=run_row),
+            ),
+            patch("turncall.storage.repositories.eval_repo.start_run", start),
+            patch("turncall.storage.repositories.eval_repo.finish_run", finish),
+            patch.object(runner_mod, "resolve_target", AsyncMock(return_value=target)),
+        ):
+            await runner_mod.execute_run(
+                run_row.id,
+                session_factory=factory,
+                settings=SimpleNamespace(),
+                execute=execute,
+            )
+        return finish, start
+
+    async def test_a_passing_run_records_the_counts_and_the_snapshots(self) -> None:
+        execute = AsyncMock(return_value=_script_result(turns=[_turn_result()]))
+        run = self._run_row(iterations=3)
+        finish, start = await self._execute(run, execute)
+
+        assert execute.await_count == 3, "one execution per iteration"
+        assert start.await_args.kwargs["resolved_config"] == {"system_prompt": "hi"}
+        assert start.await_args.kwargs["harness_config"]["pipecat_version"]
+        kwargs = finish.await_args.kwargs
+        assert kwargs["status"] is EvalRunStatus.PASSED
+        assert (kwargs["passed_count"], kwargs["failed_count"]) == (3, 0)
+        assert len(kwargs["results"]) == 3
+
+    async def test_one_failing_iteration_fails_the_run(self) -> None:
+        results = [
+            _script_result(turns=[_turn_result()]),
+            _script_result(
+                passed=False,
+                failures=[_failure()],
+                turns=[_turn_result(status="failed", failures=[_failure()])],
+            ),
+        ]
+        execute = AsyncMock(side_effect=results)
+        finish, _ = await self._execute(self._run_row(iterations=2), execute)
+        kwargs = finish.await_args.kwargs
+        assert kwargs["status"] is EvalRunStatus.FAILED
+        assert (kwargs["passed_count"], kwargs["failed_count"]) == (1, 1)
+
+    async def test_a_harness_that_raises_errors_rather_than_fails(self) -> None:
+        execute = AsyncMock(side_effect=ConnectionRefusedError("nothing listening"))
+        finish, _ = await self._execute(self._run_row(iterations=2), execute)
+        kwargs = finish.await_args.kwargs
+        assert kwargs["status"] is EvalRunStatus.ERRORED
+        assert (kwargs["passed_count"], kwargs["failed_count"]) == (0, 0)
+        assert "nothing listening" in kwargs["error"]
+
+    async def test_one_bad_iteration_does_not_stop_the_rest(self) -> None:
+        execute = AsyncMock(
+            side_effect=[
+                TimeoutError("judge timed out"),
+                _script_result(turns=[_turn_result()]),
+            ]
+        )
+        finish, _ = await self._execute(self._run_row(iterations=2), execute)
+        kwargs = finish.await_args.kwargs
+        assert kwargs["status"] is EvalRunStatus.PASSED
+        assert (kwargs["passed_count"], kwargs["failed_count"]) == (1, 0)
+        assert kwargs["results"][0]["error"].startswith("TimeoutError")
+
+    async def test_an_unresolvable_target_errors_before_any_iteration(self) -> None:
+        from turncall.evals import runner as runner_mod
+
+        factory, _ = self._session_factory()
+        run = self._run_row()
+        execute = AsyncMock()
+        finish = AsyncMock()
+        with (
+            patch(
+                "turncall.storage.repositories.eval_repo.get_run",
+                AsyncMock(return_value=run),
+            ),
+            patch("turncall.storage.repositories.eval_repo.finish_run", finish),
+            patch.object(
+                runner_mod,
+                "resolve_target",
+                AsyncMock(side_effect=TargetError("agent not found")),
+            ),
+        ):
+            await runner_mod.execute_run(
+                run.id,
+                session_factory=factory,
+                settings=SimpleNamespace(),
+                execute=execute,
+            )
+        execute.assert_not_awaited()
+        assert finish.await_args.kwargs["status"] is EvalRunStatus.ERRORED
+        assert finish.await_args.kwargs["error"] == "agent not found"
+
+    async def test_a_run_that_is_no_longer_queued_is_left_alone(self) -> None:
+        """Cancelled while queued, or already claimed by another worker."""
+        execute = AsyncMock()
+        finish = AsyncMock()
+        await self._execute(self._run_row(status="cancelled"), execute, finish=finish)
+        execute.assert_not_awaited()
+        finish.assert_not_awaited()

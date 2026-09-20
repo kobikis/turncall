@@ -27,7 +27,11 @@ async def _drain() -> None:
 
 
 async def test_assistant_tap_excludes_user_transcription() -> None:
-    tap = AssistantTranscriptTapProcessor(call_context=MagicMock())
+    # is_eval must be explicit: a bare MagicMock is truthy, which would route
+    # the tap down the eval path that logs nothing.
+    call_context = MagicMock()
+    call_context.is_eval = False
+    tap = AssistantTranscriptTapProcessor(call_context=call_context)
     logged: list[str] = []
     tap._log_transcript = AsyncMock(side_effect=lambda text: logged.append(text))
     tap.push_frame = AsyncMock()

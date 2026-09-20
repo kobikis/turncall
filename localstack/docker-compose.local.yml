@@ -74,6 +74,36 @@ services:
       redis:
         condition: service_healthy
 
+  # The eval worker is the same image with a different entrypoint, and a
+  # separate process on purpose: ADR-0004 says an eval pipeline must never
+  # share an event loop with a live call, because the jitter becomes dead air
+  # for the person on the phone.
+  eval-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["turncall-eval-worker"]
+    env_file:
+      - ../.env
+    environment:
+      TURNCALL_ENV: development
+      DATABASE_URL: postgresql+asyncpg://turncall:turncall@postgres:5432/turncall
+      REDIS_URL: redis://redis:6379/0
+      API_KEY_HASH_SECRET: turncall-local-dev-pepper-do-not-change
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_PATH: /app/storage
+      PYTHONPATH: /app/src
+    volumes:
+      - ../src:/app/src
+      - ../storage:/app/storage
+    networks:
+      - turncall_nw
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 networks:
   turncall_nw:
     external: false

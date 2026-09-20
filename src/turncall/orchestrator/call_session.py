@@ -368,7 +368,13 @@ class CallSession:
         authoritative duration, then dispatches call.ended + post-call analysis.
         The `status not in (completed, failed)` guard keeps this idempotent vs the
         /status callback and the end_call tool — whichever finalizes first wins.
+
+        An eval has no call to finalize, and must not dispatch `call.ended` to
+        subscribers for a conversation that was never a call.
         """
+        if self._call_context.is_eval:
+            return
+
         async with self._call_context.session_factory() as session:
             from turncall.storage.repositories import call_repo
 
@@ -413,6 +419,9 @@ class CallSession:
 
     async def _update_call_status(self, status: CallStatus) -> None:
         """Bridge pipeline lifecycle to call state machine."""
+        if self._call_context.is_eval:
+            # An eval iteration has no `calls` row; the run row is its record.
+            return
         try:
             async with self._call_context.session_factory() as session:
                 from turncall.storage.repositories import call_repo

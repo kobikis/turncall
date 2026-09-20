@@ -165,3 +165,60 @@ class KnowledgeRetrievalMode(StrEnum):
     AUTO = "auto"
     TOOL = "tool"
     PROMPT = "prompt"
+
+
+class EvalKind(StrEnum):
+    """Which of the two kinds of scenario this is.
+
+    The values are pipecat's own (`pipecat.evals.scenario.EvalKind`), which it
+    carries into the session, the driver and the result record — so a stored
+    row and a pipecat object never need translating between them.
+    """
+
+    SCRIPTED = "script"
+    SIMULATION = "simulation"
+
+
+class EvalModality(StrEnum):
+    """Whether the conversation is spoken or typed.
+
+    `text` skips STT and TTS entirely, so it is fast and free and covers the
+    smallest share of a voice platform's risk; `audio` is the only mode that
+    reaches the provider-connect path where most regressions have lived.
+    """
+
+    TEXT = "text"
+    AUDIO = "audio"
+
+
+class EvalRunStatus(StrEnum):
+    """Where a run is, and how it ended.
+
+    `errored` is deliberately not a kind of `failed`: it means the harness did
+    not complete (a connect failure, a judge outage), which is neither a pass
+    nor a fail and never counts toward a rate. A judge outage reading as an
+    agent regression is how a suite loses its audience.
+    """
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    PASSED = "passed"
+    FAILED = "failed"
+    ERRORED = "errored"
+    CANCELLED = "cancelled"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self not in (EvalRunStatus.QUEUED, EvalRunStatus.RUNNING)
+
+
+class EvalToolPolicy(StrEnum):
+    """What happens when the agent calls a tool with no mock (slice #71).
+
+    `mock_only` is the default and fails closed: a scenario pointed at an agent
+    whose tools have real side effects must not book a real appointment on
+    every iteration. `live` is the explicit opt-in for read-only lookups.
+    """
+
+    MOCK_ONLY = "mock_only"
+    LIVE = "live"

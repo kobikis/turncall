@@ -44,6 +44,16 @@ class CallContext:
     stream_sid: str
     session_factory: async_sessionmaker[AsyncSession]
     mcp_manager: Any | None = None  # MCPSessionManager (optional)
+    # Set when this pipeline is an eval iteration rather than a call (ADR-0018).
+    # There is no `calls` row behind it, so every call-scoped side effect --
+    # status writes, call_events, transcript and call.* webhooks -- is off. The
+    # eval's own record is the run row; the harness observes the conversation
+    # over the wire.
+    eval_run_id: UUID | None = None
+
+    @property
+    def is_eval(self) -> bool:
+        return self.eval_run_id is not None
 
 
 def _overflow(extra: dict[str, Any], *managed: str) -> dict[str, Any]:
