@@ -80,6 +80,7 @@ async def dispatch_event(
     payload: dict[str, Any],
     call_id: UUID | None = None,
     session_id: UUID | None = None,
+    eval_run_id: UUID | None = None,
     agent_id: UUID | None = None,
     event_id: str | None = None,
 ) -> int:
@@ -108,6 +109,7 @@ async def dispatch_event(
         project_id=project_id,
         call_id=call_id,
         session_id=session_id,
+        eval_run_id=eval_run_id,
         agent_id=str(resolved_agent_id) if resolved_agent_id else None,
         # One uuid per logical event: stable across retries, shared across
         # subscribers, so consumers can dedupe redeliveries. See ADR-0007.

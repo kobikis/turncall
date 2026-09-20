@@ -32,6 +32,10 @@ class WebhookEvent:
     project_id: UUID
     call_id: UUID | None = None
     session_id: UUID | None = None
+    # An eval run is the third thing an event can be about, after a call and a
+    # text session. Additive and nullable exactly as `session_id` was, so no
+    # existing subscriber breaks (ADR-0007: identity lives in the envelope).
+    eval_run_id: UUID | None = None
     agent_id: str | None = None
     event_id: str | None = None
 
@@ -66,6 +70,7 @@ async def deliver_webhook(
             "project_id": str(event.project_id),
             "call_id": str(event.call_id) if event.call_id else None,
             "session_id": str(event.session_id) if event.session_id else None,
+            "eval_run_id": str(event.eval_run_id) if event.eval_run_id else None,
             "agent_id": event.agent_id,
             "event_id": event.event_id,
             "timestamp": datetime.now(UTC).isoformat(),

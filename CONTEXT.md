@@ -305,6 +305,17 @@ to a tool no mock covers: refused, and the iteration errored naming it. See ADR-
 _Avoid_: "test suite" — the name of the dead stub this replaced (#69), and of the
 abstraction Vapi retired in favour of Simulations. Grouping is `tags` and [[batch]].
 
+**Run events**:
+`eval.run.started` and `eval.run.completed`, the only two an eval dispatches. The
+completed one is comprehensive — the whole result, including the three snapshots
+— following `call.ended`'s precedent (ADR-0006) rather than
+[[analysis.completed]]'s, which is reserved and never dispatched. The run's
+identity rides in the **envelope** as `eval_run_id`, beside `call_id` and
+`session_id` (ADR-0007), additive and nullable so no existing subscriber breaks.
+An errored run dispatches one too: `errored` is terminal.
+_Avoid_: putting the run id in the payload, or splitting the result across
+per-iteration events.
+
 **Scripted** (kind):
 A fixed conversation with per-turn expectations. Answers *"at this point, did the agent
 make the right next decision?"* Declared by `turns:` in the definition; stored as the

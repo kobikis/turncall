@@ -677,6 +677,7 @@ Subscribers (`POST /v1/webhooks`) receive a signed envelope per event:
   "project_id": "uuid",
   "call_id": "uuid | null",
   "session_id": "uuid | null",   // set on sms/chat events
+  "eval_run_id": "uuid | null",  // set on eval.run.* events (#76)
   "agent_id": "uuid | null",     // the call's active agent (handoff-aware); null for an inline agent
   "event_id": "uuid",            // unique; stable across retries → dedupe key
   "timestamp": "ISO-8601",
@@ -712,6 +713,17 @@ call finalizes the same way a hangup does. Without its own reason it read back
 as `customer_ended_call`. `interruption_enabled: false` turns off barge-in via
 the user turn-start strategies — **cascade only**; on S2S the realtime service
 owns turn-taking and the setting is warned about rather than half-applied.
+
+`eval.run.started` / `eval.run.completed` are the eval pair (#76). The completed
+one is **comprehensive** — status, `passed_count`/`failed_count` out of
+`iterations`, `error`, every iteration's entry (transcript, failures,
+`tool_calls`, and a simulation's goal + metrics), and all three snapshots
+(`resolved_config`, `resolved_scenario`, `harness_config`) — so a subscriber
+never has to call back. Same precedent as `call.ended`, and the reason
+`analysis.completed` is the counter-example nobody should copy. An **errored**
+run dispatches it too: accepted-then-silent would leave a subscriber waiting on
+a terminal event forever. The run id is in the **envelope**, never the payload;
+`agent_id` resolves as always and is null for an inline target.
 
 Key files: `events/webhook_delivery.py` (envelope + signing + retry),
 `events/dispatcher.py` (agent_id/event_id resolution), `domain/call_state.py`

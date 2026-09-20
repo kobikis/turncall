@@ -698,13 +698,90 @@ async def run_iterations(
     return outcomes
 
 
-async def _record_unrunnable(session: Any, run_id: UUID, exc: Exception) -> None:
-    """A run that cannot start is `errored` before an iteration is paid for."""
+def _completed_payload(run: Any) -> dict[str, Any]:
+    """The whole result, read back off the row that was just written.
+
+    Comprehensive on purpose (ADR-0006): one terminal event carrying status,
+    counts, every iteration's transcript and failures, and the three snapshots
+    — the same shape of promise `call.ended` makes. A subscriber that gets this
+    never has to call back to find out what happened, which is the entire point
+    of not shipping a scatter of partials.
+
+    Built from the row rather than from the values in hand so the event cannot
+    disagree with what was stored.
+    """
+    return {
+        "status": run.status,
+        "passed_count": run.passed_count,
+        "failed_count": run.failed_count,
+        "iterations": run.iterations,
+        "error": run.error,
+        "scenario_id": str(run.scenario_id) if run.scenario_id else None,
+        "scenario_name": run.scenario_name,
+        "kind": run.kind,
+        "modality": run.modality,
+        "batch_id": str(run.batch_id) if run.batch_id else None,
+        "target": run.target,
+        # Null for an inline target — the honest answer to "which stored agent
+        # was this", not missing data (ADR-0017).
+        "agent_id": str(run.agent_id) if run.agent_id else None,
+        "agent_version": run.agent_version,
+        "results": run.results,
+        "resolved_config": run.resolved_config,
+        "resolved_scenario": run.resolved_scenario,
+        "harness_config": run.harness_config,
+        "queued_at": run.queued_at.isoformat() if run.queued_at else None,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+    }
+
+
+async def _dispatch_run_event(
+    session: Any,
+    *,
+    event_type: Any,
+    run_id: UUID,
+    project_id: UUID,
+    agent_id: UUID | None,
+    payload: dict[str, Any],
+) -> None:
+    """Send one eval event to the project's webhook subscribers (#76).
+
+    Best-effort by design, like every other dispatch site: a subscriber that is
+    down must not turn a finished run into a failed one, and the row is already
+    written by the time this runs. The run id rides in the **envelope**, not the
+    payload — ADR-0007's rule, the same place `call_id` and `session_id` live —
+    and `agent_id` is null for an inline target, which is the honest answer
+    rather than missing data (ADR-0017).
+    """
+    from turncall.events.dispatcher import dispatch_event
+
+    try:
+        await dispatch_event(
+            session,
+            project_id=project_id,
+            event_type=event_type,
+            payload=payload,
+            eval_run_id=run_id,
+            agent_id=agent_id,
+        )
+    except Exception:
+        logger.exception("eval_event_dispatch_failed", run_id=str(run_id))
+
+
+async def _record_unrunnable(session: Any, run: Any, exc: Exception) -> None:
+    """A run that cannot start is `errored` before an iteration is paid for.
+
+    It still dispatches `eval.run.completed` (#76). A run that was accepted and
+    then vanished is worse than one that failed: a subscriber waiting on a
+    terminal event would wait forever, and `errored` is a terminal status.
+    """
+    from turncall.domain.enums import CallEventType
     from turncall.storage.repositories import eval_repo
 
     await eval_repo.finish_run(
         session,
-        run_id,
+        run.id,
         status=EvalRunStatus.ERRORED,
         passed_count=0,
         failed_count=0,
@@ -712,7 +789,19 @@ async def _record_unrunnable(session: Any, run_id: UUID, exc: Exception) -> None
         error=str(exc),
     )
     await session.commit()
-    logger.warning("eval_run_unrunnable", run_id=str(run_id), error=str(exc))
+    logger.warning("eval_run_unrunnable", run_id=str(run.id), error=str(exc))
+
+    finished = await eval_repo.get_run(session, run.id)
+    if finished is not None:
+        await _dispatch_run_event(
+            session,
+            event_type=CallEventType.EVAL_RUN_COMPLETED,
+            run_id=run.id,
+            project_id=run.project_id,
+            # Nothing resolved, so there is no agent to name.
+            agent_id=None,
+            payload=_completed_payload(finished),
+        )
 
 
 def _warn_unmatched_mocks(
@@ -782,7 +871,7 @@ async def _plan_run(
             session, project_id=run.project_id, target=run.target
         )
     except Exception as exc:
-        await _record_unrunnable(session, run.id, exc)
+        await _record_unrunnable(session, run, exc)
         return None
 
     tool_mocks, live_tools = tool_policy_of(run.resolved_scenario)
@@ -809,6 +898,29 @@ async def _plan_run(
     )
     await session.commit()
 
+    # After the commit, not before: an event announcing a run that is not
+    # recorded as running is a lie a subscriber cannot check.
+    from turncall.domain.enums import CallEventType
+
+    await _dispatch_run_event(
+        session,
+        event_type=CallEventType.EVAL_RUN_STARTED,
+        run_id=run.id,
+        project_id=run.project_id,
+        agent_id=target.agent_id,
+        payload={
+            "scenario_id": str(run.scenario_id) if run.scenario_id else None,
+            "scenario_name": run.scenario_name,
+            "kind": kind.value,
+            "modality": modality.value,
+            "iterations": run.iterations,
+            "batch_id": str(run.batch_id) if run.batch_id else None,
+            "target": run.target,
+            "agent_id": str(target.agent_id) if target.agent_id else None,
+            "agent_version": target.agent_version,
+        },
+    )
+
     return IterationPlan(
         parsed=parsed,
         kind=kind,
@@ -823,10 +935,14 @@ async def _plan_run(
 
 
 async def _finish_run(
-    session_factory: Any, run_id: UUID, outcomes: list[IterationOutcome]
+    session_factory: Any, plan: IterationPlan, outcomes: list[IterationOutcome]
 ) -> None:
-    """Write the run's verdict, its counts and every iteration's entry."""
+    """Write the run's verdict, its counts and every iteration's entry, then
+    announce it (#76)."""
+    from turncall.domain.enums import CallEventType
     from turncall.storage.repositories import eval_repo
+
+    run_id = plan.run_id
 
     status, passed, failed = derive_status(outcomes)
     error = None
@@ -852,6 +968,19 @@ async def _finish_run(
             error=error,
         )
         await session.commit()
+
+        # Read back rather than reassembling: an event that disagrees with the
+        # row is the kind of bug nobody finds for months.
+        finished = await eval_repo.get_run(session, run_id)
+        if finished is not None:
+            await _dispatch_run_event(
+                session,
+                event_type=CallEventType.EVAL_RUN_COMPLETED,
+                run_id=run_id,
+                project_id=plan.target.project_id,
+                agent_id=plan.target.agent_id,
+                payload=_completed_payload(finished),
+            )
 
     logger.info(
         "eval_run_finished",
@@ -903,4 +1032,4 @@ async def execute_run(
             return
 
     outcomes = await run_iterations(plan, iterations=iterations, execute=execute)
-    await _finish_run(session_factory, run_id, outcomes)
+    await _finish_run(session_factory, plan, outcomes)
