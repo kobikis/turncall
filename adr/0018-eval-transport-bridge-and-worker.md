@@ -111,10 +111,22 @@ exactly one winner and the loser finds the run no longer queued.
   validated by round-tripping it through pipecat's own parser. We track
   `schema_version` beside it rather than modelling a schema that is not ours
   and that moves between majors. The cost is no cross-scenario SQL queries.
-- We inherit pipecat's judge, so the **judge** is OpenAI-family even when the
-  agent under test is Anthropic or Bedrock. A customer on Bedrock for data
-  residency needs a self-hosted OpenAI-compatible endpoint; that is a
-  first-class documented path, not a footnote.
+- **We inherit pipecat's judge, and it is Ollama-first — not OpenAI.** The
+  design (§9.3) had this backwards, and building it settled the question:
+  `llm_service_from_config` defaults `service` to `ollama`, `service: openai`
+  is **deprecated since pipecat 1.9 and removed in 2.0**, and the only
+  supported route to any other provider is `judge.eval.factory`, a dotted path
+  to a callable returning something with `run_inference()`. A run records what
+  actually answered — the first real run wrote
+  `{"judge_service": "ollama", "judge_model": "gemma4:12b"}`.
+
+  Two consequences follow, and they invert the design's worry. The good one:
+  the default judge is local, so a deployment on Bedrock for data residency
+  sends transcripts nowhere by default, rather than being forced through
+  OpenAI. The bad one: **an `eval:` assertion needs a reachable Ollama**, which
+  most deployments do not have, so such a scenario errors at judge
+  construction until one is configured. Scenarios using only `text_contains` /
+  `function_call` — every one in this slice — build no judge at all.
 - Pipecat's schema moving is now our migration problem, bounded by
   `schema_version`.
 - **Text modality cannot see the agent's `first_message`.** It goes out as a

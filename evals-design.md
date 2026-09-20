@@ -99,9 +99,9 @@ design.**
   the API process. ADR-0004 is the reason — eval pipelines must not share an
   event loop with live calls.
 - **Judge (Q8): pipecat's `EvalJudge` only.** The drivers call it internally, so
-  a second judge is duplication. Consequence accepted: the **judge** is
-  OpenAI-family even when the agent under test is Anthropic or Bedrock, which
-  makes **Ollama a first-class documented path**, not a footnote (§9.3).
+  a second judge is duplication. Consequence accepted — though not the one
+  written here: the judge is **Ollama by default**, not OpenAI-family. Corrected
+  in §9.3 while building #70.
 - **Targets (Q9): all three** — `agent_id`, `agent_name@latest-published`,
   inline. Inline is load-bearing: it is the tool sandbox (§9.2), not a
   convenience.
@@ -526,10 +526,18 @@ Three answers, weakest first:
   it; nothing removes it.
 - **Model drift.** A silent provider-side model update moves the whole baseline.
   Pin a dated snapshot; record it in `harness_config`.
-- **OpenAI-family only.** `EvalJudge` needs `run_inference()`. A customer on
-  **Bedrock for data residency** cannot run evals without sending transcripts to
-  OpenAI. **Ollama is the answer and must be documented as first-class**, not a
-  footnote.
+- ~~**OpenAI-family only.**~~ **Corrected while building #70 — this was
+  backwards.** `llm_service_from_config` defaults `service:` to **`ollama`**;
+  `service: openai` is deprecated since pipecat 1.9 and removed in 2.0; the only
+  supported route to anything else is `judge.eval.factory`, a dotted path to a
+  callable returning a service with `run_inference()`. So the default judge is
+  *local*, and a **Bedrock for data residency** deployment sends transcripts
+  nowhere by default — the opposite of the concern recorded here. The real cost
+  is the mirror image: an `eval:` assertion needs a reachable Ollama, which most
+  deployments do not have, and errors at judge construction until one is
+  configured. Scenarios asserting only `text_contains` / `function_call` build no
+  judge at all. Verified: the first real run recorded
+  `judge_service: ollama, judge_model: gemma4:12b`. See `adr/0018`.
 - **Side effects are unverifiable.** A tool reporting success does not prove the
   external system changed. With mocking, you are testing the agent's *narration*.
 - **Simulations have three nondeterministic actors** — persona, agent, judge. A

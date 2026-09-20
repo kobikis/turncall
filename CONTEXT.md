@@ -317,12 +317,15 @@ The simulated *caller's* character and behaviour. Never the agent under test.
 
 **Judge**:
 The LLM that decides a verdict. Distinct from the [[persona]]; both are LLMs TurnCall
-runs, and neither is the agent. Pipecat's `EvalJudge`, so OpenAI-family only — a
-deployment on [[Bedrock]] for data residency points it at a self-hosted
-OpenAI-compatible endpoint rather than sending transcripts to OpenAI. The judge is the
-weakest component: verdicts are cached within a run but not across runs, so a scenario
-can flip with no code change, and a silent provider-side model update moves the whole
-baseline. Recorded in the run's `harness_config` for that reason.
+runs, and neither is the agent. Pipecat's `EvalJudge`, which defaults to a **local
+Ollama** (`service: openai` is deprecated in pipecat 1.9, removed in 2.0; any other
+provider needs `judge.eval.factory`) — so a deployment on [[Bedrock]] for data residency
+sends transcripts nowhere by default, and the real cost is the mirror image: an `eval:`
+assertion errors until an Ollama is reachable. Assertions that only use `text_contains`
+or `function_call` build no judge at all. The judge is the weakest component: verdicts
+are cached within a run but not across runs, so a scenario can flip with no code change,
+and a silent provider-side model update moves the whole baseline. Both service and model
+are recorded in the run's `harness_config` for that reason. See ADR-0018.
 
 **Modality**:
 `text` (no STT, no TTS) or `audio` (real speech both ways). One knob on the [[run]] that

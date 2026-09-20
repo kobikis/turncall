@@ -439,7 +439,11 @@ whole ADR-0004 audio class, output underrun and dead air (loopback does not
 pace in realtime, so evals measure latency, not silence), and telephony.
 **Text mode also cannot see the agent's `first_message`** — it goes out as a
 `TTSSpeakFrame`, so it never becomes LLM text, and `skip_tts` silences the TTS.
-The judge is pipecat's `EvalJudge`, OpenAI-family only.
+The judge is pipecat's `EvalJudge`, which is **Ollama by default** (`service:
+openai` is deprecated in pipecat 1.9 and gone in 2.0; anything else needs
+`judge.eval.factory`) — so an `eval:` assertion needs a reachable Ollama and
+errors without one, while `text_contains`/`function_call` build no judge at
+all.
 
 ### Config
 `EVAL_MAX_CONCURRENT_RUNS` (4), `EVAL_MAX_RUN_DURATION_SECONDS` (900, the
