@@ -693,6 +693,10 @@ One migration and one commit: drop both tables and `test_run_status`; delete
    `POST /v1/eval-runs` now accepts an inline `scenario`, which is what makes a
    local file runnable *unchanged*.
 7. **Console**: evals tab, run detail, then the two "Save as scenario" buttons.
+   The endpoint behind those buttons is built (#78):
+   `POST /v1/eval-scenarios/from-call`, returning a draft for review by default
+   and seeding each tool mock with what that tool actually returned. The
+   buttons themselves belong to the builder repo.
 8. **ADRs and `CONTEXT.md`** as each decision closes.
 
 ## 12. References

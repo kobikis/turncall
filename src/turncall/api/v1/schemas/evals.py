@@ -136,6 +136,35 @@ class EvalScenarioResponse(BaseModel):
     updated_at: datetime
 
 
+class ScenarioFromCallRequest(BaseModel):
+    """Derive a scripted scenario from a call that already happened (#78)."""
+
+    call_id: UUID
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    # False returns the draft for review; True stores it. The default is review
+    # because the conversation is faithful but the expectations are not yet a
+    # test, and a library of unedited drafts asserts whatever the agent did
+    # that day, mistakes included.
+    save: bool = False
+    tags: list[str] = Field(default_factory=list, max_length=32)
+
+
+class ScenarioDraftResponse(BaseModel):
+    """A draft, and a sentence saying that is what it is."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    definition: dict[str, Any]
+    tool_mocks: dict[str, Any]
+    tool_policy: EvalToolPolicy
+    default_target: dict[str, Any] | None
+    schema_version: str
+    note: str
+    saved: bool
+    scenario_id: UUID | None = None
+
+
 class EvalTarget(BaseModel):
     """What a run points at (#74).
 

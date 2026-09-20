@@ -22,6 +22,8 @@ from turncall.api.v1.schemas.evals import (
     EvalBatchResponse,
     EvalRunResponse,
     EvalScenarioResponse,
+    ScenarioDraftResponse,
+    ScenarioFromCallRequest,
     UpdateEvalScenarioRequest,
 )
 from turncall.auth import Auth, WriteAuth
@@ -29,6 +31,7 @@ from turncall.config import get_settings
 from turncall.domain.enums import EvalKind, EvalRunStatus, EvalToolPolicy
 from turncall.evals import queue as eval_queue
 from turncall.evals.runner import batch_outcome, resolved_scenario_snapshot
+from turncall.evals.scenario import ScenarioError, validate
 from turncall.storage.repositories import eval_repo
 
 router = APIRouter(prefix="/eval-scenarios", tags=["evals"])
@@ -252,6 +255,96 @@ async def create_eval_run(
         for run in created
     ]
     return ok({"batch_id": str(batch_id), "runs": runs})
+
+
+@router.post("/from-call", status_code=201)
+async def scenario_from_call(
+    body: ScenarioFromCallRequest, auth: WriteAuth, session: DbSession
+) -> dict:
+    """Convert a completed call into a scripted scenario draft (#78).
+
+    Returned for review by default; `save: true` stores it. Either way the
+    tool mocks are seeded with what those tools actually returned, so the draft
+    is safe to run under `mock_only` without repeating the call's side effects.
+    """
+    from turncall.domain.enums import CallEventType, CallStatus
+    from turncall.services import scenario_from_call as convert
+    from turncall.services.call_analysis_trigger import config_for_call
+    from turncall.storage.repositories import call_repo, tool_invocation_repo
+
+    call = await call_repo.get_call_by_id(
+        session, body.call_id, project_id=auth.project_id
+    )
+    if call is None:
+        raise NotFoundError("Call", str(body.call_id))
+    if call.status not in (CallStatus.COMPLETED.value, CallStatus.FAILED.value):
+        # A call still in progress has a transcript that will grow: a scenario
+        # built from half a conversation looks complete and is not.
+        raise BadRequestError(
+            f"call {body.call_id} is {call.status!r} — convert it once it has ended"
+        )
+
+    transcript = await call_repo.list_call_events(
+        session,
+        body.call_id,
+        event_type=CallEventType.TRANSCRIPT_FINAL,
+        limit=1000,
+    )
+    invocations = await tool_invocation_repo.list_invocations_for_call(
+        session, body.call_id
+    )
+
+    name = body.name or f"call-{str(body.call_id)[:8]}"
+    try:
+        draft = convert.build_scenario(
+            transcript=transcript, invocations=invocations, name=name
+        )
+    except convert.ConversionError as exc:
+        raise BadRequestError(str(exc)) from exc
+
+    # Validated by the same round-trip a hand-written scenario gets: a draft
+    # that cannot be parsed is not a draft, it is a bug report.
+    try:
+        validate(draft["definition"], name=name)
+    except ScenarioError as exc:
+        raise BadRequestError(f"the derived scenario does not parse: {exc}") from exc
+
+    config = await config_for_call(session, call)
+    target = convert.default_target(call, config)
+
+    saved_id = None
+    if body.save:
+        from turncall.evals.scenario import kind_of
+
+        row = await eval_repo.create_scenario(
+            session,
+            project_id=auth.project_id,
+            name=name,
+            kind=kind_of(draft["definition"]).value,
+            definition=draft["definition"],
+            schema_version=SCHEMA_VERSION,
+            description=f"Derived from call {body.call_id}",
+            tool_mocks=draft["tool_mocks"],
+            tool_policy=EvalToolPolicy.MOCK_ONLY.value,
+            tags=body.tags,
+            default_target=target,
+        )
+        await session.commit()
+        saved_id = row.id
+
+    return ok(
+        ScenarioDraftResponse(
+            name=name,
+            definition=draft["definition"],
+            tool_mocks=draft["tool_mocks"],
+            tool_policy=EvalToolPolicy.MOCK_ONLY,
+            default_target=target,
+            schema_version=SCHEMA_VERSION,
+            note=convert.summarise(draft),
+            saved=body.save,
+            scenario_id=saved_id,
+        )
+    )
 
 
 @runs_router.get("/batches/{batch_id}")
