@@ -16,7 +16,7 @@ from uuid import uuid4
 
 import pytest
 
-from turncall.domain.enums import EvalRunStatus
+from turncall.domain.enums import EvalKind, EvalRunStatus
 from turncall.domain.models import AgentConfig
 from turncall.evals.runner import (
     IterationOutcome,
@@ -26,6 +26,7 @@ from turncall.evals.runner import (
     errored_entry,
     harness_config,
     map_script_result,
+    map_simulation_result,
     resolve_target,
     resolved_scenario_snapshot,
     tool_policy_of,
@@ -86,6 +87,49 @@ def _turn_result(index=0, status="passed", expectations=None, failures=None):
         duration_ms=900,
         expectations=expectations if expectations is not None else [_expectation()],
         failures=failures or [],
+    )
+
+
+def _metric_score(name="politeness", *, score=1.0, passed=True, min_score=1.0, **over):
+    return SimpleNamespace(
+        name=name,
+        score=score,
+        passed=passed,
+        reason="every turn passed" if passed else "turn 2 was curt",
+        min_score=min_score,
+        verdicts=over.pop("verdicts", []),
+        value=over.pop("value", None),
+        failure_kind=over.pop("failure_kind", None),
+        **over,
+    )
+
+
+def _simulation_result(
+    *, succeeded=True, error=None, metrics=None, messages=None, **over
+):
+    """What pipecat's `EvalSimulationResult` gives us. `passed` is its own
+    property: the goal met *and* no metric short."""
+    metrics = [] if metrics is None else metrics
+    return SimpleNamespace(
+        simulation_name="recovers-the-booking",
+        succeeded=succeeded,
+        reason=over.pop("reason", "the agent found the booking and read it back"),
+        error=error,
+        metrics=metrics,
+        messages=messages
+        if messages is not None
+        else [
+            {"role": "user", "content": "I lost my booking reference"},
+            {"role": "assistant", "content": "I can find that for you."},
+        ],
+        turns=over.pop("turns", 3),
+        ended_by=over.pop("ended_by", "end_call"),
+        end_call=over.pop("end_call", {"success": True, "reason": "got it"}),
+        duration_ms=over.pop("duration_ms", 18400),
+        events_seen=[],
+        debug_log=[],
+        passed=error is None and succeeded and all(m.passed for m in metrics),
+        **over,
     )
 
 
@@ -269,6 +313,137 @@ class TestMapScriptResult:
         assert outcome.entry["transcript"] == [
             {"role": "user", "content": "book me in"}
         ]
+
+
+class TestMapSimulationResult:
+    """#73. A simulation answers "did the conversation reach the right
+    outcome", so its result is a goal verdict plus per-metric scores — a
+    different shape from a scripted run's per-turn expectations."""
+
+    def test_a_passing_run_carries_the_goal_verdict_and_its_reason(self) -> None:
+        outcome = map_simulation_result(_simulation_result(), iteration=1)
+        assert outcome.passed is True
+        assert outcome.entry["goal"] == {
+            "succeeded": True,
+            "reason": "the agent found the booking and read it back",
+        }
+        assert outcome.entry["ended_by"] == "end_call"
+        assert outcome.entry["persona_turns"] == 3
+        assert outcome.entry["duration_ms"] == 18400
+
+    def test_the_conversation_is_the_transcript(self) -> None:
+        outcome = map_simulation_result(_simulation_result(), iteration=1)
+        assert outcome.entry["transcript"] == [
+            {"role": "user", "content": "I lost my booking reference"},
+            {"role": "assistant", "content": "I can find that for you."},
+        ]
+
+    def test_a_metric_below_its_minimum_fails_the_iteration(self) -> None:
+        """Pipecat's own `passed` is the goal *and* every metric; a run whose
+        goal was met but whose politeness collapsed is not a pass."""
+        short = _metric_score(passed=False, score=0.5, failure_kind="judge_no")
+        outcome = map_simulation_result(
+            _simulation_result(metrics=[short]), iteration=1
+        )
+        assert outcome.passed is False
+        assert outcome.entry["metrics"][0]["score"] == 0.5
+        assert outcome.entry["metrics"][0]["failure_kind"] == "judge_no"
+        assert outcome.entry["failures"] == [
+            {"kind": "metric", "name": "politeness", "reason": "turn 2 was curt"}
+        ]
+
+    def test_a_reporting_metric_is_kept_even_though_it_fails_nothing(self) -> None:
+        """A metric with no `min_score` never fails a run by design. Dropping it
+        would leave the operator who asked to watch it with nothing to read."""
+        watcher = _metric_score("warmth", score=0.6, min_score=None)
+        outcome = map_simulation_result(
+            _simulation_result(metrics=[watcher]), iteration=1
+        )
+        assert outcome.passed is True
+        assert outcome.entry["metrics"][0]["min_score"] is None
+        assert outcome.entry["metrics"][0]["score"] == 0.6
+
+    def test_a_measured_metric_reports_its_value_not_a_verdict(self) -> None:
+        latency = _metric_score("latency", score=0.0, passed=False, value=4.7)
+        outcome = map_simulation_result(
+            _simulation_result(metrics=[latency]), iteration=1
+        )
+        assert outcome.entry["metrics"][0]["value"] == 4.7
+        assert outcome.entry["metrics"][0]["verdicts"] == []
+
+    def test_a_missed_goal_fails_and_says_why(self) -> None:
+        outcome = map_simulation_result(
+            _simulation_result(succeeded=False, reason="never found the booking"),
+            iteration=1,
+        )
+        assert outcome.passed is False
+        assert outcome.entry["failures"] == [
+            {"kind": "goal", "name": "success", "reason": "never found the booking"}
+        ]
+
+    def test_a_harness_error_is_errored_not_failed(self) -> None:
+        """The conversation never finished, so it says nothing about the agent
+        and must stay out of both counts."""
+        outcome = map_simulation_result(
+            _simulation_result(error="persona LLM connection refused"), iteration=2
+        )
+        assert outcome.passed is None
+        assert outcome.entry["error"] == "persona LLM connection refused"
+        assert outcome.entry["iteration"] == 2
+
+    def test_the_personas_own_claim_is_stored_and_marked_advisory(self) -> None:
+        """Pipecat is explicit that the judge decides. Showing the two as
+        equals teaches people to distrust the judge, so the label travels with
+        the value rather than living in a UI that may not carry it."""
+        outcome = map_simulation_result(
+            _simulation_result(
+                succeeded=False,
+                reason="the booking was never found",
+                end_call={"success": True, "reason": "I think we sorted it"},
+            ),
+            iteration=1,
+        )
+        claim = outcome.entry["persona_claim"]
+        assert claim == {
+            "success": True,
+            "reason": "I think we sorted it",
+            "advisory": True,
+        }
+        # The judge disagreed, and the judge is what the verdict follows.
+        assert outcome.passed is False
+
+    def test_no_claim_when_the_persona_never_hung_up(self) -> None:
+        outcome = map_simulation_result(
+            _simulation_result(end_call=None, ended_by="max_turns"), iteration=1
+        )
+        assert outcome.entry["persona_claim"] is None
+        assert outcome.entry["ended_by"] == "max_turns"
+
+
+class TestSimulationPassRate:
+    """A persona does not say the same thing twice, so one run is an anecdote.
+    The run reports passed and failed against iterations — no score column: a
+    scripted `1/1` and a simulation `7/10` are one representation read twice."""
+
+    def test_counts_are_out_of_the_iterations_that_reached_a_verdict(self) -> None:
+        outcomes = [
+            map_simulation_result(_simulation_result(), iteration=1),
+            map_simulation_result(_simulation_result(succeeded=False), iteration=2),
+            map_simulation_result(_simulation_result(), iteration=3),
+            map_simulation_result(
+                _simulation_result(error="judge timed out"), iteration=4
+            ),
+        ]
+        # Four conversations, three verdicts: the errored one counts toward
+        # neither rate.
+        assert derive_status(outcomes) == (EvalRunStatus.FAILED, 2, 1)
+
+    def test_every_iteration_erroring_errors_the_run(self) -> None:
+        outcomes = [
+            map_simulation_result(_simulation_result(error="boom"), iteration=i)
+            for i in (1, 2)
+        ]
+        assert derive_status(outcomes) == (EvalRunStatus.ERRORED, 0, 0)
 
 
 class TestErroredEntry:
@@ -739,9 +914,11 @@ class TestExecuteRun:
         assert finish.await_args.kwargs["status"] is EvalRunStatus.ERRORED
         assert finish.await_args.kwargs["error"] == "agent not found"
 
-    async def test_a_simulation_is_refused_rather_than_mis_scored(self) -> None:
-        """Only the scripted result mapping exists. Running a simulation through
-        it would report nonsense confidently, which is worse than refusing."""
+    async def test_a_simulation_runs_through_its_own_mapper(self) -> None:
+        """#73. The definition decides which mapper reads the result: handing a
+        simulation result to the scripted mapper would report nonsense
+        confidently, which is why the kind is read from what parses rather than
+        from the column copied at queue time."""
         run = self._run_row()
         run.kind = "simulation"
         run.resolved_scenario = {
@@ -751,12 +928,12 @@ class TestExecuteRun:
                 "success": "the agent finds it",
             }
         }
-        execute = AsyncMock()
-        finish = AsyncMock()
-        await self._execute(run, execute, finish=finish)
-        execute.assert_not_awaited()
-        assert finish.await_args.kwargs["status"] is EvalRunStatus.ERRORED
-        assert "scripted only" in finish.await_args.kwargs["error"]
+        execute = AsyncMock(return_value=_simulation_result())
+        finish, _ = await self._execute(run, execute)
+        kwargs = finish.await_args.kwargs
+        assert execute.await_args.kwargs["kind"] is EvalKind.SIMULATION
+        assert kwargs["status"] is EvalRunStatus.PASSED
+        assert kwargs["results"][0]["goal"]["succeeded"] is True
 
     async def test_an_unparseable_stored_definition_errors_before_paying(
         self,

@@ -671,7 +671,12 @@ One migration and one commit: drop both tables and `test_run_status`; delete
    was meant to settle are now **both measured**: the #67 turn-timing claim holds
    (§1 carries the numbers), and the S2S "audio-only" expectation turned out to
    be **false** — text modality works against a real Gemini Live agent (§5).
-5. **Simulation kind** — persona, goal, metrics, iterations.
+5. **Simulation kind** — persona, goal, metrics, iterations. Built in #73:
+   its own result mapper, the pass rate out of the iterations that reached a
+   verdict, and the persona's `end_call` claim stored as advisory. Note the
+   dependency this adds in practice — pipecat's persona LLM *and* judge both
+   default to Ollama, so a simulation needs one reachable even when the agent
+   under test runs on a hosted provider (§9.3).
 6. **CLI** with the exit code.
 7. **Console**: evals tab, run detail, then the two "Save as scenario" buttons.
 8. **ADRs and `CONTEXT.md`** as each decision closes.

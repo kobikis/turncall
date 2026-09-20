@@ -153,14 +153,6 @@ async def create_eval_run(
     )
     if scenario is None:
         raise NotFoundError("EvalScenario", str(body.scenario_id))
-    if scenario.kind != EvalKind.SCRIPTED.value:
-        # Storing a simulation is fine -- the library is meant to be populated
-        # ahead of #73 -- but running one would score it through the scripted
-        # mapper and report nonsense.
-        raise BadRequestError(
-            f"{scenario.kind!r} scenarios cannot be run yet — scripted only"
-        )
-
     batch_id = uuid4()
     run = await eval_repo.create_run(
         session,

@@ -274,3 +274,36 @@ class TestKindOf:
     def test_it_raises_a_scenario_error_not_a_key_error(self) -> None:
         with pytest.raises(ScenarioError):
             kind_of({})
+
+
+class TestSimulationsAreRunnable:
+    """#73: a simulation used to be storable but not runnable — the API
+    refused it rather than scoring it through the scripted mapper."""
+
+    def test_a_persona_definition_is_a_simulation(self) -> None:
+        body = CreateEvalScenarioRequest(name="recovers", definition=SIMULATION)
+        assert body.kind is EvalKind.SIMULATION
+
+    def test_pipecats_parser_validates_the_simulation_at_create(self) -> None:
+        """Same round-trip the scripted kind gets: what stores can run."""
+        with pytest.raises(ValidationError):
+            CreateEvalScenarioRequest(
+                name="bad-metric",
+                definition={**SIMULATION, "metrics": "not a list"},
+            )
+
+    def test_a_simulation_carries_its_metrics_through(self) -> None:
+        from turncall.evals.scenario import parse
+
+        definition = {
+            **SIMULATION,
+            "metrics": [
+                {"name": "politeness", "criterion": "stayed courteous", "min_score": 1}
+            ],
+            "max_turns": 6,
+        }
+        CreateEvalScenarioRequest(name="polite", definition=definition)
+        parsed = parse(with_modality(definition, EvalModality.TEXT), name="polite")
+        assert parsed.persona
+        assert [m.name for m in parsed.metrics] == ["politeness"]
+        assert parsed.max_turns == 6
