@@ -30,14 +30,33 @@ OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 
 
 @pytest.fixture
-def ollama() -> str:
+def ollama_model() -> str:
+    """A model this machine actually has.
+
+    Pipecat's default is `gemma4:12b` for both the persona and the judge, and
+    an Ollama that is running without it fails the run with
+    `404 model 'gemma4:12b' not found` — which the runner maps to `errored`
+    naming the model, correctly, but proves nothing about a simulation. So the
+    scenario names whatever is installed rather than assuming pipecat's
+    default. `EVAL_OLLAMA_MODEL` overrides when a box has several and one of
+    them supports tool calling (the persona ends the call with an `end_call`
+    tool; without tool support it runs to `max_turns` instead, which this test
+    allows).
+    """
     try:
-        httpx.get(f"{OLLAMA}/api/tags", timeout=2.0).raise_for_status()
+        tags = httpx.get(f"{OLLAMA}/api/tags", timeout=2.0)
+        tags.raise_for_status()
+        installed = [m["name"] for m in tags.json().get("models", [])]
     except Exception:
         pytest.skip(
             f"no Ollama at {OLLAMA}: pipecat's persona and judge both default to it"
         )
-    return OLLAMA
+    if not installed:
+        pytest.skip(f"Ollama at {OLLAMA} has no models pulled")
+    chosen = os.environ.get("EVAL_OLLAMA_MODEL") or installed[0]
+    if chosen not in installed:
+        pytest.skip(f"EVAL_OLLAMA_MODEL={chosen!r} is not pulled: {installed}")
+    return chosen
 
 
 @pytest.fixture
@@ -49,7 +68,7 @@ def session_factory():
 
 
 async def test_a_simulation_holds_a_conversation_and_is_judged(
-    openai_key: str, ollama: str, session_factory
+    openai_key: str, ollama_model: str, session_factory
 ) -> None:
     from turncall.config.settings import Settings
 
@@ -62,6 +81,9 @@ async def test_a_simulation_holds_a_conversation_and_is_judged(
         "success": "the agent told the caller that the capital of France is Paris",
         "metrics": [{"name": "politeness", "criterion": "the agent stayed courteous"}],
         "max_turns": 4,
+        # Both default to pipecat's `gemma4:12b`, which this box may not have.
+        "simulator": {"service": "ollama", "model": ollama_model},
+        "judge": {"eval": {"service": "ollama", "model": ollama_model}},
     }
     blob = {
         "system_prompt": "You are a terse, courteous geography assistant.",
