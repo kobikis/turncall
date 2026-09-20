@@ -61,9 +61,16 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root. storage/ is the default local object-storage backend → must be writable.
+# `/home/app/.cache` is created here, empty and owned by app, on purpose: it is
+# where the eval worker's audio models land (Kokoro, Moonshine), and where a
+# deployment mounts a volume to keep them across recreates. Docker copies an
+# image directory's ownership into a fresh named volume — but only if the
+# directory exists. Without this the mount point is created root-owned and the
+# non-root process gets `PermissionError: /home/app/.cache/pipecat` on the
+# first audio run, which no import check can catch.
 RUN useradd --create-home --uid 10001 app \
-    && mkdir -p /app/storage \
-    && chown -R app:app /app
+    && mkdir -p /app/storage /home/app/.cache \
+    && chown -R app:app /app /home/app/.cache
 
 COPY --from=builder --chown=app:app /opt/venv /opt/venv
 COPY --chown=app:app alembic/ alembic/
