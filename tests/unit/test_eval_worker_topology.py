@@ -112,3 +112,70 @@ def test_the_transcript_taps_stay_silent_for_an_eval() -> None:
     with patch.object(observability, "_spawn") as spawn:
         observability._spawn_unless_eval(context, _never())
         spawn.assert_not_called()
+
+
+def test_the_callers_synthesized_audio_is_cached_somewhere_durable() -> None:
+    """#72: pipecat's caching TTS defaults to a directory under $HOME, which a
+    container loses on every recreate — the caller's turns would then be
+    re-synthesized on every run of every scenario. The worker points it at the
+    configured path and creates it, so a bad path fails in the log rather than
+    halfway through a turn."""
+    import tempfile
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from turncall.domain.enums import EvalKind
+    from turncall.evals import harness
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "eval-tts-cache"
+        settings = SimpleNamespace(evals=SimpleNamespace(tts_cache_dir=str(target)))
+
+        assert harness._tts_cache_dir(settings) == str(target)
+        assert target.is_dir(), "created up front, not lazily mid-synthesis"
+
+        captured = {}
+
+        class _Params:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        class _Session:
+            @staticmethod
+            def from_scenario(parsed, url, params=None):
+                return SimpleNamespace(parsed=parsed, url=url, params=params)
+
+        with (
+            patch("pipecat.evals.session.EvalSessionParams", _Params),
+            patch("pipecat.evals.script_session.EvalScriptSession", _Session),
+        ):
+            harness._build_session(
+                SimpleNamespace(),
+                EvalKind.SCRIPTED,
+                "ws://127.0.0.1:1",
+                tts_cache_dir=str(target),
+            )
+
+    assert captured["cache_dir"] == str(target)
+    # A fresh pipeline per iteration still means the bot is torn down with it.
+    assert captured["stop_bot"] is True
+
+
+def test_every_harness_caller_passes_the_tool_policy() -> None:
+    """`run_iteration` takes `tool_mocks` with no default so a caller cannot
+    forget it and get live tools (#71). Only live tests call it directly, and
+    the hermetic suite never runs those — so the binding is checked here
+    instead of discovered by a live run months later."""
+    for path in Path("tests/live").glob("*.py"):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name != "run_iteration":
+                continue
+            passed = {kw.arg for kw in node.keywords}
+            assert "tool_mocks" in passed, (
+                f"{path}:{node.lineno} calls run_iteration without tool_mocks"
+            )

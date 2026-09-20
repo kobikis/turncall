@@ -35,9 +35,16 @@ from turncall.domain.models import AgentConfig
 from turncall.evals import scenario as scenario_mod
 from turncall.services.tool_mocks import ToolMocks
 
-# Bot speech, as pipecat names the events that carry it. `llm_response` is text
-# modality, `response`/`tts_response` audio.
-_BOT_SPEECH_EVENTS = ("llm_response", "response", "tts_response")
+# What the bot said, as pipecat names it. In text modality there is only
+# `llm_response`. In audio there are three views of one reply: `llm_response`
+# (what the model wrote), `tts_response` (what the TTS reports speaking, one
+# event per segment), and `response` (the harness's own transcription of the
+# audio it actually heard). The judge reads `response`, so that is the
+# transcript — with the model's own text kept beside it, because when an audio
+# run fails where a text run passed, the difference between those two *is* the
+# explanation (#72).
+_JUDGE_EVENT = "response"
+_LLM_EVENT = "llm_response"
 
 
 class TargetError(ValueError):
@@ -147,6 +154,12 @@ def harness_config(parsed: Any = None) -> dict[str, Any]:
         # A custom judge is a dotted path instead of a service/model pair; with
         # neither recorded the snapshot would say nothing at all about it.
         "judge_factory": judge.get("factory"),
+        # Audio only. The caller's voice and the STT the judge read through are
+        # as much a part of a result as the judge model: a different TTS says
+        # the same line differently, and a different STT mishears it
+        # differently. A snapshot without them cannot explain a flip (#72).
+        "user_speech": getattr(parsed, "user_speech", None),
+        "bot_transcription": getattr(parsed, "transcriber", None),
         "schema_version": scenario_mod.SCHEMA_VERSION,
     }
 
@@ -193,6 +206,36 @@ def _spoken(event: dict) -> str:
     return event.get("text") or event.get("transcript") or ""
 
 
+def _bot_turns(result: Any) -> list[dict[str, str]]:
+    """One entry per reply the bot gave, in order.
+
+    `content` is what the judge read: its transcription of the bot's audio when
+    the run made the bot speak, the model's text when it did not. In audio the
+    model's text rides along as `text` whenever the two are both present and
+    differ — a wrong word there is STT, a wrong sentence is the agent, and
+    without both in the record every audio failure is a mystery.
+
+    Attribution between the two lists is by order. `tts_response` is
+    deliberately not a source: it is emitted per spoken *segment*, so one reply
+    can raise several, and mixing it in gave one reply three transcript lines.
+    """
+    events = getattr(result, "events_seen", []) or []
+    heard = [e for e in events if e.get("type") == _JUDGE_EVENT and _spoken(e)]
+    written = [e for e in events if e.get("type") == _LLM_EVENT and _spoken(e)]
+
+    if not heard:
+        return [{"role": "assistant", "content": _spoken(e)} for e in written]
+
+    turns = []
+    for index, event in enumerate(heard):
+        entry = {"role": "assistant", "content": _spoken(event)}
+        text = _spoken(written[index]) if index < len(written) else ""
+        if text and text != entry["content"]:
+            entry["text"] = text
+        turns.append(entry)
+    return turns
+
+
 def _transcript_from_script(result: Any, parsed: Any) -> list[dict[str, str]]:
     """The conversation, as the user turns that were actually sent interleaved
     with what the bot actually said.
@@ -210,18 +253,9 @@ def _transcript_from_script(result: Any, parsed: Any) -> list[dict[str, str]]:
     `at` is measured from the harness's start and includes a connect and
     handshake that no turn's duration accounts for, so every reply landed a
     turn or more late.
-
-    ponytail: one-per-turn is exact for text modality, where `llm_response` is
-    emitted once per response. Audio's `tts_response` is one event per spoken
-    segment, so #72 needs to revisit this — leftovers are appended rather than
-    dropped, which keeps the content complete meanwhile.
     """
     turns = list(getattr(parsed, "turns", []) or [])
-    events = [
-        event
-        for event in getattr(result, "events_seen", []) or []
-        if event.get("type") in _BOT_SPEECH_EVENTS and _spoken(event)
-    ]
+    replies = _bot_turns(result)
 
     transcript: list[dict[str, str]] = []
     consumed = 0
@@ -240,17 +274,13 @@ def _transcript_from_script(result: Any, parsed: Any) -> list[dict[str, str]]:
                 transcript.append(
                     {"role": "user", "content": f"(DTMF keypad input: {turn.dtmf})"}
                 )
-        if consumed < len(events):
-            transcript.append(
-                {"role": "assistant", "content": _spoken(events[consumed])}
-            )
+        if consumed < len(replies):
+            transcript.append(replies[consumed])
             consumed += 1
 
-    # A turn that said several things, or speech after the last scored turn:
-    # kept rather than dropped, since losing it is the bug this replaced.
-    transcript.extend(
-        {"role": "assistant", "content": _spoken(event)} for event in events[consumed:]
-    )
+    # A reply after the last scored turn: kept rather than dropped, since
+    # losing bot speech is the bug this replaced.
+    transcript.extend(replies[consumed:])
     return transcript
 
 

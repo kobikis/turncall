@@ -61,6 +61,9 @@ async def _run(definition: dict, target, session_factory) -> object:
         settings=Settings(),
         session_factory=session_factory,
         run_id=__import__("uuid").uuid4(),
+        # No scenario mocks here; these agents' only tool is a webhook the
+        # function-call tests point at a URL nothing answers.
+        tool_mocks=None,
     ), parsed
 
 

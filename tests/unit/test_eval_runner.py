@@ -279,6 +279,91 @@ class TestErroredEntry:
         assert outcome.entry["iteration"] == 2
 
 
+class TestAudioTranscript:
+    """#72. In audio modality one reply arrives three ways: the LLM's text, the
+    TTS's segments, and the harness's transcription of the audio. The judge
+    reads the transcription, so that is the transcript — with the model's own
+    text beside it, because when an audio run fails where a text run passed,
+    the difference between those two is the whole explanation."""
+
+    def test_the_judges_transcription_is_the_content(self) -> None:
+        outcome = map_script_result(
+            _script_result(
+                turns=[_turn_result(0)],
+                events=[
+                    {"type": "llm_response", "text": "Your table is booked for two."},
+                    {"type": "tts_response", "text": "Your table is booked"},
+                    {"type": "tts_response", "text": " for two."},
+                    {"type": "response", "text": "your table is book for to"},
+                ],
+            ),
+            iteration=1,
+            parsed=_parsed("book me a table"),
+        )
+        assert outcome.entry["transcript"] == [
+            {"role": "user", "content": "book me a table"},
+            {
+                "role": "assistant",
+                # what the judge heard
+                "content": "your table is book for to",
+                # what the agent actually said
+                "text": "Your table is booked for two.",
+            },
+        ]
+
+    def test_a_reply_is_one_entry_not_one_per_spoken_segment(self) -> None:
+        """`tts_response` fires per segment, so counting it as speech gave one
+        reply three transcript lines."""
+        outcome = map_script_result(
+            _script_result(
+                turns=[_turn_result(0)],
+                events=[
+                    {"type": "tts_response", "text": "one"},
+                    {"type": "tts_response", "text": "two"},
+                    {"type": "tts_response", "text": "three"},
+                    {"type": "response", "text": "one two three"},
+                ],
+            ),
+            iteration=1,
+            parsed=_parsed("hello"),
+        )
+        assistant = [t for t in outcome.entry["transcript"] if t["role"] == "assistant"]
+        assert assistant == [{"role": "assistant", "content": "one two three"}]
+
+    def test_text_modality_is_unchanged(self) -> None:
+        """No transcription event, so the LLM text is the content and there is
+        no second field to carry."""
+        outcome = map_script_result(
+            _script_result(
+                turns=[_turn_result(0)],
+                events=[{"type": "llm_response", "text": "Hi there."}],
+            ),
+            iteration=1,
+            parsed=_parsed("hello"),
+        )
+        assert outcome.entry["transcript"][1] == {
+            "role": "assistant",
+            "content": "Hi there.",
+        }
+
+    def test_an_identical_transcription_carries_no_duplicate(self) -> None:
+        outcome = map_script_result(
+            _script_result(
+                turns=[_turn_result(0)],
+                events=[
+                    {"type": "llm_response", "text": "Hi there."},
+                    {"type": "response", "text": "Hi there."},
+                ],
+            ),
+            iteration=1,
+            parsed=_parsed("hello"),
+        )
+        assert outcome.entry["transcript"][1] == {
+            "role": "assistant",
+            "content": "Hi there.",
+        }
+
+
 class TestToolPolicyResolution:
     """One place decides the fail-closed default — deciding it twice is how the
     safe value stops being the default (#71)."""

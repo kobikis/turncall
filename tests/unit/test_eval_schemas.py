@@ -179,14 +179,26 @@ class TestRunRequest:
         assert body.modality is EvalModality.TEXT
         assert body.iterations == 1
 
-    def test_audio_is_rejected_until_its_slice_lands(self) -> None:
+    def test_audio_is_accepted(self) -> None:
+        """#72. Text stays the default — it is what people run per PR — but
+        audio is the mode that covers what makes this a voice platform."""
         from uuid import uuid4
 
-        with pytest.raises(ValidationError, match="audio modality is not supported"):
+        body = CreateEvalRunRequest(
+            scenario_id=uuid4(),
+            target=EvalTarget(type="agent", agent_id=uuid4()),
+            modality="audio",
+        )
+        assert body.modality is EvalModality.AUDIO
+
+    def test_an_unknown_modality_is_still_rejected(self) -> None:
+        from uuid import uuid4
+
+        with pytest.raises(ValidationError):
             CreateEvalRunRequest(
                 scenario_id=uuid4(),
                 target=EvalTarget(type="agent", agent_id=uuid4()),
-                modality="audio",
+                modality="video",
             )
 
     def test_zero_iterations_is_rejected(self) -> None:
@@ -213,6 +225,44 @@ class TestModalityMerge:
         merged = with_modality(definition, EvalModality.TEXT)
         assert merged["user"]["modality"] == "audio"
         assert merged["judge"]["modality"] == "text"
+
+    def test_audio_brings_the_transcription_pipecat_demands(self) -> None:
+        """#72: pipecat *raises* on `judge.modality: audio` with no
+        `transcription:` block, so a run asking for audio has to bring a
+        default or every audio scenario is unrunnable. Proven by parsing it."""
+        from turncall.evals.scenario import parse
+
+        merged = with_modality(SCRIPTED, EvalModality.AUDIO)
+        assert merged["judge"]["transcription"] == {"service": "moonshine"}
+        assert merged["user"]["speech"] == {"service": "kokoro", "voice": "af_heart"}
+        parsed = parse(merged, name="greets")
+        assert parsed.bot_audio is True
+        assert parsed.user_audio is True
+        assert parsed.transcriber["service"] == "moonshine"
+        assert parsed.user_speech["service"] == "kokoro"
+
+    def test_a_scenarios_own_transcriber_is_left_alone(self) -> None:
+        definition = {
+            **SCRIPTED,
+            "judge": {"transcription": {"service": "whisper", "model": "base"}},
+        }
+        merged = with_modality(definition, EvalModality.AUDIO)
+        assert merged["judge"]["transcription"] == {
+            "service": "whisper",
+            "model": "base",
+        }
+
+    def test_a_scenarios_own_voice_is_left_alone(self) -> None:
+        definition = {**SCRIPTED, "user": {"speech": {"factory": "mine.voice"}}}
+        merged = with_modality(definition, EvalModality.AUDIO)
+        assert merged["user"]["speech"] == {"factory": "mine.voice"}
+
+    def test_text_gets_neither_service(self) -> None:
+        """They would be built for nothing — and pipecat's text path never
+        reads either one."""
+        merged = with_modality(SCRIPTED, EvalModality.TEXT)
+        assert "transcription" not in merged["judge"]
+        assert "speech" not in merged["user"]
 
     def test_the_original_definition_is_not_mutated(self) -> None:
         definition = {**SCRIPTED}

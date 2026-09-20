@@ -54,6 +54,22 @@ def kind_of(definition: dict[str, Any]) -> EvalKind:
     )
 
 
+# The voice the caller's turns are synthesized in. Pipecat requires a
+# `user.speech:` block (service + voice) as soon as a turn has to be spoken and
+# names no `audio:` file of its own — there is no implicit default — so a run
+# asking for audio brings one. Kokoro is local: no key, no per-turn cost, and
+# the same utterance is synthesized once and cached across runs.
+DEFAULT_USER_SPEECH = {"service": "kokoro", "voice": "af_heart"}
+
+# The STT that transcribes the bot's audio for the judge in audio modality.
+# Pipecat *requires* a `judge.transcription:` block there and raises without
+# one, so a run asking for audio has to bring a default or every audio scenario
+# is unrunnable. Moonshine is pipecat's own default and runs locally — no key,
+# no per-run cost, and no transcript leaving the box, which is the same
+# property the local judge has (see ADR-0018 on the Ollama default).
+DEFAULT_BOT_TRANSCRIPTION = {"service": "moonshine"}
+
+
 def with_modality(definition: dict[str, Any], modality: EvalModality) -> dict[str, Any]:
     """The definition with the run's modality applied as the default.
 
@@ -61,6 +77,12 @@ def with_modality(definition: dict[str, Any], modality: EvalModality) -> dict[st
     combinations. A run exposes one knob, so it sets both; a scenario that
     names either one keeps its own, which is how the useful asymmetric pair
     (`user: audio, judge: text` — exercises STT, skips TTS) stays reachable.
+
+    Audio also needs services the text path never builds: a TTS to speak the
+    caller's turns (pipecat defaults it to local Kokoro) and an STT to
+    transcribe the bot's (no default at all — pipecat raises). The missing one
+    is filled here rather than demanded of every scenario, because `modality:
+    audio` on the run is the whole interface this exposes.
     """
     merged = copy.deepcopy(definition)
     for block in ("user", "judge"):
@@ -69,6 +91,20 @@ def with_modality(definition: dict[str, Any], modality: EvalModality) -> dict[st
             # Let pipecat's parser produce the error for a malformed block.
             continue
         merged[block] = {"modality": modality.value, **(existing or {})}
+
+    user, judge = merged["user"], merged["judge"]
+    if (
+        isinstance(user, dict)
+        and user.get("modality") == EvalModality.AUDIO.value
+        and user.get("speech") is None
+    ):
+        user["speech"] = dict(DEFAULT_USER_SPEECH)
+    if (
+        isinstance(judge, dict)
+        and judge.get("modality") == EvalModality.AUDIO.value
+        and judge.get("transcription") is None
+    ):
+        judge["transcription"] = dict(DEFAULT_BOT_TRANSCRIPTION)
     return merged
 
 

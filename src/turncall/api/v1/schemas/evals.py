@@ -159,14 +159,11 @@ class EvalTarget(BaseModel):
 class CreateEvalRunRequest(BaseModel):
     scenario_id: UUID
     target: EvalTarget
+    # `text` stays the default: it is the mode people run per PR — no STT, no
+    # TTS, no local models, a fraction of the time. `audio` is the one that
+    # covers what makes this a voice platform (#72).
     modality: EvalModality = EvalModality.TEXT
     iterations: int = Field(default=1, ge=1)
-
-    @model_validator(mode="after")
-    def validate_modality(self) -> "CreateEvalRunRequest":
-        if self.modality is not EvalModality.TEXT:
-            raise ValueError("audio modality is not supported yet — use 'text'")
-        return self
 
 
 class EvalRunResponse(BaseModel):

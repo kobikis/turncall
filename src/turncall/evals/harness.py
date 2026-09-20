@@ -69,7 +69,24 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def _build_session(parsed: Any, kind: EvalKind, bot_url: str) -> Any:
+def _tts_cache_dir(settings: Any) -> str | None:
+    """The caller-audio cache directory, created if it is not there yet.
+
+    Pipecat writes into it lazily; making it here means a misconfigured path
+    fails in the worker's log rather than halfway through synthesizing a turn.
+    """
+    import os
+
+    configured = getattr(getattr(settings, "evals", None), "tts_cache_dir", None)
+    if not configured:
+        return None
+    os.makedirs(configured, exist_ok=True)
+    return str(configured)
+
+
+def _build_session(
+    parsed: Any, kind: EvalKind, bot_url: str, *, tts_cache_dir: str | None = None
+) -> Any:
     """The pipecat harness session for this scenario kind."""
     from pipecat.evals.session import EvalSessionParams
 
@@ -78,6 +95,10 @@ def _build_session(parsed: Any, kind: EvalKind, bot_url: str) -> Any:
         # and its `on_client_disconnected` fired, when the scenario ends.
         stop_bot=True,
         trigger_disconnect=True,
+        # Where the caller's synthesized turns are kept between runs (#72).
+        # Same scenario, same voice, same text: synthesized once. Without a
+        # path it lands under $HOME, which a container loses on recreate.
+        cache_dir=tts_cache_dir,
     )
     if kind is EvalKind.SCRIPTED:
         from pipecat.evals.script_session import EvalScriptSession
@@ -145,7 +166,12 @@ async def run_iteration(
 
     bot = asyncio.create_task(session.start(), name=f"eval-bot-{run_id}")
     try:
-        harness = _build_session(parsed, kind, f"ws://127.0.0.1:{port}")
+        harness = _build_session(
+            parsed,
+            kind,
+            f"ws://127.0.0.1:{port}",
+            tts_cache_dir=_tts_cache_dir(settings),
+        )
         result = await harness.run()
     finally:
         await _stop_bot(bot, run_id)

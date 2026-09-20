@@ -566,6 +566,14 @@ Three answers, weakest first:
   lazy or off-script tester reads as a bad agent, and `errored` does not catch
   that.
 
+**Audio needs two local models** (#72). Pipecat requires a voice for the caller
+and an STT for the judge as soon as the modality is audio, and both defaults are
+local: Kokoro and Moonshine, downloaded on first use into `~/.cache/pipecat`. So
+an audio run on a cold machine pays a download before it pays a provider, and a
+container that keeps no cache pays it every time. The caller's synthesized turns
+are cached separately under `EVAL_TTS_CACHE_DIR` — same argument, different
+directory, and that one is TurnCall's to mount.
+
 ### 9.4 Text mode inverts the coverage
 
 Text mode cannot see STT, TTS, VAD/turn timing, interruption, pronunciation, or
@@ -610,8 +618,14 @@ One migration and one commit: drop both tables and `test_run_status`; delete
    iteration. Proves the bridge end to end.
 3. **Tool mocking** in `tool_bridge`. Before anyone points a scenario at a real
    agent.
-4. **Audio modality.** Then verify the #67 latency claim and the S2S limit for
-   real.
+4. **Audio modality.** Built in #72 — `modality: audio` runs end to end, the
+   judge's transcription is surfaced beside the agent's text, and the caller's
+   synthesized turns are cached under `EVAL_TTS_CACHE_DIR`. The two claims it
+   was meant to settle are **still open**: both need a live run with real
+   credentials. `tests/live/test_live_eval_audio.py` carries the turn-timing
+   measurement as an executable test whose failure message states the finding
+   either way; the S2S question has no test yet, because a probe with nothing
+   to assert is not one.
 5. **Simulation kind** — persona, goal, metrics, iterations.
 6. **CLI** with the exit code.
 7. **Console**: evals tab, run detail, then the two "Save as scenario" buttons.

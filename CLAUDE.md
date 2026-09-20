@@ -96,6 +96,7 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 | `PIPECAT_VAD_CONFIDENCE_THRESHOLD` | No | Silero VAD confidence (default `0.6`). Pairs with the agent's `silence_timeout_ms`, which sets the VAD stop window when Smart Turn is off (with it on, the model decides the turn and VAD uses Pipecat's 0.2s — the two waits are serial, so charging both cost 1.8s a turn) |
 | `PIPECAT_ENABLE_OBSERVERS` / `PIPECAT_ENABLE_TRACING` / `PIPECAT_TRACE_INCLUDE_PII` | No | Observability toggles (all default `true`). PII = caller phone numbers on spans. See `adr/0010` |
 | `API_KEY_HASH_SECRET` | Prod | Pepper for the HMAC-SHA256 hashing of API keys — a DB leak alone can't brute-force keys without it. **Set a strong value once and don't rotate** (rotating invalidates peppered keys; pre-pepper keys keep working via dual-read + upgrade-on-use). Default `change-me-in-production` gives no real protection until set |
+| `EVAL_TTS_CACHE_DIR` | No | Where the caller's synthesized turns are cached in audio runs (default `./storage/eval-tts-cache`). Pipecat's own default lives under `$HOME`, which a container loses on recreate — every repeat run would then re-synthesize every caller turn. Mount it |
 | `EVAL_MAX_CONCURRENT_RUNS` | No | Scenario-iterations the eval worker runs at once (default `4`). The worker runs the bot pipeline **and** the harness — which itself runs a persona LLM, a TTS, an STT and the judge — so in audio mode one run is roughly double a real call's service load in one event loop. A starting point, not a measurement. `EVAL_MAX_RUN_DURATION_SECONDS` (default `900`) is the janitor's cutoff for reclaiming a run a crashed worker left claimed, as `errored`; `EVAL_JANITOR_INTERVAL_SECONDS` (`60`) and `EVAL_MAX_ITERATIONS` (`50`) bound the sweep and one request's paid LLM work. See `adr/0018` |
 | `PROJECT_PURGE_RETENTION_DAYS` | No | Days a soft-deleted project (ADR-0011) is kept before the hourly purge job hard-deletes it (cascade). Default `30`; `0` disables |
 | `PLATFORM_API_KEY` | Prod | Privileged credential gating the unauthenticated bootstrap endpoints — project creation + first-API-key creation. Only the builder holds it; presented as the `X-Platform-Key` header. Empty default fails **closed** (rejects all bootstrap calls), so set it wherever those endpoints must work. TurnCall stays identity-free — this is a caller check, not a user |
@@ -449,6 +450,28 @@ with the LLM completely broken — seen both ways on one config. Use
 `text_contains`/`matches`/`eval:`. Such a run scores **`failed`**, never
 `errored`; errored means the harness could not complete and is kept out of
 every rate, which would hide exactly the #63/#64/#65 class evals exist for.
+
+### Audio modality (#72)
+
+`modality: audio` on the run: the caller's turns are synthesized and reach the
+agent's **real STT**, the agent answers through its **real TTS**, and the judge
+reads a transcription of the audio that was actually produced — the `response`
+event, which is what a scenario should assert on in audio mode (`llm_response`
+is the model's text and skips both ends). Text stays the default: it is what
+people run per PR, and it is a fraction of the time.
+
+Two services the text path never builds, both **local and downloaded on first
+use** (`~/.cache/pipecat`): Kokoro speaks the caller, Moonshine transcribes the
+agent for the judge. Pipecat *requires* both to be named as soon as the
+modality is audio — it raises otherwise — so `with_modality` fills the pair a
+scenario did not name (`DEFAULT_USER_SPEECH` / `DEFAULT_BOT_TRANSCRIPTION`),
+and a scenario's own `user.speech:` / `judge.transcription:` always wins.
+
+A run's results entry carries **both** views of each reply: `content` is what
+the judge read, `text` the agent's own words when the two differ. That
+difference is the whole explanation when an audio run fails where a text run
+passed. `harness_config` records which voice and which STT produced them,
+for the same reason it records the judge model.
 
 ### Known coverage limits
 Everything *inside* the transport is invisible: the Twilio serializer and the

@@ -232,6 +232,12 @@ class EvalSettings(BaseSettings):
     # Ceiling on iterations per run, so one request cannot queue an unbounded
     # amount of paid LLM work.
     max_iterations: int = 50
+    # Where pipecat's caching TTS keeps the caller's synthesized turns (#72),
+    # keyed by service/voice/model/language/speed/text. Pipecat's own default
+    # is under $HOME, which a container loses on every recreate — a scripted
+    # scenario would then re-synthesize every caller turn on every run. Point
+    # it at the same place the app already persists things, and mount it.
+    tts_cache_dir: str = "./storage/eval-tts-cache"
 
 
 class Settings(BaseSettings):
