@@ -38,6 +38,10 @@ from turncall.orchestrator.transport_factory import EVAL_SAMPLE_RATE
 _BOT_STOP_TIMEOUT_S = 15.0
 
 
+class PipelineFailed(RuntimeError):
+    """The agent's pipeline stopped, so the iteration proves nothing."""
+
+
 def _free_port() -> int:
     """A port nothing is listening on, for this run's loopback socket.
 
@@ -122,17 +126,30 @@ async def run_iteration(
     bot = asyncio.create_task(session.start(), name=f"eval-bot-{run_id}")
     try:
         harness = _build_session(parsed, kind, f"ws://127.0.0.1:{port}")
-        return await harness.run()
+        result = await harness.run()
     finally:
         await _stop_bot(bot, run_id)
+
+    # A pipeline that died — an unusable LLM, a bad key, a provider 400 — leaves
+    # the harness timing out with nothing to match, which reads as the agent
+    # falling short. It is not: nobody learned anything about the agent, so the
+    # iteration has to be `errored`. Raised after the result so a run that
+    # completed anyway is still scored on its own terms.
+    if session.failure is not None and not getattr(result, "passed", False):
+        raise PipelineFailed(
+            f"the agent pipeline stopped: {type(session.failure).__name__}: "
+            f"{session.failure}"
+        ) from session.failure
+    return result
 
 
 async def _stop_bot(bot: asyncio.Task, run_id: UUID) -> None:
     """Wind the bot pipeline down, cancelling it if it will not go quietly."""
     if bot.done():
-        # A pipeline that died before the harness finished is usually *why* the
-        # iteration failed -- an unusable LLM, a bad key, a provider 400.
-        # Swallowing it silently leaves the run scored with no way to find out.
+        # CallSession.start() swallows its own exception (a live call must
+        # finalize rather than propagate), so this almost never raises — the
+        # pipeline's failure is read off `session.failure` instead. Kept for
+        # anything that escapes start() entirely.
         try:
             bot.result()
         except asyncio.CancelledError:

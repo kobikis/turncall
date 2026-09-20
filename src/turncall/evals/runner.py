@@ -127,10 +127,27 @@ def harness_config(parsed: Any = None) -> dict[str, Any]:
     judge = getattr(parsed, "judge", None) or {}
     return {
         "pipecat_version": pipecat_version,
+        # Pipecat fills `judge.eval:` with its ollama default whether or not a
+        # judge is ever built, so record whether one actually decided anything.
+        # A snapshot naming a model that never ran is the same lie as a policy
+        # that was never enforced.
+        "judge_used": _uses_judge(parsed),
         "judge_service": judge.get("service"),
         "judge_model": judge.get("model"),
+        # A custom judge is a dotted path instead of a service/model pair; with
+        # neither recorded the snapshot would say nothing at all about it.
+        "judge_factory": judge.get("factory"),
         "schema_version": scenario_mod.SCHEMA_VERSION,
     }
+
+
+def _uses_judge(parsed: Any) -> bool:
+    """Whether anything in this scenario actually asks the judge a question."""
+    for turn in getattr(parsed, "turns", []) or []:
+        if any(getattr(exp, "eval", None) is not None for exp in turn.expect or []):
+            return True
+    # A simulation is judged end to end by definition (#73).
+    return getattr(parsed, "persona", None) is not None
 
 
 # Flipped to True by #71, when the tool bridge actually short-circuits. Until
@@ -163,57 +180,68 @@ def resolved_scenario_snapshot(
     }
 
 
+def _spoken(event: dict) -> str:
+    return event.get("text") or event.get("transcript") or ""
+
+
 def _transcript_from_script(result: Any, parsed: Any) -> list[dict[str, str]]:
-    """The conversation, as user turns interleaved with what the bot said.
+    """The conversation, as the user turns that were actually sent interleaved
+    with what the bot actually said.
 
-    The user side is the scenario's own turns — the harness sent them, so they
-    are exact. The bot side comes from the events the harness actually saw,
-    **not** from what the expectations matched: a failing turn matches nothing,
-    and a transcript that goes blank exactly when the agent said something
-    wrong is useless for the one job it has.
+    Two things this must not do, both learned by measuring rather than
+    reasoning. It must not invent user speech: `stop_on_failure` is the default,
+    so a failing run leaves its later turns `not_run`, and rendering their
+    scripted text would show the caller saying things the harness never sent.
+    And it must not lose bot speech: a failing turn matches no expectation, so
+    building the bot side from `expectation.matched` blanked the transcript
+    exactly when someone needs to read it.
 
-    Turns run strictly back to back, so a turn's slice of the event stream ends
-    at the running total of the turn durations. Events carry `at` in seconds
-    from the harness's start; `duration_ms` is per turn.
+    Attribution is by order, one reply per scored turn. An earlier attempt
+    windowed by the running total of `duration_ms`, which is simply wrong:
+    `at` is measured from the harness's start and includes a connect and
+    handshake that no turn's duration accounts for, so every reply landed a
+    turn or more late.
+
+    ponytail: one-per-turn is exact for text modality, where `llm_response` is
+    emitted once per response. Audio's `tts_response` is one event per spoken
+    segment, so #72 needs to revisit this — leftovers are appended rather than
+    dropped, which keeps the content complete meanwhile.
     """
     turns = list(getattr(parsed, "turns", []) or [])
     events = [
         event
         for event in getattr(result, "events_seen", []) or []
-        if event.get("type") in _BOT_SPEECH_EVENTS
-        and (event.get("text") or event.get("transcript"))
+        if event.get("type") in _BOT_SPEECH_EVENTS and _spoken(event)
     ]
 
     transcript: list[dict[str, str]] = []
     consumed = 0
-    elapsed_ms = 0
     for turn_result in getattr(result, "turns", []) or []:
+        if turn_result.status == "not_run":
+            # The run stopped before this turn. Nothing was sent, nothing said.
+            continue
         index = turn_result.turn_index
-        if index < len(turns) and turns[index].user:
-            transcript.append({"role": "user", "content": turns[index].user})
-
-        elapsed_ms += turn_result.duration_ms
-        while consumed < len(events) and events[consumed].get("at", 0) * 1000 <= (
-            elapsed_ms
-        ):
-            event = events[consumed]
+        if index < len(turns):
+            turn = turns[index]
+            if turn.user:
+                transcript.append({"role": "user", "content": turn.user})
+            elif getattr(turn, "dtmf", None):
+                # A keypress is the caller's turn too; pipecat's own judge
+                # records it the same way.
+                transcript.append(
+                    {"role": "user", "content": f"(DTMF keypad input: {turn.dtmf})"}
+                )
+        if consumed < len(events):
             transcript.append(
-                {
-                    "role": "assistant",
-                    "content": event.get("text") or event.get("transcript", ""),
-                }
+                {"role": "assistant", "content": _spoken(events[consumed])}
             )
             consumed += 1
 
-    # Anything the bot said after the last scored turn still belongs in the
-    # record — a run that stops at a failure leaves later events unassigned.
-    for event in events[consumed:]:
-        transcript.append(
-            {
-                "role": "assistant",
-                "content": event.get("text") or event.get("transcript", ""),
-            }
-        )
+    # A turn that said several things, or speech after the last scored turn:
+    # kept rather than dropped, since losing it is the bug this replaced.
+    transcript.extend(
+        {"role": "assistant", "content": _spoken(event)} for event in events[consumed:]
+    )
     return transcript
 
 
@@ -338,16 +366,18 @@ async def execute_run(
 
         project_id = run.project_id
         modality = EvalModality(run.modality)
-        kind = EvalKind(run.kind)
+        kind = EvalKind.SCRIPTED
         iterations = run.iterations
         definition = dict(run.resolved_scenario.get("definition") or {})
         scenario_name = run.scenario_name
 
         try:
+            # The definition decides, not `run.kind`. The column is a copy made
+            # at queue time; if the two ever disagree, the mapper is chosen from
+            # what actually parses, and `map_script_result` would otherwise be
+            # handed a simulation result to read.
+            kind = scenario_mod.kind_of(definition)
             if kind is not EvalKind.SCRIPTED:
-                # Only the scripted result mapping exists yet. Refusing here is
-                # the difference between a clear error and a run that silently
-                # scores a simulation through the wrong mapper (#73).
                 raise ScenarioKindError(
                     f"{kind.value!r} scenarios cannot be run yet — scripted only"
                 )

@@ -56,6 +56,11 @@ class CallSession:
         self._runner: WorkerRunner | None = None
         self._duration_guard: asyncio.Task | None = None
         self._running = False
+        # The pipeline's own failure, kept rather than only logged. start()
+        # swallows it on purpose — a live call must still finalize — but an
+        # eval has to tell "the agent answered badly" from "the pipeline never
+        # ran", which is the difference between `failed` and `errored`.
+        self._failure: BaseException | None = None
 
     @property
     def call_id(self) -> UUID:
@@ -64,6 +69,11 @@ class CallSession:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def failure(self) -> BaseException | None:
+        """The exception that ended the pipeline, if one did."""
+        return self._failure
 
     async def _build_telemetry(self) -> tuple[list, dict]:
         """Observers + span attributes for this call's pipeline task (ADR-0010).
@@ -190,8 +200,9 @@ class CallSession:
             await self._runner.run(self._task)
         except asyncio.CancelledError:
             logger.info("call_session_cancelled", call_id=str(self.call_id))
-        except Exception:
+        except Exception as exc:
             logger.exception("call_session_error", call_id=str(self.call_id))
+            self._failure = exc
             await self._update_call_status(CallStatus.FAILED)
         finally:
             self._running = False

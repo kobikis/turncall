@@ -68,9 +68,14 @@ def _script_result(
     )
 
 
-def _said(text, at):
-    """A bot-speech event as the harness records it (`at` is seconds)."""
-    return {"type": "llm_response", "text": text, "at": at}
+def _said(text):
+    """A bot-speech event as the harness records it.
+
+    No timestamp: attribution is by order now. Windowing by the running total
+    of `duration_ms` was wrong — `at` starts at the harness's connect, which no
+    turn's duration accounts for.
+    """
+    return {"type": "llm_response", "text": text}
 
 
 def _turn_result(index=0, status="passed", expectations=None, failures=None):
@@ -84,7 +89,9 @@ def _turn_result(index=0, status="passed", expectations=None, failures=None):
 
 
 def _parsed(*user_turns):
-    return SimpleNamespace(turns=[SimpleNamespace(user=u) for u in user_turns])
+    return SimpleNamespace(
+        turns=[SimpleNamespace(user=u, dtmf=None) for u in user_turns]
+    )
 
 
 class TestDeriveStatus:
@@ -158,10 +165,7 @@ class TestMapScriptResult:
         outcome = map_script_result(
             _script_result(
                 turns=[_turn_result(0), _turn_result(1)],
-                events=[
-                    _said("Hi, how can I help?", 0.5),
-                    _said("Sure, booking that.", 1.2),
-                ],
+                events=[_said("Hi, how can I help?"), _said("Sure, booking that.")],
             ),
             iteration=1,
             parsed=_parsed("hello", "book me in"),
@@ -173,10 +177,33 @@ class TestMapScriptResult:
             {"role": "assistant", "content": "Sure, booking that."},
         ]
 
+    def test_a_turn_that_never_ran_is_not_put_in_the_callers_mouth(self) -> None:
+        """`stop_on_failure` is the default, so a failing run leaves later turns
+        `not_run`. Rendering their scripted text showed the caller saying things
+        the harness never sent — measured against a real run, not imagined."""
+        outcome = map_script_result(
+            _script_result(
+                passed=False,
+                turns=[
+                    _turn_result(0),
+                    _turn_result(1, status="failed", expectations=[]),
+                    _turn_result(2, status="not_run", expectations=[]),
+                ],
+                events=[_said("Hello!"), _said("2+2 equals 4.")],
+            ),
+            iteration=1,
+            parsed=_parsed("Say hello.", "What is 2+2?", "Third turn never sent."),
+        )
+        assert outcome.entry["transcript"] == [
+            {"role": "user", "content": "Say hello."},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": "What is 2+2?"},
+            {"role": "assistant", "content": "2+2 equals 4."},
+        ]
+
     def test_a_failing_turn_still_records_what_the_agent_said(self) -> None:
-        """The whole point of the transcript. A failing turn matches nothing,
-        so building the bot side from `expectation.matched` made it go blank
-        exactly when someone needs to see what went wrong."""
+        """A failing turn matches no expectation, so building the bot side from
+        `expectation.matched` blanked the transcript exactly when it matters."""
         failure = _failure()
         outcome = map_script_result(
             _script_result(
@@ -187,7 +214,7 @@ class TestMapScriptResult:
                         0, status="failed", expectations=[], failures=[failure]
                     )
                 ],
-                events=[_said("I have no idea what you mean.", 0.4)],
+                events=[_said("I have no idea what you mean.")],
             ),
             iteration=1,
             parsed=_parsed("book me in"),
@@ -197,12 +224,13 @@ class TestMapScriptResult:
             {"role": "assistant", "content": "I have no idea what you mean."},
         ]
 
-    def test_speech_after_the_last_scored_turn_is_not_dropped(self) -> None:
-        """A run that stops at a failure leaves later events unassigned."""
+    def test_speech_beyond_one_reply_a_turn_is_kept_not_dropped(self) -> None:
+        """One-per-turn is exact for text mode; losing the remainder would be
+        the bug this replaced, so leftovers are appended."""
         outcome = map_script_result(
             _script_result(
                 turns=[_turn_result(0)],
-                events=[_said("first", 0.2), _said("trailing", 99.0)],
+                events=[_said("first"), _said("and also this")],
             ),
             iteration=1,
             parsed=_parsed("hello"),
@@ -210,23 +238,29 @@ class TestMapScriptResult:
         assert [m["content"] for m in outcome.entry["transcript"]] == [
             "hello",
             "first",
-            "trailing",
+            "and also this",
         ]
 
-    def test_a_non_speech_match_stays_out_of_the_transcript(self) -> None:
-        """A matched function_call is an assertion, not something anyone said."""
+    def test_a_keypress_is_the_callers_turn_too(self) -> None:
+        parsed = SimpleNamespace(turns=[SimpleNamespace(user=None, dtmf="123#")])
+        outcome = map_script_result(
+            _script_result(turns=[_turn_result(0)], events=[_said("Got it.")]),
+            iteration=1,
+            parsed=parsed,
+        )
+        assert outcome.entry["transcript"] == [
+            {"role": "user", "content": "(DTMF keypad input: 123#)"},
+            {"role": "assistant", "content": "Got it."},
+        ]
+
+    def test_a_non_speech_event_stays_out_of_the_transcript(self) -> None:
+        """A function call is an assertion subject, not something anyone said."""
         outcome = map_script_result(
             _script_result(
-                turns=[
-                    _turn_result(
-                        0,
-                        expectations=[
-                            _expectation(
-                                "book_appointment(day=friday)", "function_call"
-                            )
-                        ],
-                    )
-                ]
+                turns=[_turn_result(0)],
+                events=[
+                    {"type": "function_call", "name": "book_appointment", "at": 0.3}
+                ],
             ),
             iteration=1,
             parsed=_parsed("book me in"),
@@ -284,6 +318,7 @@ class TestSnapshots:
         config = harness_config(parsed)
         assert config["judge_model"] == "gpt-4o-2024-11-20"
         assert config["judge_service"] == "openai"
+        assert config["judge_used"] is False, "no eval: assertion asks it anything"
         assert config["pipecat_version"].startswith("1.")
         assert config["schema_version"]
 
