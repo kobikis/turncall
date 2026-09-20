@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.domain.enums import EvalRunStatus
@@ -249,26 +249,70 @@ async def cancel_run(session: AsyncSession, run_id: UUID) -> bool:
     return bool(getattr(result, "rowcount", 0))
 
 
-async def reclaim_stalled_runs(session: AsyncSession, *, max_age_seconds: int) -> int:
-    """Sweep runs that have been `running` too long into `errored`.
+async def fail_if_still_queued(
+    session: AsyncSession, run_id: UUID, *, error: str
+) -> bool:
+    """Mark a run `errored` only while it is still queued.
 
-    A crashed worker leaves its run claimed forever; nothing else would ever
-    move it, and a row stuck at `running` reads to an operator as work still in
-    flight. `errored`, not `failed`: nobody learned anything about the agent.
+    The guard is the point. A Redis push can raise *after* the write landed —
+    the reply read times out — in which case a worker may already have claimed
+    the run. An unconditional update would stomp a run that is legitimately in
+    flight and report a failure that did not happen.
     """
-    from datetime import timedelta
-
-    cutoff = _utc_now() - timedelta(seconds=max_age_seconds)
     result = await session.execute(
         update(EvalRunRow)
-        .where(
-            EvalRunRow.status == EvalRunStatus.RUNNING.value,
-            EvalRunRow.started_at < cutoff,
-        )
+        .where(EvalRunRow.id == run_id, EvalRunRow.status == EvalRunStatus.QUEUED.value)
         .values(
             status=EvalRunStatus.ERRORED.value,
             completed_at=_utc_now(),
-            error="the worker did not finish this run within its time budget",
+            error=error,
+        )
+    )
+    await session.flush()
+    return bool(getattr(result, "rowcount", 0))
+
+
+async def reclaim_stalled_runs(
+    session: AsyncSession, *, max_age_seconds: int, max_queued_seconds: int
+) -> int:
+    """Sweep runs nothing will ever finish into `errored`.
+
+    Two ways a run is abandoned, and both need a sweep:
+
+    A **claimed** run whose worker crashed. Nothing else would move it, and a
+    row stuck at `running` reads to an operator as work still in flight.
+
+    A **queued** run nothing ever picked up — the API committed the row and then
+    the process died before the push, or Redis restarted without persistence and
+    dropped the list. The endpoint handles the push *raising*, but it cannot
+    handle not being alive, so without this the row waits forever while the
+    caller was told 202 Accepted. The threshold is separate and longer, because
+    a queued run waiting behind a backlog is normal and a claimed one still
+    running after an hour is not.
+
+    `errored`, not `failed`, for both: nobody learned anything about the agent.
+    """
+    from datetime import timedelta
+
+    now = _utc_now()
+    result = await session.execute(
+        update(EvalRunRow)
+        .where(
+            or_(
+                and_(
+                    EvalRunRow.status == EvalRunStatus.RUNNING.value,
+                    EvalRunRow.started_at < now - timedelta(seconds=max_age_seconds),
+                ),
+                and_(
+                    EvalRunRow.status == EvalRunStatus.QUEUED.value,
+                    EvalRunRow.queued_at < now - timedelta(seconds=max_queued_seconds),
+                ),
+            )
+        )
+        .values(
+            status=EvalRunStatus.ERRORED.value,
+            completed_at=now,
+            error="abandoned: no worker finished this run within its time budget",
         )
     )
     await session.flush()

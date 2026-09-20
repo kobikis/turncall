@@ -259,7 +259,21 @@ class TestSnapshots:
             "schema_version": "pipecat-1.11",
             "tool_mocks": {"book": {"ok": True}},
             "tool_policy": "mock_only",
+            "tool_policy_enforced": False,
         }
+
+    def test_the_snapshot_admits_the_policy_is_not_enforced_yet(self) -> None:
+        """The scenario column defaults to `mock_only`. Copying that into a
+        durable record unqualified would tell a future reader the run's tools
+        were mocked when they fired for real — the same lie the API rejects,
+        one layer down and permanent. #71 flips the flag."""
+        snapshot = resolved_scenario_snapshot(
+            definition={},
+            schema_version="pipecat-1.11",
+            tool_mocks={},
+            tool_policy="mock_only",
+        )
+        assert snapshot["tool_policy_enforced"] is False
 
     def test_the_harness_snapshot_names_the_judge_and_pipecat(self) -> None:
         """The judge decides the verdict; a silent provider-side model update

@@ -133,6 +133,14 @@ def harness_config(parsed: Any = None) -> dict[str, Any]:
     }
 
 
+# Flipped to True by #71, when the tool bridge actually short-circuits. Until
+# then every snapshot has to say so: the scenario column defaults to
+# `mock_only`, and copying that into a durable record without qualification
+# would tell a future reader the run's tools were mocked when they fired for
+# real. That is the same lie the API now rejects, one layer down and permanent.
+TOOL_POLICY_ENFORCED = False
+
+
 def resolved_scenario_snapshot(
     *,
     definition: dict[str, Any],
@@ -143,13 +151,15 @@ def resolved_scenario_snapshot(
     """The scenario exactly as it ran, mocks and policy included.
 
     The mocks are part of what the test means, so a run that does not record
-    them cannot be compared with the next one.
+    them cannot be compared with the next one — and whether the policy was
+    honoured is part of that, not a detail.
     """
     return {
         "definition": definition,
         "schema_version": schema_version,
         "tool_mocks": tool_mocks,
         "tool_policy": tool_policy,
+        "tool_policy_enforced": TOOL_POLICY_ENFORCED,
     }
 
 

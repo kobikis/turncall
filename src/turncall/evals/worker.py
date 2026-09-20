@@ -38,7 +38,9 @@ async def _janitor(session_factory: Any, settings: Any, stop: asyncio.Event) -> 
         try:
             async with session_factory() as session:
                 swept = await eval_repo.reclaim_stalled_runs(
-                    session, max_age_seconds=settings.evals.max_run_duration_seconds
+                    session,
+                    max_age_seconds=settings.evals.max_run_duration_seconds,
+                    max_queued_seconds=settings.evals.max_queued_seconds,
                 )
                 await session.commit()
             if swept:

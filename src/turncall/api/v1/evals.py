@@ -187,17 +187,18 @@ async def create_eval_run(
         await eval_queue.enqueue(get_redis(), run.id)
     except Exception as exc:
         logger.exception("eval_enqueue_failed", run_id=str(run.id))
-        await eval_repo.finish_run(
+        # Guarded: a push can raise after the write landed (the reply read times
+        # out), and a worker may already have claimed the run. Stomping a run
+        # that is legitimately in flight would report a failure that never
+        # happened, so only a still-queued row is failed here.
+        failed = await eval_repo.fail_if_still_queued(
             session,
             run.id,
-            status=EvalRunStatus.ERRORED,
-            passed_count=0,
-            failed_count=0,
-            results=[],
             error=f"could not be queued: {type(exc).__name__}: {exc}",
         )
         await session.commit()
-        status = EvalRunStatus.ERRORED.value
+        if failed:
+            status = EvalRunStatus.ERRORED.value
 
     return ok(
         {

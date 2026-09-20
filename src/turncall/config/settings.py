@@ -224,6 +224,10 @@ class EvalSettings(BaseSettings):
     # The janitor's cutoff: a run still `running` past this is a crashed worker,
     # not slow work, and is swept to `errored`.
     max_run_duration_seconds: int = 900
+    # The same for a run nothing ever claimed — the API committed the row and
+    # then died before the queue push, or Redis lost the list. Longer, because
+    # waiting behind a backlog is normal where running for 15 minutes is not.
+    max_queued_seconds: int = 3600
     janitor_interval_seconds: int = 60
     # Ceiling on iterations per run, so one request cannot queue an unbounded
     # amount of paid LLM work.

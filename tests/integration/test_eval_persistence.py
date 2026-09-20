@@ -119,7 +119,9 @@ async def test_the_janitor_reclaims_a_run_a_worker_abandoned(factory) -> None:
         await session.commit()
 
     async with factory() as session:
-        swept = await eval_repo.reclaim_stalled_runs(session, max_age_seconds=900)
+        swept = await eval_repo.reclaim_stalled_runs(
+            session, max_age_seconds=900, max_queued_seconds=3600
+        )
         await session.commit()
         assert swept >= 1
 
@@ -147,7 +149,9 @@ async def test_a_fresh_run_is_not_swept(factory) -> None:
         run_id = run.id
 
     async with factory() as session:
-        await eval_repo.reclaim_stalled_runs(session, max_age_seconds=900)
+        await eval_repo.reclaim_stalled_runs(
+            session, max_age_seconds=900, max_queued_seconds=3600
+        )
         await session.commit()
 
     async with factory() as session:
@@ -239,33 +243,22 @@ async def test_a_scenario_name_is_unique_within_a_project(factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_run_that_could_not_be_queued_is_not_left_looking_queued(
+async def test_a_run_that_could_not_be_queued_is_failed_not_left_queued(
     factory,
 ) -> None:
-    """The janitor only sweeps `running`, so a run that never reached the queue
-    would sit at `queued` forever while the caller was told 202 Accepted.
-
-    Exercised at the repository seam the endpoint uses, since the failure is
-    about which status the row ends up in, not about HTTP.
-    """
+    """What the endpoint does when the Redis push raises."""
     async with factory() as session:
         project = await _project(session, "eval-enqueue-failure")
         _scenario, run = await _scenario_and_run(session, project.id, name="orphan")
         run_id = run.id
         await session.commit()
 
-    # What the endpoint does when the Redis push raises.
     async with factory() as session:
-        await eval_repo.finish_run(
-            session,
-            run_id,
-            status=EvalRunStatus.ERRORED,
-            passed_count=0,
-            failed_count=0,
-            results=[],
-            error="could not be queued: ConnectionError: connection refused",
+        failed = await eval_repo.fail_if_still_queued(
+            session, run_id, error="could not be queued: ConnectionError"
         )
         await session.commit()
+        assert failed
 
     async with factory() as session:
         reread = await eval_repo.get_run(session, run_id)
@@ -273,20 +266,84 @@ async def test_a_run_that_could_not_be_queued_is_not_left_looking_queued(
         assert "could not be queued" in reread.error
         assert reread.passed_count == 0 and reread.failed_count == 0
 
-    # And the janitor would never have rescued it, which is why the endpoint
-    # has to: it only looks at rows that were actually claimed.
-    async with factory() as session:
-        project = await _project(session, "eval-janitor-scope")
-        _s, queued = await _scenario_and_run(session, project.id, name="still-queued")
-        queued_id = queued.id
-        await session.commit()
 
+@pytest.mark.asyncio
+async def test_a_failed_push_never_stomps_a_run_a_worker_already_claimed(
+    factory,
+) -> None:
+    """A push can raise *after* the write landed — the reply read times out —
+    so by the time the handler runs, a worker may be running the scenario.
+    Reporting that as 'could not be queued' would be a failure that never
+    happened."""
     async with factory() as session:
-        await eval_repo.reclaim_stalled_runs(session, max_age_seconds=0)
-        await session.commit()
-
-    async with factory() as session:
-        reread = await eval_repo.get_run(session, queued_id)
-        assert reread.status == EvalRunStatus.QUEUED.value, (
-            "the janitor must not touch queued rows — a worker may still take it"
+        project = await _project(session, "eval-enqueue-race")
+        _scenario, run = await _scenario_and_run(session, project.id, name="claimed")
+        run_id = run.id
+        await eval_repo.start_run(
+            session, run_id, resolved_config={}, agent_id=None, harness_config={}
         )
+        await session.commit()
+
+    async with factory() as session:
+        failed = await eval_repo.fail_if_still_queued(
+            session, run_id, error="could not be queued: ConnectionError"
+        )
+        await session.commit()
+        assert not failed, "a claimed run must be left to its worker"
+
+    async with factory() as session:
+        reread = await eval_repo.get_run(session, run_id)
+        assert reread.status == EvalRunStatus.RUNNING.value
+        assert reread.error is None
+
+
+@pytest.mark.asyncio
+async def test_the_janitor_sweeps_a_queued_run_nothing_ever_claimed(factory) -> None:
+    """The endpoint handles the push *raising*; it cannot handle not being
+    alive. A process that dies between the commit and the push — or a Redis
+    restart that drops the list — leaves a row nothing will ever execute, while
+    the caller was told 202 Accepted."""
+    async with factory() as session:
+        project = await _project(session, "eval-orphan-queued")
+        _scenario, run = await _scenario_and_run(session, project.id, name="abandoned")
+        run_id = run.id
+        await session.commit()
+        # Backdate the queue: nobody picked it up, and nobody will.
+        await session.execute(
+            update(EvalRunRow)
+            .where(EvalRunRow.id == run_id)
+            .values(queued_at=datetime.now(UTC) - timedelta(hours=2))
+        )
+        await session.commit()
+
+    async with factory() as session:
+        await eval_repo.reclaim_stalled_runs(
+            session, max_age_seconds=900, max_queued_seconds=3600
+        )
+        await session.commit()
+
+    async with factory() as session:
+        reread = await eval_repo.get_run(session, run_id)
+        assert reread.status == EvalRunStatus.ERRORED.value
+        assert reread.passed_count == 0 and reread.failed_count == 0
+
+
+@pytest.mark.asyncio
+async def test_the_janitor_leaves_a_freshly_queued_run_alone(factory) -> None:
+    """A worker may still take it — sweeping a backlog would be worse than the
+    bug this sweep exists for."""
+    async with factory() as session:
+        project = await _project(session, "eval-fresh-queued")
+        _scenario, run = await _scenario_and_run(session, project.id, name="waiting")
+        run_id = run.id
+        await session.commit()
+
+    async with factory() as session:
+        await eval_repo.reclaim_stalled_runs(
+            session, max_age_seconds=900, max_queued_seconds=3600
+        )
+        await session.commit()
+
+    async with factory() as session:
+        reread = await eval_repo.get_run(session, run_id)
+        assert reread.status == EvalRunStatus.QUEUED.value
