@@ -95,6 +95,16 @@ def build_scenario(
 
     for entry in spoken:
         if _role(entry) != _ASSISTANT:
+            if turns and not turns[-1]["expect"]:
+                # Consecutive caller entries with no reply between them are one
+                # turn of speech that the STT reported in pieces. Seen in real
+                # calls: "Hi. Good morning. What" / "do you have in the menu?"
+                # became two turns, the first asserting nothing and the second
+                # opening mid-sentence. Joining them reproduces what the caller
+                # actually said, which is the whole promise of deriving from a
+                # call.
+                turns[-1]["user"] = f"{turns[-1]['user']} {_text(entry)}".strip()
+                continue
             turns.append({"user": _text(entry), "expect": []})
             turn_started.append(_when(entry))
         elif turns:
