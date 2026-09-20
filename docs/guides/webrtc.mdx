@@ -25,6 +25,18 @@ curl -X POST http://localhost:8090/v1/webrtc/connect \
   }'
 ```
 
+The answer carries the **call id** alongside the SDP:
+
+```json
+{
+  "sdp": "v=0...",
+  "type": "answer",
+  "call_id": "CALL_UUID"
+}
+```
+
+That is the handle for everything after the call — its transcript, its recording, or converting it into an [eval scenario](/guides/evals). A client that only reads `sdp` and `type` is unaffected.
+
 ### ICE Trickle
 
 ```bash

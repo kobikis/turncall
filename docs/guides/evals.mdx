@@ -131,9 +131,9 @@ turncall eval run --tag pre-publish --agent-name support
 
 `turncall eval show <run_id>` prints a run's transcript with its verdicts. Scenario files are the API request body unchanged — `turncall eval run scenarios/*.json --agent-name support` runs them without storing anything.
 
-## Start from a real call
+## Start from a real conversation
 
-Evals only find what someone thought to test. Turn a call that already happened into a draft:
+Evals only find what someone thought to test. Turn a conversation that already happened into a draft — a voice call:
 
 ```bash
 curl -X POST http://localhost:8090/v1/eval-scenarios/from-call \
@@ -141,7 +141,19 @@ curl -X POST http://localhost:8090/v1/eval-scenarios/from-call \
   -d '{"call_id": "<id>", "save": false}'
 ```
 
-The caller's utterances become turns, the agent's replies become expectations, and every tool the agent called becomes both an expectation and a mock seeded with what that tool actually returned — so the draft is safe to run straight away.
+or a text conversation — SMS, chat or WhatsApp:
+
+```bash
+curl -X POST http://localhost:8090/v1/eval-scenarios/from-session \
+  -H "Authorization: Bearer tc_xxx" \
+  -d '{"session_id": "<id>", "save": false}'
+```
+
+Both produce the same thing. The caller's utterances become turns, the agent's replies become expectations, and every tool the agent called becomes both an expectation and a mock seeded with what that tool actually returned — so the draft is safe to run straight away. `save: false` is the default and returns the draft without storing it; `true` stores it.
+
+A session names its agent directly, so `from-session` takes its `default_target` from the session. A call may have run an inline agent with no agent row at all, so `from-call` reads the call record instead.
+
+To convert a WebRTC call the browser just made, read the call id from the signalling answer — `POST /v1/webrtc/connect` returns it beside `sdp` and `type`. See [WebRTC](/guides/webrtc).
 
 <Warning>
 It is a **draft**. The conversation is faithful, but the expectations assert whatever the agent did that day, mistakes included. Trim each `text_contains` to the part that actually matters before trusting a green run.
