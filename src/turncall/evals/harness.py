@@ -98,6 +98,7 @@ async def run_iteration(
     settings: Any,
     session_factory: Any,
     run_id: UUID,
+    tool_mocks: Any = None,
 ) -> Any:
     """Run one scenario-iteration end to end and return pipecat's result.
 
@@ -126,6 +127,9 @@ async def run_iteration(
         stream_sid=f"eval-{run_id}",
         session_factory=session_factory,
         eval_run_id=run_id,
+        # The scenario's mocks + policy, short-circuited in the tool bridge
+        # before anything is dispatched (#71).
+        tool_mocks=tool_mocks,
     )
 
     session = await build_call_pipeline(

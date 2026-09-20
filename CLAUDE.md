@@ -431,7 +431,16 @@ DELETE /v1/eval-runs/{id}     # cancel while queued/running
   `harness_config`. ADR-0017's rule one level out.
 - **An eval has no `calls` row.** `CallContext.eval_run_id` / `.is_eval` gates
   every call-scoped side effect — status writes, call_events, transcript taps,
-  and `call.ended` (which is also what triggers post-call analysis).
+  `tool_invocations` (there is no row to hang them off), and `call.ended`
+  (which is also what triggers post-call analysis).
+- **Tools are mocked, and fail closed by default (#71).** The scenario's
+  `tool_mocks` reach `CallContext.tool_mocks` and `services/tool_mocks.intercept`
+  short-circuits the dispatch *before* the branch that would run it — webhook,
+  MCP and built-in alike. Under `mock_only` (the default) a tool with no mock is
+  refused and the iteration is `errored` naming it; `live` is the typed opt-in
+  for read-only tools. What each iteration called lands in its results entry as
+  `tool_calls`, each marked `mocked`. Mocks are the **scenario's**, never the
+  run's: "the booking succeeds" and "the booking fails" are two tests.
 
 ### Writing a scenario that actually catches a provider regression
 Assert **content**, not just the event. After a provider 404 pipecat still

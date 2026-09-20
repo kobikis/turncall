@@ -47,6 +47,9 @@ def _context(mcp_manager: object | None) -> SimpleNamespace:
         project_id=uuid.uuid4(),
         mcp_manager=mcp_manager,
         session_factory=AsyncMock(),
+        # No eval, so nothing intercepts the dispatch these tests are about.
+        tool_mocks=None,
+        is_eval=False,
     )
 
 

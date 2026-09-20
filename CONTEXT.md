@@ -298,7 +298,10 @@ One saved behavioural test, of exactly one [[kind]]. Its `definition` is pipecat
 scenario mapping, stored verbatim and validated by round-tripping it through pipecat's
 parser — the schema belongs to pipecat and moves between majors, so `schema_version`
 records which one it targets. `tool_mocks` and `tool_policy` sit beside it as TurnCall
-columns, deliberately outside the mapping we do not own. See ADR-0018.
+columns, deliberately outside the mapping we do not own — `tool_mocks` is a map of
+tool name to the canned result the model is handed instead of the call being dispatched,
+and `tool_policy` (`mock_only` by default, `live` the typed opt-in) decides what happens
+to a tool no mock covers: refused, and the iteration errored naming it. See ADR-0018.
 _Avoid_: "test suite" — the name of the dead stub this replaced (#69), and of the
 abstraction Vapi retired in favour of Simulations. Grouping is `tags` and [[batch]].
 

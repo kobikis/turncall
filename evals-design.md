@@ -526,12 +526,15 @@ Three answers, weakest first:
   not an assertion whose subject *is* the call.
 - **Inline targets with sandbox tools.** This is why inline is load-bearing
   rather than a convenience.
-- **Tool mocking in TurnCall — in v1 (Q14/Q15/Q16).** TurnCall owns
-  `orchestrator/tool_bridge.py` and `services/chat_tools.py`. The scenario's
-  `tool_mocks` map reaches the bridge via `CallContext` and short-circuits the
-  call; under the default `tool_policy: mock_only` an unmocked tool ends the run
-  as `errored` rather than executing. Needs nothing from pipecat, and is the
-  difference between a feature people run and one they fear.
+- **Tool mocking in TurnCall — in v1 (Q14/Q15/Q16). Built in #71.** The
+  scenario's `tool_mocks` map reaches `orchestrator/tool_bridge.py` via
+  `CallContext` and short-circuits the call ahead of every dispatch branch —
+  webhook, MCP and built-in; under the default `tool_policy: mock_only` an
+  unmocked tool is refused and the iteration ends `errored` naming it. Needs
+  nothing from pipecat, and is the difference between a feature people run and
+  one they fear. **Only the voice path**: an eval builds a pipeline, so it never
+  reaches `services/chat_tools.py`. That seam stays unmocked until something can
+  actually drive a text session through it.
 
 ### 9.3 The judge is the weakest component
 

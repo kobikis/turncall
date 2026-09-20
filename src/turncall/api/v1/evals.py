@@ -23,7 +23,7 @@ from turncall.api.v1.schemas.evals import (
 )
 from turncall.auth import Auth, WriteAuth
 from turncall.config import get_settings
-from turncall.domain.enums import EvalKind, EvalRunStatus
+from turncall.domain.enums import EvalKind, EvalRunStatus, EvalToolPolicy
 from turncall.evals import queue as eval_queue
 from turncall.evals.runner import resolved_scenario_snapshot
 from turncall.storage.repositories import eval_repo
@@ -51,6 +51,9 @@ async def create_eval_scenario(
         definition=body.definition,
         schema_version=SCHEMA_VERSION,
         description=body.description,
+        tool_mocks=body.tool_mocks,
+        # Fail closed when the scenario says nothing: `live` has to be typed.
+        tool_policy=(body.tool_policy or EvalToolPolicy.MOCK_ONLY).value,
         tags=body.tags,
         default_target=body.default_target,
     )
@@ -96,6 +99,8 @@ async def update_eval_scenario(
             "name": body.name,
             "description": body.description,
             "definition": body.definition,
+            "tool_mocks": body.tool_mocks,
+            "tool_policy": body.tool_policy.value if body.tool_policy else None,
             "tags": body.tags,
             "default_target": body.default_target,
         }.items()

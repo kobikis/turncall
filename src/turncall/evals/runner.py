@@ -25,9 +25,15 @@ from uuid import UUID
 
 from loguru import logger
 
-from turncall.domain.enums import EvalKind, EvalModality, EvalRunStatus
+from turncall.domain.enums import (
+    EvalKind,
+    EvalModality,
+    EvalRunStatus,
+    EvalToolPolicy,
+)
 from turncall.domain.models import AgentConfig
 from turncall.evals import scenario as scenario_mod
+from turncall.services.tool_mocks import ToolMocks
 
 # Bot speech, as pipecat names the events that carry it. `llm_response` is text
 # modality, `response`/`tts_response` audio.
@@ -150,12 +156,11 @@ def _uses_judge(parsed: Any) -> bool:
     return getattr(parsed, "persona", None) is not None
 
 
-# Flipped to True by #71, when the tool bridge actually short-circuits. Until
-# then every snapshot has to say so: the scenario column defaults to
-# `mock_only`, and copying that into a durable record without qualification
-# would tell a future reader the run's tools were mocked when they fired for
-# real. That is the same lie the API now rejects, one layer down and permanent.
-TOOL_POLICY_ENFORCED = False
+# The tool bridge short-circuits on the scenario's mocks and fails closed on
+# the policy (#71), so a snapshot saying `mock_only` now means it. Kept in the
+# snapshot rather than dropped: runs written before that slice say `False`, and
+# a reader comparing across it needs to know which of the two they are holding.
+TOOL_POLICY_ENFORCED = True
 
 
 def resolved_scenario_snapshot(
@@ -271,13 +276,20 @@ def _entry(iteration: int, **over: Any) -> dict[str, Any]:
         "transcript": [],
         "failures": [],
         "turns": [],
+        "tool_calls": [],
         "skipped": None,
         "error": None,
         **over,
     }
 
 
-def map_script_result(result: Any, *, iteration: int, parsed: Any) -> IterationOutcome:
+def map_script_result(
+    result: Any,
+    *,
+    iteration: int,
+    parsed: Any,
+    tool_calls: list[dict[str, Any]] | None = None,
+) -> IterationOutcome:
     """Turn pipecat's `EvalScriptResult` into one entry of the run's results.
 
     A skipped result is neither passed nor failed — pipecat draws that line
@@ -310,13 +322,21 @@ def map_script_result(result: Any, *, iteration: int, parsed: Any) -> IterationO
             for t in getattr(result, "turns", []) or []
         ],
         skipped=skipped,
+        tool_calls=list(tool_calls or []),
     )
     return IterationOutcome(passed=passed, entry=entry)
 
 
-def errored_entry(iteration: int, reason: str) -> IterationOutcome:
+def errored_entry(
+    iteration: int,
+    reason: str,
+    tool_calls: list[dict[str, Any]] | None = None,
+) -> IterationOutcome:
     """An iteration the harness could not complete."""
-    return IterationOutcome(passed=None, entry=_entry(iteration, error=reason))
+    return IterationOutcome(
+        passed=None,
+        entry=_entry(iteration, error=reason, tool_calls=list(tool_calls or [])),
+    )
 
 
 def derive_status(outcomes: list[IterationOutcome]) -> tuple[EvalRunStatus, int, int]:
@@ -400,9 +420,15 @@ async def execute_run(
             logger.warning("eval_run_unrunnable", run_id=str(run_id), error=str(exc))
             return
 
-        if target.config.tools or target.config.mcp_servers:
-            # tool_mocks/tool_policy are stored but not yet enforced (#71), so
-            # this agent's tools fire for real on every iteration.
+        tool_mocks = dict(run.resolved_scenario.get("tool_mocks") or {})
+        tool_policy = (
+            run.resolved_scenario.get("tool_policy") or EvalToolPolicy.MOCK_ONLY.value
+        )
+        live_tools = tool_policy == EvalToolPolicy.LIVE.value
+        if live_tools and (target.config.tools or target.config.mcp_servers):
+            # The scenario typed the word, so this is allowed — but a real
+            # webhook fires on every iteration and the run's record should not
+            # be the only place that says so.
             logger.warning(
                 "eval_agent_has_live_tools",
                 run_id=str(run_id),
@@ -422,6 +448,9 @@ async def execute_run(
 
     outcomes: list[IterationOutcome] = []
     for iteration in range(1, iterations + 1):
+        # Fresh per iteration: the mocks are the scenario's, but what was called
+        # and what was refused belong to this iteration alone.
+        mocks = ToolMocks(responses=tool_mocks, live=live_tools)
         try:
             result = await execute(
                 parsed=parsed,
@@ -431,12 +460,29 @@ async def execute_run(
                 settings=settings,
                 session_factory=session_factory,
                 run_id=run_id,
+                tool_mocks=mocks,
             )
         except Exception as exc:
             logger.exception("eval_iteration_error", run_id=str(run_id))
-            outcomes.append(errored_entry(iteration, f"{type(exc).__name__}: {exc}"))
+            outcomes.append(
+                errored_entry(iteration, f"{type(exc).__name__}: {exc}", mocks.calls)
+            )
             continue
-        outcomes.append(map_script_result(result, iteration=iteration, parsed=parsed))
+        if mocks.refused:
+            # Fail closed (#71): the agent asked for a tool no mock covers, so
+            # nothing ran and the iteration says nothing about the agent.
+            # `errored`, not `failed` — the scenario was never finished.
+            outcomes.append(
+                errored_entry(
+                    iteration, f"unmocked tool: {mocks.refused[0]}", mocks.calls
+                )
+            )
+            continue
+        outcomes.append(
+            map_script_result(
+                result, iteration=iteration, parsed=parsed, tool_calls=mocks.calls
+            )
+        )
 
     status, passed, failed = derive_status(outcomes)
     error = None

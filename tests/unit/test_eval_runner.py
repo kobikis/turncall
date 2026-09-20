@@ -293,21 +293,20 @@ class TestSnapshots:
             "schema_version": "pipecat-1.11",
             "tool_mocks": {"book": {"ok": True}},
             "tool_policy": "mock_only",
-            "tool_policy_enforced": False,
+            "tool_policy_enforced": True,
         }
 
-    def test_the_snapshot_admits_the_policy_is_not_enforced_yet(self) -> None:
-        """The scenario column defaults to `mock_only`. Copying that into a
-        durable record unqualified would tell a future reader the run's tools
-        were mocked when they fired for real — the same lie the API rejects,
-        one layer down and permanent. #71 flips the flag."""
+    def test_the_snapshot_says_whether_the_policy_was_enforced(self) -> None:
+        """Runs written before #71 say False: their `mock_only` was a column
+        default nothing honoured, and a reader comparing across the slice has
+        to be able to tell the two apart."""
         snapshot = resolved_scenario_snapshot(
             definition={},
             schema_version="pipecat-1.11",
             tool_mocks={},
             tool_policy="mock_only",
         )
-        assert snapshot["tool_policy_enforced"] is False
+        assert snapshot["tool_policy_enforced"] is True
 
     def test_the_harness_snapshot_names_the_judge_and_pipecat(self) -> None:
         """The judge decides the verdict; a silent provider-side model update
@@ -482,6 +481,63 @@ class TestExecuteRun:
         assert kwargs["status"] is EvalRunStatus.ERRORED
         assert (kwargs["passed_count"], kwargs["failed_count"]) == (0, 0)
         assert "nothing listening" in kwargs["error"]
+
+    async def test_the_scenarios_mocks_and_policy_reach_the_iteration(self) -> None:
+        """#71: the mocks are the scenario's, so every iteration gets the same
+        ones — but a fresh recorder, since what was called belongs to the
+        iteration."""
+        seen = []
+
+        async def execute(**kwargs):
+            seen.append(kwargs["tool_mocks"])
+            return _script_result(turns=[_turn_result()])
+
+        run = self._run_row(iterations=2)
+        run.resolved_scenario["tool_mocks"] = {"book": {"ok": True}}
+        run.resolved_scenario["tool_policy"] = "mock_only"
+        await self._execute(run, execute)
+
+        assert [m.responses for m in seen] == [{"book": {"ok": True}}] * 2
+        assert [m.live for m in seen] == [False, False]
+        assert seen[0] is not seen[1], "a shared recorder would pool the calls"
+
+    async def test_an_unmocked_tool_errors_the_iteration_naming_it(self) -> None:
+        """Fail closed. The iteration is `errored`, never `failed`: nothing ran,
+        so it says nothing about the agent and must stay out of every rate."""
+
+        async def execute(**kwargs):
+            kwargs["tool_mocks"].refused.append("book_appointment")
+            kwargs["tool_mocks"].record(
+                "book_appointment", {}, '{"error": "..."}', mocked=False
+            )
+            return _script_result(turns=[_turn_result()])
+
+        finish, _ = await self._execute(self._run_row(), execute)
+        kwargs = finish.await_args.kwargs
+        assert kwargs["status"] is EvalRunStatus.ERRORED
+        assert (kwargs["passed_count"], kwargs["failed_count"]) == (0, 0)
+        assert kwargs["error"] == "unmocked tool: book_appointment"
+        entry = kwargs["results"][0]
+        assert entry["tool_calls"][0]["tool_name"] == "book_appointment"
+
+    async def test_a_runs_results_carry_what_the_tools_did(self) -> None:
+        """An eval has no `calls` row, so the run entry is the only tool record
+        there is — and a mocked call has to be distinguishable from a real one."""
+
+        async def execute(**kwargs):
+            kwargs["tool_mocks"].record("book", {}, '{"ok": true}', mocked=True)
+            return _script_result(turns=[_turn_result()])
+
+        finish, _ = await self._execute(self._run_row(), execute)
+        entry = finish.await_args.kwargs["results"][0]
+        assert entry["tool_calls"] == [
+            {
+                "tool_name": "book",
+                "arguments": {},
+                "result": '{"ok": true}',
+                "mocked": True,
+            }
+        ]
 
     async def test_one_bad_iteration_does_not_stop_the_rest(self) -> None:
         execute = AsyncMock(

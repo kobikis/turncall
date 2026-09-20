@@ -19,6 +19,7 @@ from loguru import logger
 from turncall.domain.enums import ToolExecutionMode
 from turncall.domain.models import BUILTIN_TOOL_NAMES, ToolDefinition
 from turncall.services import call_control
+from turncall.services.tool_mocks import intercept
 from turncall.services.tool_webhook import classify_tool_result, post_tool_webhook
 
 if TYPE_CHECKING:
@@ -48,6 +49,12 @@ async def _log_tool_result(
 ) -> None:
     """Persist the tool invocation + call event and dispatch tool.result to
     webhook subscribers. Runs in the background; failures are logged, not raised."""
+    if call_context.is_eval:
+        # No `calls` row behind an eval (ADR-0018), so `tool_invocations.call_id`
+        # has nothing to point at and the write is a foreign-key error every
+        # time. The iteration's tool record is `ToolMocks.calls` instead, which
+        # is what reaches the run's results.
+        return
     payload = {"tool_name": function_name, "arguments": args, "result": result}
     try:
         async with call_context.session_factory() as session:
@@ -294,6 +301,16 @@ def _register_single_tool(
             call_id=str(call_context.call_id),
         )
 
+        # An eval's mocks short-circuit ahead of every branch below: a built-in
+        # acts on a call that does not exist, a webhook books a real
+        # appointment, an MCP server is a third party's. `intercept` returns
+        # None on a real call (no mocks) and under `live`, so this costs a
+        # dict lookup there. #71.
+        mocked = intercept(call_context.tool_mocks, function_name, args)
+        if mocked is not None:
+            await params.result_callback(mocked)
+            return
+
         started = time.perf_counter()
         if function_name in BUILTIN_TOOL_NAMES:
             result = await _execute_builtin(function_name, args, call_context)
@@ -322,6 +339,9 @@ def _register_single_tool(
         # critical path so they never sit between the caller and the response.
         latency_ms = int((time.perf_counter() - started) * 1000)
         await params.result_callback(result)
+        if call_context.tool_mocks is not None:
+            # A `live` eval: the tool really ran, and the run's record says so.
+            call_context.tool_mocks.record(function_name, args, result, mocked=False)
         _spawn(_log_tool_result(call_context, function_name, args, result, latency_ms))
 
     # execution_mode="async" means the call outlives an interruption: its

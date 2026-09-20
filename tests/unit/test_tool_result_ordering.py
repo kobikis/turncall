@@ -20,6 +20,9 @@ async def test_result_callback_fires_before_background_logging() -> None:
         project_id=uuid.uuid4(),
         mcp_manager=None,
         session_factory=AsyncMock(),
+        # A real call: no eval mocks intercepting the dispatch.
+        tool_mocks=None,
+        is_eval=False,
     )
 
     captured = {}

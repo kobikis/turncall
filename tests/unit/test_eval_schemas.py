@@ -75,35 +75,36 @@ class TestDefinitionValidation:
             UpdateEvalScenarioRequest(definition={"turns": "nope"})
 
 
-class TestToolFieldsAreRejectedUntilEnforced:
-    """Accepting `tool_mocks`/`tool_policy` before #71 would be worse than not
-    having them: nothing short-circuits the tool bridge yet, so a scenario
-    would read as fail-closed while booking a real appointment ten times."""
+class TestToolMocksAndPolicy:
+    """#71: the tool bridge short-circuits on the mocks and fails closed on the
+    policy, so the boundary can accept both."""
 
-    def test_tool_mocks_are_rejected(self) -> None:
-        with pytest.raises(ValidationError, match="not enforced yet"):
+    def test_mocks_and_policy_are_accepted(self) -> None:
+        body = CreateEvalScenarioRequest(
+            name="books",
+            definition=SCRIPTED,
+            tool_mocks={"book": {"status": "success", "id": "APT-1"}},
+            tool_policy=EvalToolPolicy.MOCK_ONLY,
+        )
+        assert body.tool_mocks == {"book": {"status": "success", "id": "APT-1"}}
+        assert body.tool_policy is EvalToolPolicy.MOCK_ONLY
+
+    def test_live_is_accepted_but_has_to_be_typed(self) -> None:
+        """The dangerous path is opt-in; omitting the field is not it."""
+        assert (
+            UpdateEvalScenarioRequest(tool_policy=EvalToolPolicy.LIVE).tool_policy
+            is EvalToolPolicy.LIVE
+        )
+        assert (
+            CreateEvalScenarioRequest(name="greets", definition=SCRIPTED).tool_policy
+            is None
+        )
+
+    def test_an_unknown_policy_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
             CreateEvalScenarioRequest(
-                name="greets",
-                definition=SCRIPTED,
-                tool_mocks={"book": {"ok": True}},
+                name="greets", definition=SCRIPTED, tool_policy="whatever"
             )
-
-    def test_tool_policy_is_rejected_even_when_it_is_the_safe_one(self) -> None:
-        """Especially then — that is the value that lies about protection."""
-        with pytest.raises(ValidationError, match="not enforced yet"):
-            CreateEvalScenarioRequest(
-                name="greets",
-                definition=SCRIPTED,
-                tool_policy=EvalToolPolicy.MOCK_ONLY,
-            )
-
-    def test_an_update_cannot_smuggle_them_in_either(self) -> None:
-        with pytest.raises(ValidationError, match="not enforced yet"):
-            UpdateEvalScenarioRequest(tool_policy=EvalToolPolicy.LIVE)
-
-    def test_a_scenario_without_them_is_fine(self) -> None:
-        body = CreateEvalScenarioRequest(name="greets", definition=SCRIPTED)
-        assert body.tool_mocks is None and body.tool_policy is None
 
 
 class TestTarget:

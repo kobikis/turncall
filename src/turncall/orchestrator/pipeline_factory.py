@@ -23,6 +23,7 @@ from turncall.config.settings import BYOMSettings, PipecatSettings
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.observability import ObservabilityProcessor
 from turncall.services.llm_models import resolve_llm_model
+from turncall.services.tool_mocks import ToolMocks
 
 # A call whose agent came from call-init as an inline config (ADR-0008: the
 # response carries `agent` rather than `agent_id`) has no agent row to point at.
@@ -50,6 +51,9 @@ class CallContext:
     # eval's own record is the run row; the harness observes the conversation
     # over the wire.
     eval_run_id: UUID | None = None
+    # The eval scenario's tool mocks + policy (#71). None on a real call, which
+    # is what makes every tool dispatch below unconditional there.
+    tool_mocks: ToolMocks | None = None
 
     @property
     def is_eval(self) -> bool:
