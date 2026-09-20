@@ -96,6 +96,8 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 | `PIPECAT_VAD_CONFIDENCE_THRESHOLD` | No | Silero VAD confidence (default `0.6`). Pairs with the agent's `silence_timeout_ms`, which sets the VAD stop window when Smart Turn is off (with it on, the model decides the turn and VAD uses Pipecat's 0.2s — the two waits are serial, so charging both cost 1.8s a turn) |
 | `PIPECAT_ENABLE_OBSERVERS` / `PIPECAT_ENABLE_TRACING` / `PIPECAT_TRACE_INCLUDE_PII` | No | Observability toggles (all default `true`). PII = caller phone numbers on spans. See `adr/0010` |
 | `API_KEY_HASH_SECRET` | Prod | Pepper for the HMAC-SHA256 hashing of API keys — a DB leak alone can't brute-force keys without it. **Set a strong value once and don't rotate** (rotating invalidates peppered keys; pre-pepper keys keep working via dual-read + upgrade-on-use). Default `change-me-in-production` gives no real protection until set |
+| `EVAL_TTS_CACHE_DIR` | No | Where the caller's synthesized turns are cached in audio runs (default `./storage/eval-tts-cache`). Pipecat's own default lives under `$HOME`, which a container loses on recreate — every repeat run would then re-synthesize every caller turn. Mount it |
+| `EVAL_MAX_CONCURRENT_RUNS` | No | Scenario-iterations the eval worker runs at once (default `4`). The worker runs the bot pipeline **and** the harness — which itself runs a persona LLM, a TTS, an STT and the judge — so in audio mode one run is roughly double a real call's service load in one event loop. A starting point, not a measurement. `EVAL_MAX_RUN_DURATION_SECONDS` (default `900`) is the janitor's cutoff for reclaiming a run a crashed worker left claimed, as `errored`; `EVAL_JANITOR_INTERVAL_SECONDS` (`60`) and `EVAL_MAX_ITERATIONS` (`50`) bound the sweep and one request's paid LLM work. See `adr/0018` |
 | `PROJECT_PURGE_RETENTION_DAYS` | No | Days a soft-deleted project (ADR-0011) is kept before the hourly purge job hard-deletes it (cascade). Default `30`; `0` disables |
 | `PLATFORM_API_KEY` | Prod | Privileged credential gating the unauthenticated bootstrap endpoints — project creation + first-API-key creation. Only the builder holds it; presented as the `X-Platform-Key` header. Empty default fails **closed** (rejects all bootstrap calls), so set it wherever those endpoints must work. TurnCall stays identity-free — this is a caller check, not a user |
 
@@ -392,6 +394,119 @@ GET/PUT/DELETE /v1/takeaways/{id}   # delete blocked (409) while attached to age
 ```
 
 Key files: `api/v1/takeaways.py`, `storage/repositories/takeaway_repo.py`, `services/call_analysis.py` (`extract_takeaway`), `services/call_analysis_trigger.py` (`_extract_takeaways`).
+
+## Evals
+
+Automated behavioural testing for agents (#68, ADR-0018). A **scenario** is one
+saved test — **scripted** (`turns:`, fixed conversation with per-turn
+expectations) or a **simulation** (`persona:`, an LLM plays the caller). A
+**run** is one scenario x target x modality over N iterations.
+
+The engine is `pipecat.evals`, already pinned via pipecat 1.11. **Only the
+transport is swapped** — pipecat's harness is an RTVI WebSocket client and the
+bot hosts `EvalTransport`, so an eval exercises the real STT/LLM/TTS
+construction, the real VAD and smart-turn wiring, the real tool bridge and KB
+retrieval. That construction path is where #63, #64, #65 and #67 all lived.
+
+### API
+```
+POST/GET/PUT/DELETE /v1/eval-scenarios[/{id}]   # ?kind= ?tag=
+POST   /v1/eval-runs          # 202 Accepted -- the worker executes it
+GET    /v1/eval-runs          # ?batch_id= ?scenario_id= ?status=
+GET    /v1/eval-runs/{id}
+DELETE /v1/eval-runs/{id}     # cancel while queued/running
+```
+
+### Rules that are easy to break
+- **The worker is never the API process.** `turncall-eval-worker`, same image,
+  own entrypoint, fed by a Redis list. ADR-0004: eval load in the API's event
+  loop becomes dead air on a live call.
+- **`definition` is pipecat's mapping, stored verbatim**, validated by
+  round-tripping through pipecat's parser; `schema_version` records which
+  pipecat schema it targets. `tool_mocks`/`tool_policy` are TurnCall columns
+  *outside* it.
+- **`errored` is not `failed`.** The harness not completing is neither a pass
+  nor a fail and never counts toward a rate. No `score` column —
+  `passed_count`/`failed_count` out of `iterations`.
+- **Three snapshots per run**: `resolved_config`, `resolved_scenario`,
+  `harness_config`. ADR-0017's rule one level out.
+- **An eval has no `calls` row.** `CallContext.eval_run_id` / `.is_eval` gates
+  every call-scoped side effect — status writes, call_events, transcript taps,
+  `tool_invocations` (there is no row to hang them off), and `call.ended`
+  (which is also what triggers post-call analysis).
+- **Tools are mocked, and fail closed by default (#71).** The scenario's
+  `tool_mocks` reach `CallContext.tool_mocks` and `services/tool_mocks.intercept`
+  short-circuits the dispatch *before* the branch that would run it — webhook,
+  MCP and built-in alike. Under `mock_only` (the default) a tool with no mock is
+  refused and the iteration is `errored` naming it; `live` is the typed opt-in
+  for read-only tools. What each iteration called lands in its results entry as
+  `tool_calls`, each marked `mocked`. Mocks are the **scenario's**, never the
+  run's: "the booking succeeds" and "the booking fails" are two tests.
+
+### Writing a scenario that actually catches a provider regression
+Assert **content**, not just the event. After a provider 404 pipecat still
+emits an empty `llm_response`, so `{"event": "llm_response"}` alone can pass
+with the LLM completely broken — seen both ways on one config. Use
+`text_contains`/`matches`/`eval:`. Such a run scores **`failed`**, never
+`errored`; errored means the harness could not complete and is kept out of
+every rate, which would hide exactly the #63/#64/#65 class evals exist for.
+
+### Audio modality (#72)
+
+`modality: audio` on the run: the caller's turns are synthesized and reach the
+agent's **real STT**, the agent answers through its **real TTS**, and the judge
+reads a transcription of the audio that was actually produced — the `response`
+event, which is what a scenario should assert on in audio mode (`llm_response`
+is the model's text and skips both ends). Text stays the default: it is what
+people run per PR, and it is a fraction of the time.
+
+Two services the text path never builds, both **local and downloaded on first
+use** (`~/.cache/pipecat`): Kokoro speaks the caller, Moonshine transcribes the
+agent for the judge. Pipecat *requires* both to be named as soon as the
+modality is audio — it raises otherwise — so `with_modality` fills the pair a
+scenario did not name (`DEFAULT_USER_SPEECH` / `DEFAULT_BOT_TRANSCRIPTION`),
+and a scenario's own `user.speech:` / `judge.transcription:` always wins.
+
+A run's results entry carries **both** views of each reply: `content` is what
+the judge read, `text` the agent's own words when the two differ. That
+difference is the whole explanation when an audio run fails where a text run
+passed. `harness_config` records which voice and which STT produced them,
+for the same reason it records the judge model.
+
+**S2S agents work in both modalities** — measured against Gemini Live, not
+assumed: the S2S service emits its own LLM text, so a text-mode judge has
+`llm_response` to read. Nothing enforces audio-only, because nothing needs to.
+Nova Sonic is untested.
+
+### Known coverage limits
+Everything *inside* the transport is invisible: the Twilio serializer and the
+whole ADR-0004 audio class, output underrun and dead air (loopback does not
+pace in realtime, so evals measure latency, not silence), and telephony.
+**An eval connects no MCP servers.** It builds through `build_call_pipeline`,
+which takes no MCP manager, so an agent's MCP tools are neither contacted (the
+point of #71) nor advertised — the model never sees them, and a `tool_mocks`
+entry naming one never fires. The run warns (`eval_mock_matches_no_tool`)
+rather than failing. **Text mode also cannot see the agent's `first_message`** — it goes out as a
+`TTSSpeakFrame`, so it never becomes LLM text, and `skip_tts` silences the TTS.
+The judge is pipecat's `EvalJudge`, which is **Ollama by default** (`service:
+openai` is deprecated in pipecat 1.9 and gone in 2.0; anything else needs
+`judge.eval.factory`) — so an `eval:` assertion needs a reachable Ollama and
+errors without one, while `text_contains`/`function_call` build no judge at
+all.
+
+### Config
+`EVAL_MAX_CONCURRENT_RUNS` (4), `EVAL_MAX_RUN_DURATION_SECONDS` (900, the
+janitor's cutoff), `EVAL_JANITOR_INTERVAL_SECONDS` (60), `EVAL_MAX_ITERATIONS`
+(50).
+
+### Key Files
+- `evals/harness.py` — the bridge: real pipeline one end, pipecat's session the other
+- `evals/runner.py` — target resolution, the iteration loop, status derivation, result mapping
+- `evals/worker.py` — `turncall-eval-worker`: queue consumer, concurrency cap, janitor
+- `evals/scenario.py` — parse/validate a stored definition; modality merge
+- `orchestrator/transport_factory.py` — `create_eval_transport()`
+- `api/v1/evals.py`, `storage/repositories/eval_repo.py`
+- See `adr/0018-eval-transport-bridge-and-worker.md`
 
 ## Post-Call Analysis
 

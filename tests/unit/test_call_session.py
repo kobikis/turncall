@@ -30,6 +30,9 @@ def _make_call_session(call_id):
     call_context = MagicMock()
     call_context.call_id = call_id
     call_context.session_factory = lambda: _SessionCM()
+    # A bare MagicMock makes every attribute truthy, which would read as an
+    # eval and skip the call-scoped work this file is about.
+    call_context.is_eval = False
 
     return CallSession(
         call_context=call_context,

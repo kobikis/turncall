@@ -290,3 +290,74 @@ default multi-tenant route is a per-agent `role_arn` assumed from platform crede
 which yields temporary credentials and persists no durable secret. The flag exists because
 `config_blob` is plain JSONB: secrets are masked on read but not encrypted at rest.
 _Avoid_: conflating with [[Platform credential]], which gates bootstrap endpoints and is unrelated.
+
+## Evals
+
+**Scenario**:
+One saved behavioural test, of exactly one [[kind]]. Its `definition` is pipecat's own
+scenario mapping, stored verbatim and validated by round-tripping it through pipecat's
+parser — the schema belongs to pipecat and moves between majors, so `schema_version`
+records which one it targets. `tool_mocks` and `tool_policy` sit beside it as TurnCall
+columns, deliberately outside the mapping we do not own — `tool_mocks` is a map of
+tool name to the canned result the model is handed instead of the call being dispatched,
+and `tool_policy` (`mock_only` by default, `live` the typed opt-in) decides what happens
+to a tool no mock covers: refused, and the iteration errored naming it. See ADR-0018.
+_Avoid_: "test suite" — the name of the dead stub this replaced (#69), and of the
+abstraction Vapi retired in favour of Simulations. Grouping is `tags` and [[batch]].
+
+**Scripted** (kind):
+A fixed conversation with per-turn expectations. Answers *"at this point, did the agent
+make the right next decision?"* Declared by `turns:` in the definition; stored as the
+`kind` column, computed eagerly at the API boundary so readers never sniff nullability.
+
+**Simulation** (kind):
+A [[persona]], a goal and success criteria; an LLM plays the caller and improvises.
+Answers *"by the end, did it reach the right outcome?"* Declared by `persona:`. Exactly
+one of `turns:`/`persona:` is present; both, or neither, is rejected at create.
+
+**Persona**:
+The simulated *caller's* character and behaviour. Never the agent under test.
+
+**Judge**:
+The LLM that decides a verdict. Distinct from the [[persona]]; both are LLMs TurnCall
+runs, and neither is the agent. Pipecat's `EvalJudge`, which defaults to a **local
+Ollama** (`service: openai` is deprecated in pipecat 1.9, removed in 2.0; any other
+provider needs `judge.eval.factory`) — so a deployment on [[Bedrock]] for data residency
+sends transcripts nowhere by default, and the real cost is the mirror image: an `eval:`
+assertion errors until an Ollama is reachable. Assertions that only use `text_contains`
+or `function_call` build no judge at all. The judge is the weakest component: verdicts
+are cached within a run but not across runs, so a scenario can flip with no code change,
+and a silent provider-side model update moves the whole baseline. Both service and model
+are recorded in the run's `harness_config` for that reason. See ADR-0018.
+
+**Modality**:
+`text` (no STT, no TTS) or `audio` (real speech both ways). One knob on the [[run]] that
+sets pipecat's independent `user.modality` and `judge.modality`; a scenario naming either
+one keeps its own, which is how the asymmetric pair (`user: audio, judge: text` —
+exercises STT, skips TTS) stays reachable. Text mode inverts the coverage: it is the mode
+people actually run per-PR because it is fast and free, and it is blind to STT, TTS,
+VAD/turn timing, interruption, pronunciation, and the agent's `first_message`.
+
+**Iteration**:
+One execution of a scenario. A [[simulation]] needs several — one proves nothing.
+
+**Run**:
+One scenario × target × [[modality]], over N [[iteration]]s. **Batch**: the runs produced
+by one request. A run carries three snapshots — the agent config that actually ran, the
+scenario as it stood, and the [[judge]]/pipecat versions — because all three can change
+and a result is uninterpretable without them. ADR-0017's rule one level out.
+
+**errored** (vs **failed**):
+`failed` is the agent falling short. `errored` is the *harness* not completing — a connect
+failure, a judge outage, a worker that crashed and left its run claimed. An errored run is
+neither a pass nor a fail and never counts toward a rate: a judge outage reading as an
+agent regression is how a suite loses its audience. There is no score column; a scripted
+scenario yields pass/fail and a simulation a rate, and `passed_count`/`failed_count` out
+of `iterations` represents both honestly (`1/1`, `7/10`).
+_Avoid_: treating `errored` as a kind of `failed`, or rendering it as a red cross.
+
+**Eval worker** (`turncall-eval-worker`):
+The separate process that executes runs — never the API process. ADR-0004: an eval does
+full STT+LLM+TTS at maximum speed, several at once, and that event-loop jitter would
+become dead air for someone on a live call. Same image, new entrypoint, own concurrency
+cap, fed by a Redis list. See ADR-0018.

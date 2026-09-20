@@ -45,6 +45,20 @@ def _spawn(coro) -> None:  # type: ignore[no-untyped-def]
     task.add_done_callback(_BG_TASKS.discard)
 
 
+def _spawn_unless_eval(call_context: CallContext, coro) -> None:  # type: ignore[no-untyped-def]
+    """Spawn a logging coroutine, unless this pipeline is an eval iteration.
+
+    An eval has no `calls` row behind it, so a call_event write violates its
+    foreign key and a `transcript.final` webhook would announce a call that
+    never happened. The run row and the harness's own transcript are the eval's
+    record. Closing the coroutine keeps it from warning as never awaited.
+    """
+    if call_context.is_eval:
+        coro.close()
+        return
+    _spawn(coro)
+
+
 class TranscriptTapProcessor(FrameProcessor):
     """Placed after STT to capture TranscriptionFrames before
     they are consumed by the context aggregator.
@@ -60,7 +74,10 @@ class TranscriptTapProcessor(FrameProcessor):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, TranscriptionFrame) and frame.text and frame.text.strip():
-            _spawn(self._log_transcript(frame.text, frame.user_id or "customer"))
+            _spawn_unless_eval(
+                self._call_context,
+                self._log_transcript(frame.text, frame.user_id or "customer"),
+            )
 
         await self.push_frame(frame, direction)
 
@@ -129,7 +146,7 @@ class AssistantTranscriptTapProcessor(FrameProcessor):
         if isinstance(frame, TTSSpeakFrame) and frame.text:
             # Directly-spoken text (first_message, voicemail/transfer messages)
             # never passes through the LLM — log it as an utterance of its own.
-            _spawn(self._log_transcript(frame.text))
+            _spawn_unless_eval(self._call_context, self._log_transcript(frame.text))
         elif (
             isinstance(frame, TextFrame)
             and not isinstance(frame, (TranscriptionFrame, TTSTextFrame))
@@ -144,7 +161,7 @@ class AssistantTranscriptTapProcessor(FrameProcessor):
             full_text = "".join(self._buffer).strip()
             self._buffer.clear()
             if full_text:
-                _spawn(self._log_transcript(full_text))
+                _spawn_unless_eval(self._call_context, self._log_transcript(full_text))
 
         await self.push_frame(frame, direction)
 

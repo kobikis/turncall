@@ -80,7 +80,21 @@ dependencies = [
     "defusedxml>=0.7.0",
 ]
 
+[project.scripts]
+# The eval worker is the same image with a different entrypoint. It must never
+# run in the API process -- ADR-0004: event-loop jitter becomes dead air on a
+# live call, and an eval run is exactly the load that causes it.
+turncall-eval-worker = "turncall.evals.worker:main"
+
 [project.optional-dependencies]
+# Audio-modality evals (#72). The caller's voice and the STT the judge reads
+# through are pipecat's local defaults, and neither ships with the base
+# install: an audio run raises ImportError without them. Kept optional because
+# only the eval worker ever needs them — the call path uses the agent's own
+# configured providers.
+evals-audio = [
+    "pipecat-ai[kokoro,moonshine]>=1.11.0,<2.0.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",

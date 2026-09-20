@@ -15,7 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -327,58 +327,6 @@ class WebhookSubscriptionRow(Base):
     __table_args__ = (Index("ix_webhook_subs_project_id", "project_id"),)
 
 
-class TestSuiteRow(Base):
-    __tablename__ = "test_suites"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=new_uuid
-    )
-    project_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
-    )
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    agent_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    scenarios: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    rubric: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now
-    )
-
-    __table_args__ = (Index("ix_test_suites_project_id", "project_id"),)
-
-
-class TestRunRow(Base):
-    __tablename__ = "test_runs"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=new_uuid
-    )
-    test_suite_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("test_suites.id", ondelete="CASCADE"), nullable=False
-    )
-    project_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
-    )
-    status: Mapped[str] = mapped_column(
-        Enum("pending", "running", "passed", "failed", name="test_run_status"),
-        nullable=False,
-        default="pending",
-    )
-    results: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    score: Mapped[float | None] = mapped_column(nullable=True)
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now
-    )
-
-    __table_args__ = (Index("ix_test_runs_suite_id", "test_suite_id"),)
-
-
 class SmsSessionRow(Base):
     __tablename__ = "sms_sessions"
 
@@ -597,4 +545,137 @@ class TakeawayRow(Base):
     __table_args__ = (
         Index("ix_takeaways_project_id", "project_id"),
         UniqueConstraint("project_id", "name", name="uq_takeaways_project_name"),
+    )
+
+
+class EvalScenarioRow(Base):
+    """One saved behavioural test: a scripted conversation or a simulation.
+
+    `definition` is pipecat's own scenario mapping, stored verbatim. Columns
+    would mean tracking pipecat's schema in Alembic forever, and that schema
+    moves between majors — so it is validated at the API boundary by
+    round-tripping through pipecat's parser and then stored as given, with
+    `schema_version` recording which schema it targets.
+
+    `tool_mocks` and `tool_policy` are deliberately TurnCall columns rather
+    than keys inside `definition`: mixing ownership would mean a future pipecat
+    migration had to preserve foreign keys inside a mapping it does not own.
+    """
+
+    __tablename__ = "eval_scenarios"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    kind: Mapped[str] = mapped_column(
+        Enum("script", "simulation", name="eval_kind"), nullable=False
+    )
+    definition: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    tool_mocks: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    tool_policy: Mapped[str] = mapped_column(
+        Enum("mock_only", "live", name="eval_tool_policy"),
+        nullable=False,
+        default="mock_only",
+    )
+    tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    default_target: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    __table_args__ = (
+        Index("ix_eval_scenarios_project", "project_id"),
+        Index("ix_eval_scenarios_tags", "tags", postgresql_using="gin"),
+        UniqueConstraint("project_id", "name", name="uq_eval_scenarios_project_name"),
+    )
+
+
+class EvalRunRow(Base):
+    """One scenario x target x modality, executed over N iterations.
+
+    Three snapshots make a finished run interpretable after the fact: the agent
+    config that actually ran, the scenario as it stood, and the harness config
+    (judge model, pipecat version). The agent may be edited or archived, the
+    scenario and its mocks may be edited, and the judge model is what decided
+    the verdict — this is ADR-0017's snapshot rule applied one level out.
+
+    There is no score column. A scripted scenario yields pass/fail and a
+    simulation a rate over N iterations; `passed_count`/`failed_count` out of
+    `iterations` represents both honestly (1/1, or 7/10) with no column meaning
+    two incomparable things.
+    """
+
+    __tablename__ = "eval_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    # SET NULL, not CASCADE: deleting a scenario must not destroy the history of
+    # what it once proved. scenario_name is why the row still reads.
+    scenario_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("eval_scenarios.id", ondelete="SET NULL"), nullable=True
+    )
+    scenario_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(
+        Enum("script", "simulation", name="eval_kind"), nullable=False
+    )
+    target: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    resolved_config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    resolved_scenario: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    harness_config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # NULL for an inline target — ADR-0017's first rule: no locally invented
+    # sentinel in the column.
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    modality: Mapped[str] = mapped_column(
+        Enum("text", "audio", name="eval_modality"), nullable=False
+    )
+    iterations: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(
+        Enum(
+            "queued",
+            "running",
+            "passed",
+            "failed",
+            "errored",
+            "cancelled",
+            name="eval_run_status",
+        ),
+        nullable=False,
+        default="queued",
+    )
+    passed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    results: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    queued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        Index("ix_eval_runs_project_queued", "project_id", "queued_at"),
+        Index("ix_eval_runs_batch", "batch_id"),
+        Index("ix_eval_runs_scenario", "scenario_id"),
     )

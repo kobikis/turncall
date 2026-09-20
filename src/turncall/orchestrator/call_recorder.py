@@ -84,6 +84,13 @@ class CallRecorder(AudioBufferProcessor):
         sample_rate: int,
         num_channels: int,
     ) -> None:
+        if self._call_context.is_eval:
+            # An eval has no `calls` row (ADR-0018), so the WAV would be a file
+            # nothing points at and the `recording.ready` event a foreign-key
+            # error on every iteration. The processor itself stays in the
+            # pipeline: only the transport is swapped in an eval, and dropping
+            # a stage would mean testing a pipeline the caller never gets.
+            return
         if not audio:
             await self._set_status(RecordingStatus.FAILED)
             return
@@ -132,6 +139,8 @@ class CallRecorder(AudioBufferProcessor):
         )
 
     async def _set_status(self, status: RecordingStatus) -> None:
+        if self._call_context.is_eval:
+            return
         try:
             async with self._call_context.session_factory() as session:
                 from turncall.storage.repositories import call_repo

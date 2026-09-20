@@ -56,6 +56,13 @@ class CallSession:
         self._runner: WorkerRunner | None = None
         self._duration_guard: asyncio.Task | None = None
         self._running = False
+        # An exception that escaped into start(), kept rather than only logged.
+        # start() swallows it on purpose — a live call must still finalize —
+        # but an eval has to tell a platform fault from an agent result, which
+        # is the difference between `errored` and `failed`. Note this is NOT
+        # how a refused provider shows up: pipecat ends that pipeline
+        # gracefully, and an eval is supposed to score it `failed`.
+        self._failure: BaseException | None = None
 
     @property
     def call_id(self) -> UUID:
@@ -64,6 +71,11 @@ class CallSession:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def failure(self) -> BaseException | None:
+        """The exception that ended the pipeline, if one did."""
+        return self._failure
 
     async def _build_telemetry(self) -> tuple[list, dict]:
         """Observers + span attributes for this call's pipeline task (ADR-0010).
@@ -190,8 +202,9 @@ class CallSession:
             await self._runner.run(self._task)
         except asyncio.CancelledError:
             logger.info("call_session_cancelled", call_id=str(self.call_id))
-        except Exception:
+        except Exception as exc:
             logger.exception("call_session_error", call_id=str(self.call_id))
+            self._failure = exc
             await self._update_call_status(CallStatus.FAILED)
         finally:
             self._running = False
@@ -368,7 +381,13 @@ class CallSession:
         authoritative duration, then dispatches call.ended + post-call analysis.
         The `status not in (completed, failed)` guard keeps this idempotent vs the
         /status callback and the end_call tool — whichever finalizes first wins.
+
+        An eval has no call to finalize, and must not dispatch `call.ended` to
+        subscribers for a conversation that was never a call.
         """
+        if self._call_context.is_eval:
+            return
+
         async with self._call_context.session_factory() as session:
             from turncall.storage.repositories import call_repo
 
@@ -413,6 +432,9 @@ class CallSession:
 
     async def _update_call_status(self, status: CallStatus) -> None:
         """Bridge pipeline lifecycle to call state machine."""
+        if self._call_context.is_eval:
+            # An eval iteration has no `calls` row; the run row is its record.
+            return
         try:
             async with self._call_context.session_factory() as session:
                 from turncall.storage.repositories import call_repo

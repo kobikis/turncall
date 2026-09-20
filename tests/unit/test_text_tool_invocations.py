@@ -182,8 +182,8 @@ def test_the_row_must_belong_to_exactly_one_owner() -> None:
 
 
 @pytest.mark.unit
-def test_the_migration_is_the_alembic_head() -> None:
-    """A migration nothing points at never runs."""
+def test_there_is_exactly_one_alembic_head() -> None:
+    """A migration nothing points at never runs, and two heads never merge."""
     from pathlib import Path
 
     versions = Path("alembic/versions")
@@ -196,4 +196,6 @@ def test_the_migration_is_the_alembic_head() -> None:
                 downs.add(line.split("=")[1].strip().strip("\"'"))
 
     heads = revisions - downs
-    assert heads == {"a9c1d3e5f7b2"}, f"expected one head, got {heads}"
+    assert len(heads) == 1, f"expected one head, got {heads}"
+    # This slice's migration must still be in the chain something points at.
+    assert "a9c1d3e5f7b2" in revisions

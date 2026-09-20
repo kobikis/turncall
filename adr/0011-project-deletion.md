@@ -47,7 +47,6 @@ project
 ├── phone_numbers
 ├── calls ── call_events, tool_invocations
 ├── webhook_subscriptions
-├── test_suites ── test_runs
 ├── sms_sessions ── sms_messages
 ├── knowledge_bases ── documents ── document_chunks
 └── takeaways
