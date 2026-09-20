@@ -413,9 +413,19 @@ retrieval. That construction path is where #63, #64, #65 and #67 all lived.
 POST/GET/PUT/DELETE /v1/eval-scenarios[/{id}]   # ?kind= ?tag=
 POST   /v1/eval-runs          # 202 Accepted -- the worker executes it
 GET    /v1/eval-runs          # ?batch_id= ?scenario_id= ?status=
+GET    /v1/eval-runs/batches/{batch_id}   # one verdict, no transcripts (#75)
 GET    /v1/eval-runs/{id}
 DELETE /v1/eval-runs/{id}     # cancel while queued/running
 ```
+
+`POST /v1/eval-runs` takes **exactly one** of `scenario_id` and `tag`. A `tag`
+fans out to one run per scenario carrying it, sharing a `batch_id`, all returned
+in the 202 — and a tag matching nothing is a 400, because an empty batch reports
+"0 failures" forever, which reads as a pass. Grouping is deliberately a tag
+array plus a batch id: no suite table, no join table. The batch verdict is the
+run verdict one level out — anything in flight is `running`, any failed run
+fails it, nothing reaching a verdict is `errored`, and an errored run counts
+toward neither rate. Its counts are **runs**, not iterations.
 
 ### Simulations (#73)
 

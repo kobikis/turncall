@@ -15,7 +15,12 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from turncall.config import get_settings
-from turncall.domain.enums import EvalKind, EvalModality, EvalToolPolicy
+from turncall.domain.enums import (
+    EvalKind,
+    EvalModality,
+    EvalRunStatus,
+    EvalToolPolicy,
+)
 from turncall.evals.scenario import SCHEMA_VERSION, ScenarioError, validate
 from turncall.services.tool_mocks import encode_mock
 
@@ -175,13 +180,62 @@ class EvalTarget(BaseModel):
 
 
 class CreateEvalRunRequest(BaseModel):
-    scenario_id: UUID
+    """Run one scenario, or every scenario carrying a tag (#75).
+
+    Exactly one of `scenario_id` and `tag`. A tag fans out to one run per
+    matching scenario, all sharing a batch id, so one request has one readable
+    verdict — which is what the CLI's single exit code is built on.
+    """
+
+    scenario_id: UUID | None = None
+    tag: str | None = Field(default=None, min_length=1, max_length=64)
     target: EvalTarget
     # `text` stays the default: it is the mode people run per PR — no STT, no
     # TTS, no local models, a fraction of the time. `audio` is the one that
     # covers what makes this a voice platform (#72).
     modality: EvalModality = EvalModality.TEXT
     iterations: int = Field(default=1, ge=1)
+
+    @model_validator(mode="after")
+    def validate_selection(self) -> "CreateEvalRunRequest":
+        if bool(self.scenario_id) == bool(self.tag):
+            raise ValueError("pass exactly one of 'scenario_id' and 'tag'")
+        return self
+
+
+class EvalBatchRunSummary(BaseModel):
+    """One run inside a batch, without its results blob."""
+
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    id: UUID
+    scenario_id: UUID | None
+    scenario_name: str
+    status: EvalRunStatus
+    passed_count: int
+    failed_count: int
+    iterations: int
+    error: str | None
+
+
+class EvalBatchResponse(BaseModel):
+    """A batch's outcome without fetching each run's transcripts (#75).
+
+    `status` is the batch's verdict, derived the way a run derives its own from
+    its iterations: anything still in flight makes it `running`, any failure
+    fails it, and a batch where nothing reached a verdict is `errored` rather
+    than passed — the same rule as a run, one level out.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    batch_id: UUID
+    status: EvalRunStatus
+    total: int
+    counts: dict[str, int]
+    passed_count: int
+    failed_count: int
+    runs: list[EvalBatchRunSummary]
 
 
 class EvalRunResponse(BaseModel):
