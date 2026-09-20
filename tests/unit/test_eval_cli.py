@@ -1,0 +1,256 @@
+"""The CLI's exit code, and the shape of what it prints (#77).
+
+A pull request can be gated on agent behaviour only if something exits
+non-zero when the agent regressed, so that rule gets the most cover — and it is
+checked without a server, a database or a worker, because that is the point of
+keeping it in its own module.
+
+The distinction this file exists to protect: **failed and errored are not the
+same thing**. A failure is a claim about the agent; an error means nobody could
+tell. Both are non-zero, and a CI log that calls an outage a regression sends
+someone hunting a bug that does not exist.
+"""
+
+import json
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from turncall.cli import main as cli
+from turncall.cli.client import Api, ApiError
+from turncall.cli.verdict import (
+    EXIT_CANCELLED,
+    EXIT_ERRORED,
+    EXIT_FAILED,
+    EXIT_OK,
+    EXIT_USAGE,
+    exit_code,
+    summarise,
+    summary_line,
+)
+
+pytestmark = pytest.mark.unit
+
+
+def _run(status, **over):
+    base = {
+        "id": over.pop("id", "run-1"),
+        "status": status,
+        "scenario_name": over.pop("name", "greets"),
+        "passed_count": over.pop("passed", 0),
+        "failed_count": over.pop("failed", 0),
+        "iterations": over.pop("iterations", 1),
+        "error": over.pop("error", None),
+        "results": over.pop("results", []),
+    }
+    base.update(over)
+    return base
+
+
+class TestExitCode:
+    def test_zero_only_when_every_run_passed(self) -> None:
+        assert exit_code([_run("passed"), _run("passed")]) == EXIT_OK
+
+    def test_a_failure_is_non_zero(self) -> None:
+        assert exit_code([_run("passed"), _run("failed")]) == EXIT_FAILED
+
+    def test_an_error_is_non_zero_but_not_a_failure(self) -> None:
+        """ "Your agent regressed" and "we could not check" want different
+        alerts, so a pipeline has to be able to branch on them."""
+        assert exit_code([_run("passed"), _run("errored")]) == EXIT_ERRORED
+        assert EXIT_ERRORED != EXIT_FAILED
+
+    def test_a_failure_outranks_an_error(self) -> None:
+        """A claim about the agent is louder than a claim about the harness."""
+        assert exit_code([_run("failed"), _run("errored")]) == EXIT_FAILED
+
+    def test_a_cancelled_run_is_its_own_code(self) -> None:
+        assert exit_code([_run("cancelled")]) == EXIT_CANCELLED
+
+    def test_an_empty_batch_is_not_success(self) -> None:
+        """Reporting success for a batch that ran nothing is how a green
+        pipeline stops meaning anything."""
+        assert exit_code([]) == EXIT_ERRORED
+
+    def test_a_run_still_going_is_not_success(self) -> None:
+        assert exit_code([_run("passed"), _run("running")]) == EXIT_ERRORED
+
+
+class TestSummary:
+    def test_every_terminal_status_is_present_even_at_zero(self) -> None:
+        """A summary that omits `errored` when it is zero trains people not to
+        look for it when it is not."""
+        counts = summarise([_run("passed")])
+        assert set(counts) == {"passed", "failed", "errored", "cancelled"}
+
+    def test_the_line_names_errors_separately(self) -> None:
+        line = summary_line([_run("passed"), _run("failed"), _run("errored")])
+        assert "1/3 passed" in line
+        assert "1 failed" in line
+        assert "could not check" in line, "an outage must not read as a regression"
+
+    def test_a_clean_run_says_only_what_passed(self) -> None:
+        assert summary_line([_run("passed"), _run("passed")]) == "2/2 passed"
+
+
+class TestScenarioFiles:
+    def test_a_file_is_the_api_body_unchanged(self, tmp_path: Path) -> None:
+        """No CLI-only fields: the file is what the API already accepts, which
+        is why there is one validator and nothing to keep in sync."""
+        body = {
+            "name": "books",
+            "definition": {"turns": [{"user": "hi", "expect": []}]},
+            "tool_policy": "mock_only",
+        }
+        path = tmp_path / "books.json"
+        path.write_text(json.dumps(body))
+        assert cli._load_scenario_file(path) == body
+
+    def test_the_name_falls_back_to_the_filename(self, tmp_path: Path) -> None:
+        path = tmp_path / "cancels.json"
+        path.write_text(json.dumps({"definition": {"turns": []}}))
+        assert cli._load_scenario_file(path)["name"] == "cancels"
+
+    def test_a_file_without_a_definition_is_refused_before_the_api(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "empty.json"
+        path.write_text(json.dumps({"name": "nothing"}))
+        with pytest.raises(ApiError, match="needs a 'definition'"):
+            cli._load_scenario_file(path)
+
+    def test_malformed_json_names_the_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "broken.json"
+        path.write_text("{not json")
+        with pytest.raises(ApiError, match=r"broken\.json"):
+            cli._load_scenario_file(path)
+
+
+class TestUsage:
+    def test_two_selections_at_once_is_a_usage_error(self) -> None:
+        """Not a run against whichever the parser happened to see first."""
+        code = cli.main(["eval", "run", "--scenario", "greets", "--tag", "pre-publish"])
+        assert code == EXIT_USAGE
+
+    def test_no_selection_at_all_is_a_usage_error(self) -> None:
+        assert cli.main(["eval", "run"]) == EXIT_USAGE
+
+    def test_a_missing_key_is_reported_not_raised(self, monkeypatch) -> None:
+        monkeypatch.delenv("TURNCALL_API_KEY", raising=False)
+        with pytest.raises(ApiError, match="TURNCALL_API_KEY"):
+            Api.from_env(None, None)
+
+
+class TestDefaultTarget:
+    def test_the_scenarios_own_default_target_is_used(self) -> None:
+        api = MagicMock()
+        api.list_scenarios.return_value = [
+            {"name": "greets", "default_target": {"type": "agent_name", "name": "sup"}}
+        ]
+        target = cli._default_target(api, scenario_name="greets", tag=None)
+        assert target == {"type": "agent_name", "name": "sup"}
+
+    def test_disagreeing_defaults_across_a_tag_are_refused(self) -> None:
+        """One request carries one target, so picking the first scenario's
+        would run the others against an agent nobody chose."""
+        api = MagicMock()
+        api.list_scenarios.return_value = [
+            {"name": "a", "default_target": {"type": "agent_name", "name": "one"}},
+            {"name": "b", "default_target": {"type": "agent_name", "name": "two"}},
+        ]
+        with pytest.raises(ApiError, match="different default targets"):
+            cli._default_target(api, scenario_name=None, tag="pre-publish")
+
+    def test_no_default_and_no_flag_says_what_to_pass(self) -> None:
+        api = MagicMock()
+        api.list_scenarios.return_value = [{"name": "greets", "default_target": None}]
+        with pytest.raises(ApiError, match="--agent-id"):
+            cli._default_target(api, scenario_name="greets", tag=None)
+
+
+class TestProgressStreams:
+    def test_each_run_prints_as_it_finishes(self, capsys) -> None:
+        """A suite takes minutes; a command that prints nothing until the end
+        looks hung."""
+        api = MagicMock()
+        # First poll: one done, one still going. Second: both done.
+        api.get_run.side_effect = [
+            _run("passed", id="a", name="first"),
+            _run("running", id="b", name="second"),
+            _run("failed", id="b", name="second", failed=1),
+        ]
+        with patch.object(cli.time, "sleep"):
+            finished = cli._watch(api, ["a", "b"], timeout=10, quiet=False)
+
+        out = capsys.readouterr().out
+        assert "PASS" in out and "first" in out
+        assert "FAIL" in out and "second" in out
+        assert [r["status"] for r in finished] == ["passed", "failed"]
+
+    def test_quiet_prints_nothing_per_run(self, capsys) -> None:
+        api = MagicMock()
+        api.get_run.side_effect = [_run("passed", id="a")]
+        with patch.object(cli.time, "sleep"):
+            cli._watch(api, ["a"], timeout=10, quiet=True)
+        assert capsys.readouterr().out == ""
+
+
+class TestShow:
+    def test_a_transcript_prints_with_its_failures(self, capsys) -> None:
+        api = MagicMock()
+        api.get_run.return_value = _run(
+            "failed",
+            failed=1,
+            results=[
+                {
+                    "iteration": 1,
+                    "passed": False,
+                    "transcript": [
+                        {"role": "user", "content": "what are your hours?"},
+                        {"role": "assistant", "content": "We close at nine."},
+                    ],
+                    "failures": [
+                        {
+                            "turn_index": 0,
+                            "event_name": "llm_response",
+                            "reason": "expected 'eight'",
+                        }
+                    ],
+                }
+            ],
+        )
+        with patch.object(cli.Api, "from_env", return_value=api):
+            code = cli.main(["eval", "show", "run-1", "--api-key", "k"])
+
+        out = capsys.readouterr().out
+        assert "what are your hours?" in out
+        assert "We close at nine." in out
+        assert "expected 'eight'" in out
+        assert code == EXIT_FAILED
+
+    def test_an_audio_run_shows_both_what_was_heard_and_said(self, capsys) -> None:
+        """The difference between them is the whole explanation when an audio
+        run fails where a text run passed (#72)."""
+        api = MagicMock()
+        api.get_run.return_value = _run(
+            "passed",
+            passed=1,
+            results=[
+                {
+                    "iteration": 1,
+                    "passed": True,
+                    "transcript": [
+                        {
+                            "role": "assistant",
+                            "content": "we close at nine",
+                            "text": "We close at 9.",
+                        }
+                    ],
+                }
+            ],
+        )
+        with patch.object(cli.Api, "from_env", return_value=api):
+            cli.main(["eval", "show", "run-1", "--api-key", "k"])
+        out = capsys.readouterr().out
+        assert "we close at nine" in out and "We close at 9." in out

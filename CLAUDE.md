@@ -462,6 +462,41 @@ same `AgentConfigSchema` an agent create uses (`extra="forbid"` included), runs
 with **`agent_id` null** (ADR-0017 — null is the honest answer, not missing
 data), and is snapshotted verbatim in `resolved_config`.
 
+### CLI (#77)
+
+```bash
+export TURNCALL_API_URL=https://api.example.com TURNCALL_API_KEY=tc_...
+turncall eval run --tag pre-publish --agent-name support   # a whole set
+turncall eval run scenarios/*.json --agent-id <uuid>       # local files
+turncall eval list --batch <batch_id>
+turncall eval show <run_id>                                # transcript + verdicts
+```
+
+**Exit 0 only when every run passed.** A failure is `1`, an error `2`, a
+cancellation `3`, a usage mistake `64` — distinct because "your agent
+regressed" and "we could not check" want different alerts, and a judge outage
+must never read as a regression. An empty batch exits non-zero: reporting
+success for a batch that ran nothing is how a green pipeline stops meaning
+anything.
+
+A scenario file is **the API request body, unchanged** — no CLI-only fields and
+no YAML dialect, so there is one schema and one validator. `POST /v1/eval-runs`
+therefore takes a third selector beside `scenario_id` and `tag`: an inline
+`scenario`, run without being stored (`scenario_id` null on the run, the
+snapshot is the record). Target comes from `--agent-id` / `--agent-name` /
+`--inline-agent`, falling back to the scenario's `default_target`; for a tag,
+every matching scenario has to agree on that default, since one request carries
+one target.
+
+```yaml
+# .github/workflows/agent-evals.yml
+- run: pip install turncall
+- run: turncall eval run --tag pre-publish --agent-name support
+  env:
+    TURNCALL_API_URL: ${{ vars.TURNCALL_API_URL }}
+    TURNCALL_API_KEY: ${{ secrets.TURNCALL_API_KEY }}
+```
+
 ### Rules that are easy to break
 - **The worker is never the API process.** `turncall-eval-worker`, same image,
   own entrypoint, fed by a Redis list. ADR-0004: eval load in the API's event

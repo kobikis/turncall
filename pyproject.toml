@@ -85,6 +85,9 @@ dependencies = [
 # run in the API process -- ADR-0004: event-loop jitter becomes dead air on a
 # live call, and an eval run is exactly the load that causes it.
 turncall-eval-worker = "turncall.evals.worker:main"
+# The CLI (#77). An ordinary API client — same key, same endpoints — whose
+# exit code is what lets a pull request be gated on agent behaviour.
+turncall = "turncall.cli.main:run"
 
 [project.optional-dependencies]
 # Audio-modality evals (#72). The caller's voice and the STT the judge reads

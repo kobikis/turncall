@@ -6334,6 +6334,16 @@
             ],
             "title": "Tag"
           },
+          "scenario": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InlineScenario"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "target": {
             "$ref": "#/components/schemas/EvalTarget"
           },
@@ -6353,7 +6363,7 @@
           "target"
         ],
         "title": "CreateEvalRunRequest",
-        "description": "Run one scenario, or every scenario carrying a tag (#75).\n\nExactly one of `scenario_id` and `tag`. A tag fans out to one run per\nmatching scenario, all sharing a batch id, so one request has one readable\nverdict \u2014 which is what the CLI's single exit code is built on."
+        "description": "Run one stored scenario, every scenario carrying a tag (#75), or a\nscenario supplied inline (#77).\n\nExactly one of the three. A tag fans out to one run per matching scenario,\nall sharing a batch id, so one request has one readable verdict \u2014 which is\nwhat the CLI's single exit code is built on."
       },
       "CreateEvalScenarioRequest": {
         "properties": {
@@ -6811,6 +6821,50 @@
           "message"
         ],
         "title": "InjectContextRequest"
+      },
+      "InlineScenario": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "definition": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Definition"
+          },
+          "tool_mocks": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Mocks"
+          },
+          "tool_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvalToolPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "definition"
+        ],
+        "title": "InlineScenario",
+        "description": "A scenario supplied on the run instead of stored first (#77).\n\nThis is what a local file holds, and why the CLI needs no format of its\nown: the file is the API request body, validated by the same parser a\nstored scenario is. Nothing is written to `eval_scenarios` \u2014 the run's\n`scenario_id` is null and its `resolved_scenario` snapshot is the record,\nwhich is the same shape ADR-0017 uses for an inline agent."
       },
       "LLMConfigSchema": {
         "properties": {
