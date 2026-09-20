@@ -1,0 +1,175 @@
+---
+title: Evals
+description: "Automated behavioural testing for your agents"
+icon: "flask-conical"
+---
+
+Voice agents are probabilistic. A prompt edit that reads better can quietly stop the agent from asking for a booking reference, and nothing fails — the call just goes worse. Evals let you state what an agent must do and have TurnCall check it, on every change, before a caller finds out.
+
+An **eval scenario** is one saved test. A **run** executes it against a target over N iterations. There are two kinds:
+
+<CardGroup cols={2}>
+  <Card title="Scripted" icon="list-checks">
+    A fixed conversation with per-turn expectations. Answers *"at this point, did the agent make the right next decision?"*
+  </Card>
+  <Card title="Simulation" icon="messages-square">
+    A persona, a goal and success criteria — an LLM plays the caller and improvises. Answers *"by the end, did it reach the right outcome?"*
+  </Card>
+</CardGroup>
+
+## Your first scenario
+
+A scenario's `definition` is a conversation and what you expect back.
+
+```bash
+curl -X POST http://localhost:8090/v1/eval-scenarios \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "asks-for-the-reference",
+    "tags": ["pre-publish"],
+    "definition": {
+      "turns": [
+        {
+          "user": "Hi, I need to change my booking.",
+          "expect": [
+            {"event": "llm_response", "text_contains": "reference", "within_ms": 30000}
+          ]
+        }
+      ]
+    }
+  }'
+```
+
+Then run it:
+
+```bash
+curl -X POST http://localhost:8090/v1/eval-runs \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "scenario_id": "<id>",
+    "target": {"type": "agent_name", "name": "support"},
+    "iterations": 3
+  }'
+```
+
+The response is `202 Accepted` with a `batch_id`: a dedicated worker executes runs, never the API process, so eval load can never become dead air on a live call.
+
+<Warning>
+**Assert content, not just the event.** `{"event": "llm_response"}` on its own can pass with the agent's LLM completely broken — when a provider rejects the model name, an *empty* response is still emitted. Always pair the event with `text_contains`, `matches`, or an `eval:` criterion.
+</Warning>
+
+## Targets: what you run against
+
+```jsonc
+{"type": "agent",      "agent_id": "uuid"}   // pins one version
+{"type": "agent_name", "name": "support"}    // whatever is published, at run time
+{"type": "inline",     "agent": { ... }}     // no stored agent at all
+```
+
+An agent row **is** an immutable version, so pinning by id means your scenario stops testing production the moment someone publishes the next version. `agent_name` follows the publish. `inline` runs a configuration that was never published — which is how you check a prompt change *before* shipping it, and how you point a scenario at sandbox tools.
+
+## Tool mocking, and why it's on by default
+
+A scenario that exercises "book the appointment" against an agent with a real webhook **books a real appointment**, on every iteration. So scenarios carry mocks:
+
+```json
+{
+  "tool_mocks": {"book_appointment": {"status": "confirmed", "id": "APT-1"}},
+  "tool_policy": "mock_only"
+}
+```
+
+A mocked tool returns your canned response and the real webhook is never called — webhook tools, MCP tools and built-ins alike. Under `mock_only`, the default, a tool call with **no** mock is refused and the run ends as `errored` naming the tool, rather than executing. `live` is the opt-in for agents whose tools are read-only lookups.
+
+Mocks belong to the scenario, not the run: "the booking succeeds, does it report the confirmation correctly?" and "the booking fails, does it avoid claiming success?" are two different tests.
+
+## Text or audio
+
+`modality: "text"` skips STT and TTS — fast, silent, cheap, and what you run on every pull request. `modality: "audio"` synthesizes the caller's turns into the agent's real STT and judges a transcription of the agent's real TTS. Audio is what covers recognition, synthesis and turn timing; text cannot see any of it.
+
+<Note>
+Audio runs use local models for the caller's voice and the judge's transcription, downloaded on first use. Budget for that the first time.
+</Note>
+
+## Simulations
+
+Give a persona and a goal instead of turns, and an LLM improvises the call:
+
+```json
+{
+  "persona": "A polite traveller whose flight was cancelled. Asks one thing at a time.",
+  "goal": "Get rebooked on a flight today.",
+  "success": "the agent rebooked the caller or explained why it could not",
+  "metrics": [
+    {"name": "politeness", "criterion": "the agent stayed courteous", "min_score": 1}
+  ],
+  "max_turns": 10
+}
+```
+
+The judge rules on `success` once over the whole conversation; metrics are scored per agent turn, and one below its `min_score` fails the iteration. A persona never says the same thing twice, so use `iterations` — one run is an anecdote.
+
+## In CI
+
+```bash
+pip install turncall
+export TURNCALL_API_URL=https://api.example.com TURNCALL_API_KEY=tc_xxx
+
+turncall eval run --tag pre-publish --agent-name support
+```
+
+**Exit 0 only if every run passed.** A failure exits `1`; an error — a judge outage, a pipeline that died — exits `2`, so a broken checker never reads as a broken agent.
+
+```yaml
+- run: turncall eval run --tag pre-publish --agent-name support
+  env:
+    TURNCALL_API_URL: ${{ vars.TURNCALL_API_URL }}
+    TURNCALL_API_KEY: ${{ secrets.TURNCALL_API_KEY }}
+```
+
+`turncall eval show <run_id>` prints a run's transcript with its verdicts. Scenario files are the API request body unchanged — `turncall eval run scenarios/*.json --agent-name support` runs them without storing anything.
+
+## Start from a real call
+
+Evals only find what someone thought to test. Turn a call that already happened into a draft:
+
+```bash
+curl -X POST http://localhost:8090/v1/eval-scenarios/from-call \
+  -H "Authorization: Bearer tc_xxx" \
+  -d '{"call_id": "<id>", "save": false}'
+```
+
+The caller's utterances become turns, the agent's replies become expectations, and every tool the agent called becomes both an expectation and a mock seeded with what that tool actually returned — so the draft is safe to run straight away.
+
+<Warning>
+It is a **draft**. The conversation is faithful, but the expectations assert whatever the agent did that day, mistakes included. Trim each `text_contains` to the part that actually matters before trusting a green run.
+</Warning>
+
+## Results
+
+`call.ended` has no equivalent here — subscribe to `eval.run.started` and `eval.run.completed` instead. The completed event is comprehensive: status, counts, every iteration's transcript and failures, and the configuration snapshots. The envelope carries `eval_run_id` beside `call_id` and `session_id`.
+
+Aggregate a whole batch without pulling transcripts:
+
+```bash
+curl http://localhost:8090/v1/eval-runs/batches/<batch_id> -H "Authorization: Bearer tc_xxx"
+```
+
+A run reports `passed_count`/`failed_count` out of `iterations` — there is no score. `errored` is neither: it means the harness could not complete, so it counts toward no rate at all.
+
+## What evals cannot see
+
+Worth knowing before you trust a green suite. An eval swaps **only the transport**, so everything inside it is invisible:
+
+| Not covered | Why |
+|---|---|
+| Scrambled audio, resampling faults | The Twilio serializer is replaced |
+| **Dead air** | A loopback socket doesn't pace in realtime — evals measure latency, never silence |
+| Telephony | DTMF over the carrier, answering-machine detection, warm-transfer whisper, `<Dial>` |
+| The agent's `first_message` in text mode | It's spoken, so it never becomes LLM text |
+
+Everything the pipeline *builds* is covered, which is where the regressions that shipped have actually lived: STT and TTS construction, provider model names, VAD and turn-detection wiring, the tool bridge, knowledge retrieval.
+
+The judge is an LLM and is not deterministic. Use binary criteria, use iterations, and treat a single flip as a signal to look rather than a verdict.

@@ -62,6 +62,7 @@
                   "guides/ab-testing",
                   "guides/post-call-analysis",
                   "guides/takeaways",
+                  "guides/evals",
                   "guides/observability"
                 ]
               }

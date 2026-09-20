@@ -7,6 +7,31 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**Evals: automated behavioural testing for agents.** State what an agent must do
+and have TurnCall check it on every change. Scenarios are **scripted** (a fixed
+conversation with per-turn expectations) or **simulations** (a persona and a
+goal, improvised by an LLM and judged on the outcome), run in text or audio
+modality against the agent's real pipeline. A dedicated worker executes them,
+never the API process. See [Evals](/guides/evals).
+
+**Tool mocking, failing closed.** A scenario carries `tool_mocks` and a
+`tool_policy`; under the default `mock_only` a tool call with no mock is refused
+and the run is errored naming it, so pointing a scenario at a real agent cannot
+book a real appointment ten times.
+
+**`turncall eval run` exits non-zero when your agent regressed**, so a pull
+request can be gated on behaviour. A failure exits 1 and an error exits 2 — a
+judge outage never reads as a regression.
+
+**`eval.run.started` / `eval.run.completed` webhooks.** The completed event is
+comprehensive: status, counts, every iteration's transcript and failures, and
+the configuration snapshots. The envelope gains a nullable `eval_run_id` beside
+`call_id` and `session_id`; existing subscribers are unaffected.
+
+**Derive a scenario from a real call** — `POST /v1/eval-scenarios/from-call`
+turns a finished call into a draft, seeding each tool mock with what that tool
+actually returned.
+
 **Tool calling on SMS, chat and WhatsApp text.** Text conversations could not
 call tools at all — an agent that books meetings on a phone call would claim it
 had booked one over SMS. Works on every provider family: OpenAI-compatible,
