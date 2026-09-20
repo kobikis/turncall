@@ -473,6 +473,11 @@ difference is the whole explanation when an audio run fails where a text run
 passed. `harness_config` records which voice and which STT produced them,
 for the same reason it records the judge model.
 
+**S2S agents work in both modalities** — measured against Gemini Live, not
+assumed: the S2S service emits its own LLM text, so a text-mode judge has
+`llm_response` to read. Nothing enforces audio-only, because nothing needs to.
+Nova Sonic is untested.
+
 ### Known coverage limits
 Everything *inside* the transport is invisible: the Twilio serializer and the
 whole ADR-0004 audio class, output underrun and dead air (loopback does not

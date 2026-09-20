@@ -252,17 +252,33 @@ Isolation first; optimise when someone measures the cost.
 
 ### Known limit: S2S
 
-An S2S pipeline has no TTS stage, so `skip_tts` has nothing to silence and there
-is no separate LLM text output for a text-mode judge to read. **S2S agents are
-expected to be audio-mode only** — the same shape as "avatar is WebRTC + cascade
-only". Verify against a real Gemini Live agent before documenting it either way.
+~~An S2S pipeline has no TTS stage, so there is no separate LLM text output for a
+text-mode judge to read, so **S2S agents are audio-mode only**.~~ **Wrong —
+measured against a real Gemini Live agent while closing #72.** The reasoning was
+sound and the premise was false: the S2S service emits LLM text frames of its
+own, so the harness sees `llm_response` exactly as a cascade agent's would be
+seen, and a text-mode judge has something to read.
 
-**Still unverified after #72.** Audio modality shipped and the #67 claim above
-was measured, but this one was not: it needs a Gemini Live or Nova Sonic agent
-and a real run, and there is no test for it — a probe with nothing to assert is
-not one. Until someone runs it, TurnCall neither enforces audio-only for S2S nor
-promises text works: a text-modality run against an S2S agent does whatever it
-does. This is the last open claim in this document.
+One scenario, one turn ("What is the capital of France? Answer with just the
+city."), `pipeline_mode: s2s`, `s2s.provider: google`:
+
+| Modality | Events the harness saw | Verdict |
+|---|---|---|
+| text | `llm_started`, `llm_response: "Paris"` | passed |
+| audio | `user_transcription`, `tts_response`, `llm_response`, `response` | passed |
+
+Both work. **Nothing is enforced, because there is nothing to enforce**, and no
+error was added: a text-modality run against an S2S agent is a supported thing
+to do, and the cheaper of the two.
+
+Two caveats worth carrying. This is **Gemini Live specifically** — Nova Sonic is
+untested, and it is a different service with its own frame behaviour, so the
+premise should be re-checked there rather than assumed to generalise. And in the
+audio run the model answered the question *poorly* ("Understood."), having heard
+only the tail of the synthesized turn — the mechanism worked, the conversation
+did not. An S2S agent judged on audio is being judged on its own endpointing as
+much as its answers, which is a reason to prefer text mode for S2S behaviour
+checks, not a defect in the bridge.
 
 ## 6. Schema
 
@@ -652,9 +668,9 @@ One migration and one commit: drop both tables and `test_run_status`; delete
 4. **Audio modality.** Built in #72 — `modality: audio` runs end to end, the
    judge's transcription is surfaced beside the agent's text, and the caller's
    synthesized turns are cached under `EVAL_TTS_CACHE_DIR`. The two claims it
-   was meant to settle: the **#67 turn-timing claim is now measured** and holds
-   (§1 carries the numbers), and the **S2S question is still open** — it needs a
-   Gemini Live or Nova Sonic agent and a real run (§5).
+   was meant to settle are now **both measured**: the #67 turn-timing claim holds
+   (§1 carries the numbers), and the S2S "audio-only" expectation turned out to
+   be **false** — text modality works against a real Gemini Live agent (§5).
 5. **Simulation kind** — persona, goal, metrics, iterations.
 6. **CLI** with the exit code.
 7. **Console**: evals tab, run detail, then the two "Save as scenario" buttons.

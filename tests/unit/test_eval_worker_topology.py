@@ -114,6 +114,42 @@ def test_the_transcript_taps_stay_silent_for_an_eval() -> None:
         spawn.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_an_eval_writes_no_recording_and_no_recording_event() -> None:
+    """Found by running an S2S probe: every eval iteration uploaded a WAV
+    nothing pointed at and then raised a foreign-key error dispatching
+    `recording.ready` for a call that does not exist. Caught and logged, so it
+    was invisible — and the junk files accumulated.
+
+    The processor itself must stay in the pipeline: only the transport is
+    swapped in an eval, so dropping a stage would test a pipeline the caller
+    never gets. Its side effects are what stop."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from uuid import uuid4
+
+    from turncall.domain.enums import RecordingStatus
+    from turncall.orchestrator import call_recorder
+
+    context = MagicMock()
+    context.is_eval = True
+    context.call_id = uuid4()
+    context.session_factory = AsyncMock()
+
+    recorder = call_recorder.CallRecorder.__new__(call_recorder.CallRecorder)
+    recorder._call_context = context
+
+    with (
+        patch.object(call_recorder, "create_storage_adapter") as storage,
+        patch.object(call_recorder, "_pcm16_to_wav") as to_wav,
+    ):
+        await recorder._on_audio_data(MagicMock(), b"\x00\x01" * 100, 16000, 1)
+        await recorder._set_status(RecordingStatus.IN_PROGRESS)
+
+    storage.assert_not_called(), "an eval must not write a recording to storage"
+    to_wav.assert_not_called()
+    context.session_factory.assert_not_called()
+
+
 def test_the_callers_synthesized_audio_is_cached_somewhere_durable() -> None:
     """#72: pipecat's caching TTS defaults to a directory under $HOME, which a
     container loses on every recreate — the caller's turns would then be
