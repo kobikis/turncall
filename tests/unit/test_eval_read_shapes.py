@@ -23,7 +23,7 @@ from turncall.api.v1.evals import (
 )
 from turncall.api.v1.schemas.evals import EvalRunSummaryResponse
 
-pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
+pytestmark = pytest.mark.unit
 
 AUTH = SimpleNamespace(project_id=uuid4())
 
@@ -52,6 +52,7 @@ def _summary_row(**over):
     return base
 
 
+@pytest.mark.asyncio
 class TestTheLightRead:
     async def test_a_summary_view_never_touches_the_heavy_read(self) -> None:
         summary = AsyncMock(return_value=_summary_row())
@@ -94,6 +95,7 @@ class TestTheLightRead:
             await get_eval_run(uuid4(), AUTH, AsyncMock(), view="brief")
 
 
+@pytest.mark.asyncio
 class TestTheListsPage:
     async def test_runs_are_paged_and_counted(self) -> None:
         rows = AsyncMock(return_value=[])
@@ -121,6 +123,7 @@ class TestTheListsPage:
         assert result["total"] == 4
 
 
+@pytest.mark.asyncio
 class TestTheFanOutStillSeesEverything:
     async def test_a_tag_run_reads_every_matching_scenario(self) -> None:
         """A suite that silently ran a page of itself reports a verdict for
@@ -138,3 +141,69 @@ class TestTheFanOutStillSeesEverything:
         assert listed.await_args.kwargs.get("limit") is None, (
             "the fan-out must not be handed a page"
         )
+
+
+class TestThePagingBoundsAreValidated:
+    """`page=0` used to become `offset=-50`, which Postgres refuses — a 500 for
+    a caller who typed a wrong number, from an authenticated endpoint."""
+
+    def test_the_declared_bounds_reject_a_zero_or_negative_page(self) -> None:
+        from turncall.api.v1.evals import MAX_PAGE_SIZE, Page, PageSize
+
+        def bounds(annotated):
+            return {
+                type(c).__name__.lower(): getattr(c, type(c).__name__.lower())
+                for c in annotated.__metadata__[0].metadata
+            }
+
+        assert bounds(Page) == {"ge": 1}, "page=0 becomes a negative OFFSET"
+        assert bounds(PageSize) == {"ge": 1, "le": MAX_PAGE_SIZE}
+
+    @pytest.mark.asyncio
+    async def test_a_page_never_produces_a_negative_offset(self) -> None:
+        """The arithmetic the bound protects."""
+        rows = AsyncMock(return_value=[])
+        count = AsyncMock(return_value=0)
+        with (
+            patch("turncall.storage.repositories.eval_repo.list_runs", rows),
+            patch("turncall.storage.repositories.eval_repo.count_runs", count),
+        ):
+            await list_eval_runs(AUTH, AsyncMock(), page=1, limit=50)
+        assert rows.await_args.kwargs["offset"] == 0
+
+
+class TestTheCliReadsEveryScenario:
+    """A target agreed across a subset runs the rest against an agent nobody
+    chose — so the CLI pages to the end rather than asking for one big page."""
+
+    def test_it_follows_pages_until_a_short_one(self) -> None:
+        from unittest.mock import MagicMock
+
+        from turncall.cli import main as cli
+
+        api = MagicMock()
+        api.list_scenarios.side_effect = [
+            [{"name": f"s{i}"} for i in range(cli._PAGE_SIZE)],
+            [{"name": "last"}],
+        ]
+        assert len(cli._all_scenarios(api)) == cli._PAGE_SIZE + 1
+        assert api.list_scenarios.call_args_list[1].kwargs["page"] == 2
+
+    def test_it_asks_for_a_page_size_the_server_allows(self) -> None:
+        from turncall.api.v1.evals import MAX_PAGE_SIZE
+        from turncall.cli import main as cli
+
+        assert cli._PAGE_SIZE <= MAX_PAGE_SIZE, (
+            "asking for more than the server's ceiling is a 422, not a big page"
+        )
+
+    def test_an_endless_listing_raises_instead_of_hanging(self) -> None:
+        from unittest.mock import MagicMock
+
+        from turncall.cli import main as cli
+        from turncall.cli.client import ApiError
+
+        api = MagicMock()
+        api.list_scenarios.return_value = [{"name": "x"}] * cli._PAGE_SIZE
+        with pytest.raises(ApiError, match="narrow the tag"):
+            cli._all_scenarios(api)

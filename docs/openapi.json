@@ -4490,9 +4490,12 @@
             "required": false,
             "schema": {
               "type": "integer",
+              "minimum": 1,
+              "description": "1-based page number",
               "default": 1,
               "title": "Page"
-            }
+            },
+            "description": "1-based page number"
           },
           {
             "name": "limit",
@@ -4500,6 +4503,8 @@
             "required": false,
             "schema": {
               "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
               "default": 50,
               "title": "Limit"
             }
@@ -4986,9 +4991,12 @@
             "required": false,
             "schema": {
               "type": "integer",
+              "minimum": 1,
+              "description": "1-based page number",
               "default": 1,
               "title": "Page"
-            }
+            },
+            "description": "1-based page number"
           },
           {
             "name": "limit",
@@ -4996,6 +5004,8 @@
             "required": false,
             "schema": {
               "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
               "default": 50,
               "title": "Limit"
             }

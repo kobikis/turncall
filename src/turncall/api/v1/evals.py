@@ -6,10 +6,10 @@ this process (ADR-0004: event-loop jitter here is dead air on a live call).
 """
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from loguru import logger
 
 from turncall.api.deps import DbSession
@@ -38,6 +38,16 @@ from turncall.storage.repositories import eval_repo
 
 router = APIRouter(prefix="/eval-scenarios", tags=["evals"])
 runs_router = APIRouter(prefix="/eval-runs", tags=["evals"])
+
+
+# Paging bounds, validated by FastAPI so a bad page is a 422 and never a
+# negative OFFSET (#99). The ceiling matters more here than on most lists: a
+# run row carries every iteration's transcript and three JSONB snapshots, so an
+# unbounded `limit` is an unbounded read.
+MAX_PAGE_SIZE = 100
+
+Page = Annotated[int, Query(ge=1, description="1-based page number")]
+PageSize = Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)]
 
 
 @router.post("", status_code=201)
@@ -76,8 +86,8 @@ async def list_eval_scenarios(
     session: DbSession,
     kind: EvalKind | None = None,
     tag: str | None = None,
-    page: int = 1,
-    limit: int = 50,
+    page: Page = 1,
+    limit: PageSize = 50,
 ) -> dict:
     """List scenarios, newest first, paged (#99).
 
@@ -517,8 +527,8 @@ async def list_eval_runs(
     batch_id: UUID | None = None,
     scenario_id: UUID | None = None,
     status: EvalRunStatus | None = None,
-    page: int = 1,
-    limit: int = 50,
+    page: Page = 1,
+    limit: PageSize = 50,
 ) -> dict:
     """List runs, newest first. Paged like every other list here (#99): a year
     of CI runs is the volume this feature is for."""

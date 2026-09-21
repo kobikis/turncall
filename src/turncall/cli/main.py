@@ -75,6 +75,35 @@ def _target_from_args(args: argparse.Namespace, api: Api) -> dict[str, Any] | No
 # What the API replaces a secret with in any config it returns.
 _MASK = "***"
 
+# The API's own page ceiling. A short page is the last page; asking for more
+# than the server allows is a 422, so this is read from the same number rather
+# than guessed at.
+_PAGE_SIZE = 100
+# 10,000 scenarios in one project is not a page-size problem, and a paging loop
+# with no bound is how a CLI hangs forever against a server that keeps
+# answering with full pages.
+_MAX_PAGES = 100
+
+
+def _all_scenarios(api: Api, *, tag: str | None = None) -> list[dict[str, Any]]:
+    """Every scenario the filter matches, read to the end of the listing.
+
+    Paged deliberately rather than asked for in one large page: agreeing on a
+    target across a *subset* would run the rest against an agent nobody chose,
+    which is the same failure a truncated tag fan-out would be (#99).
+    """
+    query = {"tag": tag} if tag else {}
+    scenarios: list[dict[str, Any]] = []
+    for page in range(1, _MAX_PAGES + 1):
+        batch = api.list_scenarios(**query, page=page, limit=_PAGE_SIZE)
+        scenarios.extend(batch)
+        if len(batch) < _PAGE_SIZE:
+            return scenarios
+    raise ApiError(
+        f"more than {_MAX_PAGES * _PAGE_SIZE} scenarios matched; narrow the tag "
+        "or name a target with --agent-id / --agent-name / --inline-agent"
+    )
+
 
 def _default_target(api: Api, *, scenario_name: str | None, tag: str | None) -> dict:
     """The scenario's own `default_target`, when the command named none.
@@ -83,13 +112,7 @@ def _default_target(api: Api, *, scenario_name: str | None, tag: str | None) -> 
     per request, so silently picking the first scenario's would run the others
     against an agent nobody chose.
     """
-    # One page big enough to be every scenario a tag could run: the API
-    # refuses a tag matching more than its own fan-out cap (#97), so agreeing
-    # on a target across a *subset* is a state that cannot arise (#99).
-    page = {"limit": 500}
-    scenarios = (
-        api.list_scenarios(tag=tag, **page) if tag else api.list_scenarios(**page)
-    )
+    scenarios = _all_scenarios(api, tag=tag)
     if scenario_name:
         scenarios = [s for s in scenarios if s["name"] == scenario_name]
         if not scenarios:
@@ -121,7 +144,7 @@ def _default_target(api: Api, *, scenario_name: str | None, tag: str | None) -> 
 
 
 def _scenario_id(api: Api, name: str) -> str:
-    for scenario in api.list_scenarios():
+    for scenario in _all_scenarios(api):
         if scenario["name"] == name:
             return scenario["id"]
     raise ApiError(f"no scenario named {name!r}")
