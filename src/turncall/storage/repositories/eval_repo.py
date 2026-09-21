@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.domain.enums import EvalRunStatus
@@ -79,15 +79,47 @@ async def list_scenarios(
     *,
     kind: str | None = None,
     tag: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[EvalScenarioRow]:
+    """Scenarios for a project, newest first.
+
+    `limit=None` means every matching row, and the tag fan-out depends on it:
+    a suite that silently ran a page of itself reports a verdict for scenarios
+    that never ran, which is worse than a slow query (#97 caps that instead).
+    """
     query = select(EvalScenarioRow).where(EvalScenarioRow.project_id == project_id)
     if kind is not None:
         query = query.where(EvalScenarioRow.kind == kind)
     if tag is not None:
         # `tags @> ARRAY[tag]` — the containment operator the GIN index serves.
         query = query.where(EvalScenarioRow.tags.contains([tag]))
-    query = query.order_by(EvalScenarioRow.created_at.desc())
+    # `id` breaks ties: two scenarios created in the same millisecond have no
+    # order otherwise, so a row can repeat on one page and be missed on the
+    # next (#99). A page is only a page if the sort is total.
+    query = query.order_by(EvalScenarioRow.created_at.desc(), EvalScenarioRow.id.desc())
+    if limit is not None:
+        query = query.limit(limit).offset(offset)
     return list((await session.execute(query)).scalars().all())
+
+
+async def count_scenarios(
+    session: AsyncSession,
+    project_id: UUID,
+    *,
+    kind: str | None = None,
+    tag: str | None = None,
+) -> int:
+    query = (
+        select(func.count())
+        .select_from(EvalScenarioRow)
+        .where(EvalScenarioRow.project_id == project_id)
+    )
+    if kind is not None:
+        query = query.where(EvalScenarioRow.kind == kind)
+    if tag is not None:
+        query = query.where(EvalScenarioRow.tags.contains([tag]))
+    return int((await session.execute(query)).scalar_one())
 
 
 async def update_scenario(
@@ -169,6 +201,7 @@ async def list_runs(
     scenario_id: UUID | None = None,
     status: str | None = None,
     limit: int = 100,
+    offset: int = 0,
 ) -> list[EvalRunRow]:
     query = select(EvalRunRow).where(EvalRunRow.project_id == project_id)
     if batch_id is not None:
@@ -177,8 +210,72 @@ async def list_runs(
         query = query.where(EvalRunRow.scenario_id == scenario_id)
     if status is not None:
         query = query.where(EvalRunRow.status == status)
-    query = query.order_by(EvalRunRow.queued_at.desc()).limit(limit)
+    # `id` breaks ties on `queued_at`, so paging cannot repeat or skip a row
+    # (#99): a tag fan-out queues its whole batch in one transaction, and those
+    # timestamps are as close together as timestamps get.
+    query = query.order_by(EvalRunRow.queued_at.desc(), EvalRunRow.id.desc())
+    query = query.limit(limit).offset(offset)
     return list((await session.execute(query)).scalars().all())
+
+
+async def count_runs(
+    session: AsyncSession,
+    project_id: UUID,
+    *,
+    batch_id: UUID | None = None,
+    scenario_id: UUID | None = None,
+    status: str | None = None,
+) -> int:
+    query = (
+        select(func.count())
+        .select_from(EvalRunRow)
+        .where(EvalRunRow.project_id == project_id)
+    )
+    if batch_id is not None:
+        query = query.where(EvalRunRow.batch_id == batch_id)
+    if scenario_id is not None:
+        query = query.where(EvalRunRow.scenario_id == scenario_id)
+    if status is not None:
+        query = query.where(EvalRunRow.status == status)
+    return int((await session.execute(query)).scalar_one())
+
+
+# The columns a "is it done yet" read needs. Selected by name rather than
+# loading the row, because the three JSONB snapshots and every iteration's
+# transcript are the whole weight of an eval run (#99).
+_SUMMARY_COLUMNS = (
+    EvalRunRow.id,
+    EvalRunRow.project_id,
+    EvalRunRow.batch_id,
+    EvalRunRow.scenario_id,
+    EvalRunRow.scenario_name,
+    EvalRunRow.kind,
+    EvalRunRow.modality,
+    EvalRunRow.status,
+    EvalRunRow.iterations,
+    EvalRunRow.passed_count,
+    EvalRunRow.failed_count,
+    EvalRunRow.agent_id,
+    EvalRunRow.agent_version,
+    EvalRunRow.error,
+    EvalRunRow.queued_at,
+    EvalRunRow.started_at,
+    EvalRunRow.completed_at,
+)
+
+
+async def get_run_summary(
+    session: AsyncSession, run_id: UUID, *, project_id: UUID | None = None
+) -> Any | None:
+    """One run's verdict without its transcripts or snapshots (#99).
+
+    The same call `GET /v1/eval-runs/batches/{id}` makes for a whole batch,
+    for the endpoint a CLI and a Console poll on a timer.
+    """
+    query = select(*_SUMMARY_COLUMNS).where(EvalRunRow.id == run_id)
+    if project_id is not None:
+        query = query.where(EvalRunRow.project_id == project_id)
+    return (await session.execute(query)).mappings().one_or_none()
 
 
 async def start_run(

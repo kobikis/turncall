@@ -349,6 +349,36 @@ class EvalBatchResponse(BaseModel):
     runs: list[EvalBatchRunSummary]
 
 
+class EvalRunSummaryResponse(BaseModel):
+    """A run's verdict without its payload (#99).
+
+    `GET /v1/eval-runs/{id}` answers "is it done yet" far more often than it
+    answers "what happened", and the full read carries every iteration's
+    transcript plus all three snapshots. Same precedent as the batch endpoint
+    (#75): one verdict, no transcripts.
+    """
+
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    batch_id: UUID | None
+    scenario_id: UUID | None
+    scenario_name: str
+    kind: EvalKind
+    modality: EvalModality
+    status: str
+    iterations: int
+    passed_count: int
+    failed_count: int
+    agent_id: UUID | None
+    agent_version: int | None
+    error: str | None
+    queued_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+
+
 class EvalRunResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
@@ -399,6 +429,7 @@ __all__ = [
     "CreateEvalRunRequest",
     "CreateEvalScenarioRequest",
     "EvalRunResponse",
+    "EvalRunSummaryResponse",
     "EvalScenarioResponse",
     "EvalTarget",
     "UpdateEvalScenarioRequest",

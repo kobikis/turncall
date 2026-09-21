@@ -83,7 +83,13 @@ def _default_target(api: Api, *, scenario_name: str | None, tag: str | None) -> 
     per request, so silently picking the first scenario's would run the others
     against an agent nobody chose.
     """
-    scenarios = api.list_scenarios(tag=tag) if tag else api.list_scenarios()
+    # One page big enough to be every scenario a tag could run: the API
+    # refuses a tag matching more than its own fan-out cap (#97), so agreeing
+    # on a target across a *subset* is a state that cannot arise (#99).
+    page = {"limit": 500}
+    scenarios = (
+        api.list_scenarios(tag=tag, **page) if tag else api.list_scenarios(**page)
+    )
     if scenario_name:
         scenarios = [s for s in scenarios if s["name"] == scenario_name]
         if not scenarios:
