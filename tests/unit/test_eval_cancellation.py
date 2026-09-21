@@ -17,6 +17,7 @@ import pytest
 from turncall.domain.enums import EvalRunStatus
 from turncall.domain.models import AgentConfig
 from turncall.evals.runner import ResolvedTarget
+from turncall.evals.runner import logger as runner_logger
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
@@ -134,8 +135,12 @@ class TestTheLoopNoticesTheCancellation:
         assert finish.await_args.kwargs["status"] is not EvalRunStatus.CANCELLED
         assert len(finish.await_args.kwargs["results"]) == cancelled_after
 
-    async def test_a_database_hiccup_is_not_a_cancellation(self) -> None:
-        """A check that cannot be made must not abandon a run nobody stopped."""
+    async def test_a_database_hiccup_is_not_a_cancellation(self, caplog) -> None:
+        """A check that cannot be made must not abandon a run nobody stopped.
+
+        Asserting the run completes is not enough — an unchecked loop does that
+        too, so this pins that the check *was* attempted, failed, and said why.
+        """
         run = _run_row(iterations=3)
         calls = {"n": 0}
 
@@ -147,8 +152,18 @@ class TestTheLoopNoticesTheCancellation:
                 raise RuntimeError("connection reset")
             return run
 
-        execute, _finish, _dispatched = await _execute_run(run, get_run=get_run)
-        assert execute.await_count == 3
+        logged: list[str] = []
+        with patch.object(
+            runner_logger, "warning", lambda event, **kw: logged.append((event, kw))
+        ):
+            execute, _finish, _dispatched = await _execute_run(run, get_run=get_run)
+
+        assert execute.await_count == 3, "a failed check stopped a healthy run"
+        failures = [kw for event, kw in logged if event == "eval_cancel_check_failed"]
+        assert len(failures) == 3, "the check was never attempted"
+        assert "connection reset" in failures[0]["error"], (
+            "a bare log line does not say which check is failing, or why"
+        )
 
 
 class TestTheVerdictDoesNotOverwriteIt:

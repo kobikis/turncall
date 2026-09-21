@@ -707,8 +707,13 @@ async def _was_cancelled(plan: IterationPlan) -> bool:
     try:
         async with plan.session_factory() as session:
             run = await eval_repo.get_run(session, plan.run_id)
-    except Exception:
-        logger.warning("eval_cancel_check_failed", run_id=str(plan.run_id))
+    except Exception as exc:
+        # With the reason: a check that fails every iteration is otherwise a
+        # repeated bare line, and this is the one branch that decides to keep
+        # paying for a run nobody may still want.
+        logger.warning(
+            "eval_cancel_check_failed", run_id=str(plan.run_id), error=str(exc)
+        )
         return False
     return run is not None and run.status == EvalRunStatus.CANCELLED.value
 
