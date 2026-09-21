@@ -223,10 +223,27 @@ async def finish_run(
     failed_count: int,
     results: list[dict[str, Any]],
     error: str | None = None,
-) -> None:
-    await session.execute(
+) -> bool:
+    """Write a run's verdict, but only over a row that has not finished (#92).
+
+    The WHERE is `start_run`'s claim one step later in the lifecycle: a
+    terminal row wins over a late writer. Without it, a run the user cancelled
+    mid-flight was silently reverted to `passed` when the loop ended, and a
+    `running` row the janitor had already reclaimed as `errored` came back to
+    life. Both non-terminal statuses are allowed because a run that cannot
+    start is failed while still `queued`.
+
+    Returns whether the write landed; the caller announces the run only if it
+    did, since the event is read back off this row.
+    """
+    result = await session.execute(
         update(EvalRunRow)
-        .where(EvalRunRow.id == run_id)
+        .where(
+            EvalRunRow.id == run_id,
+            EvalRunRow.status.in_(
+                [EvalRunStatus.QUEUED.value, EvalRunStatus.RUNNING.value]
+            ),
+        )
         .values(
             status=status.value,
             passed_count=passed_count,
@@ -237,6 +254,7 @@ async def finish_run(
         )
     )
     await session.flush()
+    return bool(getattr(result, "rowcount", 0))
 
 
 async def cancel_run(session: AsyncSession, run_id: UUID) -> bool:

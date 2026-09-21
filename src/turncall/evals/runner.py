@@ -694,6 +694,25 @@ def tool_policy_of(resolved_scenario: dict[str, Any]) -> tuple[dict[str, Any], b
     ), policy is EvalToolPolicy.LIVE
 
 
+async def _was_cancelled(plan: IterationPlan) -> bool:
+    """Has the run been cancelled since the last iteration?
+
+    Read on its own short-lived session: the loop holds none, deliberately, so
+    a run taking minutes does not sit on a pooled connection. A check that
+    cannot be made is not a cancellation — a database hiccup must not abandon
+    a run that nobody stopped.
+    """
+    from turncall.storage.repositories import eval_repo
+
+    try:
+        async with plan.session_factory() as session:
+            run = await eval_repo.get_run(session, plan.run_id)
+    except Exception:
+        logger.warning("eval_cancel_check_failed", run_id=str(plan.run_id))
+        return False
+    return run is not None and run.status == EvalRunStatus.CANCELLED.value
+
+
 async def run_iterations(
     plan: IterationPlan, *, iterations: int, execute: ExecuteIteration
 ) -> list[IterationOutcome]:
@@ -704,6 +723,15 @@ async def run_iterations(
     """
     outcomes: list[IterationOutcome] = []
     for iteration in range(1, iterations + 1):
+        if await _was_cancelled(plan):
+            # Between iterations is the cheap seam (#92): it bounds the waste
+            # at one iteration, where tearing down a live pipeline mid-turn
+            # would buy a fraction of that for real complexity. Whatever ran
+            # is returned; `finish_run` will decline to overwrite the row.
+            logger.info(
+                "eval_run_cancelled", run_id=str(plan.run_id), after=iteration - 1
+            )
+            break
         mocks = plan.fresh_mocks()
         try:
             result = await execute(**plan.execute_kwargs(), tool_mocks=mocks)
@@ -832,7 +860,7 @@ async def _record_unrunnable(session: Any, run: Any, exc: Exception) -> None:
     from turncall.domain.enums import CallEventType
     from turncall.storage.repositories import eval_repo
 
-    await eval_repo.finish_run(
+    written = await eval_repo.finish_run(
         session,
         run.id,
         status=EvalRunStatus.ERRORED,
@@ -843,6 +871,10 @@ async def _record_unrunnable(session: Any, run: Any, exc: Exception) -> None:
     )
     await session.commit()
     logger.warning("eval_run_unrunnable", run_id=str(run.id), error=str(exc))
+    if not written:
+        # Cancelled between the claim and the failure (#92). The row is already
+        # terminal and is not this path's to relabel.
+        return
 
     finished = await eval_repo.get_run(session, run.id)
     if finished is not None:
@@ -1052,7 +1084,7 @@ async def _finish_run(
         )
 
     async with session_factory() as session:
-        await eval_repo.finish_run(
+        written = await eval_repo.finish_run(
             session,
             run_id,
             status=status,
@@ -1062,6 +1094,13 @@ async def _finish_run(
             error=error,
         )
         await session.commit()
+        if not written:
+            # The row reached a terminal status without this loop — cancelled
+            # by the user, or reclaimed by the janitor. Announcing a verdict
+            # for a conversation someone asked to stop is the whole complaint
+            # in #92; the run they cancelled stays cancelled.
+            logger.info("eval_run_verdict_discarded", run_id=str(run_id))
+            return
 
         # Read back rather than reassembling: an event that disagrees with the
         # row is the kind of bug nobody finds for months.
