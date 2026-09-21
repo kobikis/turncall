@@ -254,3 +254,97 @@ class TestShow:
             cli.main(["eval", "show", "run-1", "--api-key", "k"])
         out = capsys.readouterr().out
         assert "we close at nine" in out and "We close at 9." in out
+
+
+class TestTheDeadlineFitsTheBatch:
+    """The old flat 900s was a *per-run* budget used as a whole-batch deadline
+    (#98): ten scenarios behind a four-slot worker is three waves, so a healthy
+    suite was abandoned and CI read `errored` as an outage."""
+
+    def test_the_default_scales_with_how_many_runs_were_queued(self) -> None:
+        args = cli.build_parser().parse_args(["eval", "run", "--tag", "pre-publish"])
+        assert args.timeout is None, "computed from the batch, not a flat constant"
+
+        seen = {}
+
+        def _watch(_api, run_ids, *, timeout, quiet, batch_id=None):
+            seen["timeout"] = timeout
+            return [_run("passed", id=r) for r in run_ids]
+
+        batch = {"batch_id": "b1", "runs": [{"id": f"r{i}"} for i in range(10)]}
+        with (
+            patch.object(cli.Api, "from_env", MagicMock()),
+            patch.object(cli, "_submit", MagicMock(return_value=batch)),
+            patch.object(cli, "_watch", _watch),
+        ):
+            assert cli._cmd_run(args) == EXIT_OK
+        assert seen["timeout"] == 10 * cli.DEFAULT_TIMEOUT_PER_RUN_SECONDS
+
+    def test_an_explicit_timeout_still_wins(self) -> None:
+        args = cli.build_parser().parse_args(
+            ["eval", "run", "--tag", "t", "--timeout", "30"]
+        )
+        seen = {}
+
+        def _watch(_api, run_ids, *, timeout, quiet, batch_id=None):
+            seen["timeout"] = timeout
+            return [_run("passed", id=r) for r in run_ids]
+
+        batch = {"batch_id": None, "runs": [{"id": "r1"}]}
+        with (
+            patch.object(cli.Api, "from_env", MagicMock()),
+            patch.object(cli, "_submit", MagicMock(return_value=batch)),
+            patch.object(cli, "_watch", _watch),
+        ):
+            cli._cmd_run(args)
+        assert seen["timeout"] == 30
+
+    def test_giving_up_says_so_instead_of_looking_like_an_outage(self, capsys) -> None:
+        api = MagicMock()
+        api.get_run.return_value = _run("running", id="a")
+        finished = cli._watch(api, ["a"], timeout=0, quiet=True)
+
+        err = capsys.readouterr().err
+        assert "timed out" in err and "still going" in err
+        assert "--timeout" in err, "the log has to say what to do about it"
+        # No invented verdict: the row says what it says, and a caller who
+        # stopped waiting genuinely could not check.
+        assert finished[0]["status"] == "running"
+        assert exit_code(finished) == EXIT_ERRORED
+
+
+class TestThePollingIsCheap:
+    def test_a_batch_is_one_request_per_tick_not_one_per_run(self) -> None:
+        """`GET /v1/eval-runs/batches/{id}` was built for this question (#75)
+        and carries no transcripts; `get_run` returns all three snapshots."""
+        api = MagicMock()
+        api.get_batch.side_effect = [
+            {"runs": [_run("running", id="a"), _run("running", id="b")]},
+            {"runs": [_run("passed", id="a"), _run("failed", id="b")]},
+        ]
+        with patch.object(cli.time, "sleep"):
+            finished = cli._watch(
+                api, ["a", "b"], timeout=10, quiet=True, batch_id="b1"
+            )
+
+        assert api.get_batch.call_count == 2, "two ticks, two requests, four runs"
+        assert api.get_run.call_count == 0, "no transcripts pulled while polling"
+        assert [r["status"] for r in finished] == ["passed", "failed"]
+
+    def test_the_interval_widens_and_is_capped(self) -> None:
+        """A run takes minutes; a poll a second is thousands of requests to
+        learn a status string."""
+        api = MagicMock()
+        api.get_run.return_value = _run("running", id="a")
+        slept: list[float] = []
+
+        with patch.object(cli.time, "sleep", slept.append):
+            # A deadline in the future for a handful of ticks, then done.
+            ticks = iter([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1_000_000])
+            with patch.object(cli.time, "monotonic", lambda: next(ticks)):
+                cli._watch(api, ["a"], timeout=10, quiet=True)
+
+        assert slept[0] == cli.POLL_SECONDS
+        assert slept[1] > slept[0], "it widens"
+        assert max(slept) <= cli.MAX_POLL_SECONDS, "and is capped"
+        assert slept == sorted(slept), "monotonically"
