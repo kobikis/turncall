@@ -550,7 +550,12 @@ one target.
 - **`definition` is pipecat's mapping, stored verbatim**, validated by
   round-tripping through pipecat's parser; `schema_version` records which
   pipecat schema it targets. `tool_mocks`/`tool_policy` are TurnCall columns
-  *outside* it.
+  *outside* it. That round-trip uses two of pipecat's **private** functions
+  (`_parse_script`/`_parse_simulation`) because 1.11's public loaders take a
+  *path* and a stored scenario has no file — so a pipecat bump that moves them
+  takes out every create, update and queued run at once.
+  `tests/unit/test_pipecat_parser_contract.py` is what makes that a red build
+  naming the version instead (#100).
 - **`errored` is not `failed`.** The harness not completing is neither a pass
   nor a fail and never counts toward a rate. No `score` column —
   `passed_count`/`failed_count` out of `iterations`.
