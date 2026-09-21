@@ -63,6 +63,11 @@ class TestWhatCountsAsAnAssertion:
             # Asserting an event never arrives is a claim about behaviour, and
             # pipecat forbids combining it with the content checks.
             {"event": "function_call", "absent": True},
+            # Falsy but *set*: "no markers arrived" is an assertion, and
+            # truthiness read it as unset — reporting a scenario that can fail
+            # as one that cannot, which is the feature backwards.
+            {"event": "llm_marker", "markers": 0},
+            {"event": "llm_marker", "marker": "complete", "text_after": False},
         ],
     )
     def test_a_real_assertion_warns_about_nothing(self, expectation) -> None:
@@ -101,6 +106,19 @@ class TestWhatCountsAsAnAssertion:
 
     def test_a_definition_that_does_not_parse_is_the_validators_problem(self) -> None:
         assert _codes({"turns": "not a list"}) == []
+
+
+class TestTheVocabularyIsPipecatsNotTheDocs:
+    def test_a_matches_only_expectation_is_warned_about(self) -> None:
+        """`matches:` is not a field pipecat 1.11 has — its parser drops the
+        key, so such an expectation really does assert nothing. CLAUDE.md named
+        it in the vocabulary; that was the documentation being wrong, and this
+        check is what caught it."""
+        from turncall.evals.scenario import parse
+
+        definition = _scripted({"event": "llm_response", "matches": "Berlin"})
+        assert parse(definition, name="x").turns[0].expect[0].text_contains is None
+        assert _codes(definition) == ["scenario_cannot_fail"]
 
 
 class TestTheMixedCase:

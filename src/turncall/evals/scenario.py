@@ -18,6 +18,8 @@ import copy
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from turncall.domain.enums import EvalKind, EvalModality
 
 # The pipecat scenario schema a definition is validated against, recorded on
@@ -160,36 +162,41 @@ def validate(definition: dict[str, Any], *, name: str | None = None) -> EvalKind
 _ASSERTING_FIELDS = (
     "text_contains",
     "text_excludes",
-    # Not a field pipecat 1.11 carries; listed because the documented
-    # vocabulary includes it and `getattr` on an absent one costs nothing —
-    # this must never warn about a scenario that does assert something.
-    "matches",
     "eval",
     "calls",
     "marker",
     "markers",
     "marker_first",
+    "text_after",
 )
+# `matches` is deliberately absent: pipecat 1.11's expectation has no such
+# field and its parser drops the key, so an expectation whose only check is
+# `matches:` really does assert nothing and *should* be warned about. CLAUDE.md
+# used to name it in the vocabulary; that was the documentation being wrong,
+# and this check is what caught it.
 
 
 def _asserts_something(expectation: Any) -> bool:
     """Whether one expectation can fail on anything but a missing event.
 
-    `absent: True` counts: asserting that an event never arrives is a claim
+    Presence, not truthiness: `markers: 0` ("no markers arrived") and
+    `text_after: false` ("the marker is not followed by text") are assertions
+    whose values are falsy, and reading those as unset reported a scenario that
+    can fail as one that cannot — the exact reverse of the feature.
+
+    `absent: True` counts too: asserting an event never arrives is a claim
     about behaviour, and pipecat forbids combining it with the content checks.
     """
     if getattr(expectation, "absent", False):
         return True
-    return any(getattr(expectation, field, None) for field in _ASSERTING_FIELDS)
+    return any(
+        getattr(expectation, field, None) is not None for field in _ASSERTING_FIELDS
+    )
 
 
 def _cannot_fail(message: str, weak: list[str]) -> dict[str, Any]:
     """The loud case: nothing in this scenario can report a regression."""
-    return {
-        "code": "scenario_cannot_fail",
-        "message": message,
-        "expectations": weak,
-    }
+    return {"code": "scenario_cannot_fail", "message": message, "expectations": weak}
 
 
 def assertion_warnings(
@@ -209,38 +216,48 @@ def assertion_warnings(
     Takes a parsed scenario or the raw definition, since the API has the one
     and the runner has the other.
     """
-    parsed = scenario
-    if isinstance(scenario, dict):
-        try:
-            # Pipecat requires a `name:` key at all; the row's name is
-            # authoritative and a placeholder stands in for a draft that has
-            # none, so a missing name never reads as "nothing to warn about".
-            parsed = parse(scenario, name=name or "<scenario>")
-        except ScenarioError:
-            # Shape is the validator's business, and a definition that cannot
-            # parse has a louder problem than a weak assertion.
-            return []
-    turns = getattr(parsed, "turns", None)
+    turns = getattr(_parsed(scenario, name), "turns", None)
     if not turns:
         return []
+    return _warning_for(*_weak_expectations(turns))
 
+
+def _parsed(scenario: Any, name: str | None) -> Any:
+    """The scenario as pipecat's object, parsing a raw definition if needed."""
+    if not isinstance(scenario, dict):
+        return scenario
+    try:
+        # Pipecat requires a `name:` key at all; the row's name is
+        # authoritative and a placeholder stands in for a draft that has none,
+        # so a missing name never reads as "nothing to warn about".
+        return parse(scenario, name=name or "<scenario>")
+    except ScenarioError as exc:
+        # Shape is the validator's business and a definition that cannot parse
+        # has a louder problem — but not silently: `coding-style.md` is right
+        # that a swallowed error nobody can see is how this gets misdiagnosed.
+        logger.debug("assertion_check_skipped", scenario=name, error=str(exc))
+        return None
+
+
+def _weak_expectations(turns: list[Any]) -> tuple[int, list[str]]:
+    """How many expectations there are, and which assert no content."""
     total = 0
     weak: list[str] = []
-    for index, turn in enumerate(turns):
+    for index, turn in enumerate(turns, start=1):
         for expectation in getattr(turn, "expect", None) or []:
             total += 1
             if not _asserts_something(expectation):
-                weak.append(f"turn {index + 1}: {getattr(expectation, 'event', '?')}")
-    add = " Add text_contains, matches, eval: or a function_call with its args."
+                weak.append(f"turn {index}: {getattr(expectation, 'event', '?')}")
+    return total, weak
+
+
+def _warning_for(total: int, weak: list[str]) -> list[dict[str, Any]]:
+    """What a turn count and its weak expectations add up to, if anything."""
+    add = " Add text_contains, text_excludes, eval: or a function_call with its args."
     if total == 0:
-        return [
-            _cannot_fail(
-                "this scenario's turns carry no expectations at all." + add, []
-            )
-        ]
+        return [_cannot_fail("this scenario's turns carry no expectations." + add, [])]
     if not weak:
         return []
-
     if len(weak) == total:
         return [
             _cannot_fail(

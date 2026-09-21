@@ -568,11 +568,14 @@ one target.
 Assert **content**, not just the event. After a provider 404 pipecat still
 emits an empty `llm_response`, so `{"event": "llm_response"}` alone can pass
 with the LLM completely broken — seen both ways on one config. Use
-`text_contains`/`matches`/`eval:`. Validation is a round-trip through pipecat's
+`text_contains`/`text_excludes`/`eval:` — **not** `matches:`, which pipecat 1.11
+has no field for and its parser silently drops, so an expectation resting on it
+asserts nothing at all. Validation is a round-trip through pipecat's
 parser and checks *shape*, not strength, so this one is checked separately and
 **warned about, never rejected** (#95): the create/update response and the run
 both carry `scenario_cannot_fail` when no expectation asserts content, and
-`content_free_expectations` naming the weak ones when only some do. A
+`content_free_expectations` naming the weak ones when only some do — and a
+`matches:`-only expectation is one of the things it catches. A
 `function_call` with its `calls:` is a real assertion; a simulation is exempt,
 since its judge rules on `success` over the whole conversation. Such a run scores **`failed`**, never
 `errored`; errored means the harness could not complete and is kept out of
