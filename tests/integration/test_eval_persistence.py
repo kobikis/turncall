@@ -612,3 +612,103 @@ async def test_a_running_run_still_takes_its_verdict(factory) -> None:
         reread = await eval_repo.get_run(session, run_id)
         assert reread.status == EvalRunStatus.PASSED.value
         assert reread.passed_count == 1
+
+
+@pytest.mark.asyncio
+async def test_paging_returns_each_row_once_under_a_stable_order(factory) -> None:
+    """Without the id tiebreak a page can repeat a row and miss another (#99).
+
+    The timestamps are forced equal rather than assumed to be: `created_at`
+    defaults to `utc_now` evaluated per row in Python, so rows written in one
+    transaction get distinct values and a tie would never arise — the test
+    would then pass with the tiebreak reverted, which is the one thing it must
+    not do. A tie is what a bulk insert or a clock with coarser resolution
+    produces.
+    """
+    tied = datetime.now(UTC)
+    async with factory() as session:
+        project = await _project(session, "eval-paging")
+        for i in range(7):
+            row = await eval_repo.create_scenario(
+                session,
+                project_id=project.id,
+                name=f"scenario-{i}",
+                kind="script",
+                definition=SCRIPTED,
+                schema_version="pipecat-1.11",
+                tags=["paged"],
+            )
+            row.created_at = tied
+        await session.commit()
+        project_id = project.id
+
+    async with factory() as session:
+        seen = []
+        for page in range(3):
+            rows = await eval_repo.list_scenarios(
+                session, project_id, limit=3, offset=page * 3
+            )
+            seen.extend(str(row.id) for row in rows)
+        assert len(seen) == 7
+        assert len(set(seen)) == 7, "a row was served twice"
+        # And in the order the tiebreak declares, not merely each row once:
+        # with the timestamps tied, `id DESC` is the whole sort.
+        every = await eval_repo.list_scenarios(session, project_id, limit=50)
+        assert seen == sorted((str(row.id) for row in every), reverse=True)
+        assert await eval_repo.count_scenarios(session, project_id) == 7
+
+
+@pytest.mark.asyncio
+async def test_a_tag_fan_out_still_reads_every_scenario(factory) -> None:
+    """The deliberate exception to paging: the fan-out takes no limit."""
+    async with factory() as session:
+        project = await _project(session, "eval-fanout")
+        for i in range(60):
+            await eval_repo.create_scenario(
+                session,
+                project_id=project.id,
+                name=f"fan-{i}",
+                kind="script",
+                definition=SCRIPTED,
+                schema_version="pipecat-1.11",
+                tags=["pre-publish"],
+            )
+        await session.commit()
+        project_id = project.id
+
+    async with factory() as session:
+        rows = await eval_repo.list_scenarios(session, project_id, tag="pre-publish")
+        assert len(rows) == 60
+
+
+@pytest.mark.asyncio
+async def test_a_summary_read_carries_the_verdict_without_the_payload(factory) -> None:
+    async with factory() as session:
+        project = await _project(session, "eval-summary-read")
+        _scenario, run = await _scenario_and_run(session, project.id, name="summarised")
+        run_id = run.id
+        await eval_repo.start_run(
+            session,
+            run_id,
+            resolved_config={"system_prompt": "a large blob"},
+            agent_id=None,
+            harness_config={"pipecat_version": "1.11.0"},
+        )
+        await eval_repo.finish_run(
+            session,
+            run_id,
+            status=EvalRunStatus.PASSED,
+            passed_count=1,
+            failed_count=0,
+            results=[{"iteration": 1, "passed": True, "transcript": [{"x": "y"}]}],
+        )
+        await session.commit()
+
+    async with factory() as session:
+        summary = await eval_repo.get_run_summary(
+            session, run_id, project_id=project.id
+        )
+        assert summary["status"] == EvalRunStatus.PASSED.value
+        assert summary["passed_count"] == 1
+        assert "results" not in summary
+        assert "resolved_config" not in summary

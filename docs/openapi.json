@@ -4449,6 +4449,7 @@
           "evals"
         ],
         "summary": "List Eval Scenarios",
+        "description": "List scenarios, newest first, paged (#99).\n\nThe tag **fan-out** deliberately does not go through here: it reads every\nmatching scenario, because a suite that silently ran one page of itself\nreports a verdict for scenarios that never ran.",
         "operationId": "list_eval_scenarios_v1_eval_scenarios_get",
         "parameters": [
           {
@@ -4481,6 +4482,31 @@
                 }
               ],
               "title": "Tag"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "1-based page number",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "1-based page number"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
             }
           },
           {
@@ -4906,6 +4932,7 @@
           "evals"
         ],
         "summary": "List Eval Runs",
+        "description": "List runs, newest first. Paged like every other list here (#99): a year\nof CI runs is the volume this feature is for.",
         "operationId": "list_eval_runs_v1_eval_runs_get",
         "parameters": [
           {
@@ -4956,6 +4983,31 @@
                 }
               ],
               "title": "Status"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "1-based page number",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "1-based page number"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
             }
           },
           {
@@ -5069,6 +5121,7 @@
           "evals"
         ],
         "summary": "Get Eval Run",
+        "description": "One run. `?view=summary` answers \"is it done yet\" without the payload.\n\nThe full read carries every iteration's transcript and all three\nsnapshots, which for a 50-iteration audio run is a large response to poll\non a timer (#99).",
         "operationId": "get_eval_run_v1_eval_runs__run_id__get",
         "parameters": [
           {
@@ -5079,6 +5132,16 @@
               "type": "string",
               "format": "uuid",
               "title": "Run Id"
+            }
+          },
+          {
+            "name": "view",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "full",
+              "title": "View"
             }
           },
           {

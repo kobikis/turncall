@@ -410,13 +410,22 @@ retrieval. That construction path is where #63, #64, #65 and #67 all lived.
 
 ### API
 ```
-POST/GET/PUT/DELETE /v1/eval-scenarios[/{id}]   # ?kind= ?tag=
+POST/GET/PUT/DELETE /v1/eval-scenarios[/{id}]   # ?kind= ?tag= ?page= ?limit=
 POST   /v1/eval-runs          # 202 Accepted -- the worker executes it
-GET    /v1/eval-runs          # ?batch_id= ?scenario_id= ?status=
+GET    /v1/eval-runs          # ?batch_id= ?scenario_id= ?status= ?page= ?limit=
 GET    /v1/eval-runs/batches/{batch_id}   # one verdict, no transcripts (#75)
-GET    /v1/eval-runs/{id}
+GET    /v1/eval-runs/{id}     # ?view=summary for the verdict without the payload
 DELETE /v1/eval-runs/{id}     # cancel while queued/running
 ```
+
+Both lists page (`page`/`limit`, newest first, `id` breaking ties so a page
+cannot repeat or skip a row) and answer in the `paginated` envelope with
+`total`. The **tag fan-out** is the deliberate exception: `POST /v1/eval-runs`
+reads every scenario carrying the tag, because a suite that silently ran one
+page of itself reports a verdict for scenarios that never ran (#97 caps that
+instead). `?view=summary` is the same trade the batch endpoint makes — a full
+run read carries every iteration's transcript and all three snapshots, which is
+a lot to poll on a timer.
 
 `POST /v1/eval-runs` takes **exactly one** of `scenario_id` and `tag`. A `tag`
 fans out to one run per scenario carrying it, sharing a `batch_id`, all returned

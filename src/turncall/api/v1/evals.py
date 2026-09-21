@@ -6,21 +6,22 @@ this process (ADR-0004: event-loop jitter here is dead air on a live call).
 """
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from loguru import logger
 
 from turncall.api.deps import DbSession
 from turncall.api.errors import BadRequestError, ConflictError, NotFoundError
-from turncall.api.responses import ok
+from turncall.api.responses import ok, paginated
 from turncall.api.v1.schemas.evals import (
     SCHEMA_VERSION,
     CreateEvalRunRequest,
     CreateEvalScenarioRequest,
     EvalBatchResponse,
     EvalRunResponse,
+    EvalRunSummaryResponse,
     EvalScenarioResponse,
     ScenarioDraftResponse,
     ScenarioFromCallRequest,
@@ -37,6 +38,16 @@ from turncall.storage.repositories import eval_repo
 
 router = APIRouter(prefix="/eval-scenarios", tags=["evals"])
 runs_router = APIRouter(prefix="/eval-runs", tags=["evals"])
+
+
+# Paging bounds, validated by FastAPI so a bad page is a 422 and never a
+# negative OFFSET (#99). The ceiling matters more here than on most lists: a
+# run row carries every iteration's transcript and three JSONB snapshots, so an
+# unbounded `limit` is an unbounded read.
+MAX_PAGE_SIZE = 100
+
+Page = Annotated[int, Query(ge=1, description="1-based page number")]
+PageSize = Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)]
 
 
 @router.post("", status_code=201)
@@ -75,11 +86,26 @@ async def list_eval_scenarios(
     session: DbSession,
     kind: EvalKind | None = None,
     tag: str | None = None,
+    page: Page = 1,
+    limit: PageSize = 50,
 ) -> dict:
+    """List scenarios, newest first, paged (#99).
+
+    The tag **fan-out** deliberately does not go through here: it reads every
+    matching scenario, because a suite that silently ran one page of itself
+    reports a verdict for scenarios that never ran.
+    """
+    filters = {"kind": kind.value if kind else None, "tag": tag}
     rows = await eval_repo.list_scenarios(
-        session, auth.project_id, kind=kind.value if kind else None, tag=tag
+        session, auth.project_id, limit=limit, offset=(page - 1) * limit, **filters
     )
-    return ok([EvalScenarioResponse.model_validate(r) for r in rows])
+    total = await eval_repo.count_scenarios(session, auth.project_id, **filters)
+    return paginated(
+        data=[EvalScenarioResponse.model_validate(r) for r in rows],
+        total=total,
+        page=page,
+        limit=limit,
+    )
 
 
 @router.get("/{scenario_id}")
@@ -501,19 +527,51 @@ async def list_eval_runs(
     batch_id: UUID | None = None,
     scenario_id: UUID | None = None,
     status: EvalRunStatus | None = None,
+    page: Page = 1,
+    limit: PageSize = 50,
 ) -> dict:
+    """List runs, newest first. Paged like every other list here (#99): a year
+    of CI runs is the volume this feature is for."""
+    filters = {
+        "batch_id": batch_id,
+        "scenario_id": scenario_id,
+        "status": status.value if status else None,
+    }
     rows = await eval_repo.list_runs(
         session,
         auth.project_id,
-        batch_id=batch_id,
-        scenario_id=scenario_id,
-        status=status.value if status else None,
+        limit=limit,
+        offset=(page - 1) * limit,
+        **filters,
     )
-    return ok([EvalRunResponse.model_validate(r) for r in rows])
+    total = await eval_repo.count_runs(session, auth.project_id, **filters)
+    return paginated(
+        data=[EvalRunResponse.model_validate(r) for r in rows],
+        total=total,
+        page=page,
+        limit=limit,
+    )
 
 
 @runs_router.get("/{run_id}")
-async def get_eval_run(run_id: UUID, auth: Auth, session: DbSession) -> dict:
+async def get_eval_run(
+    run_id: UUID, auth: Auth, session: DbSession, view: str = "full"
+) -> dict:
+    """One run. `?view=summary` answers "is it done yet" without the payload.
+
+    The full read carries every iteration's transcript and all three
+    snapshots, which for a 50-iteration audio run is a large response to poll
+    on a timer (#99).
+    """
+    if view == "summary":
+        row = await eval_repo.get_run_summary(
+            session, run_id, project_id=auth.project_id
+        )
+        if row is None:
+            raise NotFoundError("EvalRun", str(run_id))
+        return ok(EvalRunSummaryResponse.model_validate(dict(row)))
+    if view != "full":
+        raise BadRequestError(f"unknown view {view!r}: expected 'full' or 'summary'")
     row = await eval_repo.get_run(session, run_id, project_id=auth.project_id)
     if row is None:
         raise NotFoundError("EvalRun", str(run_id))
