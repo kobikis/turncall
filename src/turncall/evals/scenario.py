@@ -5,6 +5,10 @@ Validating it means round-tripping it through pipecat's parser and surfacing
 pipecat's own error — the schema belongs to pipecat and moves between majors,
 so tracking it in our own models would be a standing migration debt.
 
+That round-trip goes through two of pipecat's **private** functions, because
+1.11 has no public mapping-level parser: `EvalScenarioFile.load` takes a path,
+and a stored scenario has no file. See `_parsers` and #100.
+
 `_parse_script` / `_parse_simulation` take `(mapping, path)`; the path is only
 used in error messages and to resolve a turn's relative `audio:`/`image:`
 paths. A stored scenario has no file, so a label stands in — and an audio path
@@ -110,6 +114,41 @@ def with_modality(definition: dict[str, Any], modality: EvalModality) -> dict[st
     return merged
 
 
+def _parsers() -> dict[EvalKind, Any]:
+    """Pipecat's parsers for the two scenario kinds, by kind.
+
+    Both are underscore-private and carry no compatibility promise (#100). They
+    are used anyway because the public entry points in pipecat 1.11 are
+    file-based — `EvalScenarioFile.load(path)` reads YAML off disk, and the
+    mapping-level `_scenario_from_mapping` beneath it is private too. A stored
+    definition has no file, and writing one per validation to reach a public
+    API would add I/O to every create and every queued run, and a YAML
+    round-trip to a mapping that is already parsed.
+
+    What this costs is a rename in a pipecat minor taking out **all** scenario
+    validation at once: creating, updating, and `_parse_for_run` on every run in
+    the queue. `tests/unit/test_pipecat_parser_contract.py` is what turns that
+    into a red build with an obvious cause instead, and the error below is what
+    the worker's log says if one ever ships anyway.
+    """
+    from importlib.metadata import version
+
+    try:
+        from pipecat.evals.script import _parse_script
+        from pipecat.evals.simulation import _parse_simulation
+    except ImportError as exc:  # pragma: no cover - the upgrade this warns about
+        try:
+            installed = version("pipecat-ai")
+        except Exception:
+            installed = "unknown"
+        raise ScenarioError(
+            f"pipecat {installed} does not expose the scenario parsers TurnCall "
+            f"validates against ({SCHEMA_VERSION}): {exc}. This is a pipecat "
+            "upgrade, not a problem with this scenario — see #100."
+        ) from exc
+    return {EvalKind.SCRIPTED: _parse_script, EvalKind.SIMULATION: _parse_simulation}
+
+
 def parse(definition: dict[str, Any], *, name: str | None = None) -> Any:
     """Parse a definition into pipecat's scenario dataclass.
 
@@ -124,15 +163,13 @@ def parse(definition: dict[str, Any], *, name: str | None = None) -> Any:
     Raises:
         ScenarioError: The mapping is of neither kind, or pipecat rejected it.
     """
-    from pipecat.evals.script import _parse_script
-    from pipecat.evals.simulation import _parse_simulation
-
+    parser_for = _parsers()
     kind = kind_of(definition)
     data = dict(definition)
     if name is not None:
         data["name"] = name
 
-    parser = _parse_script if kind is EvalKind.SCRIPTED else _parse_simulation
+    parser = parser_for[kind]
     try:
         return parser(data, _STORED)
     except ScenarioError:
