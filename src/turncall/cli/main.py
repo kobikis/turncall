@@ -16,6 +16,7 @@ from typing import Any
 from turncall.cli.client import Api, ApiError
 from turncall.cli.verdict import (
     EXIT_ERRORED,
+    EXIT_TIMEOUT,
     EXIT_USAGE,
     exit_code,
     is_terminal,
@@ -196,7 +197,7 @@ def _watch(
         print(
             f"timed out after {timeout}s with {len(pending)} run(s) still going; "
             f"they are still running — raise --timeout, or read the verdict later "
-            f"with `turncall eval list`",
+            f"with `turncall eval list` (exit {EXIT_TIMEOUT})",
             file=sys.stderr,
             flush=True,
         )

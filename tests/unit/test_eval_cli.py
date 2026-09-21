@@ -24,6 +24,7 @@ from turncall.cli.verdict import (
     EXIT_ERRORED,
     EXIT_FAILED,
     EXIT_OK,
+    EXIT_TIMEOUT,
     EXIT_USAGE,
     exit_code,
     summarise,
@@ -73,8 +74,27 @@ class TestExitCode:
         pipeline stops meaning anything."""
         assert exit_code([]) == EXIT_ERRORED
 
-    def test_a_run_still_going_is_not_success(self) -> None:
-        assert exit_code([_run("passed"), _run("running")]) == EXIT_ERRORED
+    def test_a_run_still_going_is_its_own_code(self) -> None:
+        """Not `errored` (#112): an errored run is terminal and means nobody
+        could tell, while this one is still going and will reach a verdict
+        nobody will read, because the pipeline has already gone red."""
+        assert exit_code([_run("passed"), _run("running")]) == EXIT_TIMEOUT
+        assert exit_code([_run("queued")]) == EXIT_TIMEOUT
+
+    def test_a_regression_outranks_a_timeout(self) -> None:
+        """A suite where one scenario regressed and another was slow has
+        regressed — the same precedence failure already has over error."""
+        assert exit_code([_run("failed"), _run("running")]) == EXIT_FAILED
+
+    def test_an_outage_outranks_a_timeout(self) -> None:
+        """ "We could never check" is a stronger claim than "we stopped
+        waiting", and it is the one that needs someone to look at the judge."""
+        assert exit_code([_run("errored"), _run("running")]) == EXIT_ERRORED
+
+    def test_a_batch_that_finished_in_time_is_untouched(self) -> None:
+        assert exit_code([_run("passed"), _run("passed")]) == EXIT_OK
+        assert exit_code([_run("passed"), _run("cancelled")]) == EXIT_CANCELLED
+        assert exit_code([]) == EXIT_ERRORED, "an empty batch is still an outage"
 
 
 class TestSummary:
@@ -92,6 +112,14 @@ class TestSummary:
 
     def test_a_clean_run_says_only_what_passed(self) -> None:
         assert summary_line([_run("passed"), _run("passed")]) == "2/2 passed"
+
+    def test_the_line_names_the_runs_it_stopped_waiting_for(self) -> None:
+        """Folding them into either verdict teaches people to read the line
+        wrong, which is the argument `errored` already won (#112)."""
+        line = summary_line([_run("passed"), _run("running"), _run("queued")])
+        assert "1/3 passed" in line
+        assert "2 still running (timed out waiting)" in line
+        assert "could not check" not in line
 
 
 class TestScenarioFiles:
@@ -307,10 +335,11 @@ class TestTheDeadlineFitsTheBatch:
         err = capsys.readouterr().err
         assert "timed out" in err and "still going" in err
         assert "--timeout" in err, "the log has to say what to do about it"
-        # No invented verdict: the row says what it says, and a caller who
-        # stopped waiting genuinely could not check.
+        assert f"exit {EXIT_TIMEOUT}" in err, "the log and the code must agree"
+        # No invented verdict: the row says what it says, and the code says the
+        # command stopped waiting rather than that nobody could check (#112).
         assert finished[0]["status"] == "running"
-        assert exit_code(finished) == EXIT_ERRORED
+        assert exit_code(finished) == EXIT_TIMEOUT
 
 
 class TestThePollingIsCheap:

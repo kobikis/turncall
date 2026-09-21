@@ -514,11 +514,16 @@ turncall eval show <run_id>                                # transcript + verdic
 ```
 
 **Exit 0 only when every run passed.** A failure is `1`, an error `2`, a
-cancellation `3`, a usage mistake `64` — distinct because "your agent
-regressed" and "we could not check" want different alerts, and a judge outage
-must never read as a regression. An empty batch exits non-zero: reporting
-success for a batch that ran nothing is how a green pipeline stops meaning
-anything.
+cancellation `3`, a batch still running when the command stopped waiting `4`, a
+usage mistake `64` — distinct because "your agent regressed" and "we could not
+check" want different alerts, and a judge outage must never read as a
+regression. `4` is separate from `2` for the same reason one step on (#112): an
+errored run is terminal and means nobody could tell, while a timed-out one is
+still being executed and will reach a real verdict minutes later — and the
+remedy is `--timeout` or more worker slots, not the judge. Precedence is by how
+loudly it should be read: a failure outranks an error, which outranks a run
+that simply has not finished. An empty batch exits non-zero: reporting success
+for a batch that ran nothing is how a green pipeline stops meaning anything.
 
 A scenario file is **the API request body, unchanged** — no CLI-only fields and
 no YAML dialect, so there is one schema and one validator. `POST /v1/eval-runs`
