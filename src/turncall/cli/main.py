@@ -22,11 +22,17 @@ from turncall.cli.verdict import (
     summary_line,
 )
 
-# How often to ask the API what happened, and how long to keep asking. A run is
-# seconds to minutes; the API is local or one hop away, so a second is cheap and
-# keeps the progress output feeling live.
+# How often to ask the API what happened. The first tick is quick so a short
+# suite feels live; it then widens, because a run takes minutes and sub-second
+# resolution buys nothing but requests (#98).
 POLL_SECONDS = 1.0
-DEFAULT_TIMEOUT_SECONDS = 900
+MAX_POLL_SECONDS = 10.0
+# The deadline is per **run**, multiplied by how many were queued. The old flat
+# 900s was a per-run budget used as a whole-batch one, so ten scenarios behind a
+# four-slot worker gave up on a healthy suite and CI read it as an outage. A CI
+# job has its own overall timeout; this one only needs to not be the first to
+# fire. `--timeout` is the exception, and is the whole batch's.
+DEFAULT_TIMEOUT_PER_RUN_SECONDS = 900
 
 
 def _load_scenario_file(path: Path) -> dict[str, Any]:
@@ -138,32 +144,66 @@ def _submit(api: Api, args: argparse.Namespace) -> dict[str, Any]:
     return api.create_run(payload)
 
 
-def _watch(api: Api, run_ids: list[str], *, timeout: int, quiet: bool) -> list[dict]:
+def _poll(api: Api, pending: dict[str, Any], batch_id: str | None) -> list[dict]:
+    """The pending runs' current state, in as few requests as possible.
+
+    A batch is one request however many runs it holds — #75 built
+    `GET /v1/eval-runs/batches/{id}` for exactly this question, and it answers
+    it without the transcripts and the three snapshots that `get_run` carries.
+    Loose runs (a pile of scenario files) have no batch to ask about.
+    """
+    if batch_id:
+        runs = api.get_batch(batch_id).get("runs", [])
+        return [run for run in runs if str(run.get("id")) in pending]
+    return [api.get_run(run_id) for run_id in list(pending)]
+
+
+def _watch(
+    api: Api,
+    run_ids: list[str],
+    *,
+    timeout: int,
+    quiet: bool,
+    batch_id: str | None = None,
+) -> list[dict]:
     """Poll until every run is terminal, printing each as it lands.
 
     Streamed rather than summarised at the end: a suite of ten scenarios takes
     minutes, and a command that prints nothing until it is done looks hung.
     """
-    pending = dict.fromkeys(run_ids)
+    pending = dict.fromkeys(str(run_id) for run_id in run_ids)
     finished: dict[str, dict] = {}
     deadline = time.monotonic() + timeout
+    delay = POLL_SECONDS
 
     while pending and time.monotonic() < deadline:
-        for run_id in list(pending):
-            run = api.get_run(run_id)
-            if not is_terminal(run["status"]):
+        for run in _poll(api, pending, batch_id):
+            run_id = str(run.get("id"))
+            if run_id not in pending or not is_terminal(run["status"]):
                 continue
             finished[run_id] = run
             del pending[run_id]
             if not quiet:
                 print(_run_line(run), flush=True)
         if pending:
-            time.sleep(POLL_SECONDS)
+            time.sleep(delay)
+            delay = min(delay * 2, MAX_POLL_SECONDS)
 
+    if pending:
+        # Say it out loud. The runs are still going, so the verdict below is
+        # `errored` — "nobody could check" is the truth when the command
+        # stopped waiting, but a log that does not say why reads as an outage.
+        print(
+            f"timed out after {timeout}s with {len(pending)} run(s) still going; "
+            f"they are still running — raise --timeout, or read the verdict later "
+            f"with `turncall eval list`",
+            file=sys.stderr,
+            flush=True,
+        )
     for run_id in pending:
-        # Timed out: report what the row says rather than inventing a verdict.
+        # Report what the row says rather than inventing a verdict.
         finished[run_id] = api.get_run(run_id)
-    return [finished[run_id] for run_id in run_ids]
+    return [finished[str(run_id)] for run_id in run_ids]
 
 
 _MARK = {
@@ -196,8 +236,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if batch.get("batch_id") and not args.quiet:
         print(f"batch {batch['batch_id']}: {len(runs)} run(s)", flush=True)
 
+    # Per run, not per batch: the queue is served a few runs at a time, so a
+    # ten-scenario suite is several waves of one run's worth of work.
+    timeout = args.timeout or DEFAULT_TIMEOUT_PER_RUN_SECONDS * len(runs)
     finished = _watch(
-        api, [r["id"] for r in runs], timeout=args.timeout, quiet=args.quiet
+        api,
+        [r["id"] for r in runs],
+        timeout=timeout,
+        quiet=args.quiet,
+        batch_id=batch.get("batch_id"),
     )
     print(summary_line(finished))
     return exit_code(finished)
@@ -286,7 +333,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--modality", default="text", choices=("text", "audio"))
     run.add_argument("--iterations", type=int, default=1)
-    run.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
+    run.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help="seconds to wait for the whole batch "
+        f"(default: {DEFAULT_TIMEOUT_PER_RUN_SECONDS}s per queued run)",
+    )
     run.add_argument("--quiet", action="store_true", help="only the summary line")
     run.set_defaults(func=_cmd_run)
 
