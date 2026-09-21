@@ -10,6 +10,7 @@ answered as healthy.
 """
 
 import asyncio
+import contextlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -154,12 +155,24 @@ class TestTheIterationGivesEverythingBack:
             stop.set()
             return None
 
-        async def execute_run(run_id, **_kw):
+        async def execute_run(run_id, session_factory, settings, **_kw):
+            """The real thing, one layer down: a run whose *harness* hangs.
+
+            Raising here instead would prove nothing — the slot's `finally`
+            already handles a raise, so the test would pass with the bound
+            reverted. This goes through `_run_harness`, so an unbudgeted await
+            hangs the loop and the second run never starts.
+            """
             ran.append(run_id)
-            if run_id == "hangs":
-                # What the bound turns a hang into: a raise, eventually.
-                await asyncio.sleep(0.01)
-                raise IterationTimeout("the harness did not finish within 180s")
+            if run_id != "hangs":
+                return
+            from turncall.evals import harness as harness_mod
+
+            async def never():
+                await asyncio.Event().wait()
+
+            with contextlib.suppress(IterationTimeout):
+                await harness_mod._run_harness(_harness(never), 0.02, uuid4())
 
         with (
             patch("turncall.storage.redis.get_redis", MagicMock()),
@@ -168,6 +181,8 @@ class TestTheIterationGivesEverythingBack:
         ):
             await asyncio.wait_for(
                 worker_mod._consume(MagicMock(), SimpleNamespace(), stop, slots),
+                # Generous, and still finite: an unbounded harness await turns
+                # this into the hang the bound exists to prevent.
                 timeout=5,
             )
 
