@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from turncall.domain.config_secrets import sanitize_config as _sanitize_config
+
 
 class STTConfigSchema(BaseModel):
     provider: str = "deepgram"
@@ -596,69 +598,3 @@ class AgentResponse(BaseModel):
             created_at=row.created_at,
             published_at=row.published_at,
         )
-
-
-_MASK = "***"
-
-
-def _sanitize_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Mask every secret in an agent config before returning it in API responses.
-
-    A read-only key must not be able to exfiltrate credentials for external
-    systems, so this covers all secret-bearing fields, not just llm.api_key:
-    - llm.api_key (BYOM provider key)
-    - aws.secret_access_key / aws.session_token (adr/0016)
-    - server_url.secret (server-events signing secret)
-    - tools[].webhook_secret (custom-tool signing secret)
-    - mcp_servers[].headers / .env (documented as carrying Authorization)
-
-    New secret-bearing config fields MUST be added here.
-    """
-    if not isinstance(config, dict):
-        return config
-    out = {**config}
-
-    llm = out.get("llm")
-    if isinstance(llm, dict) and llm.get("api_key") is not None:
-        out["llm"] = {**llm, "api_key": _MASK}
-
-    aws = out.get("aws")
-    if isinstance(aws, dict):
-        masked = {
-            k: (_MASK if aws.get(k) is not None else None)
-            for k in ("secret_access_key", "session_token")
-            if k in aws
-        }
-        if masked:
-            out["aws"] = {**aws, **masked}
-
-    server_url = out.get("server_url")
-    if isinstance(server_url, dict) and server_url.get("secret") is not None:
-        out["server_url"] = {**server_url, "secret": _MASK}
-
-    tools = out.get("tools")
-    if isinstance(tools, list):
-        out["tools"] = [
-            {**t, "webhook_secret": _MASK}
-            if isinstance(t, dict) and t.get("webhook_secret") is not None
-            else t
-            for t in tools
-        ]
-
-    mcp_servers = out.get("mcp_servers")
-    if isinstance(mcp_servers, list):
-        out["mcp_servers"] = [_mask_mcp_server(s) for s in mcp_servers]
-
-    return out
-
-
-def _mask_mcp_server(server: Any) -> Any:
-    """Mask header/env values (keeping keys, so the shape stays visible)."""
-    if not isinstance(server, dict):
-        return server
-    masked = {**server}
-    if isinstance(server.get("headers"), dict) and server["headers"]:
-        masked["headers"] = {k: _MASK for k in server["headers"]}
-    if isinstance(server.get("env"), dict) and server["env"]:
-        masked["env"] = {k: _MASK for k in server["env"]}
-    return masked

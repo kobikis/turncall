@@ -15,6 +15,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from turncall.config import get_settings
+from turncall.domain.config_secrets import sanitize_config, sanitize_target
 from turncall.domain.enums import (
     EvalKind,
     EvalModality,
@@ -361,6 +362,13 @@ class EvalRunResponse(BaseModel):
     queued_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+
+    # Masked on the way out, not at the call sites (#91): the run endpoints are
+    # gated on `Auth`, so a viewer key reading a run would otherwise get every
+    # credential in the agent's config in the clear. A validator catches every
+    # `model_validate`, including rows written before the runner masked them.
+    _mask_target = field_validator("target")(sanitize_target)
+    _mask_config = field_validator("resolved_config")(sanitize_config)
 
 
 __all__ = [

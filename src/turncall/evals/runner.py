@@ -25,6 +25,7 @@ from uuid import UUID
 
 from loguru import logger
 
+from turncall.domain.config_secrets import sanitize_config, sanitize_target
 from turncall.domain.enums import (
     EvalKind,
     EvalModality,
@@ -805,7 +806,7 @@ def _completed_payload(run: Any) -> dict[str, Any]:
         "kind": run.kind,
         "modality": run.modality,
         "batch_id": str(run.batch_id) if run.batch_id else None,
-        "target": run.target,
+        "target": sanitize_target(run.target),
         # Null for an inline target — the honest answer to "which stored agent
         # was this", not missing data (ADR-0017).
         "agent_id": str(run.agent_id) if run.agent_id else None,
@@ -813,7 +814,7 @@ def _completed_payload(run: Any) -> dict[str, Any]:
         "results": run.results,
         # What the worker's log used to be the only home for (#96).
         "warnings": list(run.warnings or []),
-        "resolved_config": run.resolved_config,
+        "resolved_config": sanitize_config(run.resolved_config),
         "resolved_scenario": run.resolved_scenario,
         "harness_config": run.harness_config,
         "queued_at": run.queued_at.isoformat() if run.queued_at else None,
@@ -1020,7 +1021,10 @@ async def _plan_run(
     await eval_repo.start_run(
         session,
         run.id,
-        resolved_config=target.config_blob,
+        # Stored already masked (#91): nothing reads this back to execute
+        # anything — it answers "what config produced this verdict", which a
+        # masked key answers as well as a real one.
+        resolved_config=sanitize_config(target.config_blob),
         agent_id=target.agent_id,
         agent_version=target.agent_version,
         harness_config=harness_config(parsed),
@@ -1045,7 +1049,7 @@ async def _plan_run(
             "modality": modality.value,
             "iterations": run.iterations,
             "batch_id": str(run.batch_id) if run.batch_id else None,
-            "target": run.target,
+            "target": sanitize_target(run.target),
             "agent_id": str(target.agent_id) if target.agent_id else None,
             "agent_version": target.agent_version,
         },
