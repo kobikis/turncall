@@ -72,6 +72,8 @@ def _row(**over):
         failed_count=0,
         error=None,
         results=[],
+        # Mirrors the row: `warnings` arrived with #96 while this was out.
+        warnings=[],
         agent_id=None,
         agent_version=None,
         resolved_config=SECRETFUL,
