@@ -951,7 +951,12 @@ async def _plan_run(
         return None
 
     tool_mocks, live_tools = tool_policy_of(run.resolved_scenario)
-    warnings = _warn_unmatched_mocks(tool_mocks, target, run_id=run.id)
+    # Carried into the run, not only the create response (#95): the person who
+    # reads a green verdict is not always the one who wrote the scenario, and
+    # "this could not have failed" is the most important thing a green run can
+    # say about itself.
+    warnings = scenario_mod.assertion_warnings(parsed)
+    warnings += _warn_unmatched_mocks(tool_mocks, target, run_id=run.id)
     if live_tools and (target.config.tools or target.config.mcp_servers):
         # The scenario typed the word, so this is allowed — but a real webhook
         # fires on every iteration, and the run's record is where someone

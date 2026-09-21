@@ -134,6 +134,20 @@ class EvalScenarioResponse(BaseModel):
     default_target: dict[str, Any] | None
     created_at: datetime
     updated_at: datetime
+    # Derived, not stored (#95): a scenario whose every expectation is a bare
+    # event parses cleanly and then reports `passed` forever against an agent
+    # whose LLM returns nothing. Computed on every read rather than at create,
+    # so an existing scenario that was trimmed into that state says so too.
+    warnings: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _derive_warnings(self) -> "EvalScenarioResponse":
+        from turncall.evals.scenario import assertion_warnings
+
+        if self.warnings:
+            return self
+        found = assertion_warnings(self.definition, name=self.name)
+        return self.model_copy(update={"warnings": found}) if found else self
 
 
 class ScenarioFromCallRequest(BaseModel):

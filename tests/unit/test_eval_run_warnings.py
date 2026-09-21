@@ -134,7 +134,8 @@ class TestTheyReachTheRunAndTheEvent:
             )
 
         written = start.await_args.kwargs["warnings"]
-        assert [w["code"] for w in written] == ["mock_matches_no_tool"]
+        # Alongside whatever else the run has to say about itself (#95).
+        assert "mock_matches_no_tool" in [w["code"] for w in written]
 
     async def test_the_completed_event_carries_them(self) -> None:
         """It is built off the row, so this comes free — but free is not the
