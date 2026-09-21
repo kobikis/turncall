@@ -426,3 +426,49 @@ async def test_a_batch_reads_back_without_fetching_every_run(factory) -> None:
             session, project_id, batch_id=batch_id, status="queued"
         )
         assert len(queued) == 1, "status filter narrows within the batch"
+
+
+@pytest.mark.asyncio
+async def test_a_runs_warnings_survive_the_round_trip(factory) -> None:
+    """The column exists and holds what the runner put in it (#96) — the whole
+    point is that the warning outlives the worker's log."""
+    warning = {
+        "code": "mock_matches_no_tool",
+        "message": "1 mock(s) name a tool this run cannot call: book_table",
+        "tools": ["book_table"],
+        "mcp_servers": 1,
+    }
+    async with factory() as session:
+        project = await _project(session, "eval-warnings")
+        _scenario, run = await _scenario_and_run(session, project.id, name="warns")
+        run_id = run.id
+        await eval_repo.start_run(
+            session,
+            run_id,
+            resolved_config={},
+            agent_id=None,
+            harness_config={},
+            warnings=[warning],
+        )
+        await session.commit()
+
+    async with factory() as session:
+        reread = await eval_repo.get_run(session, run_id)
+        assert reread.warnings == [warning]
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_nothing_to_say_carries_an_empty_list(factory) -> None:
+    """Not null: "nothing was recorded" and "nothing was wrong" have to read
+    the same way to every consumer."""
+    async with factory() as session:
+        project = await _project(session, "eval-warnings-clean")
+        _scenario, run = await _scenario_and_run(session, project.id, name="clean")
+        run_id = run.id
+        await eval_repo.start_run(
+            session, run_id, resolved_config={}, agent_id=None, harness_config={}
+        )
+        await session.commit()
+
+    async with factory() as session:
+        assert (await eval_repo.get_run(session, run_id)).warnings == []

@@ -293,6 +293,9 @@ class EvalBatchRunSummary(BaseModel):
     failed_count: int
     iterations: int
     error: str | None
+    # Carried here too (#96): this is the endpoint the CLI polls, and a warning
+    # that only exists on the heavy per-run response is one nobody reads.
+    warnings: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class EvalBatchResponse(BaseModel):
@@ -335,6 +338,11 @@ class EvalRunResponse(BaseModel):
     passed_count: int
     failed_count: int
     results: list[dict[str, Any]]
+    # Not verdicts, and not errors: things the scenario's author has to know
+    # about the run they just got back (#96) — a mock that can never fire, an
+    # agent whose real tools were allowed to. They were worker log lines, which
+    # nobody reading a run ever sees.
+    warnings: list[dict[str, Any]] = Field(default_factory=list)
     error: str | None
     queued_at: datetime
     started_at: datetime | None

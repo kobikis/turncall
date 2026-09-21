@@ -765,6 +765,7 @@ class TestExecuteRun:
             failed_count=0,
             error=None,
             results=[],
+            warnings=[],
             agent_id=None,
             agent_version=None,
             resolved_config={},

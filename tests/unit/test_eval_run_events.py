@@ -153,6 +153,7 @@ class TestTheRunnerDispatches:
             results=[
                 {"iteration": 1, "passed": True, "transcript": [], "failures": []}
             ],
+            warnings=[],
             agent_id=uuid4(),
             agent_version=3,
             resolved_config={"system_prompt": "hi"},

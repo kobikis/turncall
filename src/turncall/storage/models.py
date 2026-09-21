@@ -667,6 +667,13 @@ class EvalRunRow(Base):
     passed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     results: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # Things the run's author needs to know that are not verdicts (#96): a mock
+    # keyed to a tool this run can never call, an agent whose real tools are
+    # allowed to fire. They used to be worker log lines, which is a container
+    # nobody watching a run ever reads.
+    warnings: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     queued_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now

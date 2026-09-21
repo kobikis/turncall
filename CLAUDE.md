@@ -606,8 +606,13 @@ pace in realtime, so evals measure latency, not silence), and telephony.
 **An eval connects no MCP servers.** It builds through `build_call_pipeline`,
 which takes no MCP manager, so an agent's MCP tools are neither contacted (the
 point of #71) nor advertised — the model never sees them, and a `tool_mocks`
-entry naming one never fires. The run warns (`eval_mock_matches_no_tool`)
-rather than failing. **Text mode also cannot see the agent's `first_message`** — it goes out as a
+entry naming one never fires. The run warns rather than failing — in the run's
+own **`warnings`** list (`{code, message, tools, mcp_servers}`), which rides to
+`eval.run.completed`, the batch summary and `turncall eval show`, because the
+author reads the run and never the worker's log. `mcp_servers` is the valuable
+half: it says "this is the MCP limitation, not your typo". `live_tools_allowed`
+is the other one — a `live` policy really executes the agent's tools, once per
+iteration. **Text mode also cannot see the agent's `first_message`** — it goes out as a
 `TTSSpeakFrame`, so it never becomes LLM text, and `skip_tts` silences the TTS.
 The judge is pipecat's `EvalJudge`, which is **Ollama by default** (`service:
 openai` is deprecated in pipecat 1.9 and gone in 2.0; anything else needs
