@@ -616,12 +616,20 @@ async def test_a_running_run_still_takes_its_verdict(factory) -> None:
 
 @pytest.mark.asyncio
 async def test_paging_returns_each_row_once_under_a_stable_order(factory) -> None:
-    """Rows created in one transaction share a timestamp to the microsecond, so
-    without the id tiebreak a page can repeat a row and miss another (#99)."""
+    """Without the id tiebreak a page can repeat a row and miss another (#99).
+
+    The timestamps are forced equal rather than assumed to be: `created_at`
+    defaults to `utc_now` evaluated per row in Python, so rows written in one
+    transaction get distinct values and a tie would never arise — the test
+    would then pass with the tiebreak reverted, which is the one thing it must
+    not do. A tie is what a bulk insert or a clock with coarser resolution
+    produces.
+    """
+    tied = datetime.now(UTC)
     async with factory() as session:
         project = await _project(session, "eval-paging")
         for i in range(7):
-            await eval_repo.create_scenario(
+            row = await eval_repo.create_scenario(
                 session,
                 project_id=project.id,
                 name=f"scenario-{i}",
@@ -630,6 +638,7 @@ async def test_paging_returns_each_row_once_under_a_stable_order(factory) -> Non
                 schema_version="pipecat-1.11",
                 tags=["paged"],
             )
+            row.created_at = tied
         await session.commit()
         project_id = project.id
 
@@ -642,6 +651,10 @@ async def test_paging_returns_each_row_once_under_a_stable_order(factory) -> Non
             seen.extend(str(row.id) for row in rows)
         assert len(seen) == 7
         assert len(set(seen)) == 7, "a row was served twice"
+        # And in the order the tiebreak declares, not merely each row once:
+        # with the timestamps tied, `id DESC` is the whole sort.
+        every = await eval_repo.list_scenarios(session, project_id, limit=50)
+        assert seen == sorted((str(row.id) for row in every), reverse=True)
         assert await eval_repo.count_scenarios(session, project_id) == 7
 
 
