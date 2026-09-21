@@ -279,7 +279,12 @@ async def fail_if_still_queued(
 
 
 async def reclaim_stalled_runs(
-    session: AsyncSession, *, max_age_seconds: int, max_queued_seconds: int
+    session: AsyncSession,
+    *,
+    max_age_seconds: int,
+    max_queued_seconds: int,
+    min_iteration_seconds: float = 0.0,
+    margin_seconds: float = 0.0,
 ) -> int:
     """Sweep runs nothing will ever finish into `errored`.
 
@@ -297,17 +302,39 @@ async def reclaim_stalled_runs(
     running after an hour is not.
 
     `errored`, not `failed`, for both: nobody learned anything about the agent.
+
+    The claimed-run cutoff is **per row** (#94). There is no heartbeat and no
+    lease — `started_at` is stamped once and never renewed — so a flat
+    `max_run_duration_seconds` made a healthy 10-iteration run indistinguishable
+    from a crashed one, and sweeping it mid-flight made `turncall eval run` exit
+    2 on a run that passed. Iterations are serial and each is bounded (#93), so
+    the row's own budget is `iterations * per-iteration budget + margin`, which
+    is what `evals.runner.run_budget_seconds` computes in Python and this
+    rebuilds in SQL: the per-iteration budget is the run budget split
+    `iterations` ways but never below `min_iteration_seconds`, so the product is
+    `greatest(max_age_seconds, min_iteration_seconds * iterations)`.
+
+    Left at their defaults the two new arguments reproduce the flat cutoff.
     """
     from datetime import timedelta
 
+    from sqlalchemy import func, literal
+
     now = _utc_now()
+    # Seconds, per row. Compared against the age of the claim on the database's
+    # clock, which is the only one every worker agrees on.
+    run_budget = func.greatest(
+        literal(float(max_age_seconds)),
+        literal(float(min_iteration_seconds)) * EvalRunRow.iterations,
+    ) + literal(float(margin_seconds))
     result = await session.execute(
         update(EvalRunRow)
         .where(
             or_(
                 and_(
                     EvalRunRow.status == EvalRunStatus.RUNNING.value,
-                    EvalRunRow.started_at < now - timedelta(seconds=max_age_seconds),
+                    func.extract("epoch", func.now() - EvalRunRow.started_at)
+                    > run_budget,
                 ),
                 and_(
                     EvalRunRow.status == EvalRunStatus.QUEUED.value,

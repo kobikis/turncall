@@ -19,6 +19,7 @@ from sqlalchemy import update
 
 from turncall.config.settings import Settings
 from turncall.domain.enums import EvalRunStatus
+from turncall.evals.runner import MIN_ITERATION_BUDGET_S, RECLAIM_MARGIN_S
 from turncall.storage.database import create_engine, create_session_factory
 from turncall.storage.models import EvalRunRow, ProjectRow
 from turncall.storage.repositories import eval_repo
@@ -54,7 +55,9 @@ async def _project(session, name: str):
     return project
 
 
-async def _scenario_and_run(session, project_id, *, name="greets-the-caller"):
+async def _scenario_and_run(
+    session, project_id, *, name="greets-the-caller", iterations=1
+):
     scenario = await eval_repo.create_scenario(
         session,
         project_id=project_id,
@@ -72,7 +75,7 @@ async def _scenario_and_run(session, project_id, *, name="greets-the-caller"):
         target={"type": "agent", "agent_id": str(project_id)},
         resolved_scenario={"definition": SCRIPTED},
         modality="text",
-        iterations=1,
+        iterations=iterations,
     )
     return scenario, run
 
@@ -472,3 +475,79 @@ async def test_a_run_with_nothing_to_say_carries_an_empty_list(factory) -> None:
 
     async with factory() as session:
         assert (await eval_repo.get_run(session, run_id)).warnings == []
+
+
+# The bounds the worker's janitor passes (#94), derived from #93's per-iteration
+# budget rather than guessed.
+_JANITOR_BOUNDS = {
+    "max_age_seconds": 900,
+    "max_queued_seconds": 3600,
+    "min_iteration_seconds": MIN_ITERATION_BUDGET_S,
+    "margin_seconds": RECLAIM_MARGIN_S,
+}
+
+
+async def _claimed(factory, *, name, iterations, age):
+    """A run claimed `age` ago, as if a worker were still running it."""
+    async with factory() as session:
+        project = await _project(session, name)
+        _scenario, run = await _scenario_and_run(
+            session, project.id, name=name, iterations=iterations
+        )
+        run_id = run.id
+        await eval_repo.start_run(
+            session, run_id, resolved_config={}, agent_id=None, harness_config={}
+        )
+        await session.execute(
+            update(EvalRunRow)
+            .where(EvalRunRow.id == run_id)
+            .values(started_at=datetime.now(UTC) - age)
+        )
+        await session.commit()
+    return run_id
+
+
+async def _sweep(factory):
+    async with factory() as session:
+        swept = await eval_repo.reclaim_stalled_runs(session, **_JANITOR_BOUNDS)
+        await session.commit()
+        return swept
+
+
+async def _status(factory, run_id):
+    async with factory() as session:
+        return await eval_repo.get_run(session, run_id)
+
+
+@pytest.mark.asyncio
+async def test_a_long_run_inside_its_iterations_budget_is_not_swept(factory) -> None:
+    """The bug (#94): 20 minutes is past the flat 900s cutoff, but a
+    10-iteration run is entitled to 31. Sweeping it mid-flight is what made
+    `turncall eval run` exit 2 on a run that passed."""
+    run_id = await _claimed(
+        factory, name="eval-janitor-long", iterations=10, age=timedelta(minutes=20)
+    )
+    await _sweep(factory)
+    assert (await _status(factory, run_id)).status == EvalRunStatus.RUNNING.value
+
+
+@pytest.mark.asyncio
+async def test_a_run_past_its_iterations_budget_is_swept(factory) -> None:
+    run_id = await _claimed(
+        factory, name="eval-janitor-over", iterations=10, age=timedelta(minutes=40)
+    )
+    assert await _sweep(factory) >= 1
+    reread = await _status(factory, run_id)
+    assert reread.status == EvalRunStatus.ERRORED.value
+    assert "abandoned" in reread.error
+
+
+@pytest.mark.asyncio
+async def test_a_crashed_workers_run_is_still_reclaimed(factory) -> None:
+    """The behaviour the janitor exists for, unchanged: one iteration buys
+    960 seconds, not an hour."""
+    run_id = await _claimed(
+        factory, name="eval-janitor-crashed", iterations=1, age=timedelta(hours=1)
+    )
+    assert await _sweep(factory) >= 1
+    assert (await _status(factory, run_id)).status == EvalRunStatus.ERRORED.value

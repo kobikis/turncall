@@ -22,7 +22,7 @@ from turncall.domain.enums import EvalRunStatus
 from turncall.domain.models import AgentConfig
 from turncall.evals.harness import IterationTimeout, _run_harness, run_iteration
 from turncall.evals.runner import (
-    _MIN_ITERATION_BUDGET_S,
+    MIN_ITERATION_BUDGET_S,
     ResolvedTarget,
     iteration_budget_seconds,
 )
@@ -47,10 +47,10 @@ class TestTheBudget:
         """900s split 50 ways is 18s, which one audio simulation exceeds by
         design. A budget that tight abandons a run nobody misconfigured."""
         settings = SimpleNamespace(evals=EvalSettings(max_run_duration_seconds=900))
-        assert iteration_budget_seconds(settings, 50) == _MIN_ITERATION_BUDGET_S
+        assert iteration_budget_seconds(settings, 50) == MIN_ITERATION_BUDGET_S
 
     def test_settings_that_say_nothing_still_give_a_budget(self) -> None:
-        assert iteration_budget_seconds(SimpleNamespace(), 1) == _MIN_ITERATION_BUDGET_S
+        assert iteration_budget_seconds(SimpleNamespace(), 1) == MIN_ITERATION_BUDGET_S
 
 
 @pytest.mark.unit
