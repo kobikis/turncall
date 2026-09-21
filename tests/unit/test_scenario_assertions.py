@@ -83,18 +83,21 @@ class TestWhatCountsAsAnAssertion:
 
     def test_a_simulation_is_exempt(self) -> None:
         """Its judge rules on `success` over the whole conversation, so there
-        is always something to fail."""
-        assert (
-            _codes(
-                {
-                    "persona": {
-                        "prompt": "a caller booking a table",
-                        "goal": "books a table for two",
-                    }
-                }
-            )
-            == []
-        )
+        is always something to fail.
+
+        The mapping has to be one pipecat actually accepts — `persona`, `goal`
+        and `success` are top-level strings — or this would pass for the wrong
+        reason, since a definition that cannot parse also yields no warnings.
+        """
+        simulation = {
+            "persona": "a caller booking a table",
+            "goal": "book a table for two",
+            "success": "the agent books a table for two",
+        }
+        from turncall.evals.scenario import parse
+
+        assert parse(simulation, name="booking").persona, "the fixture must parse"
+        assert _codes(simulation) == []
 
     def test_a_definition_that_does_not_parse_is_the_validators_problem(self) -> None:
         assert _codes({"turns": "not a list"}) == []
