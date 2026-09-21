@@ -51,6 +51,9 @@ def _run_row(iterations: int, status: str = "queued"):
         failed_count=0,
         error=None,
         results=[],
+        # Mirrors the row (#76 builds the completed event by reading it back);
+        # `warnings` arrived with #96 while this branch was out.
+        warnings=[],
         agent_id=None,
         agent_version=None,
         resolved_config={},
