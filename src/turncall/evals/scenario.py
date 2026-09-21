@@ -150,3 +150,114 @@ def validate(definition: dict[str, Any], *, name: str | None = None) -> EvalKind
     """
     parse(definition, name=name)
     return kind_of(definition)
+
+
+# What makes an expectation an assertion rather than a shape check. A bare
+# `{"event": "llm_response"}` asserts only that *something* arrived: after a
+# provider 404 pipecat still emits an empty `llm_response`, so such a scenario
+# reports `passed` against an agent whose LLM returns nothing — which is the
+# exact class of regression (#63/#64/#65) the feature was built to catch.
+_ASSERTING_FIELDS = (
+    "text_contains",
+    "text_excludes",
+    # Not a field pipecat 1.11 carries; listed because the documented
+    # vocabulary includes it and `getattr` on an absent one costs nothing —
+    # this must never warn about a scenario that does assert something.
+    "matches",
+    "eval",
+    "calls",
+    "marker",
+    "markers",
+    "marker_first",
+)
+
+
+def _asserts_something(expectation: Any) -> bool:
+    """Whether one expectation can fail on anything but a missing event.
+
+    `absent: True` counts: asserting that an event never arrives is a claim
+    about behaviour, and pipecat forbids combining it with the content checks.
+    """
+    if getattr(expectation, "absent", False):
+        return True
+    return any(getattr(expectation, field, None) for field in _ASSERTING_FIELDS)
+
+
+def _cannot_fail(message: str, weak: list[str]) -> dict[str, Any]:
+    """The loud case: nothing in this scenario can report a regression."""
+    return {
+        "code": "scenario_cannot_fail",
+        "message": message,
+        "expectations": weak,
+    }
+
+
+def assertion_warnings(
+    scenario: Any, *, name: str | None = None
+) -> list[dict[str, Any]]:
+    """Say so when a scripted scenario cannot fail for the right reason (#95).
+
+    Advisory, never fatal — `_warn_unmatched_mocks` sets that precedent, and
+    the asymmetric cases are real: a turn may legitimately assert only that a
+    function call happened. What is never intended is a whole scenario of bare
+    events, which parses cleanly, stores, runs, and stays green through every
+    broken provider.
+
+    A simulation is exempt: its judge rules on `success` over the whole
+    conversation, so there is always something to fail.
+
+    Takes a parsed scenario or the raw definition, since the API has the one
+    and the runner has the other.
+    """
+    parsed = scenario
+    if isinstance(scenario, dict):
+        try:
+            # Pipecat requires a `name:` key at all; the row's name is
+            # authoritative and a placeholder stands in for a draft that has
+            # none, so a missing name never reads as "nothing to warn about".
+            parsed = parse(scenario, name=name or "<scenario>")
+        except ScenarioError:
+            # Shape is the validator's business, and a definition that cannot
+            # parse has a louder problem than a weak assertion.
+            return []
+    turns = getattr(parsed, "turns", None)
+    if not turns:
+        return []
+
+    total = 0
+    weak: list[str] = []
+    for index, turn in enumerate(turns):
+        for expectation in getattr(turn, "expect", None) or []:
+            total += 1
+            if not _asserts_something(expectation):
+                weak.append(f"turn {index + 1}: {getattr(expectation, 'event', '?')}")
+    add = " Add text_contains, matches, eval: or a function_call with its args."
+    if total == 0:
+        return [
+            _cannot_fail(
+                "this scenario's turns carry no expectations at all." + add, []
+            )
+        ]
+    if not weak:
+        return []
+
+    if len(weak) == total:
+        return [
+            _cannot_fail(
+                "no expectation in this scenario asserts any content, so it passes "
+                "whenever the events merely arrive — including when the LLM is "
+                "returning nothing at all (a provider that 404s still emits an "
+                "empty llm_response)." + add,
+                weak,
+            )
+        ]
+    return [
+        {
+            "code": "content_free_expectations",
+            "message": (
+                f"{len(weak)} of {total} expectations assert only that an event "
+                "arrived: " + "; ".join(weak)
+            ),
+            "expectations": weak,
+        }
+    ]
