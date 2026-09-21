@@ -551,3 +551,64 @@ async def test_a_crashed_workers_run_is_still_reclaimed(factory) -> None:
     )
     assert await _sweep(factory) >= 1
     assert (await _status(factory, run_id)).status == EvalRunStatus.ERRORED.value
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_run_cannot_be_given_a_verdict(factory) -> None:
+    """The loop's verdict must not overwrite a terminal row (#92). The user
+    cancelled; a run that then reports `passed` is the cancel button lying."""
+    async with factory() as session:
+        project = await _project(session, "eval-cancel-race")
+        _scenario, run = await _scenario_and_run(session, project.id, name="cancelled")
+        run_id = run.id
+        await eval_repo.start_run(
+            session, run_id, resolved_config={}, agent_id=None, harness_config={}
+        )
+        assert await eval_repo.cancel_run(session, run_id)
+        await session.commit()
+
+    async with factory() as session:
+        written = await eval_repo.finish_run(
+            session,
+            run_id,
+            status=EvalRunStatus.PASSED,
+            passed_count=3,
+            failed_count=0,
+            results=[{"iteration": 1, "passed": True}],
+        )
+        await session.commit()
+        assert not written, "a terminal row wins over a late writer"
+
+    async with factory() as session:
+        reread = await eval_repo.get_run(session, run_id)
+        assert reread.status == EvalRunStatus.CANCELLED.value
+        assert reread.passed_count == 0 and reread.results == []
+
+
+@pytest.mark.asyncio
+async def test_a_running_run_still_takes_its_verdict(factory) -> None:
+    """The control for the guard above: the ordinary path is untouched."""
+    async with factory() as session:
+        project = await _project(session, "eval-finish-ok")
+        _scenario, run = await _scenario_and_run(session, project.id, name="finishes")
+        run_id = run.id
+        await eval_repo.start_run(
+            session, run_id, resolved_config={}, agent_id=None, harness_config={}
+        )
+        await session.commit()
+
+    async with factory() as session:
+        assert await eval_repo.finish_run(
+            session,
+            run_id,
+            status=EvalRunStatus.PASSED,
+            passed_count=1,
+            failed_count=0,
+            results=[{"iteration": 1, "passed": True}],
+        )
+        await session.commit()
+
+    async with factory() as session:
+        reread = await eval_repo.get_run(session, run_id)
+        assert reread.status == EvalRunStatus.PASSED.value
+        assert reread.passed_count == 1
