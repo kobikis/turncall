@@ -27,6 +27,7 @@ async def _janitor(session_factory: Any, settings: Any, stop: asyncio.Event) -> 
     Nothing else would ever move them, and a row stuck at `running` reads to an
     operator as work still in flight.
     """
+    from turncall.evals.runner import MIN_ITERATION_BUDGET_S, RECLAIM_MARGIN_S
     from turncall.storage.repositories import eval_repo
 
     interval = settings.evals.janitor_interval_seconds
@@ -41,6 +42,11 @@ async def _janitor(session_factory: Any, settings: Any, stop: asyncio.Event) -> 
                     session,
                     max_age_seconds=settings.evals.max_run_duration_seconds,
                     max_queued_seconds=settings.evals.max_queued_seconds,
+                    # The claimed-run cutoff is per row (#94): a run is given
+                    # its iterations' budgets, never a flat 900s that says
+                    # nothing about how much work it was asked to do.
+                    min_iteration_seconds=MIN_ITERATION_BUDGET_S,
+                    margin_seconds=RECLAIM_MARGIN_S,
                 )
                 await session.commit()
             if swept:

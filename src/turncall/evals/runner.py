@@ -596,7 +596,14 @@ def derive_status(outcomes: list[IterationOutcome]) -> tuple[EvalRunStatus, int,
 # misconfigured. #94 derives the janitor's cutoff from this same number, so a
 # run allowed to take longer than `max_run_duration_seconds` is not then swept
 # for taking it.
-_MIN_ITERATION_BUDGET_S = 180.0
+MIN_ITERATION_BUDGET_S = 180.0
+
+
+# What the janitor allows a run *on top of* its iterations' budgets before
+# calling it abandoned (#94): the last iteration still has a bot pipeline to
+# wind down (up to `_BOT_STOP_TIMEOUT_S`), a verdict to write and an event to
+# dispatch. Flat, because none of that scales with the iteration count.
+RECLAIM_MARGIN_S = 60.0
 
 
 def iteration_budget_seconds(settings: Any, iterations: int) -> float:
@@ -609,7 +616,27 @@ def iteration_budget_seconds(settings: Any, iterations: int) -> float:
     """
     whole = getattr(getattr(settings, "evals", None), "max_run_duration_seconds", 0)
     share = float(whole or 0) / max(iterations, 1)
-    return max(share, _MIN_ITERATION_BUDGET_S)
+    return max(share, MIN_ITERATION_BUDGET_S)
+
+
+def run_budget_seconds(settings: Any, iterations: int) -> float:
+    """How long a whole run may take before nothing but a crash explains it.
+
+    #93's per-iteration bound is what makes this knowable: iterations are
+    serial, so the run's real ceiling is the sum of theirs plus the margin.
+    The janitor compares against this rather than against
+    `max_run_duration_seconds` flat, which had nothing to do with how much work
+    the run was asked to do — a 10-iteration audio simulation passes 900s
+    comfortably, and sweeping it mid-flight made `turncall eval run` exit 2 on
+    a run that passed.
+
+    The janitor cannot call this per row, so it rebuilds the same arithmetic in
+    SQL from `MIN_ITERATION_BUDGET_S` and `RECLAIM_MARGIN_S`; the identity is
+    pinned by `test_the_sql_cutoff_is_the_same_arithmetic`.
+    """
+    return (
+        iterations * iteration_budget_seconds(settings, iterations) + RECLAIM_MARGIN_S
+    )
 
 
 @dataclass(frozen=True)

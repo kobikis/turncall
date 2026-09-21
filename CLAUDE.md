@@ -621,13 +621,16 @@ errors without one, while `text_contains`/`function_call` build no judge at
 all.
 
 ### Config
-`EVAL_MAX_CONCURRENT_RUNS` (4), `EVAL_MAX_RUN_DURATION_SECONDS` (900, the
-janitor's cutoff for a claimed run — and, split across the run's iterations,
-the budget **one iteration** gets before it is abandoned as `errored`, floored
-at 180s so a 50-iteration run is not handed 18s per conversation. Unbudgeted, a
+`EVAL_MAX_CONCURRENT_RUNS` (4), `EVAL_MAX_RUN_DURATION_SECONDS` (900). That
+number is a **run** budget, split across the run's iterations to bound each one:
+one iteration is abandoned as `errored` after `max(900/iterations, 180s)`,
+floored so a 50-iteration run is not handed 18s per conversation. Unbudgeted, a
 provider that accepts a connection and never answers held a worker slot for the
-life of the process), `EVAL_MAX_QUEUED_SECONDS` (3600, the same
-for one never claimed), `EVAL_JANITOR_INTERVAL_SECONDS` (60),
+life of the process (#93). The janitor's cutoff for a claimed run is then that
+arithmetic back out — `max(900, 180 × iterations) + 60s`, **per row** — because
+there is no heartbeat, and a flat 900s swept healthy multi-iteration runs
+mid-flight, which the CLI reported as a regression (#94). `EVAL_MAX_QUEUED_SECONDS`
+(3600, the cutoff for a run never claimed), `EVAL_JANITOR_INTERVAL_SECONDS` (60),
 `EVAL_MAX_ITERATIONS` (50), `EVAL_TTS_CACHE_DIR`.
 
 ### Key Files
