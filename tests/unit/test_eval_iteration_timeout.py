@@ -213,6 +213,11 @@ class TestTheRunStillCompletes:
             failed_count=0,
             error=None,
             results=[],
+            # Mirrors the row: `eval.run.completed` is built by reading it back
+            # (#76), so a fake missing a column passes a test the real path
+            # cannot. This one arrived with #96 while this fixture was on a
+            # branch of its own — each was green alone, and main was not.
+            warnings=[],
             agent_id=None,
             agent_version=None,
             resolved_config={},
