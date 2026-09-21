@@ -727,6 +727,8 @@ def _completed_payload(run: Any) -> dict[str, Any]:
         "agent_id": str(run.agent_id) if run.agent_id else None,
         "agent_version": run.agent_version,
         "results": run.results,
+        # What the worker's log used to be the only home for (#96).
+        "warnings": list(run.warnings or []),
         "resolved_config": run.resolved_config,
         "resolved_scenario": run.resolved_scenario,
         "harness_config": run.harness_config,
@@ -806,7 +808,7 @@ async def _record_unrunnable(session: Any, run: Any, exc: Exception) -> None:
 
 def _warn_unmatched_mocks(
     tool_mocks: dict[str, Any], target: ResolvedTarget, *, run_id: UUID
-) -> None:
+) -> list[dict[str, Any]]:
     """Say so when a mock names a tool this run can never call.
 
     An eval builds its pipeline through `build_call_pipeline`, which takes no
@@ -824,18 +826,41 @@ def _warn_unmatched_mocks(
     are the sanctioned way to give an eval a tool surface of its own).
     """
     if not tool_mocks:
-        return
+        return []
     from turncall.domain.models import BUILTIN_TOOL_NAMES
 
     known = {t.name for t in target.config.tools} | set(BUILTIN_TOOL_NAMES)
     unmatched = sorted(set(tool_mocks) - known)
-    if unmatched:
-        logger.warning(
-            "eval_mock_matches_no_tool",
-            run_id=str(run_id),
-            tools=unmatched,
-            mcp_servers=len(target.config.mcp_servers),
-        )
+    if not unmatched:
+        return []
+    servers = len(target.config.mcp_servers)
+    logger.warning(
+        "eval_mock_matches_no_tool",
+        run_id=str(run_id),
+        tools=unmatched,
+        mcp_servers=servers,
+    )
+    # Returned as well as logged (#96): the log is the worker's container and
+    # the author reads the run. The MCP server count is the valuable half —
+    # it is what says "this is the MCP limitation, not your typo".
+    return [
+        {
+            "code": "mock_matches_no_tool",
+            "message": (
+                f"{len(unmatched)} mock(s) name a tool this run cannot call: "
+                + ", ".join(unmatched)
+                + (
+                    f". The agent has {servers} MCP server(s), whose tools an "
+                    "eval never connects or advertises — a mock naming one can "
+                    "never fire."
+                    if servers
+                    else ". Check the tool name against the agent's tools."
+                )
+            ),
+            "tools": unmatched,
+            "mcp_servers": servers,
+        }
+    ]
 
 
 def _parse_for_run(run: Any, modality: EvalModality) -> tuple[EvalKind, Any]:
@@ -875,17 +900,28 @@ async def _plan_run(
         return None
 
     tool_mocks, live_tools = tool_policy_of(run.resolved_scenario)
-    _warn_unmatched_mocks(tool_mocks, target, run_id=run.id)
+    warnings = _warn_unmatched_mocks(tool_mocks, target, run_id=run.id)
     if live_tools and (target.config.tools or target.config.mcp_servers):
         # The scenario typed the word, so this is allowed — but a real webhook
-        # fires on every iteration and the run's record should not be the only
-        # place that says so.
+        # fires on every iteration, and the run's record is where someone
+        # reading the result will look for that (#96).
         logger.warning(
             "eval_agent_has_live_tools",
             run_id=str(run.id),
             agent_id=str(target.agent_id),
             tools=len(target.config.tools),
             mcp_servers=len(target.config.mcp_servers),
+        )
+        warnings.append(
+            {
+                "code": "live_tools_allowed",
+                "message": (
+                    f"tool_policy is 'live': the agent's {len(target.config.tools)} "
+                    "tool(s) really execute, once per iteration"
+                ),
+                "tools": [t.name for t in target.config.tools],
+                "mcp_servers": len(target.config.mcp_servers),
+            }
         )
 
     await eval_repo.start_run(
@@ -895,6 +931,7 @@ async def _plan_run(
         agent_id=target.agent_id,
         agent_version=target.agent_version,
         harness_config=harness_config(parsed),
+        warnings=warnings,
     )
     await session.commit()
 

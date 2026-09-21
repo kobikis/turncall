@@ -185,6 +185,16 @@ def _run_line(run: dict[str, Any]) -> str:
     return line
 
 
+def _print_warnings(run: dict[str, Any]) -> None:
+    """Things that are not verdicts but change how the verdict reads (#96).
+
+    A mock that can never fire makes a green run mean less than it looks like
+    it does, and the run is where the person who wrote the scenario is looking.
+    """
+    for warning in run.get("warnings") or []:
+        print(f"warning: {warning.get('message') or warning.get('code')}")
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     api = Api.from_env(args.base_url, args.api_key)
     batch = _submit(api, args)
@@ -199,6 +209,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     finished = _watch(
         api, [r["id"] for r in runs], timeout=args.timeout, quiet=args.quiet
     )
+    for run in finished:
+        _print_warnings(run)
     print(summary_line(finished))
     return exit_code(finished)
 
@@ -223,6 +235,7 @@ def _cmd_show(args: argparse.Namespace) -> int:
     print(f"{run['scenario_name']}  {run['status']}  ({run['id']})")
     if run.get("error"):
         print(f"error: {run['error']}")
+    _print_warnings(run)
 
     for entry in run.get("results", []):
         print(f"\niteration {entry['iteration']}: {_verdict_word(entry)}")
