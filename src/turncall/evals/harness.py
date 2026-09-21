@@ -38,6 +38,15 @@ from turncall.orchestrator.transport_factory import EVAL_SAMPLE_RATE
 _BOT_STOP_TIMEOUT_S = 15.0
 
 
+class IterationTimeout(RuntimeError):
+    """The harness did not finish inside this iteration's budget (#93).
+
+    `errored`, like every other harness fault: an iteration that did not
+    complete says nothing about the agent, and must stay out of the pass/fail
+    rates for the same reason `PipelineFailed` does.
+    """
+
+
 class PipelineFailed(RuntimeError):
     """The pipeline raised, so the iteration proves nothing about the agent.
 
@@ -120,6 +129,7 @@ async def run_iteration(
     session_factory: Any,
     run_id: UUID,
     tool_mocks: Any,
+    timeout_s: float | None = None,
 ) -> Any:
     """Run one scenario-iteration end to end and return pipecat's result.
 
@@ -172,7 +182,7 @@ async def run_iteration(
             f"ws://127.0.0.1:{port}",
             tts_cache_dir=_tts_cache_dir(settings),
         )
-        result = await harness.run()
+        result = await _run_harness(harness, timeout_s, run_id)
     finally:
         await _stop_bot(bot, run_id)
 
@@ -187,6 +197,32 @@ async def run_iteration(
             f"{session.failure}"
         ) from session.failure
     return result
+
+
+async def _run_harness(harness: Any, timeout_s: float | None, run_id: UUID) -> Any:
+    """Drive the harness, inside a time budget (#93).
+
+    Every service the harness itself drives — the persona LLM, its TTS, its
+    STT, the judge — is a network call, and a provider that accepts a
+    connection and then never answers is the ordinary failure, not an exotic
+    one. Unbudgeted, that await never returns: `execute_run` never returns,
+    the worker's concurrency slot is never released, and four of them leave a
+    process that consumes no queue, executes nothing, logs nothing and still
+    answers as healthy.
+
+    The bot pipeline is wound down by the caller's `finally` either way.
+    """
+    if not timeout_s:
+        return await harness.run()
+    try:
+        return await asyncio.wait_for(harness.run(), timeout=timeout_s)
+    except TimeoutError as exc:
+        logger.warning(
+            "eval_iteration_timeout", run_id=str(run_id), budget_s=round(timeout_s, 1)
+        )
+        raise IterationTimeout(
+            f"the harness did not finish within {timeout_s:.0f}s"
+        ) from exc
 
 
 async def _stop_bot(bot: asyncio.Task, run_id: UUID) -> None:

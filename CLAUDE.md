@@ -622,7 +622,11 @@ all.
 
 ### Config
 `EVAL_MAX_CONCURRENT_RUNS` (4), `EVAL_MAX_RUN_DURATION_SECONDS` (900, the
-janitor's cutoff for a claimed run), `EVAL_MAX_QUEUED_SECONDS` (3600, the same
+janitor's cutoff for a claimed run — and, split across the run's iterations,
+the budget **one iteration** gets before it is abandoned as `errored`, floored
+at 180s so a 50-iteration run is not handed 18s per conversation. Unbudgeted, a
+provider that accepts a connection and never answers held a worker slot for the
+life of the process), `EVAL_MAX_QUEUED_SECONDS` (3600, the same
 for one never claimed), `EVAL_JANITOR_INTERVAL_SECONDS` (60),
 `EVAL_MAX_ITERATIONS` (50), `EVAL_TTS_CACHE_DIR`.
 

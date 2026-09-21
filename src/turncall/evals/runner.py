@@ -590,6 +590,28 @@ def derive_status(outcomes: list[IterationOutcome]) -> tuple[EvalRunStatus, int,
     return status, passed, failed
 
 
+# The floor under a derived per-iteration budget (#93). The whole-run budget
+# split 50 ways is 18 seconds, which one audio simulation exceeds by design —
+# a budget that tight would abandon every iteration of a run nobody
+# misconfigured. #94 derives the janitor's cutoff from this same number, so a
+# run allowed to take longer than `max_run_duration_seconds` is not then swept
+# for taking it.
+_MIN_ITERATION_BUDGET_S = 180.0
+
+
+def iteration_budget_seconds(settings: Any, iterations: int) -> float:
+    """How long one iteration may run before it is abandoned (#93).
+
+    Derived from the run budget and the work the run was asked to do, rather
+    than being a constant of its own: one number should govern how long a run
+    may take. The floor is what keeps a high iteration count from turning that
+    division into a budget no real conversation fits in.
+    """
+    whole = getattr(getattr(settings, "evals", None), "max_run_duration_seconds", 0)
+    share = float(whole or 0) / max(iterations, 1)
+    return max(share, _MIN_ITERATION_BUDGET_S)
+
+
 @dataclass(frozen=True)
 class IterationPlan:
     """Everything one iteration needs, resolved once before the first runs.
@@ -608,6 +630,7 @@ class IterationPlan:
     run_id: UUID
     tool_mocks: dict[str, Any]
     live_tools: bool
+    timeout_s: float
 
     def fresh_mocks(self) -> ToolMocks:
         """A recorder for one iteration.
@@ -627,6 +650,7 @@ class IterationPlan:
             "settings": self.settings,
             "session_factory": self.session_factory,
             "run_id": self.run_id,
+            "timeout_s": self.timeout_s,
         }
 
 
@@ -968,6 +992,7 @@ async def _plan_run(
         run_id=run.id,
         tool_mocks=tool_mocks,
         live_tools=live_tools,
+        timeout_s=iteration_budget_seconds(settings, run.iterations),
     )
 
 
