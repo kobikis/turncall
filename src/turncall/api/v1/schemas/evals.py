@@ -15,6 +15,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from turncall.config import get_settings
+from turncall.domain.config_secrets import sanitize_config, sanitize_target
 from turncall.domain.enums import (
     EvalKind,
     EvalModality,
@@ -149,6 +150,14 @@ class EvalScenarioResponse(BaseModel):
         found = assertion_warnings(self.definition, name=self.name)
         return self.model_copy(update={"warnings": found}) if found else self
 
+    @field_validator("default_target")
+    @classmethod
+    def _mask_default_target(cls, value: Any) -> Any:
+        """An inline `default_target` carries a whole agent config (#74), and
+        these endpoints are gated on `Auth` too — so the credentials a run
+        response masks would otherwise walk out through the scenario."""
+        return sanitize_target(value)
+
 
 class ScenarioFromCallRequest(BaseModel):
     """Derive a scripted scenario from a call that already happened (#78)."""
@@ -190,6 +199,14 @@ class ScenarioDraftResponse(BaseModel):
     note: str
     saved: bool
     scenario_id: UUID | None = None
+
+    @field_validator("default_target")
+    @classmethod
+    def _mask_default_target(cls, value: Any) -> Any:
+        """An inline `default_target` carries a whole agent config (#74), and
+        these endpoints are gated on `Auth` too — so the credentials a run
+        response masks would otherwise walk out through the scenario."""
+        return sanitize_target(value)
 
 
 class EvalTarget(BaseModel):
@@ -361,6 +378,20 @@ class EvalRunResponse(BaseModel):
     queued_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+
+    # Masked on the way out, not at the call sites (#91): the run endpoints are
+    # gated on `Auth`, so a viewer key reading a run would otherwise get every
+    # credential in the agent's config in the clear. Validators catch every
+    # `model_validate`, including rows written before the runner masked them.
+    @field_validator("target")
+    @classmethod
+    def _mask_target(cls, value: Any) -> Any:
+        return sanitize_target(value)
+
+    @field_validator("resolved_config")
+    @classmethod
+    def _mask_config(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return sanitize_config(value)
 
 
 __all__ = [
