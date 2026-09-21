@@ -232,6 +232,13 @@ class EvalSettings(BaseSettings):
     # Ceiling on iterations per run, so one request cannot queue an unbounded
     # amount of paid LLM work.
     max_iterations: int = 50
+    # The other axis of the same bill (#97). A `tag` fans out to every scenario
+    # carrying it, so without this one POST queues `scenarios x iterations`
+    # full conversations — each an agent pipeline plus a persona LLM plus a
+    # judge. Over the cap the request is refused, never truncated: a batch that
+    # silently ran 50 of 200 scenarios reports a pass for a suite that never
+    # ran.
+    max_scenarios_per_request: int = 50
     # Where pipecat's caching TTS keeps the caller's synthesized turns (#72),
     # keyed by service/voice/model/language/speed/text. Pipecat's own default
     # is under $HOME, which a container loses on every recreate — a scripted

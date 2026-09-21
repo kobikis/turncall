@@ -170,6 +170,101 @@ async def _queue_one(session: DbSession, run: Any) -> str:
         return EvalRunStatus.ERRORED.value if failed else run.status
 
 
+async def _record_runs(
+    body: CreateEvalRunRequest,
+    auth: Any,
+    session: DbSession,
+    scenarios: list[Any],
+    batch_id: UUID,
+) -> list[Any]:
+    """One row per scenario, all carrying the batch id, none queued yet."""
+    target = body.target.model_dump(mode="json", exclude_none=True)
+    created = []
+    for scenario in scenarios:
+        created.append(
+            await eval_repo.create_run(
+                session,
+                project_id=auth.project_id,
+                scenario_id=scenario.id,
+                scenario_name=scenario.name,
+                kind=scenario.kind,
+                target=target,
+                resolved_scenario=resolved_scenario_snapshot(
+                    definition=scenario.definition,
+                    schema_version=scenario.schema_version,
+                    tool_mocks=scenario.tool_mocks,
+                    tool_policy=scenario.tool_policy,
+                ),
+                modality=body.modality.value,
+                iterations=body.iterations,
+                batch_id=batch_id,
+            )
+        )
+    return created
+
+
+async def _scenarios_to_run(
+    body: CreateEvalRunRequest, auth: Any, session: DbSession, settings: Any
+) -> list[Any]:
+    """The scenarios one run request covers: inline, a tag's fan-out, or one id.
+
+    Exactly one of the three, enforced by the request schema. Split out of
+    `create_eval_run` because selecting *what* to run and queueing it are two
+    jobs, and the tag branch is the one with rules of its own.
+    """
+    if body.scenario is not None:
+        # Supplied inline (#77), not stored: nothing is written to
+        # `eval_scenarios`, the run's `scenario_id` stays null, and the
+        # snapshot is the record. Same shape as an inline agent (ADR-0017).
+        return [
+            SimpleNamespace(
+                id=None,
+                name=body.scenario.name,
+                kind=body.scenario.kind.value,
+                definition=body.scenario.definition,
+                schema_version=SCHEMA_VERSION,
+                tool_mocks=body.scenario.tool_mocks or {},
+                tool_policy=(
+                    body.scenario.tool_policy or EvalToolPolicy.MOCK_ONLY
+                ).value,
+            )
+        ]
+    if body.tag:
+        return await _scenarios_for_tag(body, auth, session, settings)
+
+    scenario = await eval_repo.get_scenario(
+        session, body.scenario_id, project_id=auth.project_id
+    )
+    if scenario is None:
+        raise NotFoundError("EvalScenario", str(body.scenario_id))
+    return [scenario]
+
+
+async def _scenarios_for_tag(
+    body: CreateEvalRunRequest, auth: Any, session: DbSession, settings: Any
+) -> list[Any]:
+    """Every scenario carrying the tag — or a refusal, never a subset (#97)."""
+    scenarios = await eval_repo.list_scenarios(session, auth.project_id, tag=body.tag)
+    if not scenarios:
+        # An empty batch is worse than a rejection: it reports "0 failures"
+        # forever, which reads as a pass. A typo'd tag is the common case.
+        raise BadRequestError(f"no scenarios carry the tag {body.tag!r}")
+    cap = settings.evals.max_scenarios_per_request
+    if len(scenarios) > cap:
+        # Refused, not truncated, for the same reason the empty tag is refused:
+        # a batch that ran 50 of 200 scenarios reports a verdict for a suite
+        # that never ran. `iterations` bounds the other axis; this is the one a
+        # popular tag blows through.
+        raise BadRequestError(
+            f"the tag {body.tag!r} matches {len(scenarios)} scenarios, over the "
+            f"limit of {cap} for one request "
+            f"({len(scenarios) * body.iterations} conversations at "
+            f"{body.iterations} iterations) — narrow the tag, or raise "
+            f"EVAL_MAX_SCENARIOS_PER_REQUEST"
+        )
+    return scenarios
+
+
 @runs_router.post("", status_code=202)
 async def create_eval_run(
     body: CreateEvalRunRequest,
@@ -189,63 +284,15 @@ async def create_eval_run(
             f"iterations exceeds the limit of {settings.evals.max_iterations}"
         )
 
-    if body.scenario is not None:
-        # Supplied inline (#77), not stored: nothing is written to
-        # `eval_scenarios`, the run's `scenario_id` stays null, and the
-        # snapshot is the record. Same shape as an inline agent (ADR-0017).
-        scenarios = [
-            SimpleNamespace(
-                id=None,
-                name=body.scenario.name,
-                kind=body.scenario.kind.value,
-                definition=body.scenario.definition,
-                schema_version=SCHEMA_VERSION,
-                tool_mocks=body.scenario.tool_mocks or {},
-                tool_policy=(
-                    body.scenario.tool_policy or EvalToolPolicy.MOCK_ONLY
-                ).value,
-            )
-        ]
-    elif body.tag:
-        scenarios = await eval_repo.list_scenarios(
-            session, auth.project_id, tag=body.tag
-        )
-        if not scenarios:
-            # An empty batch is worse than a rejection: it reports "0 failures"
-            # forever, which reads as a pass. A typo'd tag is the common case.
-            raise BadRequestError(f"no scenarios carry the tag {body.tag!r}")
-    else:
-        scenario = await eval_repo.get_scenario(
-            session, body.scenario_id, project_id=auth.project_id
-        )
-        if scenario is None:
-            raise NotFoundError("EvalScenario", str(body.scenario_id))
-        scenarios = [scenario]
+    scenarios = await _scenarios_to_run(body, auth, session, settings)
 
     batch_id = uuid4()
-    target = body.target.model_dump(mode="json", exclude_none=True)
-    created = []
-    for scenario in scenarios:
-        run = await eval_repo.create_run(
-            session,
-            project_id=auth.project_id,
-            scenario_id=scenario.id,
-            scenario_name=scenario.name,
-            kind=scenario.kind,
-            target=target,
-            resolved_scenario=resolved_scenario_snapshot(
-                definition=scenario.definition,
-                schema_version=scenario.schema_version,
-                tool_mocks=scenario.tool_mocks,
-                tool_policy=scenario.tool_policy,
-            ),
-            modality=body.modality.value,
-            iterations=body.iterations,
-            batch_id=batch_id,
-        )
-        created.append(run)
+    created = await _record_runs(body, auth, session, scenarios, batch_id)
     await session.commit()
 
+    # Committed before the push, so a run is never executed without being
+    # recorded, and queued one at a time so one failed push does not cost the
+    # others theirs.
     runs = [
         {
             "id": str(run.id),
