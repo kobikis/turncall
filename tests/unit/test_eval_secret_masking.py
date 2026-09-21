@@ -160,3 +160,67 @@ class TestTheStoredSnapshot:
 
         assert start.await_args.kwargs["resolved_config"] == sanitize_config(SECRETFUL)
         assert _leaks(started_payloads) == []
+
+
+@pytest.mark.unit
+class TestTheScenarioIsNotAFourthDoor:
+    """A scenario's `default_target` can be an inline agent (#74) — a whole
+    config, credentials included — and `GET /v1/eval-scenarios` is gated on
+    `Auth` like the run endpoints. Masking the run and leaving this open would
+    be the same escalation through one more door."""
+
+    @staticmethod
+    def _row(**over):
+        base = dict(
+            id=uuid4(),
+            project_id=uuid4(),
+            name="greets",
+            description=None,
+            kind="script",
+            definition={"turns": []},
+            schema_version="pipecat-1.11",
+            tool_mocks={},
+            tool_policy="mock_only",
+            tags=[],
+            default_target={"type": "inline", "agent": SECRETFUL},
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        base.update(over)
+        return SimpleNamespace(**base)
+
+    def test_an_inline_default_target_is_masked(self) -> None:
+        from turncall.api.v1.schemas.evals import EvalScenarioResponse
+
+        response = EvalScenarioResponse.model_validate(self._row())
+        assert _leaks(response.model_dump()) == []
+        assert response.default_target["agent"] == sanitize_config(SECRETFUL)
+
+    def test_a_target_naming_an_agent_row_is_untouched(self) -> None:
+        from turncall.api.v1.schemas.evals import EvalScenarioResponse
+
+        agent_id = str(uuid4())
+        target = {"type": "agent", "agent_id": agent_id}
+        response = EvalScenarioResponse.model_validate(self._row(default_target=target))
+        assert response.default_target == target
+
+    def test_the_cli_refuses_a_masked_target_instead_of_running_it(self) -> None:
+        """`***` submitted as an API key fails three layers down, in a provider
+        error nobody traces back to here."""
+        from unittest.mock import MagicMock
+
+        from turncall.cli import main as cli
+        from turncall.cli.client import ApiError
+
+        api = MagicMock()
+        api.list_scenarios.return_value = [
+            {
+                "name": "greets",
+                "default_target": {
+                    "type": "inline",
+                    "agent": {"llm": {"api_key": "***"}},
+                },
+            }
+        ]
+        with pytest.raises(ApiError, match="masked credentials"):
+            cli._default_target(api, scenario_name=None, tag="pre-publish")

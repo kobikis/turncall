@@ -72,6 +72,10 @@ def _target_from_args(args: argparse.Namespace, api: Api) -> dict[str, Any] | No
     return None
 
 
+# What the API replaces a secret with in any config it returns.
+_MASK = "***"
+
+
 def _default_target(api: Api, *, scenario_name: str | None, tag: str | None) -> dict:
     """The scenario's own `default_target`, when the command named none.
 
@@ -98,6 +102,14 @@ def _default_target(api: Api, *, scenario_name: str | None, tag: str | None) -> 
         raise ApiError(
             "no target: pass --agent-id, --agent-name or --inline-agent, "
             "or give the scenario a default_target"
+        )
+    if _MASK in json.dumps(target):
+        # The API masks the credentials in an inline target (#91), so what
+        # came back cannot be run. Better to say that than to submit `***` as
+        # an API key and let the provider report it three layers down.
+        raise ApiError(
+            "this scenario's default_target holds masked credentials — "
+            "pass --agent-id, --agent-name, or --inline-agent with the config"
         )
     return target
 
