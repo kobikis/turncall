@@ -214,6 +214,19 @@ async def create_eval_run(
             # An empty batch is worse than a rejection: it reports "0 failures"
             # forever, which reads as a pass. A typo'd tag is the common case.
             raise BadRequestError(f"no scenarios carry the tag {body.tag!r}")
+        cap = settings.evals.max_scenarios_per_request
+        if len(scenarios) > cap:
+            # Refused, not truncated, for the same reason the empty tag is
+            # refused: a batch that ran 50 of 200 scenarios reports a verdict
+            # for a suite that never ran. `iterations` bounds the other axis;
+            # this is the one a popular tag blows through (#97).
+            raise BadRequestError(
+                f"the tag {body.tag!r} matches {len(scenarios)} scenarios, over the "
+                f"limit of {cap} for one request "
+                f"({len(scenarios) * body.iterations} conversations at "
+                f"{body.iterations} iterations) — narrow the tag, or raise "
+                f"EVAL_MAX_SCENARIOS_PER_REQUEST"
+            )
     else:
         scenario = await eval_repo.get_scenario(
             session, body.scenario_id, project_id=auth.project_id
