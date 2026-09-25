@@ -28,6 +28,28 @@ comprehensive: status, counts, every iteration's transcript and failures, and
 the configuration snapshots. The envelope gains a nullable `eval_run_id` beside
 `call_id` and `session_id`; existing subscribers are unaffected.
 
+**Choose the model that judges an eval.** A scenario names
+`judge: {provider, model, temperature}` and `simulator: {...}`; `provider` is a
+closed set — `ollama`, `openai`, `anthropic` — mapping to factories TurnCall
+ships, because pipecat's own escape hatch is a dotted import path and that is
+remote code execution from a request body. `EVAL_JUDGE_PROVIDER` / `_MODEL` /
+`_TEMPERATURE` (and the `EVAL_SIMULATOR_*` trio) set one for the whole platform;
+the scenario's block wins, taken whole. A `judge` on a **run** request is
+refused, because a run is what it was queued as. Sending `"judge": null` on an
+update returns a scenario to the default. See
+[Choosing the judge](/guides/evals#choosing-the-judge).
+
+**A verdict says which judge decided it.** `harness_config` gains
+`judge_provider` and `judge_temperature` beside the model, service and factory
+it already recorded — and a run whose judge differs from the same scenario's
+last verdict carries a `judge_changed` warning naming both, so a scenario that
+turns red can be told apart from a judge that moved underneath it.
+
+**A run records the code that executed it** — `worker_version`,
+`worker_started_at`, and `worker_stale` when the worker's source is newer than
+the process running it. A worker left running while the code moves under it
+produces results that look ordinary and silently lack whatever shipped since.
+
 **Derive a scenario from a real conversation** — `POST
 /v1/eval-scenarios/from-call` turns a finished call into a draft, and
 `POST /v1/eval-scenarios/from-session` does the same for an SMS, chat or

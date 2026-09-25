@@ -344,14 +344,29 @@ The simulated *caller's* character and behaviour. Never the agent under test.
 **Judge**:
 The LLM that decides a verdict. Distinct from the [[persona]]; both are LLMs TurnCall
 runs, and neither is the agent. Pipecat's `EvalJudge`, which defaults to a **local
-Ollama** (`service: openai` is deprecated in pipecat 1.9, removed in 2.0; any other
-provider needs `judge.eval.factory`) — so a deployment on [[Bedrock]] for data residency
-sends transcripts nowhere by default, and the real cost is the mirror image: an `eval:`
-assertion errors until an Ollama is reachable. Assertions that only use `text_contains`
-or `function_call` build no judge at all. The judge is the weakest component: verdicts
-are cached within a run but not across runs, so a scenario can flip with no code change,
-and a silent provider-side model update moves the whole baseline. Both service and model
-are recorded in the run's `harness_config` for that reason. See ADR-0018.
+Ollama** — so a deployment on [[Bedrock]] for data residency sends transcripts nowhere by
+default, and the real cost is the mirror image: an `eval:` assertion errors until an
+Ollama is reachable. Assertions that only use `text_contains` or `function_call` build no
+judge at all.
+
+A scenario names its own with `judge: {provider, model, temperature, endpoint}` and
+`simulator: {...}` — TurnCall columns beside `tool_mocks`, compiled into pipecat's blocks
+at parse time. `provider` is a closed set (`ollama`, `openai`, `anthropic`) mapping to
+factories **TurnCall ships**, because pipecat's own escape hatch is `factory`: a dotted
+path it hands to `importlib.import_module`, which from a request body is remote code
+execution. The key is the platform's, never the scenario's. `EVAL_JUDGE_PROVIDER` /
+`_MODEL` / `_TEMPERATURE` set one for the whole platform; precedence is narrowest-wins
+and a block is taken whole. A **run** cannot override it — that would make two runs of one
+scenario incomparable with nothing on either row saying why.
+
+The judge is the weakest component: verdicts are cached within a run but not across runs,
+so a scenario can flip with no code change, and a silent provider-side model update moves
+the whole baseline. `harness_config` records provider, model, temperature, service,
+factory and whether a judge was asked anything at all — and a run whose judge differs
+from this scenario's last verdict carries a `judge_changed` warning, because otherwise a
+red run reads identically whether the agent regressed or the judge moved. See ADR-0018.
+_Avoid_: reading a recorded judge model as proof one ran — `judge_used: false` means
+every expectation was checked directly.
 
 **Modality**:
 `text` (no STT, no TTS) or `audio` (real speech both ways). One knob on the [[run]] that
@@ -368,7 +383,10 @@ One execution of a scenario. A [[simulation]] needs several — one proves nothi
 One scenario × target × [[modality]], over N [[iteration]]s. **Batch**: the runs produced
 by one request. A run carries three snapshots — the agent config that actually ran, the
 scenario as it stood, and the [[judge]]/pipecat versions — because all three can change
-and a result is uninterpretable without them. ADR-0017's rule one level out.
+and a result is uninterpretable without them. ADR-0017's rule one level out. The third
+also names the **worker** that executed it (`worker_version`, `worker_started_at`,
+`worker_stale`): a process older than the code it runs produces a result that looks
+ordinary and silently lacks whatever shipped since, which cost a day to diagnose once.
 
 **errored** (vs **failed**):
 `failed` is the agent falling short. `errored` is the *harness* not completing — a connect
