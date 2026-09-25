@@ -266,3 +266,98 @@ class TestAScenarioCanGoBackToTheDefault:
         """The exception is the two fields where absence is a real value, not
         a general "nulls now clear things"."""
         assert self._values(name=None, judge=None) == {"judge": None}
+
+
+class TestAJudgeIsBuiltWithACredential:
+    """The factories are only reached at run time, so a missing constructor
+    argument surfaces as an errored run minutes later — which reads as "the
+    judge was unreachable" and says nothing about what to fix.
+
+    `TypeError: AnthropicLLMService.__init__() missing 1 required keyword-only
+    argument: 'api_key'` is the bug this class exists for.
+    """
+
+    @staticmethod
+    def _settings(monkeypatch, **keys):
+        from types import SimpleNamespace
+
+        from turncall.evals import judges
+
+        monkeypatch.setattr(
+            judges,
+            "_platform_key",
+            lambda attr: keys.get(attr, ""),
+        )
+        return SimpleNamespace()
+
+    def test_the_anthropic_judge_is_handed_a_key(self, monkeypatch) -> None:
+        import pipecat.services.anthropic.llm as anthropic_llm
+
+        from turncall.evals import judges
+
+        seen: dict = {}
+
+        class _Fake:
+            Settings = anthropic_llm.AnthropicLLMService.Settings
+
+            def __init__(self, **kwargs):
+                seen.update(kwargs)
+
+        monkeypatch.setattr(anthropic_llm, "AnthropicLLMService", _Fake)
+        self._settings(monkeypatch, anthropic="sk-ant-test")
+        judges.anthropic({"model": "claude-haiku-4-5-20251001"})
+
+        assert seen["api_key"] == "sk-ant-test"
+        assert seen["settings"].model == "claude-haiku-4-5-20251001"
+
+    def test_the_openai_judge_is_handed_a_key_and_any_gateway(
+        self, monkeypatch
+    ) -> None:
+        import pipecat.services.openai.llm as openai_llm
+
+        from turncall.evals import judges
+
+        seen: dict = {}
+
+        class _Fake:
+            Settings = openai_llm.OpenAILLMService.Settings
+
+            def __init__(self, **kwargs):
+                seen.update(kwargs)
+
+        monkeypatch.setattr(openai_llm, "OpenAILLMService", _Fake)
+        self._settings(monkeypatch, openai="sk-test")
+        judges.openai({"model": "gpt-4o-mini", "endpoint": "https://gateway.test/v1"})
+
+        assert seen["api_key"] == "sk-test"
+        assert seen["base_url"] == "https://gateway.test/v1"
+
+    def test_no_endpoint_means_the_provider_itself(self, monkeypatch) -> None:
+        """None, not an empty string: pipecat passes it straight to the SDK,
+        and `base_url=""` is a request to an empty host."""
+        import pipecat.services.openai.llm as openai_llm
+
+        from turncall.evals import judges
+
+        seen: dict = {}
+
+        class _Fake:
+            Settings = openai_llm.OpenAILLMService.Settings
+
+            def __init__(self, **kwargs):
+                seen.update(kwargs)
+
+        monkeypatch.setattr(openai_llm, "OpenAILLMService", _Fake)
+        self._settings(monkeypatch, openai="sk-test")
+        judges.openai({})
+
+        assert seen["base_url"] is None
+
+    def test_the_key_comes_from_the_platform_not_the_scenario(self) -> None:
+        """A credential that can be set in a scenario is one that gets stored
+        in JSONB and masked forever after (#91). The schema forbids it, and
+        this is the other half of that rule."""
+        from turncall.api.v1.schemas.evals import EvalModelSchema
+
+        with pytest.raises(ValueError, match="api_key"):
+            EvalModelSchema(provider="openai", api_key="sk-leaked")
