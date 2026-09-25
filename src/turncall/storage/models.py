@@ -585,6 +585,13 @@ class EvalScenarioRow(Base):
     )
     tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     default_target: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # The LLMs an eval runs besides the agent's (#118): the judge that decides
+    # `eval:` assertions and every simulation verdict, and the persona that
+    # plays the caller. TurnCall columns for the reason above — and because the
+    # pipecat block they compile into names a `factory`, a dotted path this
+    # service imports, which must never come from a request.
+    judge: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    simulator: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )

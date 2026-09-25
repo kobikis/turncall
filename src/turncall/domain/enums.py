@@ -219,6 +219,23 @@ class EvalRunStatus(StrEnum):
         return self not in (EvalRunStatus.QUEUED, EvalRunStatus.RUNNING)
 
 
+class EvalModelProvider(StrEnum):
+    """Who runs an eval's judge, or its persona (#118).
+
+    A closed set on purpose. Pipecat reaches anything but Ollama through
+    `factory`, a dotted path it imports — so the provider name is what a
+    request carries, and `evals.judges.PROVIDERS` maps it to a callable
+    TurnCall ships. The set is the allowlist.
+
+    `ollama` stays the default: it is pipecat's, it is local, and a judge that
+    needs no key is what keeps an eval runnable on a laptop.
+    """
+
+    OLLAMA = "ollama"
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+
+
 class EvalToolPolicy(StrEnum):
     """What happens when the agent calls a tool with no mock (slice #71).
 

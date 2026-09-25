@@ -33,6 +33,8 @@ async def create_scenario(
     tool_policy: str = "mock_only",
     tags: list[str] | None = None,
     default_target: dict[str, Any] | None = None,
+    judge: dict[str, Any] | None = None,
+    simulator: dict[str, Any] | None = None,
 ) -> EvalScenarioRow:
     row = EvalScenarioRow(
         project_id=project_id,
@@ -45,6 +47,8 @@ async def create_scenario(
         tool_policy=tool_policy,
         tags=tags or [],
         default_target=default_target,
+        judge=judge,
+        simulator=simulator,
     )
     session.add(row)
     await session.flush()

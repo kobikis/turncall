@@ -588,6 +588,10 @@ class TestSnapshots:
             "tool_mocks": {"book": {"ok": True}},
             "tool_policy": "mock_only",
             "tool_policy_enforced": True,
+            # Which LLM decided the verdict is part of the same record (#118);
+            # null is a scenario that left pipecat's default alone.
+            "judge": None,
+            "simulator": None,
         }
 
     def test_the_snapshot_says_whether_the_policy_was_enforced(self) -> None:
