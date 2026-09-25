@@ -34,6 +34,7 @@ from turncall.domain.enums import (
 )
 from turncall.domain.models import AgentConfig
 from turncall.evals import scenario as scenario_mod
+from turncall.evals.build import worker_build
 from turncall.services.tool_mocks import ToolMocks
 
 # What the bot said, as pipecat names it. In text modality there is only
@@ -244,6 +245,10 @@ def harness_config(parsed: Any = None) -> dict[str, Any]:
         "user_speech": getattr(parsed, "user_speech", None),
         "bot_transcription": getattr(parsed, "transcriber", None),
         "schema_version": scenario_mod.SCHEMA_VERSION,
+        # Which code actually executed this, and whether it was the code on
+        # disk. A worker started before the feature a scenario depends on
+        # produces a result that looks ordinary and is not (#119).
+        **worker_build(),
     }
 
 
@@ -1094,6 +1099,32 @@ async def _warn_judge_changed(
     ]
 
 
+def _warn_worker_stale(harness: dict[str, Any]) -> list[dict[str, Any]]:
+    """Say so when the worker is older than the code it is running.
+
+    The failure this exists for is silent by construction: the run succeeds,
+    the verdict looks ordinary, and the feature the scenario depends on was
+    simply not in the process. It belongs on the run rather than in a log,
+    because the log is not what anyone reads when a result surprises them.
+    """
+    if not harness.get("worker_stale"):
+        return []
+    return [
+        {
+            "code": "worker_stale",
+            "message": (
+                "this run was executed by a worker started at "
+                f"{harness.get('worker_started_at')}, before the code it runs "
+                f"was last changed ({harness.get('worker_source_mtime')}). "
+                "Anything added since is not in this result — restart the "
+                "eval worker."
+            ),
+            "worker_started_at": harness.get("worker_started_at"),
+            "worker_source_mtime": harness.get("worker_source_mtime"),
+        }
+    ]
+
+
 async def _plan_run(
     session: Any, run: Any, *, settings: Any, session_factory: Any
 ) -> IterationPlan | None:
@@ -1125,6 +1156,7 @@ async def _plan_run(
     warnings = scenario_mod.assertion_warnings(parsed)
     warnings += _warn_unmatched_mocks(tool_mocks, target, run_id=run.id)
     warnings += await _warn_judge_changed(session, run, harness)
+    warnings += _warn_worker_stale(harness)
     if live_tools and (target.config.tools or target.config.mcp_servers):
         # The scenario typed the word, so this is allowed — but a real webhook
         # fires on every iteration, and the run's record is where someone

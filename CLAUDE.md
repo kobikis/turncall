@@ -690,6 +690,16 @@ the older snapshot actually recorded are compared: rows written before #119 have
 no `judge_provider`, and reading that absence as a change would announce one on
 every scenario's next run.
 
+`harness_config` records **which code ran it** for the same reason:
+`worker_version`, `worker_started_at`, and `worker_stale` — true when the
+package's newest source file is younger than the process that imported it. A
+packaged image bakes its source at build, so this stays false there; a
+bind-mounted dev worker left running while the code moved under it reports
+true, and the run carries a `worker_stale` warning saying when each happened.
+That case is silent by construction — the run succeeds and the verdict looks
+ordinary, while the feature the scenario depends on was simply not in the
+process — and it cost a day and a database query to diagnose once already.
+
 ### Config
 `EVAL_MAX_CONCURRENT_RUNS` (4), `EVAL_MAX_RUN_DURATION_SECONDS` (900). That
 number is a **run** budget, split across the run's iterations to bound each one:
