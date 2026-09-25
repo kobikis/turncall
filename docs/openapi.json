@@ -4449,7 +4449,7 @@
           "evals"
         ],
         "summary": "List Eval Scenarios",
-        "description": "List scenarios, newest first, paged (#99).\n\nThe tag **fan-out** deliberately does not go through here: it reads every\nmatching scenario, because a suite that silently ran one page of itself\nreports a verdict for scenarios that never ran.",
+        "description": "List scenarios, newest first, paged.\n\nThe tag **fan-out** deliberately does not go through here: it reads every\nmatching scenario, because a suite that silently ran one page of itself\nreports a verdict for scenarios that never ran.",
         "operationId": "list_eval_scenarios_v1_eval_scenarios_get",
         "parameters": [
           {
@@ -4748,7 +4748,7 @@
           "evals"
         ],
         "summary": "Scenario From Call",
-        "description": "Convert a completed call into a scripted scenario draft (#78).\n\nReturned for review by default; `save: true` stores it. Either way the\ntool mocks are seeded with what those tools actually returned, so the draft\nis safe to run under `mock_only` without repeating the call's side effects.",
+        "description": "Convert a completed call into a scripted scenario draft.\n\nReturned for review by default; `save: true` stores it. Either way the\ntool mocks are seeded with what those tools actually returned, so the draft\nis safe to run under `mock_only` without repeating the call's side effects.",
         "operationId": "scenario_from_call_v1_eval_scenarios_from_call_post",
         "parameters": [
           {
@@ -4810,7 +4810,7 @@
           "evals"
         ],
         "summary": "Scenario From Session",
-        "description": "Convert a finished text conversation into a scripted scenario draft (#87).\n\nThe voice equivalent is `/from-call`. Both produce the same draft and both\ndefault to review rather than save, because a derived scenario asserts\nwhatever the agent did that day \u2014 mistakes included.",
+        "description": "Convert a finished text conversation into a scripted scenario draft.\n\nThe voice equivalent is `/from-call`. Both produce the same draft and both\ndefault to review rather than save, because a derived scenario asserts\nwhatever the agent did that day \u2014 mistakes included.",
         "operationId": "scenario_from_session_v1_eval_scenarios_from_session_post",
         "parameters": [
           {
@@ -4932,7 +4932,7 @@
           "evals"
         ],
         "summary": "List Eval Runs",
-        "description": "List runs, newest first. Paged like every other list here (#99): a year\nof CI runs is the volume this feature is for.",
+        "description": "List runs, newest first, paged like every other list here: a year\nof CI runs is the volume this feature is for.",
         "operationId": "list_eval_runs_v1_eval_runs_get",
         "parameters": [
           {
@@ -5059,7 +5059,7 @@
           "evals"
         ],
         "summary": "Get Eval Batch",
-        "description": "A batch's outcome without fetching every run's transcripts (#75).\n\nRoute declared before `/{run_id}` so a literal path segment is not read as\na run id \u2014 FastAPI matches in declaration order.",
+        "description": "A batch's outcome without fetching every run's transcripts.\n\nRoute declared before `/{run_id}` so a literal path segment is not read as\na run id \u2014 FastAPI matches in declaration order.",
         "operationId": "get_eval_batch_v1_eval_runs_batches__batch_id__get",
         "parameters": [
           {
@@ -5121,7 +5121,7 @@
           "evals"
         ],
         "summary": "Get Eval Run",
-        "description": "One run. `?view=summary` answers \"is it done yet\" without the payload.\n\nThe full read carries every iteration's transcript and all three\nsnapshots, which for a 50-iteration audio run is a large response to poll\non a timer (#99).",
+        "description": "One run. `?view=summary` answers \"is it done yet\" without the payload.\n\nThe full read carries every iteration's transcript and all three\nsnapshots, which for a 50-iteration audio run is a large response to poll\non a timer.",
         "operationId": "get_eval_run_v1_eval_runs__run_id__get",
         "parameters": [
           {

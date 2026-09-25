@@ -96,7 +96,7 @@ async def list_eval_scenarios(
     page: Page = 1,
     limit: PageSize = 50,
 ) -> dict:
-    """List scenarios, newest first, paged (#99).
+    """List scenarios, newest first, paged.
 
     The tag **fan-out** deliberately does not go through here: it reads every
     matching scenario, because a suite that silently ran one page of itself
@@ -362,7 +362,7 @@ async def create_eval_run(
 async def scenario_from_call(
     body: ScenarioFromCallRequest, auth: WriteAuth, session: DbSession
 ) -> dict:
-    """Convert a completed call into a scripted scenario draft (#78).
+    """Convert a completed call into a scripted scenario draft.
 
     Returned for review by default; `save: true` stores it. Either way the
     tool mocks are seeded with what those tools actually returned, so the draft
@@ -454,7 +454,7 @@ async def scenario_from_call(
 async def scenario_from_session(
     body: ScenarioFromSessionRequest, auth: WriteAuth, session: DbSession
 ) -> dict:
-    """Convert a finished text conversation into a scripted scenario draft (#87).
+    """Convert a finished text conversation into a scripted scenario draft.
 
     The voice equivalent is `/from-call`. Both produce the same draft and both
     default to review rather than save, because a derived scenario asserts
@@ -536,7 +536,7 @@ async def scenario_from_session(
 
 @runs_router.get("/batches/{batch_id}")
 async def get_eval_batch(batch_id: UUID, auth: Auth, session: DbSession) -> dict:
-    """A batch's outcome without fetching every run's transcripts (#75).
+    """A batch's outcome without fetching every run's transcripts.
 
     Route declared before `/{run_id}` so a literal path segment is not read as
     a run id — FastAPI matches in declaration order.
@@ -557,7 +557,7 @@ async def list_eval_runs(
     page: Page = 1,
     limit: PageSize = 50,
 ) -> dict:
-    """List runs, newest first. Paged like every other list here (#99): a year
+    """List runs, newest first, paged like every other list here: a year
     of CI runs is the volume this feature is for."""
     filters = {
         "batch_id": batch_id,
@@ -588,7 +588,7 @@ async def get_eval_run(
 
     The full read carries every iteration's transcript and all three
     snapshots, which for a 50-iteration audio run is a large response to poll
-    on a timer (#99).
+    on a timer.
     """
     if view == "summary":
         row = await eval_repo.get_run_summary(
