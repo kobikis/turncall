@@ -262,6 +262,8 @@ def resolved_scenario_snapshot(
     schema_version: str,
     tool_mocks: dict[str, Any],
     tool_policy: str,
+    judge: dict[str, Any] | None = None,
+    simulator: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The scenario exactly as it ran, mocks and policy included.
 
@@ -275,6 +277,11 @@ def resolved_scenario_snapshot(
         "tool_mocks": tool_mocks,
         "tool_policy": tool_policy,
         "tool_policy_enforced": TOOL_POLICY_ENFORCED,
+        # Which LLM decides the verdict is part of what the run means (#118):
+        # a result cannot be compared with the next one without it, which is
+        # the same argument `harness_config` already makes for the judge model.
+        "judge": judge,
+        "simulator": simulator,
     }
 
 
@@ -962,6 +969,13 @@ def _parse_for_run(run: Any, modality: EvalModality) -> tuple[EvalKind, Any]:
     """
     definition = dict(run.resolved_scenario.get("definition") or {})
     kind = scenario_mod.kind_of(definition)
+    # The scenario's own judge and persona, compiled into pipecat's blocks. A
+    # raw block inside the definition wins — see `with_models`.
+    definition = scenario_mod.with_models(
+        definition,
+        judge=run.resolved_scenario.get("judge"),
+        simulator=run.resolved_scenario.get("simulator"),
+    )
     merged = scenario_mod.with_modality(definition, modality)
     return kind, scenario_mod.parse(merged, name=run.scenario_name)
 

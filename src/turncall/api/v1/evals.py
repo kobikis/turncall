@@ -50,6 +50,11 @@ Page = Annotated[int, Query(ge=1, description="1-based page number")]
 PageSize = Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)]
 
 
+def _model_block(block: Any) -> dict[str, Any] | None:
+    """One judge/simulator block as the JSONB column stores it."""
+    return block.model_dump(mode="json", exclude_none=True) if block else None
+
+
 @router.post("", status_code=201)
 async def create_eval_scenario(
     body: CreateEvalScenarioRequest,
@@ -75,6 +80,8 @@ async def create_eval_scenario(
         tool_policy=EvalToolPolicy.resolve(body.tool_policy).value,
         tags=body.tags,
         default_target=body.default_target,
+        judge=_model_block(body.judge),
+        simulator=_model_block(body.simulator),
     )
     await session.commit()
     return ok(EvalScenarioResponse.model_validate(row))
@@ -137,6 +144,8 @@ async def update_eval_scenario(
             "tool_policy": body.tool_policy.value if body.tool_policy else None,
             "tags": body.tags,
             "default_target": body.default_target,
+            "judge": _model_block(body.judge),
+            "simulator": _model_block(body.simulator),
         }.items()
         if v is not None
     }
@@ -220,6 +229,8 @@ async def _record_runs(
                     schema_version=scenario.schema_version,
                     tool_mocks=scenario.tool_mocks,
                     tool_policy=scenario.tool_policy,
+                    judge=getattr(scenario, "judge", None),
+                    simulator=getattr(scenario, "simulator", None),
                 ),
                 modality=body.modality.value,
                 iterations=body.iterations,

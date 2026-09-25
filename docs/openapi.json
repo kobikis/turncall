@@ -6618,6 +6618,26 @@
               }
             ],
             "title": "Default Target"
+          },
+          "judge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvalModelSchema"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "simulator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvalModelSchema"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -6829,6 +6849,65 @@
         ],
         "title": "EvalModality",
         "description": "Whether the conversation is spoken or typed.\n\n`text` skips STT and TTS entirely, so it is fast and free and covers the\nsmallest share of a voice platform's risk; `audio` is the only mode that\nreaches the provider-connect path where most regressions have lived."
+      },
+      "EvalModelProvider": {
+        "type": "string",
+        "enum": [
+          "ollama",
+          "openai",
+          "anthropic"
+        ],
+        "title": "EvalModelProvider",
+        "description": "Who runs an eval's judge, or its persona (#118).\n\nA closed set on purpose. Pipecat reaches anything but Ollama through\n`factory`, a dotted path it imports \u2014 so the provider name is what a\nrequest carries, and `evals.judges.PROVIDERS` maps it to a callable\nTurnCall ships. The set is the allowlist.\n\n`ollama` stays the default: it is pipecat's, it is local, and a judge that\nneeds no key is what keeps an eval runnable on a laptop."
+      },
+      "EvalModelSchema": {
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/EvalModelProvider",
+            "default": "ollama"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 2.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "EvalModelSchema",
+        "description": "One LLM an eval runs besides the agent's: the judge, or the persona (#118).\n\n`provider` is a closed set mapping to factories TurnCall ships\n(`evals.judges.PROVIDERS`). Pipecat's own escape hatch is `factory`, a\ndotted path it hands to `importlib.import_module` \u2014 safe for a file on\ndisk, remote code execution for a request body \u2014 so a caller names a\nprovider and never a path. `extra=\"forbid\"` is what makes that a rule\nrather than a convention: a request carrying `factory` is a 422."
       },
       "EvalRunStatus": {
         "type": "string",
@@ -8050,6 +8129,26 @@
               }
             ],
             "title": "Default Target"
+          },
+          "judge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvalModelSchema"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "simulator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvalModelSchema"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "name": {
             "anyOf": [

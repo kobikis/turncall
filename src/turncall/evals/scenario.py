@@ -315,3 +315,121 @@ def _warning_for(total: int, weak: list[str]) -> list[dict[str, Any]]:
             "expectations": weak,
         }
     ]
+
+
+# Every place pipecat will read a `factory` from, and therefore every place a
+# stored definition could smuggle one in. `factory` is a dotted path pipecat
+# hands to `importlib.import_module`, so a definition carrying one turns a
+# scenario create into "import this module on the eval worker" (#118).
+_FACTORY_PATHS = (
+    ("judge", "eval"),
+    ("judge", "transcription"),
+    ("simulator",),
+    ("user", "speech"),
+)
+
+
+def reject_factories(definition: dict[str, Any]) -> None:
+    """Refuse a definition that names a `factory` anywhere pipecat imports one.
+
+    TurnCall ships the factories (`evals.judges.PROVIDERS`) and a request names
+    a provider; a dotted path from a caller is never imported. Checked at the
+    API boundary, where the definition arrives, rather than at run time, where
+    the worker would already have the module loaded.
+
+    Raises:
+        ScenarioError: A `factory` key is present.
+    """
+    for path in _FACTORY_PATHS:
+        node: Any = definition
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, dict) and "factory" in node:
+            where = ".".join(path)
+            raise ScenarioError(
+                f"{where}.factory is not accepted: it is a dotted path this "
+                "service would import. Name a `provider` on the scenario's "
+                f"judge/simulator block instead (one of: "
+                f"{', '.join(sorted(_provider_names()))})."
+            )
+
+
+def _provider_names() -> list[str]:
+    from turncall.evals.judges import PROVIDERS
+
+    return list(PROVIDERS)
+
+
+def compile_model_block(block: dict[str, Any] | None) -> dict[str, Any] | None:
+    """One typed `{provider, model, temperature, endpoint}` as pipecat's mapping.
+
+    Temperature rides in `extra`, which pipecat forwards as top-level request
+    parameters — there is no first-class field for it. Anthropic gets none at
+    all: current Claude models reject the parameter outright, and the rule
+    belongs to the model rather than to whoever configured it, exactly as on
+    the call path.
+    """
+    if not block:
+        return None
+    from turncall.evals.judges import PROVIDERS
+
+    provider = str(block.get("provider") or "ollama")
+    if provider not in PROVIDERS:
+        raise ScenarioError(f"unknown provider {provider!r}")
+
+    compiled: dict[str, Any] = {"factory": PROVIDERS[provider]}
+    for key in ("model", "endpoint"):
+        if block.get(key):
+            compiled[key] = block[key]
+
+    temperature = block.get("temperature")
+    if temperature is not None and _takes_temperature(provider, compiled.get("model")):
+        compiled["extra"] = {"temperature": temperature}
+    return compiled
+
+
+# OpenAI's reasoning families reject `temperature` the way Claude does; the
+# prefixes are the ones `llm.reasoning_effort` already documents.
+_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+
+
+def _takes_temperature(provider: str, model: str | None) -> bool:
+    """Whether this model accepts a temperature at all.
+
+    Anthropic never does — current Claude models answer `400 temperature is
+    deprecated for this model`, which is the bug that made the service
+    unusable on the call path. An OpenAI reasoning model rejects it too. The
+    rule travels with the model rather than the caller, so a scenario that
+    names one is not punished for a parameter it never asked about.
+    """
+    if provider == "anthropic":
+        return False
+    name = (model or "").lower()
+    return not any(name.startswith(prefix) for prefix in _REASONING_PREFIXES)
+
+
+def with_models(
+    definition: dict[str, Any],
+    *,
+    judge: dict[str, Any] | None = None,
+    simulator: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The definition with the scenario's judge and persona LLMs applied.
+
+    A raw block already inside the definition **wins**. It was there first, and
+    a stored scenario whose verdicts were decided by the judge it names must
+    not start being decided by a different one because a typed field appeared
+    beside it.
+    """
+    merged = copy.deepcopy(definition)
+
+    compiled_judge = compile_model_block(judge)
+    if compiled_judge:
+        block = merged.setdefault("judge", {})
+        if isinstance(block, dict) and not block.get("eval"):
+            block["eval"] = compiled_judge
+
+    compiled_persona = compile_model_block(simulator)
+    if compiled_persona and not merged.get("simulator"):
+        merged["simulator"] = compiled_persona
+    return merged

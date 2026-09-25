@@ -712,3 +712,51 @@ async def test_a_summary_read_carries_the_verdict_without_the_payload(factory) -
         assert summary["passed_count"] == 1
         assert "results" not in summary
         assert "resolved_config" not in summary
+
+
+@pytest.mark.asyncio
+async def test_a_scenarios_judge_survives_the_round_trip(factory) -> None:
+    """The judge is a TurnCall column, not a key inside pipecat's mapping
+    (#118) — and a verdict cannot be compared later without it."""
+    judge = {"provider": "openai", "model": "gpt-4o", "temperature": 0.0}
+    async with factory() as session:
+        project = await _project(session, "eval-judge-column")
+        scenario = await eval_repo.create_scenario(
+            session,
+            project_id=project.id,
+            name="judged",
+            kind="script",
+            definition=SCRIPTED,
+            schema_version="pipecat-1.11",
+            judge=judge,
+            simulator={"provider": "ollama"},
+        )
+        scenario_id = scenario.id
+        await session.commit()
+
+    async with factory() as session:
+        reread = await eval_repo.get_scenario(session, scenario_id)
+        assert reread.judge == judge
+        assert reread.simulator == {"provider": "ollama"}
+
+
+@pytest.mark.asyncio
+async def test_a_scenario_that_names_no_judge_stores_null(factory) -> None:
+    """Null is pipecat's default left alone, which is not the same as a
+    scenario that chose ollama explicitly."""
+    async with factory() as session:
+        project = await _project(session, "eval-judge-default")
+        scenario = await eval_repo.create_scenario(
+            session,
+            project_id=project.id,
+            name="unjudged",
+            kind="script",
+            definition=SCRIPTED,
+            schema_version="pipecat-1.11",
+        )
+        scenario_id = scenario.id
+        await session.commit()
+
+    async with factory() as session:
+        reread = await eval_repo.get_scenario(session, scenario_id)
+        assert reread.judge is None and reread.simulator is None

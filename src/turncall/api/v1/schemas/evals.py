@@ -19,10 +19,16 @@ from turncall.domain.config_secrets import sanitize_config, sanitize_target
 from turncall.domain.enums import (
     EvalKind,
     EvalModality,
+    EvalModelProvider,
     EvalRunStatus,
     EvalToolPolicy,
 )
-from turncall.evals.scenario import SCHEMA_VERSION, ScenarioError, validate
+from turncall.evals.scenario import (
+    SCHEMA_VERSION,
+    ScenarioError,
+    reject_factories,
+    validate,
+)
 from turncall.services.tool_mocks import encode_mock
 
 # A mock is keyed by tool name. Permissive on shape because an MCP server names
@@ -64,9 +70,35 @@ def _validated_mocks(mocks: dict[str, Any] | None) -> dict[str, Any] | None:
 
 def _validated_kind(definition: dict[str, Any], name: str) -> EvalKind:
     try:
+        # Before pipecat's parser, because this one is about what the parser
+        # would *import* rather than what it would accept (#118).
+        reject_factories(definition)
         return validate(definition, name=name)
     except ScenarioError as exc:
         raise ValueError(str(exc)) from exc
+
+
+class EvalModelSchema(BaseModel):
+    """One LLM an eval runs besides the agent's: the judge, or the persona (#118).
+
+    `provider` is a closed set mapping to factories TurnCall ships
+    (`evals.judges.PROVIDERS`). Pipecat's own escape hatch is `factory`, a
+    dotted path it hands to `importlib.import_module` — safe for a file on
+    disk, remote code execution for a request body — so a caller names a
+    provider and never a path. `extra="forbid"` is what makes that a rule
+    rather than a convention: a request carrying `factory` is a 422.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: EvalModelProvider = EvalModelProvider.OLLAMA
+    # Empty = that provider's own default. There is no cross-provider default
+    # model, for the reason the agent's `llm.model` has none either.
+    model: str | None = Field(default=None, max_length=255)
+    # 0 for a judge, and the default is 0: a verdict that varies run to run is
+    # not a verdict. Raise it only to measure how much the judge itself moves.
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    endpoint: str | None = Field(default=None, max_length=2048)
 
 
 class CreateEvalScenarioRequest(BaseModel):
@@ -80,6 +112,10 @@ class CreateEvalScenarioRequest(BaseModel):
     tool_policy: EvalToolPolicy | None = None
     tags: list[str] = Field(default_factory=list, max_length=32)
     default_target: dict[str, Any] | None = None
+    # The judge decides `eval:` assertions and simulation verdicts; the
+    # simulator plays the caller. Omitted, pipecat's local Ollama decides both.
+    judge: EvalModelSchema | None = None
+    simulator: EvalModelSchema | None = None
 
     @field_validator("tool_mocks")
     @classmethod
@@ -103,6 +139,8 @@ class UpdateEvalScenarioRequest(BaseModel):
     tool_policy: EvalToolPolicy | None = None
     tags: list[str] | None = Field(default=None, max_length=32)
     default_target: dict[str, Any] | None = None
+    judge: EvalModelSchema | None = None
+    simulator: EvalModelSchema | None = None
     # The name keys nothing in a payload, but a run records `scenario_name` at
     # queue time, so renaming is allowed and old runs keep the old name.
     name: str | None = Field(default=None, min_length=1, max_length=255)
@@ -133,6 +171,8 @@ class EvalScenarioResponse(BaseModel):
     tool_policy: EvalToolPolicy
     tags: list[str]
     default_target: dict[str, Any] | None
+    judge: dict[str, Any] | None = None
+    simulator: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
     # Derived, not stored (#95): a scenario whose every expectation is a bare
@@ -428,6 +468,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "CreateEvalRunRequest",
     "CreateEvalScenarioRequest",
+    "EvalModelSchema",
     "EvalRunResponse",
     "EvalRunSummaryResponse",
     "EvalScenarioResponse",

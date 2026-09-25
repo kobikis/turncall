@@ -642,9 +642,20 @@ half: it says "this is the MCP limitation, not your typo". `live_tools_allowed`
 is the other one — a `live` policy really executes the agent's tools, once per
 iteration. **Text mode also cannot see the agent's `first_message`** — it goes out as a
 `TTSSpeakFrame`, so it never becomes LLM text, and `skip_tts` silences the TTS.
-The judge is pipecat's `EvalJudge`, which is **Ollama by default** (`service:
-openai` is deprecated in pipecat 1.9 and gone in 2.0; anything else needs
-`judge.eval.factory`) — so an `eval:` assertion needs a reachable Ollama and
+The judge is pipecat's `EvalJudge`, **Ollama by default** — but a scenario can
+name another (#118): `judge: {provider, model, temperature, endpoint}` and
+`simulator: {...}` are TurnCall columns beside `tool_mocks`, compiled into
+pipecat's blocks at parse time. `provider` is a closed set (`ollama`, `openai`,
+`anthropic`) mapping to factories **TurnCall ships**, because pipecat's own
+escape hatch is `factory` — a dotted path it hands to `importlib.import_module`,
+which from a request body is remote code execution. A definition naming one
+anywhere pipecat reads it (`judge.eval`, `judge.transcription`, `simulator`,
+`user.speech`) is refused at the API boundary. Temperature has no pipecat field
+and rides in `extra`; it defaults to unset, and is dropped for models that
+reject it — Anthropic and the OpenAI reasoning families — by the same rule the
+call path follows. A raw `judge:` block inside `definition` still wins, so a
+stored scenario's verdicts keep being decided by the model it named. Without any
+of that, an `eval:` assertion needs a reachable Ollama and
 errors without one, while `text_contains`/`function_call` build no judge at
 all.
 
