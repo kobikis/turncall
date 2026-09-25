@@ -1,6 +1,6 @@
 # Examples
 
-Sixteen runnable examples. Each is a directory with a `README.md`, a `setup.py`
+Seventeen runnable examples. Each is a directory with a `README.md`, a `setup.py`
 that creates the project, agent and bindings through the API, and a `run.sh`
 that reads what it needs from the repo-root `.env`.
 
@@ -39,6 +39,7 @@ about a minute.
 | [`mcp-tools`](mcp-tools/) | MCP servers, with tools discovered at call start |
 | [`call-transfer`](call-transfer/) | Cold and warm transfer, including the operator briefing |
 | [`events-webhook`](events-webhook/) | Receive and verify every event TurnCall emits |
+| [`eval-tool-mock`](eval-tool-mock/) | An eval that books nothing: tool mocks, and why they fail closed |
 
 ## Channels
 
@@ -63,7 +64,7 @@ Everything needs `OPENAI_API_KEY` and `DEEPGRAM_API_KEY` in the repo-root
 |---|---|
 | A Twilio number + `ngrok` | `ab-testing`, `call-transfer`, `events-webhook`, `mcp-tools`, `ollama-local`, `openrouter-fallback`, `post-call-analysis`, `receptionist`, `s2s-realtime`, `sms-chat`, `tools-showcase` |
 | `ngrok` only | `whatsapp` |
-| Nothing else | `webrtc-client`, `knowledge-base`, `video-avatar` |
+| Nothing else | `webrtc-client`, `knowledge-base`, `video-avatar`, `eval-tool-mock` |
 | A provider key of its own | `bedrock` (AWS), `video-avatar` (HeyGen or Tavus), `openrouter-fallback` (OpenRouter), `ollama-local` (Ollama running locally) |
 
 Most phone examples also accept `--twilio-number` and `--twilio-number-sid` as
