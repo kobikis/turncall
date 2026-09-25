@@ -654,7 +654,11 @@ anywhere pipecat reads it (`judge.eval`, `judge.transcription`, `simulator`,
 `user.speech`) is refused at the API boundary. Temperature has no pipecat field
 and rides in `extra`; it defaults to unset, and is dropped for models that
 reject it — Anthropic and the OpenAI reasoning families — by the same rule the
-call path follows. A raw `judge:` block inside `definition` still wins, so a
+call path follows. The **key is the platform's**, read from `ANTHROPIC_API_KEY`
+/ `OPENAI_API_KEY` exactly as the agent's own LLM reads it: a credential a
+scenario could set would be stored in JSONB, returned by a read and masked
+forever after (#91), so `api_key` in a judge block is a 422. `endpoint` is the
+one field that travels — an OpenAI-compatible gateway, or Ollama's URL. A raw `judge:` block inside `definition` still wins, so a
 stored scenario's verdicts keep being decided by the model it named. Without any
 of that, an `eval:` assertion needs a reachable Ollama and
 errors without one, while `text_contains`/`function_call` build no judge at

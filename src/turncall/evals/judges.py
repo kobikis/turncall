@@ -71,16 +71,35 @@ def ollama(config: dict[str, Any]) -> Any:
     return ollama_service(config)
 
 
+def _platform_key(attr: str) -> str:
+    """The provider's key from TurnCall's own settings.
+
+    Never from the scenario: a judge block arrives in an API body, and a
+    credential that can be *set* there is one that gets stored in JSONB,
+    returned by a read, and masked forever after (#91). The platform holds the
+    keys for the agent's own LLM already, and the judge is the same trust
+    boundary.
+    """
+    from turncall.config.settings import get_settings
+
+    return getattr(get_settings(), attr).api_key
+
+
 def openai(config: dict[str, Any]) -> Any:
     """An OpenAI judge. `extra` carries whatever the model takes, temperature
     included — pipecat forwards it as top-level request parameters."""
     from pipecat.services.openai.llm import OpenAILLMService
 
     return OpenAILLMService(
+        api_key=_platform_key("openai"),
+        # An OpenAI-compatible gateway, when the scenario named one. The same
+        # field carries Ollama's URL, which is why it is spelled `endpoint`
+        # rather than after either vendor.
+        base_url=config.get("endpoint") or None,
         settings=OpenAILLMService.Settings(
             model=config.get("model") or DEFAULT_MODELS["openai"],
             extra=dict(config.get("extra") or {}),
-        )
+        ),
     )
 
 
@@ -95,8 +114,12 @@ def anthropic(config: dict[str, Any]) -> Any:
     from pipecat.services.anthropic.llm import AnthropicLLMService
 
     return AnthropicLLMService(
+        # Required by name on this one — pipecat's Anthropic service takes no
+        # key from the environment, and omitting it raised `TypeError` on the
+        # first judged run rather than at construction time.
+        api_key=_platform_key("anthropic"),
         settings=AnthropicLLMService.Settings(
             model=config.get("model") or DEFAULT_MODELS["anthropic"],
             extra=dict(config.get("extra") or {}),
-        )
+        ),
     )
