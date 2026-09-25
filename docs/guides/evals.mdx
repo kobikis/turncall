@@ -57,7 +57,9 @@ curl -X POST http://localhost:8090/v1/eval-runs \
 The response is `202 Accepted` with a `batch_id`: a dedicated worker executes runs, never the API process, so eval load can never become dead air on a live call.
 
 <Warning>
-**Assert content, not just the event.** `{"event": "llm_response"}` on its own can pass with the agent's LLM completely broken — when a provider rejects the model name, an *empty* response is still emitted. Always pair the event with `text_contains`, `matches`, or an `eval:` criterion.
+**Assert content, not just the event.** `{"event": "llm_response"}` on its own can pass with the agent's LLM completely broken — when a provider rejects the model name, an *empty* response is still emitted. Always pair the event with `text_contains`, `text_excludes`, an `eval:` criterion, or a `function_call` with its `calls:`.
+
+There is no `matches:` field. Pipecat's parser drops keys it does not know, so an expectation resting on one parses cleanly, stores, runs, and asserts nothing — which is why a create, an update and a run all report `scenario_cannot_fail` when nothing in a scenario asserts content.
 </Warning>
 
 ## Targets: what you run against
@@ -96,6 +98,47 @@ Mocks belong to the scenario, not the run: "the booking succeeds, does it report
 <Note>
 Audio runs use local models for the caller's voice and the judge's transcription, downloaded on first use. Budget for that the first time.
 </Note>
+
+## Choosing the judge
+
+An `eval:` criterion and every simulation verdict are decided by a judge LLM. Left alone that is pipecat's own — a **local Ollama** — which is why an `eval:` assertion errors on a machine with no Ollama running, while `text_contains` and `function_call` build no judge at all.
+
+A scenario can name its own:
+
+```json
+{
+  "name": "describes-the-menu-honestly",
+  "judge": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+  "simulator": {"provider": "openai", "model": "gpt-4o-mini", "temperature": 0.7},
+  "definition": { "turns": [ /* ... */ ] }
+}
+```
+
+`provider` is a closed set — `ollama`, `openai`, `anthropic` — mapping to factories TurnCall ships. Pipecat's own escape hatch is `factory`, a dotted path it hands to `importlib.import_module`: fine for a file on your disk, remote code execution for a request body. A definition naming one anywhere pipecat reads it (`judge.eval`, `judge.transcription`, `simulator`, `user.speech`) is refused at the API boundary, and `api_key` is not a field — the key is the platform's, read from the same environment the agent's own LLM uses.
+
+`model` empty means that provider's default. `temperature` has no pipecat field and rides in `extra`; it is unset by default, because a verdict that varies run to run is not a verdict. It is **dropped** for models that reject it — Anthropic, and OpenAI's `o1`/`o3`/`o4`/`gpt-5` families — by the rule the call path already follows.
+
+### Set it once
+
+Three environment variables on the worker, and the matching `EVAL_SIMULATOR_*` trio:
+
+```bash
+EVAL_JUDGE_PROVIDER=openai
+EVAL_JUDGE_MODEL=gpt-4o-mini
+EVAL_JUDGE_TEMPERATURE=0
+```
+
+Precedence is narrowest-wins: the scenario's block, then these, then pipecat's Ollama. A block is taken **whole**, never merged field by field — a platform `model` landing on a scenario's provider would name a model that provider has never heard of. Sending `"judge": null` on an update clears a scenario's own block and returns it to the default.
+
+There is deliberately **no run-level override**: a `judge` on `POST /v1/eval-runs` is a 422. A run is what it was queued as, and two runs of one scenario decided by different judges are incomparable with nothing on either row explaining why — the same reason mocks belong to the scenario.
+
+### Knowing which judge decided
+
+Every run's `harness_config` records `judge_provider`, `judge_model`, `judge_temperature`, `judge_service`, `judge_factory` and `judge_used` — the last because pipecat fills its default in whether or not a judge is ever asked anything, and a snapshot naming a model that never ran is the same lie as a policy that was never enforced.
+
+On top of that, a run whose judge differs from the last run of the same scenario to reach a verdict carries a **`judge_changed`** warning naming both. A scenario that passed yesterday and fails today otherwise reads identically whether the agent regressed or the judge moved underneath it.
+
+The same snapshot records `worker_version`, `worker_started_at` and `worker_stale` — the last true when the worker's source has been edited since the process started, which is the mounted-development case where a scenario's judge is set, stored correctly, and quietly ignored by a process that predates the feature. A stale worker adds a **`worker_stale`** warning saying when each happened.
 
 ## Simulations
 
@@ -175,6 +218,8 @@ curl http://localhost:8090/v1/eval-runs/batches/<batch_id> -H "Authorization: Be
 
 A run reports `passed_count`/`failed_count` out of `iterations` — there is no score. `errored` is neither: it means the harness could not complete, so it counts toward no rate at all.
 
+A run also carries **`warnings`**: things its author needs to know that are not verdicts. A mock keyed to a tool this run can never call, an agent whose real tools are allowed to fire, a scenario nothing in which can fail, a judge that changed since the last verdict, a worker older than the code it runs. They ride on the run, the batch summary and `turncall eval show`, because the person reading a green verdict is rarely the one who wrote the scenario.
+
 ## What evals cannot see
 
 Worth knowing before you trust a green suite. An eval swaps **only the transport**, so everything inside it is invisible:
@@ -188,4 +233,4 @@ Worth knowing before you trust a green suite. An eval swaps **only the transport
 
 Everything the pipeline *builds* is covered, which is where the regressions that shipped have actually lived: STT and TTS construction, provider model names, VAD and turn-detection wiring, the tool bridge, knowledge retrieval.
 
-The judge is an LLM and is not deterministic. Use binary criteria, use iterations, and treat a single flip as a signal to look rather than a verdict.
+The judge is an LLM and is not deterministic. Use binary criteria, use iterations, and treat a single flip as a signal to look rather than a verdict — and check `judge_changed` before blaming the agent.

@@ -127,6 +127,29 @@ exactly one winner and the loser finds the run no longer queued.
   most deployments do not have, so such a scenario errors at judge
   construction until one is configured. Scenarios using only `text_contains` /
   `function_call` — every one in this slice — build no judge at all.
+
+  **Amended (#118, #119).** The dotted path stayed unusable from an API body:
+  `factory` is handed to `importlib.import_module`, so accepting one from a
+  request is remote code execution on the worker. TurnCall therefore ships the
+  factories and a request names a **provider** — `ollama`, `openai`,
+  `anthropic` — which `evals.judges.PROVIDERS` maps to a callable in this
+  codebase; the mapping is the allowlist, and a definition naming a `factory`
+  anywhere pipecat reads one is refused at the API boundary. The credential is
+  the platform's, read from the same settings the agent's own LLM uses, because
+  a key that can be set in a scenario is one that lands in JSONB and is masked
+  from then on. `judge`/`simulator` are TurnCall columns beside `tool_mocks`,
+  compiled into pipecat's blocks at parse time; a raw `judge:` inside the
+  definition still wins, so a stored scenario keeps the judge it named.
+
+  Platform defaults (`EVAL_JUDGE_*`, `EVAL_SIMULATOR_*`) sit one level up, taken
+  whole rather than merged, and a **run** cannot override either: a run is what
+  it was queued as, and two runs of one scenario decided by different judges are
+  incomparable with nothing on either row explaining why — the same argument
+  that keeps mocks on the scenario. That argument is also why `harness_config`
+  now records the provider and temperature it was missing, why a judge that
+  differs from a scenario's last verdict raises `judge_changed`, and why the
+  snapshot names the **worker** that ran it: a process older than the code it
+  runs produces a result that looks ordinary and lacks whatever shipped since.
 - Pipecat's schema moving is now our migration problem, bounded by
   `schema_version`.
 - **Text modality cannot see the agent's `first_message`.** It goes out as a
