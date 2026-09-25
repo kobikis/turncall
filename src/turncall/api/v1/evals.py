@@ -123,6 +123,34 @@ async def get_eval_scenario(scenario_id: UUID, auth: Auth, session: DbSession) -
     return ok(EvalScenarioResponse.model_validate(row))
 
 
+def _update_values(body: UpdateEvalScenarioRequest) -> dict:
+    """The columns a PUT actually changes.
+
+    Absent means "leave it", which is what the None filter says for every field
+    a scenario cannot un-have. `judge` and `simulator` are the exception: null
+    is a real answer there — "back to whatever the platform decides" (#119) —
+    and filtering on None alone made a scenario's judge permanent the moment it
+    had one. So those two are applied whenever they were *sent*, null included.
+    """
+    values: dict = {
+        k: v
+        for k, v in {
+            "name": body.name,
+            "description": body.description,
+            "definition": body.definition,
+            "tool_mocks": body.tool_mocks,
+            "tool_policy": body.tool_policy.value if body.tool_policy else None,
+            "tags": body.tags,
+            "default_target": body.default_target,
+        }.items()
+        if v is not None
+    }
+    for field in ("judge", "simulator"):
+        if field in body.model_fields_set:
+            values[field] = _model_block(getattr(body, field))
+    return values
+
+
 @router.put("/{scenario_id}")
 async def update_eval_scenario(
     scenario_id: UUID,
@@ -134,21 +162,7 @@ async def update_eval_scenario(
     if row is None:
         raise NotFoundError("EvalScenario", str(scenario_id))
 
-    values: dict = {
-        k: v
-        for k, v in {
-            "name": body.name,
-            "description": body.description,
-            "definition": body.definition,
-            "tool_mocks": body.tool_mocks,
-            "tool_policy": body.tool_policy.value if body.tool_policy else None,
-            "tags": body.tags,
-            "default_target": body.default_target,
-            "judge": _model_block(body.judge),
-            "simulator": _model_block(body.simulator),
-        }.items()
-        if v is not None
-    }
+    values = _update_values(body)
     if body.definition is not None:
         # A new definition may change the kind, and the column is what readers
         # switch on — leaving it stale would make the row lie about itself.

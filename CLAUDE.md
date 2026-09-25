@@ -669,7 +669,11 @@ heard of. There is **no run-level override**: a `judge` on `POST /v1/eval-runs`
 is a 422, because a run is what it was queued as and two runs of one scenario
 decided by different judges are incomparable with nothing on either row saying
 why — the same reason mocks belong to the scenario. An inline scenario (#77)
-carries its own, like the stored one it mirrors.
+carries its own, like the stored one it mirrors. On `PUT
+/v1/eval-scenarios/{id}` those two fields are the only ones where a sent
+**null** means something — "back to the platform default" — so they are applied
+whenever they were sent, while every other field still only applies when it is
+not null. Without that a scenario's judge was permanent the moment it had one.
 
 Which judge answered is then recorded and **acted on**. `harness_config` carries
 `judge_provider` and `judge_temperature` beside `judge_service`/`judge_model`/
