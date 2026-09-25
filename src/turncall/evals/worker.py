@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import signal
 from typing import Any
 
@@ -99,6 +100,47 @@ async def _consume(
         await asyncio.gather(*running, return_exceptions=True)
 
 
+# Pipecat's eval client checks the bot is listening by opening a plain TCP
+# connection and closing it without sending anything — deliberately, because a
+# real handshake would make the bot greet a connection about to be thrown away
+# (`EvalClient._wait_for_bot`). The `websockets` server on the other end sees a
+# socket that closed before a request line and logs `opening handshake failed`
+# with a traceback, once per iteration. It is a probe succeeding, and it reads
+# in the log exactly like a bot that could not be reached.
+_PROBE_MARKERS = (
+    "connection closed while reading HTTP request line",
+    "did not receive a valid HTTP request",
+)
+
+
+class _DropReadinessProbe(logging.Filter):
+    """Drop the handshake error the readiness probe provokes, and only that.
+
+    Narrow on purpose: a handshake that fails for any other reason — a client
+    speaking the wrong protocol, a TLS mismatch — still gets its traceback,
+    because that one would be a real finding.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno < logging.ERROR or record.exc_info is None:
+            return True
+        exc: BaseException | None = record.exc_info[1]
+        while exc is not None:
+            if any(marker in str(exc) for marker in _PROBE_MARKERS):
+                return False
+            exc = exc.__cause__ or exc.__context__
+        return True
+
+
+def _quieten_readiness_probe() -> None:
+    """Install the filter on the worker only.
+
+    Not global: a live Twilio call is also a websocket server, and losing its
+    handshake errors to silence an eval's log noise would be a bad trade.
+    """
+    logging.getLogger("websockets.server").addFilter(_DropReadinessProbe())
+
+
 async def run_worker() -> None:
     """Start the worker and serve until signalled."""
     from turncall.storage.database import (
@@ -108,6 +150,7 @@ async def run_worker() -> None:
     )
     from turncall.storage.redis import close_redis, init_redis
 
+    _quieten_readiness_probe()
     settings = get_settings()
     await init_database(settings.database)
     await init_redis(settings.redis)
