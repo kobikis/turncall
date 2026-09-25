@@ -85,6 +85,10 @@ A mocked tool returns your canned response and the real webhook is never called 
 
 Mocks belong to the scenario, not the run: "the booking succeeds, does it report the confirmation correctly?" and "the booking fails, does it avoid claiming success?" are two different tests.
 
+<Note>
+`examples/eval-tool-mock` runs all three cases against an agent whose booking webhook points at a host that does not exist — so a passing run is proof the webhook was never called, not a claim.
+</Note>
+
 ## Text or audio
 
 `modality: "text"` skips STT and TTS — fast, silent, cheap, and what you run on every pull request. `modality: "audio"` synthesizes the caller's turns into the agent's real STT and judges a transcription of the agent's real TTS. Audio is what covers recognition, synthesis and turn timing; text cannot see any of it.
