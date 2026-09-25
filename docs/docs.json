@@ -95,13 +95,15 @@
             "group": "Projects",
             "pages": [
               "POST /v1/projects",
-              "GET /v1/projects/{project_id}"
+              "GET /v1/projects/{project_id}",
+              "DELETE /v1/projects/{project_id}"
             ]
           },
           {
             "group": "API Keys",
             "pages": [
               "POST /v1/api-keys",
+              "POST /v1/api-keys/authenticated",
               "GET /v1/api-keys",
               "DELETE /v1/api-keys/{api_key_id}"
             ]
@@ -165,7 +167,8 @@
               "GET /v1/chat/sessions",
               "GET /v1/chat/sessions/{session_id}",
               "DELETE /v1/chat/sessions/{session_id}",
-              "GET /v1/chat/sessions/{session_id}/messages"
+              "GET /v1/chat/sessions/{session_id}/messages",
+              "GET /v1/chat/sessions/{session_id}/tool-invocations"
             ]
           },
           {
@@ -191,6 +194,23 @@
               "GET /v1/takeaways/{takeaway_id}",
               "PUT /v1/takeaways/{takeaway_id}",
               "DELETE /v1/takeaways/{takeaway_id}"
+            ]
+          },
+          {
+            "group": "Evals",
+            "pages": [
+              "POST /v1/eval-scenarios",
+              "GET /v1/eval-scenarios",
+              "GET /v1/eval-scenarios/{scenario_id}",
+              "PUT /v1/eval-scenarios/{scenario_id}",
+              "DELETE /v1/eval-scenarios/{scenario_id}",
+              "POST /v1/eval-scenarios/from-call",
+              "POST /v1/eval-scenarios/from-session",
+              "POST /v1/eval-runs",
+              "GET /v1/eval-runs",
+              "GET /v1/eval-runs/{run_id}",
+              "GET /v1/eval-runs/batches/{batch_id}",
+              "DELETE /v1/eval-runs/{run_id}"
             ]
           },
           {

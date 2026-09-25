@@ -58,6 +58,12 @@ flowchart LR
     class CALL done
 ```
 
+Behaviour is checked with the same key: `POST /v1/eval-scenarios` saves a test and `POST /v1/eval-runs` executes it on a worker, answering `202` with a batch id rather than a verdict. See [Evals](/guides/evals).
+
+## What is not here
+
+Endpoints under `/webhooks/` are absent on purpose. Twilio and Meta call those — you configure the URL and never request it yourself — so they are part of the platform's plumbing rather than its API. Your own webhooks work the other way round: TurnCall calls you. Subscribe with `POST /v1/webhooks` and see [Server events](/guides/server-events) for the envelope and its signature.
+
 ## Response Format
 
 ### Success
