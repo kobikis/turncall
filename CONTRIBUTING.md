@@ -57,8 +57,12 @@ Honest accounting, because a contract you can't verify is worse than none:
 | Check | Gated? |
 |---|---|
 | `ruff check src/ tests/` | **yes** |
-| `pytest` (610 tests) | **yes** |
+| `pytest` (1303 tests) | **yes** |
 | `bandit`, high severity | **yes** |
+| `docs/openapi.json` current (`make check-openapi`) | **yes** |
+| API Reference nav matches the spec (`make check-docs-nav`) | **yes** |
+| DCO sign-off | **yes** |
+| `docker build` | **yes** |
 | `mypy` | **no** — see below |
 | `ruff format` | **no** — see below |
 | Coverage threshold | **no** |

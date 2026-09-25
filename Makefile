@@ -49,6 +49,9 @@ gen-openapi: ## Regenerate docs/openapi.json from the app spec
 check-openapi: ## Fail if docs/openapi.json is stale (CI guard)
 	python scripts/gen_openapi.py --check
 
+check-docs-nav: ## Fail if the API Reference nav and the spec disagree (CI guard)
+	python scripts/check_docs_nav.py
+
 SKILL_REPO ?= ../turncall-skill
 sync-skill: gen-openapi ## Regenerate docs spec + copy it into the turncall-skill checkout (SKILL_REPO=path)
 	python scripts/sync_skill.py --skill-repo $(SKILL_REPO)
