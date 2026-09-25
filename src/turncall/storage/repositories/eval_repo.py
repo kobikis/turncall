@@ -282,6 +282,35 @@ async def get_run_summary(
     return (await session.execute(query)).mappings().one_or_none()
 
 
+# A run that reached a verdict, and therefore set a baseline someone may be
+# comparing against. `errored` and `cancelled` are excluded on purpose: they
+# never counted toward a rate, so they never moved a baseline either.
+_JUDGED = (EvalRunStatus.PASSED.value, EvalRunStatus.FAILED.value)
+
+
+async def last_judged_harness(
+    session: AsyncSession, *, scenario_id: UUID, excluding: UUID
+) -> dict[str, Any] | None:
+    """The harness snapshot of this scenario's most recent verdict (#119).
+
+    One row, on `ix_eval_runs_scenario`. Ordered by `completed_at` — when the
+    verdict landed, not when the run was queued, since a long run queued first
+    can finish last — with the id breaking ties the way every other eval
+    listing does.
+    """
+    query = (
+        select(EvalRunRow.harness_config)
+        .where(
+            EvalRunRow.scenario_id == scenario_id,
+            EvalRunRow.id != excluding,
+            EvalRunRow.status.in_(_JUDGED),
+        )
+        .order_by(EvalRunRow.completed_at.desc(), EvalRunRow.id.desc())
+        .limit(1)
+    )
+    return (await session.execute(query)).scalar_one_or_none()
+
+
 async def start_run(
     session: AsyncSession,
     run_id: UUID,

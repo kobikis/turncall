@@ -230,6 +230,13 @@ def harness_config(parsed: Any = None) -> dict[str, Any]:
         # A custom judge is a dotted path instead of a service/model pair; with
         # neither recorded the snapshot would say nothing at all about it.
         "judge_factory": judge.get("factory"),
+        # The two the dotted path swallowed (#119). `provider` is the name a
+        # scenario actually wrote, read back out of the factory it compiled to;
+        # `temperature` has no pipecat field at all and rides in `extra`. A
+        # snapshot missing them cannot answer "was the same judge asked the
+        # same way", which is the only question it exists to answer.
+        "judge_provider": _judge_provider(judge),
+        "judge_temperature": (judge.get("extra") or {}).get("temperature"),
         # Audio only. The caller's voice and the STT the judge read through are
         # as much a part of a result as the judge model: a different TTS says
         # the same line differently, and a different STT mishears it
@@ -238,6 +245,22 @@ def harness_config(parsed: Any = None) -> dict[str, Any]:
         "bot_transcription": getattr(parsed, "transcriber", None),
         "schema_version": scenario_mod.SCHEMA_VERSION,
     }
+
+
+def _judge_provider(judge: dict[str, Any]) -> str | None:
+    """Which provider decided the verdicts, by whichever name is recorded.
+
+    A TurnCall-compiled block carries the factory path `PROVIDERS` maps to, so
+    the provider is that mapping read backwards. Pipecat's own default carries
+    a plain `service:` instead, and an unrecognised factory — a definition that
+    predates the closed set — has no provider name to give.
+    """
+    from turncall.evals.judges import PROVIDER_BY_FACTORY
+
+    factory = judge.get("factory")
+    if factory:
+        return PROVIDER_BY_FACTORY.get(factory)
+    return judge.get("service")
 
 
 def _uses_judge(parsed: Any) -> bool:
@@ -959,7 +982,9 @@ def _warn_unmatched_mocks(
     ]
 
 
-def _parse_for_run(run: Any, modality: EvalModality) -> tuple[EvalKind, Any]:
+def _parse_for_run(
+    run: Any, modality: EvalModality, settings: Any = None
+) -> tuple[EvalKind, Any]:
     """The pipecat scenario this run will drive, and the kind it turned out to be.
 
     The definition decides, not `run.kind`. The column is a copy made at queue
@@ -970,14 +995,103 @@ def _parse_for_run(run: Any, modality: EvalModality) -> tuple[EvalKind, Any]:
     definition = dict(run.resolved_scenario.get("definition") or {})
     kind = scenario_mod.kind_of(definition)
     # The scenario's own judge and persona, compiled into pipecat's blocks. A
-    # raw block inside the definition wins — see `with_models`.
+    # raw block inside the definition wins — see `with_models`. Narrowest wins
+    # the whole way down (#119): the scenario's block, then the platform
+    # default, then pipecat's local Ollama, which is what `None` leaves.
+    judge, simulator = _platform_models(settings)
     definition = scenario_mod.with_models(
         definition,
-        judge=run.resolved_scenario.get("judge"),
-        simulator=run.resolved_scenario.get("simulator"),
+        judge=run.resolved_scenario.get("judge") or judge,
+        simulator=run.resolved_scenario.get("simulator") or simulator,
     )
     merged = scenario_mod.with_modality(definition, modality)
     return kind, scenario_mod.parse(merged, name=run.scenario_name)
+
+
+def _platform_models(
+    settings: Any,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """The platform's judge and simulator blocks, or a pair of Nones (#119).
+
+    A run is never a place to set these. Letting a request swap the judge makes
+    two runs of one scenario incomparable with nothing on either row saying
+    why — the same reason mocks belong to the scenario rather than the run.
+    """
+    from turncall.evals.judges import default_block
+
+    evals = getattr(settings, "evals", None)
+    if evals is None:
+        return None, None
+    return (
+        default_block(evals.judge_provider, evals.judge_model, evals.judge_temperature),
+        default_block(
+            evals.simulator_provider,
+            evals.simulator_model,
+            evals.simulator_temperature,
+        ),
+    )
+
+
+# What makes two runs of one scenario comparable. A verdict is the judge's, so
+# a baseline that moved because the judge moved is not a regression — and read
+# off the row alone, the two are indistinguishable (#119).
+_JUDGE_KEYS = (
+    "judge_provider",
+    "judge_model",
+    "judge_temperature",
+    "judge_service",
+    "judge_factory",
+)
+
+
+async def _warn_judge_changed(
+    session: Any, run: Any, harness: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Say so when this scenario's last verdict came from a different judge.
+
+    One indexed query against `scenario_id`, and only for a stored scenario: an
+    inline one (#77) has no history to differ from, and neither does the first
+    run of anything.
+    """
+    from turncall.storage.repositories import eval_repo
+
+    if run.scenario_id is None:
+        return []
+    previous = await eval_repo.last_judged_harness(
+        session, scenario_id=run.scenario_id, excluding=run.id
+    )
+    if not isinstance(previous, dict) or not previous:
+        # Nothing to compare against: no earlier verdict, or a snapshot that is
+        # not a mapping — `harness_config` is JSONB and a row written by hand
+        # can hold anything.
+        return []
+
+    # Only keys the previous snapshot actually recorded. `judge_provider` and
+    # `judge_temperature` arrived with this slice, so every older row is
+    # missing them — comparing against that absence would announce a judge
+    # change on the next run of every scenario in the database.
+    changed = {
+        key: {"previous": previous.get(key), "current": harness.get(key)}
+        for key in _JUDGE_KEYS
+        if key in previous and previous.get(key) != harness.get(key)
+    }
+    if not changed:
+        return []
+    return [
+        {
+            "code": "judge_changed",
+            "message": (
+                "this scenario's previous verdict was decided by a different "
+                "judge: "
+                + "; ".join(
+                    f"{key} {entry['previous']!r} -> {entry['current']!r}"
+                    for key, entry in changed.items()
+                )
+                + ". A result that moved may be the judge moving, not the agent."
+            ),
+            "judge": changed,
+        }
+    ]
 
 
 async def _plan_run(
@@ -994,7 +1108,7 @@ async def _plan_run(
 
     modality = EvalModality(run.modality)
     try:
-        kind, parsed = _parse_for_run(run, modality)
+        kind, parsed = _parse_for_run(run, modality, settings)
         target = await resolve_target(
             session, project_id=run.project_id, target=run.target
         )
@@ -1007,8 +1121,10 @@ async def _plan_run(
     # reads a green verdict is not always the one who wrote the scenario, and
     # "this could not have failed" is the most important thing a green run can
     # say about itself.
+    harness = harness_config(parsed)
     warnings = scenario_mod.assertion_warnings(parsed)
     warnings += _warn_unmatched_mocks(tool_mocks, target, run_id=run.id)
+    warnings += await _warn_judge_changed(session, run, harness)
     if live_tools and (target.config.tools or target.config.mcp_servers):
         # The scenario typed the word, so this is allowed — but a real webhook
         # fires on every iteration, and the run's record is where someone
@@ -1041,7 +1157,7 @@ async def _plan_run(
         resolved_config=sanitize_config(target.config_blob),
         agent_id=target.agent_id,
         agent_version=target.agent_version,
-        harness_config=harness_config(parsed),
+        harness_config=harness,
         warnings=warnings,
     )
     await session.commit()
