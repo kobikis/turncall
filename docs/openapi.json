@@ -6545,12 +6545,13 @@
             "default": 1
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "target"
         ],
         "title": "CreateEvalRunRequest",
-        "description": "Run one stored scenario, every scenario carrying a tag (#75), or a\nscenario supplied inline (#77).\n\nExactly one of the three. A tag fans out to one run per matching scenario,\nall sharing a batch id, so one request has one readable verdict \u2014 which is\nwhat the CLI's single exit code is built on."
+        "description": "Run one stored scenario, every scenario carrying a tag (#75), or a\nscenario supplied inline (#77).\n\nExactly one of the three. A tag fans out to one run per matching scenario,\nall sharing a batch id, so one request has one readable verdict \u2014 which is\nwhat the CLI's single exit code is built on.\n\n`extra=\"forbid\"` is what makes \"no run-level judge\" a rule (#119). A run is\nwhat it was queued as: a request that could swap the judge would make two\nruns of one scenario incomparable with nothing on either row explaining\nwhy, and quietly ignoring the field is the same outcome with the author\nbelieving otherwise. Name it on the scenario \u2014 including the inline one\nabove, which is where a run-shaped `judge:` was aiming."
       },
       "CreateEvalScenarioRequest": {
         "properties": {
@@ -7117,6 +7118,26 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/EvalToolPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "judge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvalModelSchema"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "simulator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvalModelSchema"
               },
               {
                 "type": "null"

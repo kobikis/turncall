@@ -760,3 +760,94 @@ async def test_a_scenario_that_names_no_judge_stores_null(factory) -> None:
     async with factory() as session:
         reread = await eval_repo.get_scenario(session, scenario_id)
         assert reread.judge is None and reread.simulator is None
+
+
+@pytest.mark.asyncio
+async def test_the_last_judged_run_is_the_one_a_judge_change_compares_to(
+    factory,
+) -> None:
+    """#119: the most recent run of this scenario that reached a verdict.
+
+    An `errored` run is excluded for the same reason it counts toward no rate:
+    nobody could tell what the judge thought, so it set no baseline.
+    """
+    async with factory() as session:
+        project = await _project(session, "eval-last-judge")
+        scenario = await eval_repo.create_scenario(
+            session,
+            project_id=project.id,
+            name="judged-twice",
+            kind="script",
+            definition=SCRIPTED,
+            schema_version="pipecat-1.11",
+        )
+        runs = []
+        for _ in range(3):
+            runs.append(
+                await eval_repo.create_run(
+                    session,
+                    project_id=project.id,
+                    scenario_id=scenario.id,
+                    scenario_name=scenario.name,
+                    kind="script",
+                    target={"type": "agent", "agent_id": str(uuid4())},
+                    resolved_scenario={"definition": SCRIPTED},
+                    modality="text",
+                    iterations=1,
+                )
+            )
+        for run, judge in zip(runs, ("gemma3", "gpt-4o", "never-decided"), strict=True):
+            await eval_repo.start_run(
+                session,
+                run.id,
+                resolved_config={},
+                agent_id=None,
+                harness_config={"judge_provider": "ollama", "judge_model": judge},
+            )
+        # Oldest verdict first, then the one to find, then a run that errored.
+        for run, status in zip(
+            runs,
+            (EvalRunStatus.PASSED, EvalRunStatus.FAILED, EvalRunStatus.ERRORED),
+            strict=True,
+        ):
+            await eval_repo.finish_run(
+                session,
+                run.id,
+                status=status,
+                passed_count=0,
+                failed_count=0,
+                results=[],
+            )
+        await session.commit()
+        scenario_id, newest = scenario.id, runs[-1].id
+
+    async with factory() as session:
+        found = await eval_repo.last_judged_harness(
+            session, scenario_id=scenario_id, excluding=newest
+        )
+        assert found["judge_model"] == "gpt-4o", (
+            "the latest verdict, not the latest run"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_scenario_with_no_earlier_verdict_has_nothing_to_compare(
+    factory,
+) -> None:
+    async with factory() as session:
+        project = await _project(session, "eval-first-judge")
+        scenario = await eval_repo.create_scenario(
+            session,
+            project_id=project.id,
+            name="judged-once",
+            kind="script",
+            definition=SCRIPTED,
+            schema_version="pipecat-1.11",
+        )
+        await session.commit()
+        assert (
+            await eval_repo.last_judged_harness(
+                session, scenario_id=scenario.id, excluding=uuid4()
+            )
+            is None
+        )

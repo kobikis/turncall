@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 from pydantic import Field, PostgresDsn, RedisDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from turncall.domain.enums import EvalModelProvider
+
 # Load .env before settings construction (nested models need os.environ)
 load_dotenv()
 
@@ -239,6 +241,21 @@ class EvalSettings(BaseSettings):
     # silently ran 50 of 200 scenarios reports a pass for a suite that never
     # ran.
     max_scenarios_per_request: int = 50
+    # The judge and the persona, set once for the whole platform (#119).
+    # Precedence is narrowest-wins: a scenario's own block, then these, then
+    # pipecat's local Ollama. A block here is taken whole — a scenario that
+    # names a judge keeps the one it names, rather than having a platform model
+    # merged into a provider that does not offer it.
+    #
+    # Unset provider + a model or temperature means "the default provider,
+    # configured": `compile_model_block` fills in ollama, which is what pipecat
+    # would have run anyway.
+    judge_provider: EvalModelProvider | None = None
+    judge_model: str | None = None
+    judge_temperature: float | None = None
+    simulator_provider: EvalModelProvider | None = None
+    simulator_model: str | None = None
+    simulator_temperature: float | None = None
     # Where pipecat's caching TTS keeps the caller's synthesized turns (#72),
     # keyed by service/voice/model/language/speed/text. Pipecat's own default
     # is under $HOME, which a container loses on every recreate — a scripted

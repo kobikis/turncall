@@ -306,6 +306,11 @@ class InlineScenario(BaseModel):
     definition: dict[str, Any]
     tool_mocks: dict[str, Any] | None = None
     tool_policy: EvalToolPolicy | None = None
+    # A scenario's judge belongs to the scenario however it arrives — a file on
+    # someone's disk is still a scenario, and dropping the block silently would
+    # judge it by a different model than the stored copy it was written beside.
+    judge: EvalModelSchema | None = None
+    simulator: EvalModelSchema | None = None
 
     @field_validator("tool_mocks")
     @classmethod
@@ -329,7 +334,16 @@ class CreateEvalRunRequest(BaseModel):
     Exactly one of the three. A tag fans out to one run per matching scenario,
     all sharing a batch id, so one request has one readable verdict — which is
     what the CLI's single exit code is built on.
+
+    `extra="forbid"` is what makes "no run-level judge" a rule (#119). A run is
+    what it was queued as: a request that could swap the judge would make two
+    runs of one scenario incomparable with nothing on either row explaining
+    why, and quietly ignoring the field is the same outcome with the author
+    believing otherwise. Name it on the scenario — including the inline one
+    above, which is where a run-shaped `judge:` was aiming.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     scenario_id: UUID | None = None
     tag: str | None = Field(default=None, min_length=1, max_length=64)

@@ -264,6 +264,8 @@ async def _scenarios_to_run(
                 tool_policy=(
                     body.scenario.tool_policy or EvalToolPolicy.MOCK_ONLY
                 ).value,
+                judge=_model_block(body.scenario.judge),
+                simulator=_model_block(body.scenario.simulator),
             )
         ]
     if body.tag:

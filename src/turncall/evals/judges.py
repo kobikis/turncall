@@ -36,6 +36,34 @@ DEFAULT_MODELS: dict[str, str] = {
 }
 
 
+# The same mapping read backwards, so a compiled block can say which provider
+# produced it. `harness_config` records the provider a run was judged by, and
+# by then the typed block is gone — pipecat stores the dotted path.
+PROVIDER_BY_FACTORY: dict[str, str] = {path: name for name, path in PROVIDERS.items()}
+
+
+def default_block(
+    provider: Any = None, model: str | None = None, temperature: float | None = None
+) -> dict[str, Any] | None:
+    """A platform-wide judge/simulator block, or None when none is configured (#119).
+
+    Taken whole or not at all: a scenario that names a judge keeps the one it
+    names. Merging field by field would let a platform `model` land on a
+    provider that has never heard of it.
+
+    A model or a temperature with no provider means "the default provider,
+    configured" — `compile_model_block` fills in ollama, which is what pipecat
+    would have run regardless.
+    """
+    if provider is None and model is None and temperature is None:
+        return None
+    return {
+        "provider": str(provider) if provider is not None else "ollama",
+        "model": model,
+        "temperature": temperature,
+    }
+
+
 def ollama(config: dict[str, Any]) -> Any:
     """Pipecat's own local judge, reached through the same door as the rest."""
     from pipecat.evals.services import ollama_service
