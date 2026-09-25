@@ -124,6 +124,11 @@ jobs:
       # misdocuments the API for everyone downstream. Runs here rather than in
       # `lint` because generating it imports the app.
       - run: make check-openapi
+      # The reference lists its pages by hand, so a shipped endpoint is only
+      # published if someone adds one. Twelve eval routes were missing and the
+      # docs read as complete throughout — a missing page looks exactly like a
+      # feature nobody wrote. Runs after the spec check, which it reads.
+      - run: make check-docs-nav
       # Only the sequence-number race test needs a live DB; it self-skips
       # without one, so migrating is what keeps it from silently not running.
       - run: alembic upgrade head
