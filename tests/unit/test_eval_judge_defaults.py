@@ -238,3 +238,31 @@ class TestARunCannotSwapTheJudge:
             target={"type": "agent_name", "name": "support"},
         )
         assert body.scenario.judge.model == "gpt-4o"
+
+
+class TestAScenarioCanGoBackToTheDefault:
+    """A judge has to be removable, or the Console's "inherit the platform
+    default" is a lie the moment anyone picks a model (#119, builder-web#26).
+    """
+
+    @staticmethod
+    def _values(**sent):
+        from turncall.api.v1.evals import _update_values
+        from turncall.api.v1.schemas.evals import UpdateEvalScenarioRequest
+
+        return _update_values(UpdateEvalScenarioRequest(**sent))
+
+    def test_an_explicit_null_clears_it(self) -> None:
+        assert self._values(judge=None) == {"judge": None}
+
+    def test_not_sending_it_leaves_it_alone(self) -> None:
+        assert "judge" not in self._values(name="renamed")
+
+    def test_a_block_is_stored_compiled(self) -> None:
+        values = self._values(judge={"provider": "openai", "model": "gpt-4o"})
+        assert values["judge"] == {"provider": "openai", "model": "gpt-4o"}
+
+    def test_a_null_name_is_still_not_a_rename(self) -> None:
+        """The exception is the two fields where absence is a real value, not
+        a general "nulls now clear things"."""
+        assert self._values(name=None, judge=None) == {"judge": None}
