@@ -29,6 +29,12 @@ _HELPER = "_tts_text_transforms"
 
 
 def _tts_service_classes() -> list[type]:
+    """The four providers, for per-class coverage below.
+
+    A hardcoded list, but not the thing that catches a fifth provider — the
+    structural guard walks the factory's own AST for that, so forgetting to
+    extend this costs per-class coverage, never the guard.
+    """
     from pipecat.services.cartesia.tts import CartesiaTTSService
     from pipecat.services.deepgram.tts import DeepgramTTSService
     from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
@@ -75,8 +81,27 @@ def test_the_helper_is_pure_and_needs_no_pipeline() -> None:
     )
 
 
+def _called_name(node: ast.expr) -> str | None:
+    """The callee's name, whether `X(...)` or `module.X(...)`.
+
+    Matching both spellings is `test_kb_pipeline_wiring.py`'s idiom. It
+    matters here: a branch constructing through an aliased import would
+    otherwise drop out of the list silently rather than fail loudly, and a
+    guard that quietly stops looking is worse than no guard.
+    """
+    if isinstance(node, ast.Name):
+        return node.id
+    return getattr(node, "attr", None)
+
+
 def _tts_constructions() -> list[ast.Call]:
-    """Every `<Something>TTSService(...)` built inside _create_tts_service."""
+    """Every `<Something>TTSService(...)` built inside _create_tts_service.
+
+    Remaining blind spot, for whoever extends this in #134: a branch that
+    constructs through a *variable* (`cls = OpenAITTSService; cls(...)`) is
+    invisible to any name match. Nothing in this module does that, and the
+    `len(calls) >= 4` floor catches it only if the total moves.
+    """
     tree = ast.parse(_FACTORY.read_text())
     fn = next(
         n
@@ -87,8 +112,7 @@ def _tts_constructions() -> list[ast.Call]:
         c
         for c in ast.walk(fn)
         if isinstance(c, ast.Call)
-        and isinstance(c.func, ast.Name)
-        and c.func.id.endswith("TTSService")
+        and (_called_name(c.func) or "").endswith("TTSService")
     ]
 
 
@@ -104,20 +128,18 @@ def test_every_provider_branch_composes_through_the_helper() -> None:
     )
 
     for call in calls:
-        built = call.func.id  # type: ignore[union-attr]
+        built = _called_name(call.func)
         kwargs = {k.arg: k.value for k in call.keywords}
         assert "text_transforms" in kwargs, (
             f"{built} is constructed without text_transforms — it will read "
             "markdown aloud"
         )
         value = kwargs["text_transforms"]
-        assert (
-            isinstance(value, ast.Call) and getattr(value.func, "id", None) == _HELPER
-        ), (
+        assert isinstance(value, ast.Call) and _called_name(value.func) == _HELPER, (
             f"{built} does not compose its transforms through {_HELPER}() — a "
             "shared list cannot carry the per-provider pronunciation transform"
         )
-        assert [getattr(a, "id", None) for a in value.args] == [built], (
-            f"{built} passes the wrong service class to {_HELPER}(): "
-            f"{[getattr(a, 'id', None) for a in value.args]}"
+        passed = [_called_name(a) for a in value.args]
+        assert passed == [built], (
+            f"{built} passes the wrong service class to {_HELPER}(): {passed}"
         )
