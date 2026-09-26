@@ -42,7 +42,10 @@ class _SessionFactory:
 
 async def _queue_a_handoff(queue):
     """Run the real handoff, landing its frames in a real pipecat FrameQueue."""
-    from turncall.orchestrator.tool_bridge import _apply_handoff_context
+    from turncall.orchestrator.tool_bridge import (
+        _apply_handoff_context,
+        _prepare_handoff,
+    )
 
     config = AgentConfig(tools=[_tool("refund")])
     agent = SimpleNamespace(name="Billing", config_blob=config.model_dump(mode="json"))
@@ -70,7 +73,9 @@ async def _queue_a_handoff(queue):
         ),
         patch("turncall.orchestrator.tool_bridge.register_tools"),
     ):
-        await _apply_handoff_context({"agent_id": str(uuid4())}, call_context, params)
+        target = await _prepare_handoff({"agent_id": str(uuid4())}, call_context)
+        assert target is not None
+        await _apply_handoff_context(target, call_context, params)
 
 
 def _drain(queue) -> list:
@@ -140,22 +145,25 @@ def test_nothing_outside_the_handoff_is_marked_uninterruptible():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_an_interruption_between_the_two_frames_still_lands_the_target_tools():
-    """PRD #135's second test: the user-visible failure, stated as a test.
+async def test_a_cancelled_handoff_that_is_then_drained_is_all_or_nothing():
+    """PRD #135's second test: both halves of an interruption, together.
 
-    The drain is only half of what an interruption does. Pipecat also cancels
-    every in-flight function call registered with `cancel_on_interruption=True`
-    — which `handoff_to_agent` is, being a sync tool — and a frame the handler
-    never got to build cannot be saved by a flag. So the interruption is
-    delivered here at the worst moment, from inside `_build_tools_schema`,
-    which runs between the two queued frames, and *then* the queue is drained.
+    The drain is one half. The other cancels every in-flight function call
+    registered with `cancel_on_interruption=True` — which `handoff_to_agent`
+    is, being a sync tool — and a frame the handler never built cannot be
+    saved by a flag. So cancellation is requested here from inside
+    `_build_tools_schema`, while the handoff is still being assembled, and
+    *then* the queue is drained.
 
-    Both halves must come out the other side: the previous agent's tools must
-    not still be what the model advertises.
+    The outcome must be all or nothing. It is "all": since #144 nothing
+    suspends after that point, so the cancellation cannot be delivered before
+    the switch finishes, and `interruptible=False` then carries both frames
+    through the drain. Neither mechanism alone gets there, which is why they
+    are exercised together — test_handoff_switch_is_atomic.py owns the
+    cancellation half on its own.
     """
     import asyncio
 
-    from pipecat.frames.frames import LLMSetToolsFrame, LLMUpdateSettingsFrame
     from pipecat.utils.frame_queue import FrameQueue
 
     from turncall.orchestrator import pipeline_factory
@@ -165,8 +173,7 @@ async def test_an_interruption_between_the_two_frames_still_lands_the_target_too
     real_build = pipeline_factory._build_tools_schema
 
     def build_and_interrupt(config):
-        # The caller starts talking: pipecat cancels the tool's task. Requested
-        # here, between the prompt frame and the tools frame.
+        # The caller starts talking while the handoff is still being assembled.
         handoff[0].cancel()
         return real_build(config)
 
@@ -174,15 +181,17 @@ async def test_an_interruption_between_the_two_frames_still_lands_the_target_too
         handoff.append(asyncio.create_task(_queue_a_handoff(queue)))
         await asyncio.gather(*handoff, return_exceptions=True)
 
-    survivors = _drain(queue)
+    from pipecat.frames.frames import LLMSetToolsFrame, LLMUpdateSettingsFrame
 
+    survivors = _drain(queue)
     tool_frames = [f for f in survivors if isinstance(f, LLMSetToolsFrame)]
-    assert any(isinstance(f, LLMUpdateSettingsFrame) for f in survivors), (
-        "the prompt frame was lost to an interruption landing mid-handoff"
+    prompts = [f for f in survivors if isinstance(f, LLMUpdateSettingsFrame)]
+
+    assert (len(prompts), len(tool_frames)) in {(0, 0), (1, 1)}, (
+        f"half-applied: {len(prompts)} prompt frame(s), "
+        f"{len(tool_frames)} tool frame(s) survived"
     )
-    assert len(tool_frames) == 1, (
-        "the tool swap was lost to an interruption landing between the two "
-        "frames — the model still advertises the previous agent's tools, "
-        "which is exactly the state the swap was added to prevent"
-    )
-    assert [t.name for t in tool_frames[0].tools.standard_tools] == ["refund"]
+    if tool_frames:
+        assert [t.name for t in tool_frames[0].tools.standard_tools] == ["refund"], (
+            "the switch landed but advertises the wrong agent's tools"
+        )
