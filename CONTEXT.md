@@ -55,6 +55,16 @@ than [[Bedrock]]'s converse endpoint, which is why it carries a separate provide
 rather than being a Bedrock model id. Its sessions expire at roughly six minutes and roll
 over transparently — ordinary phone calls exercise that path. See ADR-0016.
 
+**Classifier**:
+A small object that answers *typed* questions about some state — yes/no, a
+choice among options, or a score — and returns a probability with each answer.
+A pipecat type in its own right since 1.12, not a description: an
+`LLMClassifier` wraps a [[provider]]'s LLM and asks it for one JSON object,
+while a `JevClassifier` calls a purpose-built classification model directly.
+Used for [[voicemail detection|Voicemail detector]] and for an eval's
+[[judge]]. _Avoid_: calling the LLM *behind* one "the classifier" — the LLM
+answers the question, the classifier is what asks it and parses the reply.
+
 ## Speech recognition
 
 **Keyterms** (`stt.keyterms`):
@@ -121,6 +131,36 @@ responding and never came back. Distinct from `customer_did_not_answer`, which
 is a call that was never picked up, and from `customer_ended_call`, which is a
 caller who hung up. The strikes count *consecutive* silences: a caller who
 pauses, answers, then pauses again starts over.
+
+**Empty user turn**:
+A caller turn that VAD opened and closed with **no transcript** behind it — a
+cough, a door, a word the STT could not resolve. A turn *outcome*, deliberately
+not a fourth entry in [[the three timeouts]]: nothing here is a duration, and
+the confusion this glossary exists to prevent is the one between durations.
+Two cases, and they are answered differently because the conversation is in a
+different state:
+- **Interrupted** — the empty turn cut the agent off mid-reply. Answered: the
+  agent would otherwise be silent in the middle of its own sentence, so it asks
+  the caller to repeat. On by default.
+- **Idle** — the agent had finished and was waiting. Unanswered by default:
+  replying to what may have been a passing truck is intrusive, and the
+  conversation is not stuck. [[User idle|the three timeouts]] already covers
+  the case where it *is*.
+_Avoid_: "empty turn" for a turn the caller genuinely stayed silent through —
+that is [[user idle|the three timeouts]], and nothing opened a turn at all.
+
+## Voicemail
+
+**Voicemail detector**:
+The processor that decides whether an outbound call reached a person or an
+answering machine, and holds the agent's first words back until it knows. It
+asks a [[classifier]] after every transcription but acts on **silence**, not on
+an answer: "hi, this is Sam" is both what a person says and how a recorded
+greeting starts, and only the pause that follows separates them. A
+classification that never arrives is read as *conversation* — treating a person
+as a machine is the expensive mistake, so the ambiguity fails toward talking.
+_Avoid_: "voicemail LLM" — the LLM answers the question, the [[classifier]]
+asks it, and the detector decides when to believe it.
 
 ## Call recording
 
@@ -342,12 +382,17 @@ one of `turns:`/`persona:` is present; both, or neither, is rejected at create.
 The simulated *caller's* character and behaviour. Never the agent under test.
 
 **Judge**:
-The LLM that decides a verdict. Distinct from the [[persona]]; both are LLMs TurnCall
-runs, and neither is the agent. Pipecat's `EvalJudge`, which defaults to a **local
-Ollama** — so a deployment on [[Bedrock]] for data residency sends transcripts nowhere by
-default, and the real cost is the mirror image: an `eval:` assertion errors until an
-Ollama is reachable. Assertions that only use `text_contains` or `function_call` build no
-judge at all.
+What decides a verdict. Distinct from the [[persona]]; both are models TurnCall runs, and
+neither is the agent. Pipecat's `EvalJudge`, which defaults to a **local Ollama** — so a
+deployment on [[Bedrock]] for data residency sends transcripts nowhere by default, and the
+real cost is the mirror image: an `eval:` assertion errors until an Ollama is reachable.
+Assertions that only use `text_contains` or `function_call` build no judge at all.
+
+Since pipecat 1.12 the verdict itself is a [[classifier]]'s, not an LLM's prose answer —
+the judge picks among outcomes and carries a confidence. Because a classifier gives no
+reasons, a second model, the **explainer**, is asked for the reason behind every `no` and
+every verdict it is unsure of. The explainer never changes a verdict; where the two
+disagree, the reason says so.
 
 A scenario names its own with `judge: {provider, model, temperature, endpoint}` and
 `simulator: {...}` — TurnCall columns beside `tool_mocks`, compiled into pipecat's blocks

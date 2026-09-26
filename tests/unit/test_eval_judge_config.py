@@ -69,7 +69,7 @@ class TestAFactoryIsNeverImported:
         assert all(
             path.startswith("turncall.evals.judges.") for path in PROVIDERS.values()
         )
-        with pytest.raises(ScenarioError, match="unknown provider"):
+        with pytest.raises(ScenarioError, match="unknown judge provider"):
             compile_model_block({"provider": "together"})
 
 
@@ -83,8 +83,28 @@ class TestTheCompiledBlock:
 
     def test_ollama_is_the_default_and_keeps_its_endpoint(self) -> None:
         compiled = compile_model_block({"endpoint": "http://gpu-box:11434/v1"})
-        assert compiled["factory"] == "turncall.evals.judges.ollama"
+        assert compiled["factory"] == "turncall.evals.judges.ollama_judge"
         assert compiled["endpoint"] == "http://gpu-box:11434/v1"
+
+    def test_a_simulator_gets_the_plain_llm_not_the_judges_classifier(self) -> None:
+        """A persona is linked into a pipeline to speak. The judge's ollama is
+        an `LLMClassifier` wrapper (for its wider timeout), and handing that to
+        a simulator raises `AttributeError: no attribute 'link'` at build."""
+        judge = compile_model_block({"provider": "ollama"}, role="judge")
+        simulator = compile_model_block({"provider": "ollama"}, role="simulator")
+
+        assert judge["factory"] == "turncall.evals.judges.ollama_judge"
+        assert simulator["factory"] == "turncall.evals.judges.ollama"
+
+    def test_every_factory_reverse_resolves_to_its_provider(self) -> None:
+        """`harness_config` names the provider by reading the mapping backwards
+        (`runner._judge_provider`), so a path missing from it records no
+        provider at all and nothing fails. Merging the two maps as dicts
+        collides on the provider *name* and silently loses `judges.ollama`."""
+        from turncall.evals.judges import JUDGE_PROVIDERS, PROVIDER_BY_FACTORY
+
+        for path in (*PROVIDERS.values(), *JUDGE_PROVIDERS.values()):
+            assert PROVIDER_BY_FACTORY.get(path), f"{path} reverse-resolves to nothing"
 
     def test_temperature_rides_in_extra_because_pipecat_has_no_field(self) -> None:
         compiled = compile_model_block({"provider": "openai", "temperature": 0.2})

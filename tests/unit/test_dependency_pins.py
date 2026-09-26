@@ -17,10 +17,11 @@ def _version(dist: str) -> tuple[int, ...]:
 
 
 @pytest.mark.unit
-def test_pipecat_is_at_least_1_10() -> None:
-    """1.10 is the floor for the MCP extra's 1.x/2.x support and for the
-    WebSocket audio-pacing fix."""
-    assert _version("pipecat-ai") >= (1, 10)
+def test_pipecat_is_at_least_1_12() -> None:
+    """1.12 is the floor for the classifier-based EvalJudge and
+    VoicemailDetector, and for `Frame.interruptible`, which the handoff relies
+    on to survive a barge-in. It also forces mcp 2.x — see the pin below."""
+    assert _version("pipecat-ai") >= (1, 12)
 
 
 @pytest.mark.unit
@@ -39,28 +40,20 @@ def test_openai_sdk_is_within_the_declared_bound() -> None:
 
 
 @pytest.mark.unit
-def test_mcp_client_reads_whichever_field_names_this_sdk_uses() -> None:
-    """mcp 2.x renamed Tool.inputSchema -> input_schema and
-    CallToolResult.isError -> is_error. Reading only one spelling raised
-    AttributeError per tool, which connect_servers logs and swallows — so
-    every server quietly returned nothing. Assert against the installed SDK,
-    whichever line it is, rather than pinning one set of names."""
+def test_the_mcp_sdk_is_the_2x_line_mcp_client_now_assumes() -> None:
+    """mcp_client used to read both spellings — `inputSchema`/`input_schema`
+    and `isError`/`is_error` — because both SDK lines were reachable. pipecat
+    1.12's mcp extra requires mcp>=2.1.1, so 1.x no longer is, and those reads
+    were deleted rather than left as code that cannot run.
+
+    On 2.x the old names are pydantic *aliases*, not attributes, so a resolve
+    that somehow dropped back to 1.x would raise AttributeError per tool —
+    which connect_servers logs and swallows, quietly returning no tools at
+    all. Assert the field names directly."""
     from mcp.types import CallToolResult, Tool
 
-    from turncall.services.mcp_client import _result_is_error, _tool_input_schema
-
-    schema_field = next(
-        f for f in Tool.model_fields if f in {"inputSchema", "input_schema"}
-    )
-    error_field = next(
-        f for f in CallToolResult.model_fields if f in {"isError", "is_error"}
-    )
-
-    tool = Tool(**{"name": "t", "description": "d", schema_field: {"type": "object"}})
-    assert _tool_input_schema(tool) == {"type": "object"}
-
-    result = CallToolResult(**{"content": [], error_field: True})
-    assert _result_is_error(result) is True
+    assert "input_schema" in Tool.model_fields
+    assert "is_error" in CallToolResult.model_fields
 
 
 @pytest.mark.unit
