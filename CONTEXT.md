@@ -76,6 +76,21 @@ the provider's parameter only when discussing that provider's API. _Avoid_:
 "keywords" as the general term — on Deepgram it is a specific parameter that is
 an error on Nova-3.
 
+## Speech synthesis
+
+**Pronunciations** (`tts.pronunciations`):
+A per-agent dictionary from a word to its IPA transcription, so the voice says
+"Metformin" and "Kigali" the way they are meant to sound. The outbound mirror of
+[[keyterms]]: one TurnCall field, four provider dialects generated from it
+(Cartesia inline phonemes, ElevenLabs SSML `<phoneme>`, Deepgram's inline
+object, and OpenAI none at all). Validation is TurnCall's own — pipecat's IPA
+utilities normalize and tokenize but never reject — and whether a voice can
+*read* the markup belongs to the constructed service, not the provider name.
+_Avoid_: "pronunciation dictionary" for ElevenLabs' hosted, account-level
+`pronunciation_dictionary_locators`, which is a different thing entirely; and
+calling a respelling ("met-FOR-min") a pronunciation — only IPA is accepted,
+because only IPA can be turned into every provider's markup.
+
 ## Call quality of service
 
 **Soft cut** (vs **hard disconnect**):

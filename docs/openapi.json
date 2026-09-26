@@ -7899,6 +7899,13 @@
             "title": "Speed",
             "default": 1.0
           },
+          "pronunciations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Pronunciations"
+          },
           "extra": {
             "additionalProperties": true,
             "type": "object",

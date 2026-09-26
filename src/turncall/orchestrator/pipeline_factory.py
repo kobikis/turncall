@@ -466,7 +466,9 @@ def _tts_model_voice(config: AgentConfig) -> tuple[str | None, str | None]:
     return model or default_model, voice or default_voice
 
 
-def _tts_text_transforms(service_cls: type) -> list[tuple[str, Any]]:
+def _tts_text_transforms(
+    service_cls: Any, config: AgentConfig
+) -> list[tuple[str, Any]]:
     """The text transforms for one provider's TTS service class.
 
     LLMs emit markdown (**bold**, `code`) that TTS would otherwise read aloud
@@ -474,20 +476,69 @@ def _tts_text_transforms(service_cls: type) -> list[tuple[str, Any]]:
     comes first for everyone. Pipecat wants
     (aggregation_type | "*", transform) tuples; "*" = all types.
 
-    Composed per service class, not once and shared, because the next
-    transform is not provider-independent: pipecat exposes pronunciation as a
+    Composed per service class, not once and shared, because the pronunciation
+    transform is not provider-independent: pipecat exposes it as a
     **classmethod on the TTS service class**, each provider generating its own
-    markup from the same IPA — inline phoneme blocks, SSML phoneme tags, an
-    inline pronunciation object. `service_cls` is what that will dispatch on
-    (#134); markdown stripping is the same for all four today, so it is
-    currently unused, and this shape is the whole of the prefactor.
+    markup from the same IPA — Cartesia's inline phoneme blocks, ElevenLabs'
+    SSML phoneme tags, Deepgram's inline pronunciation object. One shared list
+    cannot carry that (#137, #140).
+
+    The pronunciation transform is registered **last**. Transforms run in order
+    and a later one rewrites what an earlier one inserted — markdown stripping
+    would eat an SSML tag.
 
     A fresh list each call: a provider appending its own transform must not
     reach into another's. `test_tts_text_transforms.py` guards both halves.
     """
     from pipecat.utils.text.transforms import strip_markdown
 
-    return [("*", strip_markdown)]
+    transforms: list[tuple[str, Any]] = [("*", strip_markdown)]
+    if config.tts.pronunciations:
+        transforms.append(
+            ("*", service_cls.pronunciation_transform_ipa(config.tts.pronunciations))
+        )
+    return transforms
+
+
+def _warn_unusable_pronunciations(config: AgentConfig, tts: Any) -> None:
+    """Warn when the built voice cannot read the pronunciation markup.
+
+    Whether a service reads it is a property of the *constructed* service, not
+    of the provider name — on ElevenLabs it takes both a phoneme-capable model
+    and `enable_ssml_parsing`, and OpenAI has no markup at all. So this is a
+    warning where a service exists, never a refusal at create: an agent's voice
+    can change long after its pronunciations were written, and the words are
+    spoken as written either way. Same precedent as `interruption_enabled` on
+    an S2S agent — said out loud rather than half-applied.
+    """
+    pronunciations = config.tts.pronunciations
+    if not pronunciations:
+        return
+
+    # Asked of the service, one word at a time, exactly as pipecat's own
+    # transform asks it: a formatter returning None is the only honest signal
+    # that a word cannot be rendered, and it covers both a provider with no
+    # markup at all (OpenAI) and a word a provider will not take.
+    unusable = [
+        word
+        for word, ipa in pronunciations.items()
+        if tts.format_pronunciation(word, ipa) is None
+    ]
+    if not unusable and tts.supports_pronunciations:
+        return
+
+    # The *resolved* model, not `config.tts.model`: that field's default is
+    # Deepgram's, so an agent that named none would be told its ElevenLabs voice
+    # is `aura-2-helena-en` — a diagnostic pointing at a model the service is
+    # not running is worse than none, and the model is half of why ElevenLabs
+    # refuses.
+    logger.warning(
+        "tts.pronunciations: {provider} ({model}) cannot read pronunciation "
+        "markup with these settings, so these are spoken as written: {words}",
+        provider=config.tts.provider,
+        model=_tts_model_voice(config)[0],
+        words=", ".join(unusable or pronunciations),
+    )
 
 
 def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
@@ -507,7 +558,7 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
                 **speed,
                 extra=_overflow(config.tts.extra, "voice", "speed"),
             ),
-            text_transforms=_tts_text_transforms(DeepgramTTSService),
+            text_transforms=_tts_text_transforms(DeepgramTTSService, config),
         )
 
     if provider == "elevenlabs":
@@ -523,7 +574,7 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
                 **speed,
                 extra=_overflow(config.tts.extra, "voice", "model", "speed"),
             ),
-            text_transforms=_tts_text_transforms(ElevenLabsTTSService),
+            text_transforms=_tts_text_transforms(ElevenLabsTTSService, config),
         )
 
     if provider == "openai":
@@ -537,7 +588,7 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
                 **speed,
                 extra=_overflow(config.tts.extra, "model", "voice", "speed"),
             ),
-            text_transforms=_tts_text_transforms(OpenAITTSService),
+            text_transforms=_tts_text_transforms(OpenAITTSService, config),
         )
 
     if provider == "cartesia":
@@ -570,7 +621,7 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
         return CartesiaTTSService(
             api_key=api_key,
             settings=tts_settings,
-            text_transforms=_tts_text_transforms(CartesiaTTSService),
+            text_transforms=_tts_text_transforms(CartesiaTTSService, config),
         )
 
     raise ValueError(f"Unsupported TTS provider: {provider}")
@@ -1031,6 +1082,7 @@ def create_pipeline(
         system_instruction=system_instruction,
     )
     tts = _create_tts_service(config, openai_api_key)
+    _warn_unusable_pronunciations(config, tts)
 
     # The context starts empty — the system prompt is on the LLM service as
     # system_instruction. BYOM providers advertise no API-level tools, theirs
@@ -1384,6 +1436,18 @@ def _create_s2s_pipeline(
             "'{td}'): the realtime service owns turn-taking. Use "
             "pipeline_mode='cascade' to disable barge-in.",
             td=config.s2s.turn_detection,
+        )
+
+    if config.tts.pronunciations:
+        # There is no TTS stage to attach the transform to — the realtime model
+        # speaks for itself. Warned about for the same reason as barge-in above:
+        # a setting that was accepted, stored and read must not evaporate in
+        # silence.
+        logger.warning(
+            "tts.pronunciations is ignored on S2S (pipeline_mode='s2s'): the "
+            "realtime model does its own synthesis, so there is no TTS stage "
+            "to apply the {count} word(s) to.",
+            count=len(config.tts.pronunciations),
         )
 
     from turncall.orchestrator.s2s_config import create_s2s_service

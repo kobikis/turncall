@@ -95,6 +95,11 @@ class TTSConfig(DomainModel):
     model: str = "aura-2-helena-en"
     voice: str = "aura-2-helena-en"
     speed: float = 1.0
+    # Word -> IPA, the outbound mirror of `STTConfig.keyterms`. Validated and
+    # canonicalized at the API boundary (domain/ipa.py); the mapping to each
+    # provider's own markup lives in the pipeline factory, since pipecat
+    # exposes it as a classmethod on the TTS service class.
+    pronunciations: dict[str, str] = Field(default_factory=dict)
     extra: dict[str, Any] = Field(default_factory=dict)
 
 

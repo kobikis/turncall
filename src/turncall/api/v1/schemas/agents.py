@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from turncall.domain.config_secrets import sanitize_config as _sanitize_config
+from turncall.domain.ipa import normalize_pronunciations
 
 
 class STTConfigSchema(BaseModel):
@@ -128,7 +129,22 @@ class TTSConfigSchema(BaseModel):
     model: str = "aura-2-helena-en"
     voice: str = "aura-2-helena-en"
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
+    # Word -> IPA. The outbound mirror of `stt.keyterms`: one per-agent
+    # vocabulary hint, four provider dialects, cleaned up at this same
+    # boundary. One IPA spelling works everywhere because each provider's
+    # markup is generated from it in the pipeline factory.
+    pronunciations: dict[str, str] = Field(default_factory=dict)
     extra: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def clean_pronunciations(self) -> "TTSConfigSchema":
+        """Drop blanks, canonicalize the notation, reject what is not IPA.
+
+        Pipecat never rejects — it would tokenize `met-FOR-min` happily, insert
+        it into the markup and change nothing audible. See domain/ipa.py.
+        """
+        self.pronunciations = normalize_pronunciations(self.pronunciations)
+        return self
 
     @model_validator(mode="after")
     def validate_provider(self) -> "TTSConfigSchema":
