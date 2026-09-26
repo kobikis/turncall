@@ -124,6 +124,13 @@ class CallSession:
         # event-loop stalls behind transient mid-word audio cut-outs, and to feed
         # the trace spans' TTFB/token attributes.
         observers, span_attrs = await self._build_telemetry()
+        # The other half of the eval RTVI bridge (evals-design §9.7). Appended
+        # after the telemetry observers and outside PIPECAT_ENABLE_OBSERVERS:
+        # this one is the protocol, not instrumentation, and the harness's
+        # handshake configures it. Empty on every live call.
+        from turncall.orchestrator.pipeline_factory import eval_rtvi_observers
+
+        observers = [*observers, *eval_rtvi_observers(self._pipeline)]
         self._task = PipelineWorker(
             self._pipeline,
             params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),

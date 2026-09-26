@@ -158,34 +158,46 @@ async def test_a_first_message_is_invisible_to_a_text_mode_eval(
     claims the design marks unverified. Until then the workaround is to leave
     `first_message` unset on an evaluated agent and let the LLM open the
     conversation, which a text-mode scenario *can* see.
+
+    The second turn is not incidental. This test used to end on
+    `events_seen == []`, which a pinned coverage hole and a *totally dead
+    bridge* both produce — and for as long as the bridge was dead (§9.7) that
+    is exactly why nobody noticed. A turn that does reach the LLM proves the
+    bridge is alive in this same run, so the silence on the greeting can only
+    be the greeting's own.
     """
     from uuid import uuid4
 
-    definition = {
-        "turns": [
-            {
-                "user": None,
-                "expect": [
-                    {
-                        "event": "llm_response",
-                        "text_contains": "Acme",
-                        "within_ms": 10000,
-                    }
-                ],
-            }
-        ]
+    greeting = {
+        "user": None,
+        "expect": [
+            {"event": "llm_response", "text_contains": "Acme", "within_ms": 10000}
+        ],
+    }
+    spoken_to = {
+        "user": "What is the name of your company?",
+        "expect": [
+            {"event": "llm_response", "text_contains": "Acme", "within_ms": 10000}
+        ],
     }
     target = _target(
         uuid4(),
-        "You are a receptionist.",
+        "You are a receptionist for a company called Acme.",
         first_message="Thanks for calling Acme, how can I help?",
     )
+    # Scenario-level and default True, so without it the greeting's timeout
+    # ends the run and the liveness turn never gets to prove anything.
+    definition = {"stop_on_failure": False, "turns": [greeting, spoken_to]}
     result, _parsed = await _run(definition, target, session_factory)
 
     assert not result.passed
-    assert result.failures[0].kind == "timeout"
-    assert result.events_seen == [], (
-        "a first_message that starts producing events is a change worth noticing"
+    assert [f.kind for f in result.failures] == ["timeout"], (
+        "only the greeting turn should fail — if the spoken turn failed too, "
+        "this is a bridge outage rather than the coverage hole being pinned"
+    )
+    assert any(event["type"] == "llm_response" for event in result.events_seen), (
+        "the run saw no llm_response at all, so the bridge is dead and this "
+        "test is proving nothing about first_message"
     )
 
 
