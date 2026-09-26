@@ -12,6 +12,24 @@ Types: feat, fix, refactor, docs, test, chore, perf, ci
 
 Note: Attribution disabled globally via ~/.claude/settings.json.
 
+## Sign off every commit (CI enforces this)
+
+Use `git commit -s`. CI's `dco` job rejects any commit on the branch without a
+`Signed-off-by:` trailer, so one unsigned commit fails the whole pull request —
+including commits you did not write but are carrying on your branch.
+
+```bash
+git commit -s -m "fix: ..."          # new commit
+git commit --amend -s                 # the last one
+git rebase --signoff <base>           # every commit on the branch
+```
+
+The last form needs a force-push. Prefer `--force-with-lease`.
+
+`Signed-off-by:` is the DCO certification and is separate from any
+`Co-Authored-By:` trailer — adding the latter does not satisfy the former. See
+CONTRIBUTING.md, "Developer Certificate of Origin".
+
 ## Pull Request Workflow
 
 When creating PRs:
