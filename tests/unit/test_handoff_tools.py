@@ -41,7 +41,10 @@ class _SessionFactory:
 
 
 async def _handoff(target_config: AgentConfig):
-    from turncall.orchestrator.tool_bridge import _apply_handoff_context
+    from turncall.orchestrator.tool_bridge import (
+        _apply_handoff_context,
+        _load_handoff_target,
+    )
 
     agent = SimpleNamespace(
         name="Billing", config_blob=target_config.model_dump(mode="json")
@@ -66,7 +69,9 @@ async def _handoff(target_config: AgentConfig):
         ),
         patch("turncall.orchestrator.tool_bridge.register_tools") as register,
     ):
-        await _apply_handoff_context({"agent_id": str(uuid4())}, call_context, params)
+        target = await _load_handoff_target({"agent_id": str(uuid4())}, call_context)
+        assert target is not None
+        await _apply_handoff_context(target, call_context, params)
 
     return params, register
 

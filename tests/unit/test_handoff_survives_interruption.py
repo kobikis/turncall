@@ -42,7 +42,10 @@ class _SessionFactory:
 
 async def _queue_a_handoff(queue):
     """Run the real handoff, landing its frames in a real pipecat FrameQueue."""
-    from turncall.orchestrator.tool_bridge import _apply_handoff_context
+    from turncall.orchestrator.tool_bridge import (
+        _apply_handoff_context,
+        _load_handoff_target,
+    )
 
     config = AgentConfig(tools=[_tool("refund")])
     agent = SimpleNamespace(name="Billing", config_blob=config.model_dump(mode="json"))
@@ -70,7 +73,9 @@ async def _queue_a_handoff(queue):
         ),
         patch("turncall.orchestrator.tool_bridge.register_tools"),
     ):
-        await _apply_handoff_context({"agent_id": str(uuid4())}, call_context, params)
+        target = await _load_handoff_target({"agent_id": str(uuid4())}, call_context)
+        assert target is not None
+        await _apply_handoff_context(target, call_context, params)
 
 
 def _drain(queue) -> list:
@@ -140,18 +145,21 @@ def test_nothing_outside_the_handoff_is_marked_uninterruptible():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_an_interruption_between_the_two_frames_still_lands_the_target_tools():
+async def test_a_cancelled_handoff_that_is_then_drained_still_lands_the_target_tools():
     """PRD #135's second test: the user-visible failure, stated as a test.
 
     The drain is only half of what an interruption does. Pipecat also cancels
     every in-flight function call registered with `cancel_on_interruption=True`
     — which `handoff_to_agent` is, being a sync tool — and a frame the handler
-    never got to build cannot be saved by a flag. So the interruption is
-    delivered here at the worst moment, from inside `_build_tools_schema`,
-    which runs between the two queued frames, and *then* the queue is drained.
+    never got to build cannot be saved by a flag. So both halves land here:
+    cancellation is requested from inside `_build_tools_schema`, while the
+    switch is still being assembled, and *then* the queue is drained.
 
-    Both halves must come out the other side: the previous agent's tools must
-    not still be what the model advertises.
+    Since #144 the switch suspends nowhere once it starts mutating, so the
+    cancellation cannot be delivered inside it and both frames are queued;
+    the flag then carries them through the drain. Neither mechanism alone
+    suffices, which is why they are exercised together here —
+    test_handoff_switch_is_atomic.py owns the cancellation half on its own.
     """
     import asyncio
 

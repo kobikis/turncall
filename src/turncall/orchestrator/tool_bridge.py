@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 from uuid import UUID
 
 from loguru import logger
@@ -25,6 +25,7 @@ from turncall.services.tool_webhook import classify_tool_result, post_tool_webho
 if TYPE_CHECKING:
     from pipecat.services.llm_service import LLMService
 
+    from turncall.domain.models import AgentConfig
     from turncall.orchestrator.pipeline_factory import CallContext
 
 
@@ -192,21 +193,31 @@ def _mark_uninterruptible(frame: Any) -> Any:
     return frame
 
 
-async def _apply_handoff_context(
+class HandoffTarget(NamedTuple):
+    """The target agent of a handoff, resolved before anything is committed."""
+
+    name: str
+    config: AgentConfig
+
+
+async def _load_handoff_target(
     args: dict[str, Any],
     call_context: CallContext,
-    params: Any,
-) -> None:
-    """Switch the LLM context to the target agent's system prompt.
+) -> HandoffTarget | None:
+    """Read the target agent's config, before the switch is committed.
 
-    Loads the target agent's config from DB and resets the conversation
-    context so the LLM operates as the new agent from this point on.
+    This is the whole of the handoff's I/O, deliberately separated from
+    applying it. `call_control.handoff_to_agent` commits `status=HANDED_OFF`
+    and `active_agent_id=<target>` before the pipeline is touched, so a DB
+    round-trip *after* that commit is a cancellation window in which the call
+    record says handed off and the live pipeline never changes — and pipecat
+    cancels a sync tool's task on every interruption. #144.
     """
     from turncall.domain.models import AgentConfig
 
     target_id = args.get("agent_id") or args.get("assistant_id") or ""
     if not target_id:
-        return
+        return None
 
     try:
         async with call_context.session_factory() as session:
@@ -215,79 +226,89 @@ async def _apply_handoff_context(
             target = await agent_repo.get_agent_by_id(session, UUID(target_id))
             if target is None:
                 logger.warning("handoff_context: target agent not found")
-                return
+                return None
+            return HandoffTarget(
+                name=target.name, config=AgentConfig.model_validate(target.config_blob)
+            )
+    except Exception:
+        logger.exception("handoff_context: failed to load target agent")
+        return None
 
-            config = AgentConfig.model_validate(target.config_blob)
 
-        # The prompt lives on the LLM service, not in the context, so switching
-        # agents is a settings update rather than a rewritten first message.
-        # Doing it the old way now would send both prompts: the OpenAI adapter
-        # prepends system_instruction to the context messages, so the previous
-        # agent's instructions would survive the handoff.
-        from pipecat.frames.frames import LLMUpdateSettingsFrame
-        from pipecat.services.llm_service import LLMSettings
+async def _apply_handoff_context(
+    target: HandoffTarget,
+    call_context: CallContext,
+    params: Any,
+) -> None:
+    """Switch the running pipeline to the target agent. Atomically.
 
-        from turncall.orchestrator.pipeline_factory import (
-            _build_system_instruction,
-            _build_tools_schema,
-        )
+    Everything that can raise or wait happens before the first mutation:
+    the frames are built, then the context is cleared, the handlers are
+    registered and the frames are queued. Nothing in that tail suspends —
+    `queue_frame` puts onto an unbounded asyncio.Queue, which never yields —
+    so an interruption is delivered either before the switch or after it.
 
-        instruction = _build_system_instruction(config)
+    Adding an `await`, or anything that can raise, below the marker reopens
+    the half-applied state: a frame that was never built cannot be saved by
+    `interruptible=False`. `tests/unit/test_handoff_switch_is_atomic.py`
+    fails if it happens.
+    """
+    # The prompt lives on the LLM service, not in the context, so switching
+    # agents is a settings update rather than a rewritten first message.
+    # Doing it the old way now would send both prompts: the OpenAI adapter
+    # prepends system_instruction to the context messages, so the previous
+    # agent's instructions would survive the handoff.
+    from pipecat.frames.frames import LLMSetToolsFrame, LLMUpdateSettingsFrame
+    from pipecat.processors.aggregators.llm_context import NOT_GIVEN
+    from pipecat.services.llm_service import LLMSettings
 
-        # From here to the last queue_frame is the handoff proper: the context
-        # is cleared, the target's handlers are registered, and the two frames
-        # carrying its prompt and its advertised schema are queued. Pipecat
-        # cancels a sync tool's task on interruption, so this region must hold
-        # no suspension point — cancellation cannot be delivered where the
-        # coroutine never yields, and `queue_frame` puts onto an unbounded
-        # asyncio.Queue, which does not. Adding an `await` here reopens the
-        # half-applied state the uninterruptible flag cannot reach: a frame
-        # that was never queued cannot survive a drain.
-        # test_handoff_survives_interruption.py pins this.
-        params.context.set_messages([])
-        await params.pipeline_worker.queue_frame(
-            _mark_uninterruptible(
-                LLMUpdateSettingsFrame(
-                    delta=LLMSettings(system_instruction=instruction)
-                )
+    from turncall.orchestrator.pipeline_factory import (
+        _build_system_instruction,
+        _build_tools_schema,
+    )
+
+    config = target.config
+    try:
+        prompt_frame = _mark_uninterruptible(
+            LLMUpdateSettingsFrame(
+                delta=LLMSettings(system_instruction=_build_system_instruction(config))
             )
         )
-
-        if config.mcp_servers:
-            # MCP sessions belong to the agent the call started as — they
-            # aren't torn down and re-opened mid-call, so the target's servers
-            # stay unconnected. Better said out loud than discovered.
-            logger.warning(
-                "handoff_context: target agent's mcp servers are not connected "
-                "mid-call: {servers}",
-                servers=[s.name for s in config.mcp_servers],
-            )
-
         # Tools live in two places: the handler registry and the advertised
         # schema. Moving only the prompt left the model believing it was the
         # new agent while still holding the previous one's tools, and none of
         # its own. NOT_GIVEN clears the set when the target defines none.
-        from pipecat.frames.frames import LLMSetToolsFrame
-        from pipecat.processors.aggregators.llm_context import NOT_GIVEN
-
-        if config.tools:
-            register_tools(params.llm, list(config.tools), call_context)
         tools_schema = _build_tools_schema(config)
-        await params.pipeline_worker.queue_frame(
-            _mark_uninterruptible(
-                LLMSetToolsFrame(
-                    tools=tools_schema if tools_schema is not None else NOT_GIVEN
-                )
+        tools_frame = _mark_uninterruptible(
+            LLMSetToolsFrame(
+                tools=tools_schema if tools_schema is not None else NOT_GIVEN
             )
         )
+    except Exception:
+        logger.exception("handoff_context: failed to build the switch")
+        return
 
-        logger.info(
-            "handoff_context: switched system instruction to agent '{name}'",
-            name=target.name,
+    if config.mcp_servers:
+        # MCP sessions belong to the agent the call started as — they aren't
+        # torn down and re-opened mid-call, so the target's servers stay
+        # unconnected. Better said out loud than discovered.
+        logger.warning(
+            "handoff_context: target agent's mcp servers are not connected "
+            "mid-call: {servers}",
+            servers=[s.name for s in config.mcp_servers],
         )
 
-    except Exception:
-        logger.exception("handoff_context: failed to switch context")
+    # --- the switch. No await, nothing that can raise, past this line. ---
+    params.context.set_messages([])
+    if config.tools:
+        register_tools(params.llm, list(config.tools), call_context)
+    await params.pipeline_worker.queue_frame(prompt_frame)
+    await params.pipeline_worker.queue_frame(tools_frame)
+
+    logger.info(
+        "handoff_context: switched system instruction to agent '{name}'",
+        name=target.name,
+    )
 
 
 def register_tools(
@@ -347,6 +368,15 @@ def _register_single_tool(
 
         started = time.perf_counter()
         if function_name in BUILTIN_TOOL_NAMES:
+            # Read the handoff target *first*: `_execute_builtin` commits
+            # `status=HANDED_OFF` + `active_agent_id`, and any await after that
+            # commit is a window where the record says handed off and the
+            # pipeline never switched. #144.
+            handoff_target = (
+                await _load_handoff_target(args, call_context)
+                if function_name == "handoff_to_agent"
+                else None
+            )
             result = await _execute_builtin(function_name, args, call_context)
         elif (
             # Only when this registration is not itself a webhook tool. Asking
@@ -363,9 +393,11 @@ def _register_single_tool(
         else:
             result = await _execute_webhook_tool(tool_def, args, call_context)
 
-        # For handoff: switch the LLM context to the new agent's prompt
-        if function_name == "handoff_to_agent":
-            await _apply_handoff_context(args, call_context, params)
+        # For handoff: switch the running pipeline to the new agent. The
+        # target was read before `_execute_builtin` committed the switch, so
+        # this applies it without waiting on anything. #144.
+        if function_name == "handoff_to_agent" and handoff_target is not None:
+            await _apply_handoff_context(handoff_target, call_context, params)
 
         # Hand the result back to the LLM immediately — the model is waiting on
         # this to continue speaking. The invocation record + tool.result webhook
