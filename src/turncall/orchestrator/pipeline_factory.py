@@ -466,16 +466,34 @@ def _tts_model_voice(config: AgentConfig) -> tuple[str | None, str | None]:
     return model or default_model, voice or default_voice
 
 
+def _tts_text_transforms(service_cls: type) -> list[tuple[str, Any]]:
+    """The text transforms for one provider's TTS service class.
+
+    LLMs emit markdown (**bold**, `code`) that TTS would otherwise read aloud
+    literally ("asterisk asterisk"). Stripping it is provider-independent and
+    comes first for everyone. Pipecat wants
+    (aggregation_type | "*", transform) tuples; "*" = all types.
+
+    Composed per service class, not once and shared, because the next
+    transform is not provider-independent: pipecat exposes pronunciation as a
+    **classmethod on the TTS service class**, each provider generating its own
+    markup from the same IPA — inline phoneme blocks, SSML phoneme tags, an
+    inline pronunciation object. `service_cls` is what that will dispatch on
+    (#134); markdown stripping is the same for all four today, so it is
+    currently unused, and this shape is the whole of the prefactor.
+
+    A fresh list each call: a provider appending its own transform must not
+    reach into another's. `test_tts_text_transforms.py` guards both halves.
+    """
+    from pipecat.utils.text.transforms import strip_markdown
+
+    return [("*", strip_markdown)]
+
+
 def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
     """Create TTS service. Supports deepgram, openai, elevenlabs, and cartesia."""
     provider = config.tts.provider
 
-    # LLMs emit markdown (**bold**, `code`) that TTS would otherwise read aloud
-    # literally ("asterisk asterisk"). Strip it on the way into every voice.
-    # Pipecat wants (aggregation_type | "*", transform) tuples; "*" = all types.
-    from pipecat.utils.text.transforms import strip_markdown
-
-    text_transforms = [("*", strip_markdown)]
     speed = {"speed": config.tts.speed} if config.tts.speed != 1.0 else {}
     model, voice = _tts_model_voice(config)
 
@@ -489,7 +507,7 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
                 **speed,
                 extra=_overflow(config.tts.extra, "voice", "speed"),
             ),
-            text_transforms=text_transforms,
+            text_transforms=_tts_text_transforms(DeepgramTTSService),
         )
 
     if provider == "elevenlabs":
@@ -505,7 +523,7 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
                 **speed,
                 extra=_overflow(config.tts.extra, "voice", "model", "speed"),
             ),
-            text_transforms=text_transforms,
+            text_transforms=_tts_text_transforms(ElevenLabsTTSService),
         )
 
     if provider == "openai":
@@ -519,7 +537,7 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
                 **speed,
                 extra=_overflow(config.tts.extra, "model", "voice", "speed"),
             ),
-            text_transforms=text_transforms,
+            text_transforms=_tts_text_transforms(OpenAITTSService),
         )
 
     if provider == "cartesia":
@@ -552,7 +570,7 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
         return CartesiaTTSService(
             api_key=api_key,
             settings=tts_settings,
-            text_transforms=text_transforms,
+            text_transforms=_tts_text_transforms(CartesiaTTSService),
         )
 
     raise ValueError(f"Unsupported TTS provider: {provider}")
