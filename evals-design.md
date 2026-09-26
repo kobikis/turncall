@@ -128,8 +128,9 @@ parsed **value**, not just that the parse succeeded — a field pipecat drops is
 silent no-op, which is exactly how `matches:` sat in this document asserting
 nothing for months.
 
-> None of this reports a verdict until §9.7 is fixed. The vocabulary is real;
-> the bridge that would exercise it does not currently complete its handshake.
+> §9.7 was the reason none of this reported a verdict. The bridge completes
+> its handshake now, and the live suite scores real `passed`/`failed` verdicts
+> against a real LLM.
 
 #### A latency budget — `within_ms`
 
@@ -879,7 +880,15 @@ captures the conversation, not the judgement. And evals only find what you
 thought to test; unknown unknowns come from production, which is why the
 `CallsTab` → scenario button is the loop that matters.
 
-### 9.7 The bridge never completes the RTVI handshake
+### 9.7 The bridge never completed the RTVI handshake — fixed
+
+**Resolved.** `_eval_rtvi()` puts an `RTVIProcessor` directly after
+`transport.input()` on the eval path only, and `eval_rtvi_observers()` reads it
+back off the pipeline for the task's observers; `tests/unit/test_eval_rtvi_bridge.py`
+fails if either half goes away, and `tests/live/test_live_eval_bridge.py` now
+scores real verdicts (`text_mismatch`, not `timeout`) against a real LLM. The
+diagnosis below is kept because it is the reason the decoy test existed.
+
 
 Pipecat's harness is an RTVI **client**, and the server half of RTVI is not the
 transport — it is an `RTVIProcessor` in the bot's pipeline plus an
@@ -922,6 +931,12 @@ asserts `events_seen == []`, which is also exactly what a dead bridge produces.
 A pinned coverage hole and a total outage look identical from there, which is
 how this survived.
 
+The decoy is gone: that test now runs a second turn under
+`stop_on_failure: false` and asserts the run saw an `llm_response` from it, so
+the greeting's silence can only be the greeting's own. The lesson generalises —
+an assertion that a feature produces *nothing* is indistinguishable from the
+harness producing nothing, and needs a liveness turn in the same run.
+
 The fix is small and belongs to the eval path only: construct an
 `RTVIProcessor` after `transport.input()` and hand `RTVIObserver(rtvi)` to the
 task's observers, both only when the transport is the eval transport, so no
@@ -961,11 +976,12 @@ One migration and one commit: drop both tables and `test_run_status`; delete
 
 ## 11. Phasing
 
-0. **Wire RTVI into the eval pipeline** (§9.7). Not a phase anyone planned: it
-   is the step phase 2 was believed to have completed. Everything below it is
-   built and untested end to end, so this comes before any new slice — an
-   `RTVIProcessor` in the processor list and its observer on the task, eval
-   path only.
+0. **Wire RTVI into the eval pipeline** (§9.7). **Done.** Not a phase anyone
+   planned: it is the step phase 2 was believed to have completed. Everything
+   below it was built and untested end to end, which is why it came before any
+   new slice — an `RTVIProcessor` in the processor list and its observer on the
+   task, eval path only, guarded structurally so neither half can be dropped
+   silently again.
 1. **Delete the stub.** Independent, unblocks the namespace.
 2. **`create_eval_transport` + the worker**, scripted kind, text modality, one
    iteration. Meant to prove the bridge end to end, and **did not**: the

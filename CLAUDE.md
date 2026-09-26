@@ -591,9 +591,11 @@ barge-in, `absent`, `within_ms`, `stop_on_failure`, `function_call_stopped`,
 simulation `measure:` metrics, `context:` (which **replaces** the agent's
 prompt). `evals-design.md` §3 has each one as a JSON example, the five that
 parse and do nothing here, and `tests/unit/test_scenario_vocabulary.py` keeping
-it honest. **§9.7 there is the blocker: the eval pipeline builds no
-`RTVIProcessor`/`RTVIObserver`, so no run gets past pipecat's `bot-ready`
-handshake and none of this reports a verdict yet.**
+it honest. §9.7 there records the bridge outage that kept any of it from
+reporting a verdict — the eval pipeline built no `RTVIProcessor`/`RTVIObserver`,
+so every run died at pipecat's `bot-ready` handshake and scored `errored`. Both
+halves are wired now, eval path only; `tests/unit/test_eval_rtvi_bridge.py`
+fails if either is dropped again.
 
 Assert **content**, not just the event. After a provider 404 pipecat still
 emits an empty `llm_response`, so `{"event": "llm_response"}` alone can pass

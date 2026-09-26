@@ -890,6 +890,66 @@ def _create_avatar_service(avatar: Any) -> Any:
     return None
 
 
+# --- The RTVI server half, eval path only (evals-design §9.7) ---
+#
+# Pipecat's eval harness is an RTVI *client*. The server half is not the
+# transport: it is an `RTVIProcessor` in the bot's pipeline plus an
+# `RTVIObserver` on the bot's task. Without the pair, three things fail in the
+# order they bite: nothing ever sends `bot-ready`, so every iteration dies at
+# `handshake()`; nothing interprets the `send-text`/`raw-audio`/`dtmf` messages
+# the eval serializer produces, so the caller's turn never reaches the LLM; and
+# nothing emits `llm_response`/`function_call`, so `events_seen` stays empty
+# even where the agent worked perfectly.
+#
+# The failure is silent by construction — a harness timeout scores `errored`,
+# which is deliberately kept out of every pass/fail rate, so a total outage
+# reads as "no signal" rather than as a red build.
+#
+# The two functions below are one decision. Dropping either leaves the same
+# symptom as dropping both; `tests/unit/test_eval_rtvi_bridge.py` asserts both.
+
+
+def _eval_rtvi(call_context: CallContext) -> list[Any]:
+    """The `RTVIProcessor`, for an eval pipeline's processor list.
+
+    Placed directly after `transport.input()` so it sees the
+    `InputTransportMessageFrame`s the eval serializer produces, and present in
+    the list from the start rather than added from an `on_client_connected`
+    handler: `client-ready` arrives as soon as the harness connects, and a
+    processor that is not there yet cannot answer it.
+
+    Empty on every call path, so no live call gains a processor.
+    """
+    if not call_context.is_eval:
+        return []
+
+    from pipecat.processors.frameworks.rtvi import RTVIProcessor
+
+    return [RTVIProcessor()]
+
+
+def eval_rtvi_observers(pipeline: Pipeline) -> list[Any]:
+    """The `RTVIObserver` half of `_eval_rtvi`, for the pipeline task.
+
+    Read back off the pipeline rather than threaded through
+    `create_pipeline`'s return type — the same way `build_call_pipeline`
+    already finds the `LLMService` to register tools on. Empty for a pipeline
+    that has no RTVI processor, which is every live call.
+
+    Not telemetry: the harness's `handshake()` sends an
+    `RTVIConfigureObserverFrame` to raise the function-call report level, so
+    the observer must exist to be configured, whatever
+    `PIPECAT_ENABLE_OBSERVERS` says.
+    """
+    from pipecat.processors.frameworks.rtvi import RTVIProcessor
+
+    return [
+        processor.create_rtvi_observer()
+        for processor in pipeline.processors
+        if isinstance(processor, RTVIProcessor)
+    ]
+
+
 def create_pipeline(
     config: AgentConfig,
     transport: Any,
@@ -1203,6 +1263,7 @@ def create_pipeline(
     if voicemail_detector:
         processors: list[Any] = [
             transport.input(),
+            *_eval_rtvi(call_context),
             stt,
             customer_tap,
             voicemail_detector.detector(),
@@ -1221,6 +1282,7 @@ def create_pipeline(
     else:
         processors = [
             transport.input(),
+            *_eval_rtvi(call_context),
             stt,
             customer_tap,
             context_aggregator.user(),
@@ -1383,6 +1445,7 @@ def _create_s2s_pipeline(
     # LLMContextFrame that triggers the Realtime WebSocket connection.
     processors: list[Any] = [
         transport.input(),
+        *_eval_rtvi(call_context),
         context_aggregator.user(),
         *([input_resampler] if input_resampler else []),
         customer_tap,
