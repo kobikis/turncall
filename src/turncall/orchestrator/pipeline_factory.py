@@ -467,7 +467,7 @@ def _tts_model_voice(config: AgentConfig) -> tuple[str | None, str | None]:
 
 
 def _tts_text_transforms(
-    service_cls: Any, config: AgentConfig
+    service_cls: Any, config: AgentConfig, *, pronunciations: bool = True
 ) -> list[tuple[str, Any]]:
     """The text transforms for one provider's TTS service class.
 
@@ -489,11 +489,18 @@ def _tts_text_transforms(
 
     A fresh list each call: a provider appending its own transform must not
     reach into another's. `test_tts_text_transforms.py` guards both halves.
+
+    `pronunciations=False` withholds it for a service that will not read the
+    markup. Measured on ElevenLabs' WebSocket with SSML parsing off, a
+    `<phoneme>` tag is **spoken** — "phoneme alphabet i p a", at 3.5-4.3x the
+    audio of the plain sentence. Markup a service ignores would be harmless;
+    markup it reads aloud is worse than the mispronunciation it was meant to
+    fix, so "spoken as written" has to mean the tag never goes (#147).
     """
     from pipecat.utils.text.transforms import strip_markdown
 
     transforms: list[tuple[str, Any]] = [("*", strip_markdown)]
-    if config.tts.pronunciations:
+    if pronunciations and config.tts.pronunciations:
         transforms.append(
             ("*", service_cls.pronunciation_transform_ipa(config.tts.pronunciations))
         )
@@ -562,19 +569,45 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
         )
 
     if provider == "elevenlabs":
-        from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+        from pipecat.services.elevenlabs.tts import (
+            ELEVENLABS_PHONEME_MODELS,
+            ElevenLabsTTSService,
+        )
+
+        # ElevenLabs reads SSML <phoneme> tags only with `enable_ssml_parsing`
+        # on — a *constructor* kwarg, not a `Settings` field, so an author's
+        # `tts.extra` lands in `Settings.extra` and can never reach it (#147).
+        # TurnCall decides instead, and only for an agent that asked for
+        # pronunciations on a model that can read them: SSML parsing changes how
+        # **all** of that agent's text is read (a `<` in an LLM reply becomes
+        # markup) and adds latency, so it is not a default. None rather than
+        # False leaves the URL parameter off entirely, as before.
+        #
+        # The model half stays the author's: downgrading `eleven_flash_v2_5` to
+        # `eleven_flash_v2` would trade what every caller hears for what one
+        # might — `_warn_unusable_pronunciations` naming the resolved model is
+        # the nudge. The set is pipecat's, never a copy; a bump that moves it is
+        # a red build in `test_tts_pronunciations.py`, naming the version.
+        enable_ssml_parsing = (
+            True
+            if config.tts.pronunciations and model in ELEVENLABS_PHONEME_MODELS
+            else None
+        )
 
         # ElevenLabs uses voice IDs (e.g. "21m00Tcm4TlvDq8ikWAM" for Rachel)
         # or voice names via Settings. Pass as voice in Settings.
         return ElevenLabsTTSService(
             api_key=os.environ.get("ELEVENLABS_API_KEY", ""),
+            enable_ssml_parsing=enable_ssml_parsing,
             settings=ElevenLabsTTSService.Settings(
                 voice=voice,
                 model=model,
                 **speed,
                 extra=_overflow(config.tts.extra, "voice", "model", "speed"),
             ),
-            text_transforms=_tts_text_transforms(ElevenLabsTTSService, config),
+            text_transforms=_tts_text_transforms(
+                ElevenLabsTTSService, config, pronunciations=bool(enable_ssml_parsing)
+            ),
         )
 
     if provider == "openai":

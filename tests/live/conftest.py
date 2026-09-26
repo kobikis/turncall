@@ -37,3 +37,8 @@ def google_key() -> str:
 @pytest.fixture
 def deepgram_key() -> str:
     return require("DEEPGRAM_API_KEY")
+
+
+@pytest.fixture
+def elevenlabs_key() -> str:
+    return require("ELEVENLABS_API_KEY")
