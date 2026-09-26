@@ -585,6 +585,16 @@ one target.
   run's: "the booking succeeds" and "the booking fails" are two tests.
 
 ### Writing a scenario that actually catches a provider regression
+The vocabulary is wider than this file's examples: `definition` is stored
+verbatim, so every pipecat 1.11 field is already reachable — `send_after`
+barge-in, `absent`, `within_ms`, `stop_on_failure`, `function_call_stopped`,
+simulation `measure:` metrics, `context:` (which **replaces** the agent's
+prompt). `evals-design.md` §3 has each one as a JSON example, the five that
+parse and do nothing here, and `tests/unit/test_scenario_vocabulary.py` keeping
+it honest. **§9.7 there is the blocker: the eval pipeline builds no
+`RTVIProcessor`/`RTVIObserver`, so no run gets past pipecat's `bot-ready`
+handshake and none of this reports a verdict yet.**
+
 Assert **content**, not just the event. After a provider 404 pipecat still
 emits an empty `llm_response`, so `{"event": "llm_response"}` alone can pass
 with the LLM completely broken — seen both ways on one config. Use
