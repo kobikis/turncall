@@ -193,25 +193,70 @@ def _mark_uninterruptible(frame: Any) -> Any:
     return frame
 
 
-class HandoffTarget(NamedTuple):
-    """The target agent of a handoff, resolved before anything is committed."""
+class PreparedHandoff(NamedTuple):
+    """Everything a handoff needs, assembled before anything is committed.
+
+    Carrying the built frames rather than just the config is the point: the
+    switch is committed to the database *before* the pipeline is touched, so
+    anything that can wait or raise has to have happened already.
+    """
 
     name: str
     config: AgentConfig
+    frames: tuple[Any, ...]
 
 
-async def _load_handoff_target(
+def _build_handoff_frames(config: AgentConfig) -> tuple[Any, Any]:
+    """Build the two frames that carry a handoff, marked uninterruptible.
+
+    Called before the switch is committed, where raising is still safe.
+    """
+    from pipecat.frames.frames import LLMSetToolsFrame, LLMUpdateSettingsFrame
+    from pipecat.processors.aggregators.llm_context import NOT_GIVEN
+    from pipecat.services.llm_service import LLMSettings
+
+    from turncall.orchestrator.pipeline_factory import (
+        _build_system_instruction,
+        _build_tools_schema,
+    )
+
+    # The prompt lives on the LLM service, not in the context, so switching
+    # agents is a settings update rather than a rewritten first message. Doing
+    # it the old way would send both prompts: the OpenAI adapter prepends
+    # system_instruction to the context messages, so the previous agent's
+    # instructions would survive the handoff.
+    prompt_frame = _mark_uninterruptible(
+        LLMUpdateSettingsFrame(
+            delta=LLMSettings(system_instruction=_build_system_instruction(config))
+        )
+    )
+    # Tools live in two places: the handler registry and the advertised
+    # schema. Moving only the prompt left the model believing it was the new
+    # agent while still holding the previous one's tools, and none of its own.
+    # NOT_GIVEN clears the set when the target defines none.
+    tools_schema = _build_tools_schema(config)
+    tools_frame = _mark_uninterruptible(
+        LLMSetToolsFrame(tools=tools_schema if tools_schema is not None else NOT_GIVEN)
+    )
+    return prompt_frame, tools_frame
+
+
+async def _prepare_handoff(
     args: dict[str, Any],
     call_context: CallContext,
-) -> HandoffTarget | None:
-    """Read the target agent's config, before the switch is committed.
+) -> PreparedHandoff | None:
+    """Read the target agent and build its frames, before the switch commits.
 
-    This is the whole of the handoff's I/O, deliberately separated from
-    applying it. `call_control.handoff_to_agent` commits `status=HANDED_OFF`
-    and `active_agent_id=<target>` before the pipeline is touched, so a DB
-    round-trip *after* that commit is a cancellation window in which the call
-    record says handed off and the live pipeline never changes — and pipecat
-    cancels a sync tool's task on every interruption. #144.
+    All of the handoff's I/O and all of its fallible work, deliberately
+    separated from applying it. `call_control.handoff_to_agent` commits
+    `status=HANDED_OFF` and `active_agent_id=<target>` before the pipeline is
+    touched, so a DB round-trip *after* that commit is a cancellation window —
+    pipecat cancels a sync tool's task on every interruption — and a raise
+    after it is the same divergence with a deterministic trigger. Either way
+    the record says handed off and the live pipeline never changes. #144.
+
+    Returns None when the handoff cannot be prepared, having logged why; the
+    caller then leaves the pipeline alone.
     """
     from turncall.domain.models import AgentConfig
 
@@ -227,66 +272,12 @@ async def _load_handoff_target(
             if target is None:
                 logger.warning("handoff_context: target agent not found")
                 return None
-            return HandoffTarget(
-                name=target.name, config=AgentConfig.model_validate(target.config_blob)
-            )
+            config = AgentConfig.model_validate(target.config_blob)
+
+        frames = _build_handoff_frames(config)
     except Exception:
-        logger.exception("handoff_context: failed to load target agent")
+        logger.exception("handoff_context: failed to prepare the handoff")
         return None
-
-
-async def _apply_handoff_context(
-    target: HandoffTarget,
-    call_context: CallContext,
-    params: Any,
-) -> None:
-    """Switch the running pipeline to the target agent. Atomically.
-
-    Everything that can raise or wait happens before the first mutation:
-    the frames are built, then the context is cleared, the handlers are
-    registered and the frames are queued. Nothing in that tail suspends —
-    `queue_frame` puts onto an unbounded asyncio.Queue, which never yields —
-    so an interruption is delivered either before the switch or after it.
-
-    Adding an `await`, or anything that can raise, below the marker reopens
-    the half-applied state: a frame that was never built cannot be saved by
-    `interruptible=False`. `tests/unit/test_handoff_switch_is_atomic.py`
-    fails if it happens.
-    """
-    # The prompt lives on the LLM service, not in the context, so switching
-    # agents is a settings update rather than a rewritten first message.
-    # Doing it the old way now would send both prompts: the OpenAI adapter
-    # prepends system_instruction to the context messages, so the previous
-    # agent's instructions would survive the handoff.
-    from pipecat.frames.frames import LLMSetToolsFrame, LLMUpdateSettingsFrame
-    from pipecat.processors.aggregators.llm_context import NOT_GIVEN
-    from pipecat.services.llm_service import LLMSettings
-
-    from turncall.orchestrator.pipeline_factory import (
-        _build_system_instruction,
-        _build_tools_schema,
-    )
-
-    config = target.config
-    try:
-        prompt_frame = _mark_uninterruptible(
-            LLMUpdateSettingsFrame(
-                delta=LLMSettings(system_instruction=_build_system_instruction(config))
-            )
-        )
-        # Tools live in two places: the handler registry and the advertised
-        # schema. Moving only the prompt left the model believing it was the
-        # new agent while still holding the previous one's tools, and none of
-        # its own. NOT_GIVEN clears the set when the target defines none.
-        tools_schema = _build_tools_schema(config)
-        tools_frame = _mark_uninterruptible(
-            LLMSetToolsFrame(
-                tools=tools_schema if tools_schema is not None else NOT_GIVEN
-            )
-        )
-    except Exception:
-        logger.exception("handoff_context: failed to build the switch")
-        return
 
     if config.mcp_servers:
         # MCP sessions belong to the agent the call started as — they aren't
@@ -298,17 +289,64 @@ async def _apply_handoff_context(
             servers=[s.name for s in config.mcp_servers],
         )
 
-    # --- the switch. No await, nothing that can raise, past this line. ---
+    return PreparedHandoff(name=target.name, config=config, frames=frames)
+
+
+async def _apply_handoff_context(
+    prepared: PreparedHandoff,
+    call_context: CallContext,
+    params: Any,
+) -> None:
+    """Switch the running pipeline to the target agent. Atomically.
+
+    Everything that can wait or raise happened in `_prepare_handoff`, before
+    the switch was committed. What is left cannot suspend — `queue_frame` puts
+    onto an unbounded asyncio.Queue, which never yields — so an interruption
+    is delivered either before this or after it, never through it.
+
+    Adding an `await`, or anything that can raise, reopens the half-applied
+    state the `interruptible=False` flag cannot reach: a frame that was never
+    built cannot survive a drain. `test_handoff_switch_is_atomic.py` fails if
+    it happens.
+    """
     params.context.set_messages([])
-    if config.tools:
-        register_tools(params.llm, list(config.tools), call_context)
-    await params.pipeline_worker.queue_frame(prompt_frame)
-    await params.pipeline_worker.queue_frame(tools_frame)
+    if prepared.config.tools:
+        register_tools(params.llm, list(prepared.config.tools), call_context)
+    for frame in prepared.frames:
+        await params.pipeline_worker.queue_frame(frame)
 
     logger.info(
         "handoff_context: switched system instruction to agent '{name}'",
-        name=target.name,
+        name=prepared.name,
     )
+
+
+async def _complete_handoff(
+    prepared: PreparedHandoff,
+    result: str,
+    call_context: CallContext,
+    params: Any,
+) -> None:
+    """Apply a prepared handoff, but only if the switch was actually committed.
+
+    Applying one the database refused would be #144 the other way up: the
+    pipeline speaking as the target agent while the call record never moved.
+    The payload is ours, built one frame up by `_execute_builtin`.
+    """
+    try:
+        committed = bool(json.loads(result).get("success"))
+    except (ValueError, AttributeError):
+        committed = False
+
+    if not committed:
+        logger.warning(
+            "handoff_context: switch was refused, leaving the pipeline on the "
+            "current agent: {result}",
+            result=result,
+        )
+        return
+
+    await _apply_handoff_context(prepared, call_context, params)
 
 
 def register_tools(
@@ -367,16 +405,14 @@ def _register_single_tool(
             return
 
         started = time.perf_counter()
+        prepared_handoff: PreparedHandoff | None = None
         if function_name in BUILTIN_TOOL_NAMES:
-            # Read the handoff target *first*: `_execute_builtin` commits
-            # `status=HANDED_OFF` + `active_agent_id`, and any await after that
-            # commit is a window where the record says handed off and the
-            # pipeline never switched. #144.
-            handoff_target = (
-                await _load_handoff_target(args, call_context)
-                if function_name == "handoff_to_agent"
-                else None
-            )
+            # Prepare the handoff *first*: `_execute_builtin` commits
+            # `status=HANDED_OFF` + `active_agent_id`, and anything that waits
+            # or raises after that commit is a window where the record says
+            # handed off and the pipeline never switched. #144.
+            if function_name == "handoff_to_agent":
+                prepared_handoff = await _prepare_handoff(args, call_context)
             result = await _execute_builtin(function_name, args, call_context)
         elif (
             # Only when this registration is not itself a webhook tool. Asking
@@ -396,8 +432,8 @@ def _register_single_tool(
         # For handoff: switch the running pipeline to the new agent. The
         # target was read before `_execute_builtin` committed the switch, so
         # this applies it without waiting on anything. #144.
-        if function_name == "handoff_to_agent" and handoff_target is not None:
-            await _apply_handoff_context(handoff_target, call_context, params)
+        if function_name == "handoff_to_agent" and prepared_handoff is not None:
+            await _complete_handoff(prepared_handoff, result, call_context, params)
 
         # Hand the result back to the LLM immediately — the model is waiting on
         # this to continue speaking. The invocation record + tool.result webhook

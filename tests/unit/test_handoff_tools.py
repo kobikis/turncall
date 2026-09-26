@@ -43,7 +43,7 @@ class _SessionFactory:
 async def _handoff(target_config: AgentConfig):
     from turncall.orchestrator.tool_bridge import (
         _apply_handoff_context,
-        _load_handoff_target,
+        _prepare_handoff,
     )
 
     agent = SimpleNamespace(
@@ -69,7 +69,7 @@ async def _handoff(target_config: AgentConfig):
         ),
         patch("turncall.orchestrator.tool_bridge.register_tools") as register,
     ):
-        target = await _load_handoff_target({"agent_id": str(uuid4())}, call_context)
+        target = await _prepare_handoff({"agent_id": str(uuid4())}, call_context)
         assert target is not None
         await _apply_handoff_context(target, call_context, params)
 
