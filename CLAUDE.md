@@ -950,6 +950,12 @@ GitHub Issues in `kobikis/turncall`, via the `gh` CLI.
 The five canonical roles under their default names: `needs-triage`, `needs-info`,
 `ready-for-agent`, `ready-for-human`, `wontfix`.
 
+### Committing
+
+`git commit -s`. CI's `dco` job fails a pull request carrying any commit
+without a `Signed-off-by:` trailer, and `Co-Authored-By:` does not satisfy it.
+`.claude/rules/common/git-workflow.md` has the recovery commands.
+
 ### Domain docs
 
 Single-context: `CONTEXT.md` and `adr/` at the repo root — not `docs/adr/`, which
