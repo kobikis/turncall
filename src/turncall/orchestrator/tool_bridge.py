@@ -167,6 +167,31 @@ async def _execute_builtin(
         )
 
 
+def _mark_uninterruptible(frame: Any) -> Any:
+    """Mark a frame as one an interruption must not drop.
+
+    A handoff queues the target's prompt and the target's advertised tools.
+    Pipecat drains interruptible frames from a processor's queue when the
+    caller barges in, so losing either leaves the agent running the previous
+    agent's prompt and tools over a context that was already cleared —
+    silently. The flag makes the interruption land before the handoff or after
+    it, never through the middle. Pipecat 1.12 shipped the same fix for Flows.
+
+    Narrow by design: spoken frames (the first message, the idle nudge) are
+    *supposed* to be dropped when the caller starts talking.
+
+    Mutates the frame, against this repo's immutability rule, because pipecat
+    declares ``interruptible`` as a non-init dataclass field — there is no
+    constructor argument to pass it to. The alternative, ``UninterruptibleFrame``,
+    is the pre-1.12 marker: deprecated, removed in 2.0, and subclass-based, so
+    it would mean declaring TurnCall frame subclasses purely to set a flag. The
+    frame is freshly built at the call site and not yet queued, so nothing else
+    can observe the mutation.
+    """
+    frame.interruptible = False
+    return frame
+
+
 async def _apply_handoff_context(
     args: dict[str, Any],
     call_context: CallContext,
@@ -209,10 +234,23 @@ async def _apply_handoff_context(
 
         instruction = _build_system_instruction(config)
 
-        # Clear the conversation as before: the new agent starts fresh.
+        # From here to the last queue_frame is the handoff proper: the context
+        # is cleared, the target's handlers are registered, and the two frames
+        # carrying its prompt and its advertised schema are queued. Pipecat
+        # cancels a sync tool's task on interruption, so this region must hold
+        # no suspension point — cancellation cannot be delivered where the
+        # coroutine never yields, and `queue_frame` puts onto an unbounded
+        # asyncio.Queue, which does not. Adding an `await` here reopens the
+        # half-applied state the uninterruptible flag cannot reach: a frame
+        # that was never queued cannot survive a drain.
+        # test_handoff_survives_interruption.py pins this.
         params.context.set_messages([])
         await params.pipeline_worker.queue_frame(
-            LLMUpdateSettingsFrame(delta=LLMSettings(system_instruction=instruction))
+            _mark_uninterruptible(
+                LLMUpdateSettingsFrame(
+                    delta=LLMSettings(system_instruction=instruction)
+                )
+            )
         )
 
         if config.mcp_servers:
@@ -236,8 +274,10 @@ async def _apply_handoff_context(
             register_tools(params.llm, list(config.tools), call_context)
         tools_schema = _build_tools_schema(config)
         await params.pipeline_worker.queue_frame(
-            LLMSetToolsFrame(
-                tools=tools_schema if tools_schema is not None else NOT_GIVEN
+            _mark_uninterruptible(
+                LLMSetToolsFrame(
+                    tools=tools_schema if tools_schema is not None else NOT_GIVEN
+                )
             )
         )
 
