@@ -113,6 +113,181 @@ _load_mapping(path) -> dict                # the only YAML in the stack
 already the dict those parsers want, so **there is no YAML anywhere in this
 design.**
 
+### The vocabulary a stored definition already accepts
+
+The list above is accurate and useless: nobody writes a `send_after` off a
+shopping list. Because `definition` is stored verbatim and handed to pipecat's
+parser, **every field pipecat 1.11's schema has is already reachable from `POST
+/v1/eval-scenarios`** with no TurnCall code behind it — and half of it has never
+been used, because it was never written down as something you could write.
+
+Examples are JSON, not YAML: a definition is a JSONB column (§3), so pipecat's
+own YAML docs need translating before they are usable here. Each one is
+round-tripped in `tests/unit/test_scenario_vocabulary.py`, which asserts the
+parsed **value**, not just that the parse succeeded — a field pipecat drops is a
+silent no-op, which is exactly how `matches:` sat in this document asserting
+nothing for months.
+
+> None of this reports a verdict until §9.7 is fixed. The vocabulary is real;
+> the bridge that would exercise it does not currently complete its handshake.
+
+#### A latency budget — `within_ms`
+
+```json
+{"turns": [{"user": "What are your hours?",
+            "expect": [{"event": "llm_started", "within_ms": 2000},
+                       {"event": "llm_response", "text_contains": "nine"}]}]}
+```
+
+All of a turn's expectations share **one** deadline, anchored at the moment the
+turn was sent — so time spent matching `llm_started` is spent out of
+`llm_response`'s budget, and a turn that stalls completely fails within one
+budget rather than one per expectation. Unset means 60s.
+
+#### Barge-in — `send_after`
+
+```json
+{"turns": [
+  {"user": "Tell me a long, detailed story about the history of Paris.",
+   "expect": [{"event": "llm_started"}]},
+  {"user": "Actually, never mind. What is the capital of Japan?",
+   "send_after": {"event": "llm_started", "delay_ms": 2000},
+   "expect": [{"event": "bot_interrupted"},
+              {"event": "llm_response", "text_contains": "Tokyo",
+               "text_excludes": "Paris"}]}]}
+```
+
+`interruption_enabled` is a config field with no coverage, and this is the
+assertion for it. It works in **text** mode: a text turn arrives as RTVI
+`send-text` with `run_immediately`, which interrupts the bot before appending
+the message, so barge-in needs no audio and no TTS. By default a turn is sent
+only once the agent has stopped speaking, which is why interrupting has to be
+asked for; a bare `{"delay_ms": 500}` with no `event` is a plain delay measured
+from the previous send.
+
+#### Nothing should arrive — `absent`
+
+```json
+{"event": "llm_response", "absent": true, "within_ms": 3000}
+```
+
+Matches on the event type alone — pipecat forbids combining it with
+`text_contains`, `eval` or `calls`. **Always** set `within_ms`, or the quiet
+window is the full 60s default. This is the check for a duplicate reply, and for
+an agent that should hold its turn instead of answering a half-finished
+sentence ("I'd go to Japan because…") — the smart-turn behaviour nothing else
+here can assert.
+
+#### Score every turn — `stop_on_failure`
+
+```json
+{"stop_on_failure": false,
+ "turns": [{"user": "Book me a flight to Tokyo.",
+            "expect": [{"event": "function_call", "within_ms": 15000,
+                        "calls": [{"name": "book_flight"}]}]}]}
+```
+
+Default is `true`: the first failed turn ends the scenario, because a
+conversation that has gone wrong says little about what follows. Turn it off
+when the turns are independent — intent classification over a list of
+utterances — and give each an explicit `within_ms`, or an agent that has stopped
+answering costs a full 60s budget on every remaining turn.
+
+#### A cancelled tool — `function_call_stopped`
+
+```json
+{"event": "function_call_stopped",
+ "calls": [{"name": "lookup_order", "args": {"cancelled": true}}]}
+```
+
+The assertion for `execution_mode`, which `tool_bridge.py` maps to pipecat's
+`cancel_on_interruption`: a `sync` tool should be cancelled when the caller
+talks over it, an `async` one should survive and deliver late. Pair it with a
+`send_after` interruption. The event carries only how the call ended, so it
+takes no `eval:`.
+
+Note the shape: expectations take a **`calls:` list**, never a top-level
+`name`/`args`. The parser ignores keys it does not know, so the wrong shape
+parses cleanly and asserts nothing.
+
+#### Judging a call the model phrases itself — `eval` on `function_call`
+
+```json
+{"event": "function_call",
+ "calls": [{"name": "submit_ticket"}],
+ "eval": "a ticket about a broken thermostat, raised for Jennifer Smith"}
+```
+
+`args:` is a verbatim subset check, which is no use for an argument the model
+writes in its own words. With `eval:`, each matched call goes to the judge by
+name and arguments, over the conversation so far.
+
+#### Simulation thresholds — `metrics`
+
+```json
+{"persona": "Jamie, booking dinner for two at 6 PM. Gives name and number when asked.",
+ "goal": "Book a table for two at 6 PM, then end the call.",
+ "success": "the bot confirmed a reservation for two at 6 PM",
+ "metrics": [
+   {"name": "politeness", "criterion": "the reply is courteous, never curt", "min_score": 1},
+   {"measure": "words", "max_value": 60},
+   {"measure": "latency", "max_value": 5},
+   {"measure": "function_calls", "calls": [{"name": "book_table", "args": {"party_size": 2}}]}],
+ "max_turns": 8, "max_duration_s": 120, "max_silence_s": 30}
+```
+
+A judged metric scores the **share** of replies the judge said yes to, so `0.8`
+is four in five; one without a `min_score` reports and fails nothing. A measured
+metric bounds the **worst** reply, so set `words` and `latency` to the longest
+and slowest you can accept, not the typical one.
+
+`measure: function_calls` is the one check the judge cannot make — it is shown
+the calls but never their results — and `"calls": []` is the assertion for a
+caller who must be turned down with nothing called at all. `latency` means two
+different things: in text mode, the caller's send to the first LLM token (a
+budget on the model); in audio mode, the caller falling silent to the agent's
+first spoken sentence (what a caller experiences). The two are not comparable.
+
+#### Seeding history — `context`, and the trap in it
+
+```json
+{"context": [{"role": "system", "content": "You are Acme's receptionist. <the agent's prompt, restated>"},
+             {"role": "assistant", "content": "Thanks for calling Acme. How can I help?"}],
+ "turns": [{"user": "I'm calling back about ticket 4127.",
+            "expect": [{"event": "llm_response", "eval": "asks for or confirms the ticket number"}]}]}
+```
+
+`context:` **replaces** the agent's context wholesale — pipecat sends it as
+`LLMMessagesUpdateFrame`, whose own docstring is "messages to replace current
+context". On TurnCall that includes the system prompt `render_agent_config()`
+built from the agent's config, so a scenario that reaches for `context:` to
+start mid-conversation silently stops testing the agent's prompt and starts
+testing the one in the scenario. Either restate the prompt inside `context:` and
+accept that it now drifts from the agent, or leave the field alone and script
+the opening turns.
+
+#### Audio-only events
+
+`response` is the modality-agnostic one and resolves to `llm_response` in text
+mode; prefer it for content checks so one definition covers both. These need
+`modality: audio` and time out silently without it: `user_transcription`,
+`user_started_speaking`, `user_stopped_speaking`, `vad_user_started_speaking`,
+`vad_user_stopped_speaking`, `tts_response`.
+
+#### What parses and does nothing here
+
+Each of these is a valid pipecat field that stores without complaint and then
+never fires, so a scenario resting on one times out for a reason that looks like
+the agent's fault.
+
+| Field | Why it does nothing |
+| --- | --- |
+| `dtmf:` | The keys arrive as `InputDTMFFrame` and TurnCall's pipeline has no `DTMFAggregator`, so they never become a transcription and no user turn ever starts. The same gap means **inbound** DTMF is unhandled on real calls; the `send_dtmf` built-in is the outbound direction and a different thing. |
+| `llm_marker`, `marker`, `markers`, `marker_first`, `text_after` | The event reports a turn-completion marker, which only an agent whose LLM is instructed to emit them produces. TurnCall uses Smart Turn V3 and no marker protocol, so the event never arrives. |
+| `image:` | The path is resolved relative to the scenario **file**, and `evals/scenario.py` passes the `<stored scenario>` placeholder because a row has no file. Vision evals need an asset store first. |
+| turn-level `audio:` | The same path resolution, and the costliest of the four: a recorded caller — real accent, real codec, real noise — is the closest an eval gets to a real call. |
+| `matches:` | Not a field in 1.11 at all. The parser drops the key, so an expectation whose only check is `matches:` asserts nothing; `assertion_warnings` reports it as `scenario_cannot_fail`. |
+
 ## 4. Decisions
 
 ### ✅ Settled
@@ -184,8 +359,56 @@ hygiene decision, not a crash avoidance one.)
 
 ### Frontier
 
-Empty. Everything above is settled; everything else is explicitly out of v1
-(§8, §11).
+Everything above is settled; the v1 cut is §8 and §11. What follows is from
+reading pipecat's eval docs against this implementation — the places where
+parity is already reached and the *platform* shape is what could go further.
+Pipecat's evals are a dev-loop tool: YAML on disk, one command, an exit code,
+a `.eval.log`. Ours is a service: rows, projects, agent versions, batches, a
+worker, webhooks. Ranked by what that difference is worth, once §9.7 lands.
+
+1. **A text-channel modality.** The biggest hole, and invisible because it
+   looks like a modality question. SMS, chat and WhatsApp text run through
+   `services/llm_text.py` and `chat_tools.py` — a separate implementation with
+   three provider tool dialects, a 5-round tool cap and its own KB retrieval —
+   and no eval reaches it: `run_iteration` builds `build_call_pipeline`, the
+   voice pipeline, always. `POST /v1/eval-scenarios/from-session` therefore
+   converts a *chat* session into a scenario that then runs against the voice
+   path, so the test exercises a different code path than the one that produced
+   it. Pipecat cannot help here; it has no text channel.
+2. **A baseline verdict.** The question evals exist for — *did this regress?* —
+   has no answer. `eval_runs` already carries `scenario_id`, `agent_id`,
+   `agent_version` and the counts, and the only cross-run query that exists is
+   `last_judged_harness`, for judge changes (#119). Newly-failing,
+   newly-passing and a per-scenario flake rate are one query on
+   `ix_eval_runs_scenario`. Structurally impossible for a file-based runner.
+3. **Gate `publish` on a batch.** `POST /v1/agents/{id}/publish` archives the
+   previous version and re-points phone numbers with no behavioural check. A
+   `pre-publish` tag blocking that transition is the eval feature no CI job can
+   have, because CI is not where the transition happens.
+4. **Cost and latency on the run.** Nothing records what a run cost or how slow
+   it was, while 50 iterations × audio × real providers is real money. The
+   observers on the call path already collect TTFB and usage (ADR-0010) and an
+   eval builds the same pipeline and drops both. `within_ms` and
+   `measure: latency` assert per-run; a column gives the trend per agent
+   version, which is what §6's snapshot discipline was already building toward.
+5. **Judge agreement.** #118/#119 made the judge configurable, which makes "is
+   the judge right?" a live question with nowhere to record the answer. One
+   table of human verdicts on iterations turns §9.3 from a caveat into a number.
+6. **MCP under eval.** The known limit that matters most, because production
+   agents use MCP: `build_call_pipeline` takes no MCP manager, so those tools
+   are neither contacted nor advertised and a mock naming one never fires. The
+   mock interception (#71) is what makes connecting them safe.
+7. **The serializer, cheaply.** "Everything inside the transport is invisible"
+   (§9.1) covers the Twilio serializer and the whole ADR-0004 audio class. Real
+   PSTN is not needed for most of it: running the eval audio through
+   `serializer.py`'s µ-law 8kHz round-trip as a third modality covers the
+   serializer and the narrowband path, and claims nothing about the network.
+8. **Coverage.** `from-call` exists; nothing says *which* calls to convert.
+   "23 calls last week ended `pipeline_error` and no scenario covers them" is a
+   query, and it is the half of §9.6's loop that is still manual.
+9. **Retrieval quality is an island.** `scripts/eval_retrieval.py` and
+   `rag_golden.yaml` score hit@k and MRR (ADR-0012) and never reach a run, so
+   KB quality is invisible to the surface that would gate on it.
 
 ## 5. Architecture
 
@@ -656,6 +879,74 @@ captures the conversation, not the judgement. And evals only find what you
 thought to test; unknown unknowns come from production, which is why the
 `CallsTab` → scenario button is the loop that matters.
 
+### 9.7 The bridge never completes the RTVI handshake
+
+Pipecat's harness is an RTVI **client**, and the server half of RTVI is not the
+transport — it is an `RTVIProcessor` in the bot's pipeline plus an
+`RTVIObserver` on the bot's task. Pipecat says so itself, in the runner, at the
+branch that builds this very transport: "the bot pipeline must include an
+RTVIProcessor and pass an RTVIObserver to the task"
+(`pipecat/runner/utils.py:717`).
+
+TurnCall builds neither. `create_pipeline`'s processor lists
+(`pipeline_factory.py:1204`, `:1222`) hold no RTVI processor, and
+`build_observers` (`call_session.py:87`) passes no RTVI observer; repo-wide,
+"rtvi" occurs twice, both in comments. Three consequences, in the order they
+bite:
+
+1. **No run gets past the handshake.** `EvalSession` calls
+   `client.handshake()` (`evals/session.py:425`), which waits for `bot-ready`
+   and raises after `BOT_READY_TIMEOUT_S = 10.0` (`evals/client.py:92`,
+   `:548-564`). Only `RTVIProcessor` ever sends that message
+   (`rtvi/processor.py:135`, `:521`). 10s is far inside the per-iteration
+   budget, so every iteration ends as a harness timeout — `errored`, which by
+   design is kept out of every rate.
+2. **The caller's turn never reaches the LLM.** `send-text` (text mode),
+   `raw-audio` (audio mode) and `dtmf` are all handled in
+   `RTVIProcessor._handle_*` (`rtvi/processor.py:364-371`). Without it, the
+   `InputTransportMessageFrame` the serializer produces travels the pipeline
+   with nothing to interpret it.
+3. **No asserted event is ever emitted.** `bot-llm-text` → `llm_response`,
+   `llm-function-call-in-progress` → `function_call`, and the rest come only
+   from `RTVIObserver` (`rtvi/observer.py`), so `events_seen` stays empty even
+   where the agent worked perfectly. `handshake()` also sends
+   `RTVIConfigureObserverFrame` to raise the function-call report level for the
+   scenario — a message addressed to an observer that is not there.
+
+The tests that should have caught it are `@pytest.mark.live` and skip without
+`OPENAI_API_KEY`. The live suite happens to contain both a discriminator and a
+decoy: `test_a_wrong_answer_fails_with_a_readable_reason` asserts the failure
+kind is `text_mismatch`, which only a working bridge produces (a dead one gives
+`timeout`) — while `test_a_first_message_is_invisible_to_a_text_mode_eval`
+asserts `events_seen == []`, which is also exactly what a dead bridge produces.
+A pinned coverage hole and a total outage look identical from there, which is
+how this survived.
+
+The fix is small and belongs to the eval path only: construct an
+`RTVIProcessor` after `transport.input()` and hand `RTVIObserver(rtvi)` to the
+task's observers, both only when the transport is the eval transport, so no
+call path changes. Nothing in §3's vocabulary — and no verdict of any kind —
+works before that lands, which is why it is the first item of §11 rather than
+an entry in this list.
+
+```python
+# pipeline_factory.py, eval path only — directly after transport.input(), so it
+# sees the InputTransportMessageFrames the EvalSerializer produces.
+rtvi = RTVIProcessor()
+
+# call_session.py, beside build_observers() — handshake() sends an
+# RTVIConfigureObserverFrame, so the observer has to exist to be configured.
+observers.append(rtvi.create_rtvi_observer())
+```
+
+One ordering detail, which fails with the same symptom as no wiring at all:
+`client-ready` arrives as soon as the harness connects and `set_bot_ready`
+answers it, so the processor has to be in the pipeline already — it belongs in
+the processor list, not added from an `on_client_connected` handler. Audio needs
+nothing extra: `audio_in_stream_on_start` defaults to `True`, so the eval
+transport streams the caller's audio without waiting for client-ready, and the
+gating opt-in (`False`) is the thing *not* to set here.
+
 ## 10. Removing the stub
 
 `test_suites` and `test_runs` exist today with four endpoints in
@@ -670,9 +961,16 @@ One migration and one commit: drop both tables and `test_run_status`; delete
 
 ## 11. Phasing
 
+0. **Wire RTVI into the eval pipeline** (§9.7). Not a phase anyone planned: it
+   is the step phase 2 was believed to have completed. Everything below it is
+   built and untested end to end, so this comes before any new slice — an
+   `RTVIProcessor` in the processor list and its observer on the task, eval
+   path only.
 1. **Delete the stub.** Independent, unblocks the namespace.
 2. **`create_eval_transport` + the worker**, scripted kind, text modality, one
-   iteration. Proves the bridge end to end.
+   iteration. Meant to prove the bridge end to end, and **did not**: the
+   transport is only half of pipecat's contract and the live tests that would
+   have said so are credential-gated (§9.7).
 3. **Tool mocking** in `tool_bridge`. Before anyone points a scenario at a real
    agent.
 4. **Audio modality.** Built in #72 — `modality: audio` runs end to end, the
