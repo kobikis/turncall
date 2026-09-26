@@ -154,6 +154,11 @@ ignore = ["S101", "S104", "E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S105", "S106", "S314", "B017"]
+# IPA symbols are ambiguous with ASCII look-alikes by definition — that is
+# what these files are about. Flagging every one of them says nothing.
+"src/turncall/domain/ipa.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/test_tts_pronunciations.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/live/test_live_tts_pronunciations.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
 python_version = "3.12"

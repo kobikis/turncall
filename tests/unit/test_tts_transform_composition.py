@@ -55,9 +55,10 @@ def test_every_provider_still_strips_markdown_first(service_cls: type) -> None:
     ("asterisk asterisk"). No provider may lose that, and it stays first."""
     from pipecat.utils.text.transforms import strip_markdown
 
+    from turncall.domain.models import AgentConfig
     from turncall.orchestrator.pipeline_factory import _tts_text_transforms
 
-    transforms = _tts_text_transforms(service_cls)
+    transforms = _tts_text_transforms(service_cls, AgentConfig())
 
     assert transforms[0] == ("*", strip_markdown), (
         f"{service_cls.__name__} no longer strips markdown first: {transforms}"
@@ -68,11 +69,13 @@ def test_every_provider_still_strips_markdown_first(service_cls: type) -> None:
 def test_the_helper_is_pure_and_needs_no_pipeline() -> None:
     """It is a plain function of the service class — callable in a unit test
     with nothing constructed, which is the point of routing through it."""
+    from turncall.domain.models import AgentConfig
     from turncall.orchestrator.pipeline_factory import _tts_text_transforms
 
+    config = AgentConfig()
     first, second = (
-        _tts_text_transforms(_tts_service_classes()[0]),
-        _tts_text_transforms(_tts_service_classes()[0]),
+        _tts_text_transforms(_tts_service_classes()[0], config),
+        _tts_text_transforms(_tts_service_classes()[0], config),
     )
     assert first == second
     assert first is not second, (
@@ -140,6 +143,8 @@ def test_every_provider_branch_composes_through_the_helper() -> None:
             "shared list cannot carry the per-provider pronunciation transform"
         )
         passed = [_called_name(a) for a in value.args]
-        assert passed == [built], (
-            f"{built} passes the wrong service class to {_HELPER}(): {passed}"
+        assert passed == [built, "config"], (
+            f"{built} passes the wrong arguments to {_HELPER}(): {passed} — it "
+            "needs its own service class (for the provider's pronunciation "
+            "markup) and the agent config (for the pronunciations themselves)"
         )
