@@ -14,6 +14,7 @@ with a caller already listening.
 """
 
 from collections.abc import Callable
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -289,3 +290,125 @@ class TestTheWarnings:
         )
 
         assert any("tts.pronunciations is ignored on S2S" in m for m in said), said
+
+
+@pytest.mark.unit
+class TestElevenLabsSsmlParsing:
+    """ElevenLabs reads the markup only with SSML parsing on (#147).
+
+    `enable_ssml_parsing` is a **constructor kwarg**, not a field on
+    `ElevenLabsTTSService.Settings`, so an author's `tts.extra` landed in
+    `Settings.extra` and never reached it — the warning above was correct with
+    no configuration path out of it. TurnCall decides instead, scoped to agents
+    that asked for pronunciations: SSML parsing changes how *all* of that
+    agent's text is read (a `<` in an LLM reply becomes markup) and is reported
+    to add latency, so it is not a default.
+
+    The model half stays the author's. `eleven_flash_v2_5` is a better voice
+    than `eleven_flash_v2`, and downgrading it to make a pronunciation work
+    trades what every caller hears for what one might; the warning naming the
+    resolved model is the nudge.
+    """
+
+    def _built(self, **tts: object) -> tuple[AgentConfig, Any]:
+        """The config and the service built from it — one source of truth, since
+        the warning is asked of both."""
+        from turncall.orchestrator.pipeline_factory import _create_tts_service
+
+        config = AgentConfig(
+            tts=TTSConfig(provider="elevenlabs", voice="21m00Tcm4TlvDq8ikWAM", **tts)
+        )
+        return config, _create_tts_service(config, openai_api_key="x")
+
+    def test_a_phoneme_model_with_pronunciations_reads_the_markup(self) -> None:
+        """The whole point: asked of the *constructed* service, which is where
+        the measurement in #147 said False."""
+        from turncall.orchestrator.pipeline_factory import (
+            _warn_unusable_pronunciations,
+        )
+
+        config, tts = self._built(model="eleven_flash_v2", pronunciations=METFORMIN)
+
+        assert tts.supports_pronunciations
+        said = _warnings(lambda: _warn_unusable_pronunciations(config, tts))
+        assert not [m for m in said if "pronunciation" in m], said
+
+    async def test_the_word_reaches_that_service_as_phoneme_markup(self) -> None:
+        """Reading SSML is no use if the transform is not building it."""
+        from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+
+        from turncall.orchestrator.pipeline_factory import _tts_text_transforms
+
+        _, (_, transform) = _tts_text_transforms(
+            ElevenLabsTTSService,
+            AgentConfig(tts=TTSConfig(pronunciations=METFORMIN)),
+        )
+
+        assert "<phoneme" in await transform("Take your Metformin", "*")
+
+    def test_an_agent_with_no_pronunciations_is_built_as_it_was(self) -> None:
+        """SSML parsing is not turned on for text that never asked for it —
+        every `<` in every LLM reply would start meaning something."""
+        _, tts = self._built(model="eleven_flash_v2")
+
+        assert tts._enable_ssml_parsing is None
+
+    def test_a_model_that_cannot_read_phonemes_still_warns(self) -> None:
+        """The resolved default. Turning SSML parsing on would not make this
+        model read the tags, so the warning stays and still names the model."""
+        from turncall.orchestrator.pipeline_factory import (
+            _warn_unusable_pronunciations,
+        )
+
+        config, tts = self._built(model="eleven_flash_v2_5", pronunciations=METFORMIN)
+
+        assert not tts.supports_pronunciations
+        said = _warnings(lambda: _warn_unusable_pronunciations(config, tts))
+        assert any("eleven_flash_v2_5" in m for m in said), said
+
+    async def test_the_markup_is_withheld_where_it_would_be_read_aloud(self) -> None:
+        """Measured on the WebSocket pipecat uses: a `<phoneme>` tag reaching a
+        service that is not parsing SSML is **spoken**, at 3.5-4.3x the audio of
+        the plain sentence — "phoneme alphabet i p a" read out to the caller. So
+        the transform is withheld when the built service will not read the markup,
+        which is what "spoken as written" has to mean here. The warning above is
+        what tells the author; this is what the caller hears meanwhile.
+        """
+        _, tts = self._built(model="eleven_flash_v2_5", pronunciations=METFORMIN)
+
+        spoken = "Take your Metformin today"
+        for _, transform in tts._text_transforms:
+            spoken = await transform(spoken, "*")
+
+        assert spoken == "Take your Metformin today"
+
+    async def test_a_capable_model_still_gets_the_markup(self) -> None:
+        """The other side of that gate, asked of the constructed service."""
+        _, tts = self._built(model="eleven_flash_v2", pronunciations=METFORMIN)
+
+        spoken = "Take your Metformin today"
+        for _, transform in tts._text_transforms:
+            spoken = await transform(spoken, "*")
+
+        assert "<phoneme" in spoken
+
+    def test_the_phoneme_model_pin_is_pipecats_own(self) -> None:
+        """Not a second copy of the frozenset: every model pipecat lists reads
+        the markup on a service this factory built. A pipecat bump that renames
+        or moves `ELEVENLABS_PHONEME_MODELS` is then a red build naming the
+        version, the way `test_pipecat_parser_contract.py` is for the eval
+        parser — not an ElevenLabs agent that silently stopped reading IPA.
+        """
+        from importlib.metadata import version
+
+        from pipecat.services.elevenlabs.tts import ELEVENLABS_PHONEME_MODELS
+
+        why = (
+            f"pipecat {version('pipecat-ai')} moved or emptied "
+            "ELEVENLABS_PHONEME_MODELS; the factory keys SSML parsing off it, so "
+            "ElevenLabs pronunciations go with it (#147)."
+        )
+        assert ELEVENLABS_PHONEME_MODELS, why
+        for model in ELEVENLABS_PHONEME_MODELS:
+            _, tts = self._built(model=model, pronunciations=METFORMIN)
+            assert tts.supports_pronunciations, f"{model}: {why}"

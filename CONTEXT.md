@@ -85,7 +85,13 @@ A per-agent dictionary from a word to its IPA transcription, so the voice says
 (Cartesia inline phonemes, ElevenLabs SSML `<phoneme>`, Deepgram's inline
 object, and OpenAI none at all). Validation is TurnCall's own — pipecat's IPA
 utilities normalize and tokenize but never reject — and whether a voice can
-*read* the markup belongs to the constructed service, not the provider name.
+*read* the markup belongs to the constructed service, not the provider name. On
+ElevenLabs that takes `enable_ssml_parsing`, which TurnCall turns on for an agent
+that has pronunciations and a phoneme-capable model, and only then: SSML parsing
+changes how all of that agent's text is read (#147). The model stays the
+author's — a phoneme-incapable one still warns rather than being downgraded, and
+has the markup withheld: a `<phoneme>` tag reaching a service that is not parsing
+SSML is read aloud, so "spoken as written" means the tag never goes.
 _Avoid_: "pronunciation dictionary" for ElevenLabs' hosted, account-level
 `pronunciation_dictionary_locators`, which is a different thing entirely; and
 calling a respelling ("met-FOR-min") a pronunciation — only IPA is accepted,
