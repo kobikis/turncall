@@ -30,6 +30,14 @@ The last form needs a force-push. Prefer `--force-with-lease`.
 `Co-Authored-By:` trailer — adding the latter does not satisfy the former. See
 CONTRIBUTING.md, "Developer Certificate of Origin".
 
+Merging is the other half, and the gate does not cover it. A squash merge whose
+body you supply by hand (`gh pr merge --squash --body-file ...`) replaces the
+commit messages and drops their trailers — and the `dco` job only reads commits
+in a pull request's range, so an unsigned squash commit reaches `main`
+unchallenged. Keep the trailer in the body you pass, or let `gh` default to the
+commit messages. Undoing it means rewriting published history, so it is worth
+getting right on the first try.
+
 ## Pull Request Workflow
 
 When creating PRs:
