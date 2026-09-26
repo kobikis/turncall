@@ -34,9 +34,11 @@ COPY pyproject.toml ./
 COPY src/ src/
 RUN --mount=type=cache,target=/root/.cache/pip     if [ -n "$INSTALL_EXTRAS" ]; then pip install ".[$INSTALL_EXTRAS]";     else pip install .; fi
 
-# Pipecat's TTS services sentence-split with NLTK; bake the tokenizer data into
-# the venv so the runtime never hits "Resource punkt_tab not found" mid-call.
-RUN python -m nltk.downloader -d /opt/venv/nltk_data punkt_tab
+# No NLTK step. Pipecat's TTS sentence splitting used NLTK and needed its
+# `punkt_tab` data baked in, or the runtime hit "Resource punkt_tab not found"
+# mid-call. 1.12 replaced it with sentencex, which carries its own rules and
+# downloads nothing — so the step it replaced now fails the build outright
+# with `No module named 'nltk'`.
 
 # ---- runtime: slim image, just the venv + migrations, no compilers ----
 FROM python:3.12-slim AS runtime
