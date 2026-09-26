@@ -21,10 +21,26 @@ from typing import Any
 
 # provider -> the dotted path pipecat will import. The values name callables in
 # this module and nothing else: the mapping is the allowlist.
+#
+# What a **simulator** may be. A persona is linked into a pipeline to play the
+# caller, so every entry here has to be a real LLM service.
 PROVIDERS: dict[str, str] = {
     "ollama": "turncall.evals.judges.ollama",
     "openai": "turncall.evals.judges.openai",
     "anthropic": "turncall.evals.judges.anthropic",
+}
+
+# What a **judge** may be — a superset, because a judge only has to answer
+# questions and never joins a pipeline. Pipecat accepts either an LLM service
+# or a `BaseClassifier` here (`classifier_from_config`).
+#
+# `ollama` is the one that differs: the same local LLM, wrapped so its budget
+# can be widened. Handing that wrapper to a simulator raises
+# `AttributeError: 'LLMClassifier' object has no attribute 'link'` at pipeline
+# build, which is why the two roles get two maps rather than one with a check.
+JUDGE_PROVIDERS: dict[str, str] = {
+    **PROVIDERS,
+    "ollama": "turncall.evals.judges.ollama_judge",
 }
 
 # What each provider runs when a scenario names no model. Pipecat's own default
@@ -39,7 +55,9 @@ DEFAULT_MODELS: dict[str, str] = {
 # The same mapping read backwards, so a compiled block can say which provider
 # produced it. `harness_config` records the provider a run was judged by, and
 # by then the typed block is gone — pipecat stores the dotted path.
-PROVIDER_BY_FACTORY: dict[str, str] = {path: name for name, path in PROVIDERS.items()}
+PROVIDER_BY_FACTORY: dict[str, str] = {
+    path: name for name, path in {**PROVIDERS, **JUDGE_PROVIDERS}.items()
+}
 
 
 def default_block(
@@ -64,11 +82,46 @@ def default_block(
     }
 
 
+# How long a local judge gets to answer one classification.
+#
+# pipecat 1.12 judges a simulation **one bot turn per call** rather than the
+# whole run in one prose call, and fires those calls together. A local Ollama
+# serializes them, so the per-call latency scales with the turn count while
+# `LLMClassifier`'s own default budget stays at 10s. Measured on this box with
+# `gemma4:e2b`: one classification 4.5-5.8s, four concurrent 18s each — so the
+# default judge timed out on every turn of a four-turn simulation, which the
+# runner correctly scored as a judge failure and which looks exactly like an
+# agent regression from the outside.
+#
+# 60s is generous against that 18s and still a third of the 180s floor the
+# per-iteration budget gives one conversation (ADR-0018), so a hung judge is
+# still caught by the budget rather than by this.
+_LOCAL_JUDGE_TIMEOUT_S = 60.0
+
+
 def ollama(config: dict[str, Any]) -> Any:
-    """Pipecat's own local judge, reached through the same door as the rest."""
+    """Pipecat's own local LLM, reached through the same door as the rest.
+
+    The persona's, and the judge's before 1.12 gave the judge a reason to want
+    a wrapper. See `ollama_judge`.
+    """
     from pipecat.evals.services import ollama_service
 
     return ollama_service(config)
+
+
+def ollama_judge(config: dict[str, Any]) -> Any:
+    """The same local LLM, wrapped so the judge's budget can be widened.
+
+    The one factory that returns a classifier rather than an LLM service.
+    Pipecat accepts either (`classifier_from_config`), and wrapping it here
+    leaves explainer resolution identical: `EvalJudge.from_config` reads
+    `classifier.llm` for an `LLMClassifier` that came without an `explainer:`
+    block, which is the same Ollama the bare service would have been.
+    """
+    from pipecat.classifiers.llm.classifier import LLMClassifier
+
+    return LLMClassifier(llm=ollama(config), timeout=_LOCAL_JUDGE_TIMEOUT_S)
 
 
 def _platform_key(attr: str) -> str:

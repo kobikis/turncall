@@ -78,7 +78,7 @@ class TestThePlatformDefault:
             EvalModality.TEXT,
             _settings(judge_provider="openai", judge_model="gpt-4o"),
         )
-        assert parsed.judge.get("factory") == "turncall.evals.judges.ollama"
+        assert parsed.judge.get("factory") == "turncall.evals.judges.ollama_judge"
         assert parsed.judge["model"] == "gemma3"
 
     def test_the_block_is_taken_whole_not_merged(self) -> None:

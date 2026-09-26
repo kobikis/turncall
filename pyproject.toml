@@ -29,12 +29,12 @@ dependencies = [
     "httpx>=0.27.0",
 
     # MCP (Model Context Protocol)
-    # Both SDK lines. 2.x renamed Tool.inputSchema -> input_schema and
-    # CallToolResult.isError -> is_error, and moved streamable HTTP to a
-    # prepared-client signature; mcp_client reads whichever spelling is
-    # present and uses `streamable_http_client`, the transport name 1.24+
-    # and 2.x share. Verified against 1.28 and 2.2.0.
-    "mcp>=1.27.0,<3.0.0",
+    # 2.x only, and not by choice: pipecat 1.12's `mcp` extra (taken below)
+    # requires mcp[cli]>=2.1.1, so the 1.x line is unreachable from here. The
+    # dual-spelling reads mcp_client used to carry for Tool.inputSchema and
+    # CallToolResult.isError went with this pin — code that can no longer run
+    # is a false claim about what the project supports.
+    "mcp>=2.1.1,<3.0.0",
 
     # Redis
     "redis[hiredis]>=5.0.0",
@@ -66,7 +66,7 @@ dependencies = [
     # pins aiobotocore==2.25.1 and has no 3.x-compatible release — declaring it
     # makes the project uninstallable. AWSBedrockLLMService works fine on
     # aiobotocore 2.25.1, which aioboto3 already provides. See adr/0016.
-    "pipecat-ai[openai,deepgram,elevenlabs,silero,webrtc,webrtc-video,local-smart-turn,google,anthropic,cartesia,heygen,tavus,aws-nova-sonic,tracing,mcp]>=1.11.0,<2.0.0",
+    "pipecat-ai[openai,deepgram,elevenlabs,silero,webrtc,webrtc-video,local-smart-turn,google,anthropic,cartesia,heygen,tavus,aws-nova-sonic,tracing,mcp]>=1.12.0,<2.0.0",
     # OTLP span exporter (pipecat[tracing] ships otel api/sdk but not an exporter).
     # See ADR-0010.
     "opentelemetry-exporter-otlp>=1.43.0",
@@ -96,7 +96,15 @@ turncall = "turncall.cli.main:run"
 # only the eval worker ever needs them — the call path uses the agent's own
 # configured providers.
 evals-audio = [
-    "pipecat-ai[kokoro,moonshine]>=1.11.0,<2.0.0",
+    "pipecat-ai[kokoro,moonshine]>=1.12.0,<2.0.0",
+]
+# The judge's optional classifier (#118 extended). Jev answers a verdict in a
+# few hundred ms with a calibrated probability, where an LLM judge spends a
+# turn on it. Only ever built off the call path, and only when a scenario or
+# the platform names `provider: jev`, so it stays out of the base install —
+# it is a vendor (TYPESAFE_API_KEY) that no live call ever contacts.
+evals-jev = [
+    "pipecat-ai[jev]>=1.12.0,<2.0.0",
 ]
 dev = [
     "pytest>=8.0.0",

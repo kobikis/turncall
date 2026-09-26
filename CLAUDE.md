@@ -4,7 +4,7 @@ Production voice agent platform. API-only backend for real-time AI voice agents 
 
 ## Stack
 
-- **Runtime**: Python 3.12, FastAPI, Pipecat 1.11
+- **Runtime**: Python 3.12, FastAPI, Pipecat 1.12
 - **Database**: PostgreSQL (asyncpg + SQLAlchemy async + Alembic)
 - **Cache**: Redis
 - **Telephony**: Twilio Voice + Media Streams (WebSocket)
@@ -18,7 +18,7 @@ Production voice agent platform. API-only backend for real-time AI voice agents 
 - **TTS**: Deepgram Aura-2 · OpenAI TTS-1 · ElevenLabs Flash v2.5 · Cartesia Sonic-3.6
 - **VAD**: Silero (barge-in / interruption handling)
 - **Turn Detection**: Smart Turn V3 (ML-based, local ONNX)
-- **Voicemail**: Pipecat VoicemailDetector with retry backoff
+- **Voicemail**: Pipecat VoicemailDetector (1.12: one processor over an `LLMClassifier`) with retry backoff
 - **Knowledge Base**: pgvector (RAG), OpenAI embeddings, pypdf
 - **Logging**: Loguru
 
@@ -827,7 +827,7 @@ Connect agents to MCP servers for auto-discovered tools. Tools are fetched at ca
 | `stdio` | `command` + `args` + `env` | Local subprocess (requires `MCP_STDIO_ENABLED=true`) |
 
 ### Key Files
-- `services/mcp_client.py` — `MCPSessionManager`: connect, discover, call, cleanup. Works against **both** MCP SDK lines (`mcp>=1.27,<3`): 2.x renamed `Tool.inputSchema`→`input_schema` and `CallToolResult.isError`→`is_error`, so the client reads whichever spelling is present, and uses `streamable_http_client` — the transport name 1.24+ and 2.x share — building its own HTTP client for headers/timeout from whichever httpx family the SDK was built on
+- `services/mcp_client.py` — `MCPSessionManager`: connect, discover, call, cleanup. **mcp 2.x only** (`mcp>=2.1.1,<3`), which pipecat 1.12's `mcp` extra forces: the dual-spelling reads for 1.x's `Tool.inputSchema` / `CallToolResult.isError` are gone, since under that pin they could never match — on 2.x the old names survive only as pydantic aliases. Uses `streamable_http_client`, building its own HTTP client for headers/timeout
 - `orchestrator/tool_bridge.py` — Routes MCP tool calls through MCP client
 - `orchestrator/pipeline_factory.py` — Merges MCP tools into pipeline at creation
 - `orchestrator/pipeline_builder.py` — `start_call_pipeline()`: MCP discovery for WebRTC + WhatsApp voice (in the task that also runs the call — MCP transports open anyio cancel scopes that must be exited where they were entered)
@@ -888,6 +888,15 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 `ended_reason` (derived, not stored): `customer_ended_call`, `assistant_ended_call`,
 `customer_did_not_answer`, `customer_busy`, `customer_silent`, `voicemail`, `transferred`,
 `max_duration_reached`, `pipeline_error`, `telephony_failed`, `unknown`.
+
+Since pipecat 1.12 a user turn that VAD opened and closed with **no
+transcript** — a cough, a door, an unrecognized word — is handled rather than
+dropped, and it is on by default. One that *interrupted* the agent gets a
+single LLM run so the agent asks the caller to repeat instead of stopping dead
+mid-sentence; one that arrives while the agent was already waiting is left
+unanswered, because replying to a passing truck is intrusive and the idle guard
+below already covers a caller who has genuinely gone quiet. See CONTEXT.md,
+"empty user turn" — it is a turn *outcome*, not a fourth timeout.
 
 `customer_silent` comes from `user_idle_timeout_ms` (default `10000`, `0`
 disables): after the agent stops speaking, a caller who stays quiet that long

@@ -81,9 +81,6 @@ async def test_a_simulation_holds_a_conversation_and_is_judged(
         "success": "the agent told the caller that the capital of France is Paris",
         "metrics": [{"name": "politeness", "criterion": "the agent stayed courteous"}],
         "max_turns": 4,
-        # Both default to pipecat's `gemma4:12b`, which this box may not have.
-        "simulator": {"service": "ollama", "model": ollama_model},
-        "judge": {"eval": {"service": "ollama", "model": ollama_model}},
     }
     blob = {
         "system_prompt": "You are a terse, courteous geography assistant.",
@@ -98,6 +95,23 @@ async def test_a_simulation_holds_a_conversation_and_is_judged(
         agent_id=None,
     )
 
+    # TurnCall's typed blocks (#118), applied the way `runner` applies them —
+    # they are columns beside the definition, not keys inside it, and only
+    # this path reaches TurnCall's own factories. Both models default to
+    # pipecat's `gemma4:12b`, which this box may not have.
+    #
+    # Going through the factories became load-bearing in pipecat 1.12. A raw
+    # `judge.eval` block inside the definition is wrapped in an
+    # `LLMClassifier` carrying pipecat's default 10s budget, while 1.12 judges
+    # a simulation one bot turn per call and fires those calls together —
+    # four concurrent classifications take ~18s each against a local Ollama,
+    # so every one of them times out and the run reports "judge call failed".
+    # TurnCall's `ollama` factory widens that budget; a raw block cannot.
+    definition = scenario_mod.with_models(
+        definition,
+        judge={"provider": "ollama", "model": ollama_model},
+        simulator={"provider": "ollama", "model": ollama_model},
+    )
     merged = scenario_mod.with_modality(definition, EvalModality.TEXT)
     parsed = scenario_mod.parse(merged, name="live-simulation")
     result = await run_iteration(

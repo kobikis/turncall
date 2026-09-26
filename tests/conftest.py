@@ -25,18 +25,15 @@ def app(settings: Settings) -> TestClient:
 
 
 def mcp_tool(name: str, schema: dict | None = None):
-    """Build an mcp Tool without hard-coding which SDK line is installed.
+    """Build an mcp Tool.
 
-    1.x spells the field `inputSchema`, 2.x `input_schema`. Constructing it
-    by the wrong name is a TypeError, so tests that named one would break on
-    the other — the code they cover reads both.
+    `input_schema` is 2.x's spelling, and 2.x is the only line reachable now
+    that pipecat's mcp extra requires it (see test_dependency_pins). 1.x spelled
+    it `inputSchema`, which survives on 2.x only as a pydantic alias.
     """
     from mcp.types import Tool
 
-    field = "inputSchema" if "inputSchema" in Tool.model_fields else "input_schema"
-    return Tool(
-        **{"name": name, "description": "d", field: schema or {"type": "object"}}
-    )
+    return Tool(name=name, description="d", input_schema=schema or {"type": "object"})
 
 
 def mcp_settings(*, allowed_url_patterns: list[str] | None = None, **mcp_over):

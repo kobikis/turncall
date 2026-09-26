@@ -96,7 +96,7 @@ class TestMCPToolConversion:
         mcp_tool = MagicMock()
         mcp_tool.name = "lookup_customer"
         mcp_tool.description = "Look up a customer by phone"
-        mcp_tool.inputSchema = {
+        mcp_tool.input_schema = {
             "type": "object",
             "properties": {
                 "phone": {"type": "string", "description": "Phone number"},
@@ -119,7 +119,7 @@ class TestMCPToolConversion:
         mcp_tool = MagicMock()
         mcp_tool.name = "my_tool"
         mcp_tool.description = None
-        mcp_tool.inputSchema = {}
+        mcp_tool.input_schema = {}
 
         result = _mcp_tool_to_definition(mcp_tool, "srv")
         assert "MCP tool from srv" in result.description
@@ -128,7 +128,7 @@ class TestMCPToolConversion:
         mcp_tool = MagicMock()
         mcp_tool.name = "no_params"
         mcp_tool.description = "A tool"
-        mcp_tool.inputSchema = None
+        mcp_tool.input_schema = None
 
         result = _mcp_tool_to_definition(mcp_tool, "srv")
         assert result.parameters_schema["type"] == "object"

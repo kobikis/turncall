@@ -1071,20 +1071,41 @@ def create_pipeline(
         vm_config = config.voicemail_detection
         backoff = vm_config.backoff_plan
 
-        # Use a separate lightweight LLM for classification. Pin a deterministic
-        # temperature and force reasoning off — a yes/no classifier must not
-        # inherit the agent's conversational sampling (same pattern as call-analysis).
-        classification_llm = _create_llm_service(
+        # A separate lightweight LLM answers the classification. Deterministic
+        # temperature, reasoning forced off — a yes/no question must not
+        # inherit the agent's conversational sampling (same pattern as
+        # call-analysis).
+        #
+        # It is the LLM *behind* a classifier, not a classifier itself. Since
+        # pipecat 1.12 `Classifier` is a type in its own right (an object that
+        # answers typed questions about some state), so the word belongs to it
+        # and this stays named for what it is.
+        voicemail_llm = _create_llm_service(
             config,
             openai_api_key,
             anthropic_api_key=anthropic_api_key,
             temperature=0.1,
             reasoning_effort=None,
         )
+        # 1.12 rewrote the detector: `llm=`/`custom_system_prompt=` are
+        # deprecated and it now takes a classifier. Built explicitly rather
+        # than left to the shim, which is removed in 2.0.0.
+        #
+        # `instructions` REPLACES the classifier's own, so an agent's custom
+        # prompt goes in front of the default rather than instead of it — the
+        # default is what asks for the JSON object the classifier parses, and
+        # dropping it makes every verdict unreadable. Same order the shim uses.
+        from pipecat.classifiers.llm.classifier import (
+            DEFAULT_INSTRUCTIONS,
+            LLMClassifier,
+        )
+
+        instructions = None
+        if vm_config.custom_system_prompt:
+            instructions = f"{vm_config.custom_system_prompt}\n\n{DEFAULT_INSTRUCTIONS}"
         voicemail_detector = VoicemailDetector(
-            llm=classification_llm,
+            classifier=LLMClassifier(llm=voicemail_llm, instructions=instructions),
             voicemail_response_delay=backoff.start_at_seconds,
-            custom_system_prompt=vm_config.custom_system_prompt,
         )
 
         # Track retry state

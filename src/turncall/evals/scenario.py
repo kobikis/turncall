@@ -6,8 +6,8 @@ pipecat's own error — the schema belongs to pipecat and moves between majors,
 so tracking it in our own models would be a standing migration debt.
 
 That round-trip goes through two of pipecat's **private** functions, because
-1.11 has no public mapping-level parser: `EvalScenarioFile.load` takes a path,
-and a stored scenario has no file. See `_parsers` and #100.
+there is still no public mapping-level parser as of 1.12: `EvalScenarioFile.load`
+takes a path, and a stored scenario has no file. See `_parsers` and #100.
 
 `_parse_script` / `_parse_simulation` take `(mapping, path)`; the path is only
 used in error messages and to resolve a turn's relative `audio:`/`image:`
@@ -28,7 +28,13 @@ from turncall.domain.enums import EvalKind, EvalModality
 
 # The pipecat scenario schema a definition is validated against, recorded on
 # every scenario so a pipecat major upgrade can find the rows that predate it.
-SCHEMA_VERSION = "pipecat-1.11"
+#
+# Rows written before a bump keep the version they were validated against —
+# that is the column's whole job, and rewriting it would erase the only record
+# of which parser accepted them. 1.12 changed no field of either scenario
+# dataclass (tests/unit/test_pipecat_parser_contract.py), so a 1.11 row is
+# still valid; the version says when it was checked, not whether it works.
+SCHEMA_VERSION = "pipecat-1.12"
 
 # Stands in for the file path pipecat's parsers name in their errors.
 _STORED = Path("<stored scenario>")
@@ -360,7 +366,9 @@ def _provider_names() -> list[str]:
     return list(PROVIDERS)
 
 
-def compile_model_block(block: dict[str, Any] | None) -> dict[str, Any] | None:
+def compile_model_block(
+    block: dict[str, Any] | None, *, role: str = "judge"
+) -> dict[str, Any] | None:
     """One typed `{provider, model, temperature, endpoint}` as pipecat's mapping.
 
     Temperature rides in `extra`, which pipecat forwards as top-level request
@@ -371,13 +379,17 @@ def compile_model_block(block: dict[str, Any] | None) -> dict[str, Any] | None:
     """
     if not block:
         return None
-    from turncall.evals.judges import PROVIDERS
+    from turncall.evals.judges import JUDGE_PROVIDERS, PROVIDERS
+
+    # A judge may be anything that answers a question; a simulator has to be an
+    # LLM service, because the persona is linked into a pipeline to speak.
+    providers = JUDGE_PROVIDERS if role == "judge" else PROVIDERS
 
     provider = str(block.get("provider") or "ollama")
-    if provider not in PROVIDERS:
-        raise ScenarioError(f"unknown provider {provider!r}")
+    if provider not in providers:
+        raise ScenarioError(f"unknown {role} provider {provider!r}")
 
-    compiled: dict[str, Any] = {"factory": PROVIDERS[provider]}
+    compiled: dict[str, Any] = {"factory": providers[provider]}
     for key in ("model", "endpoint"):
         if block.get(key):
             compiled[key] = block[key]
@@ -429,7 +441,7 @@ def with_models(
         if isinstance(block, dict) and not block.get("eval"):
             block["eval"] = compiled_judge
 
-    compiled_persona = compile_model_block(simulator)
+    compiled_persona = compile_model_block(simulator, role="simulator")
     if compiled_persona and not merged.get("simulator"):
         merged["simulator"] = compiled_persona
     return merged

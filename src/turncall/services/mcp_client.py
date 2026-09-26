@@ -381,7 +381,7 @@ class MCPSessionManager:
                 ref.tool_name, arguments
             )
 
-            if _result_is_error(result):
+            if result.is_error:
                 error_text = ""
                 for block in result.content:
                     if hasattr(block, "text"):
@@ -440,29 +440,6 @@ def _cap_response(text: str, tool_name: str, server_name: str) -> str:
     )
 
 
-def _tool_input_schema(tool: Tool) -> dict[str, Any]:
-    """The tool's JSON schema, whichever way the SDK spells the field.
-
-    mcp 2.x renamed `inputSchema` to `input_schema`. Reading only the old name
-    raised AttributeError per tool, which connect_servers logs and swallows —
-    so every server quietly returned nothing at all.
-    """
-    for name in ("inputSchema", "input_schema"):
-        schema = getattr(tool, name, None)
-        if isinstance(schema, dict):
-            return schema
-    return {}
-
-
-def _result_is_error(result: CallToolResult) -> bool:
-    """Whether the call failed — `isError` on mcp 1.x, `is_error` on 2.x."""
-    for name in ("isError", "is_error"):
-        flag = getattr(result, name, None)
-        if isinstance(flag, bool):
-            return flag
-    return False
-
-
 def _mcp_tool_to_definition(tool: Tool, server_name: str) -> ToolDefinition:
     """Convert an MCP Tool to a TurnCall ToolDefinition.
 
@@ -474,7 +451,7 @@ def _mcp_tool_to_definition(tool: Tool, server_name: str) -> ToolDefinition:
     reject an unresolvable `$ref` outright. Only the two keys a function
     schema must have are filled in when the server omits them.
     """
-    schema = dict(_tool_input_schema(tool))
+    schema = dict(tool.input_schema or {})
     schema.setdefault("type", "object")
     schema.setdefault("properties", {})
     return ToolDefinition(

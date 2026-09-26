@@ -28,7 +28,7 @@ def _tool(name: str) -> Tool:
 
 def _result(text: str) -> MagicMock:
     block = SimpleNamespace(text=text)
-    return SimpleNamespace(isError=False, content=[block])
+    return SimpleNamespace(is_error=False, content=[block])
 
 
 def _manager() -> MCPSessionManager:
