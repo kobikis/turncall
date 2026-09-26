@@ -98,14 +98,6 @@ turncall = "turncall.cli.main:run"
 evals-audio = [
     "pipecat-ai[kokoro,moonshine]>=1.12.0,<2.0.0",
 ]
-# The judge's optional classifier (#118 extended). Jev answers a verdict in a
-# few hundred ms with a calibrated probability, where an LLM judge spends a
-# turn on it. Only ever built off the call path, and only when a scenario or
-# the platform names `provider: jev`, so it stays out of the base install —
-# it is a vendor (TYPESAFE_API_KEY) that no live call ever contacts.
-evals-jev = [
-    "pipecat-ai[jev]>=1.12.0,<2.0.0",
-]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",

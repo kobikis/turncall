@@ -55,8 +55,13 @@ DEFAULT_MODELS: dict[str, str] = {
 # The same mapping read backwards, so a compiled block can say which provider
 # produced it. `harness_config` records the provider a run was judged by, and
 # by then the typed block is gone — pipecat stores the dotted path.
+#
+# Both maps' paths, flattened as pairs rather than merged as dicts: merging
+# collides on the provider *name*, so `{**PROVIDERS, **JUDGE_PROVIDERS}` drops
+# `judges.ollama` — the simulator's factory — and a lookup of it returns None
+# with nothing failing.
 PROVIDER_BY_FACTORY: dict[str, str] = {
-    path: name for name, path in {**PROVIDERS, **JUDGE_PROVIDERS}.items()
+    path: name for name, path in [*JUDGE_PROVIDERS.items(), *PROVIDERS.items()]
 }
 
 

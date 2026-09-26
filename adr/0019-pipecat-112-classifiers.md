@@ -98,13 +98,16 @@ Three runtime consequences, all accepted:
   `TTSSpeakFrame` the voicemail handler pushes originates one slot earlier in
   the graph. It still reaches TTS and the gate.
 
-**4. Jev is adopted for the judge only, as an optional extra.** `provider: jev`
-joins the closed set in `evals/judges.py`, mapping to a TurnCall-shipped
-factory exactly as `ollama`/`openai`/`anthropic` do — pipecat's own escape
-hatch is `factory`, a dotted path handed to `importlib.import_module`, which
-from a request body is remote code execution (#118). It is **not** adopted for
-voicemail: that is on the live call path, and a new vendor there is a decision
-that deserves its own measurement.
+**4. Jev is not adopted here.** When it is, it belongs in `JUDGE_PROVIDERS`
+only and nowhere else: `provider: jev` joins that closed set mapping to a
+TurnCall-shipped factory exactly as `ollama`/`openai`/`anthropic` do, because
+pipecat's own escape hatch is `factory`, a dotted path handed to
+`importlib.import_module`, which from a request body is remote code execution
+(#118). Not in this change, which is a bump: adopting a vendor is a decision
+with a key, an extra and a measurement behind it, and this document is not the
+place it gets made by implication. It is not a candidate for **voicemail**
+either way — that is on the live call path, where a new vendor deserves its own
+measurement.
 
 **5. `mcp` narrows to 2.x and the dual-spelling reads are deleted.** They
 cannot execute under a pin that pipecat forces anyway, and CLAUDE.md advertised
@@ -115,10 +118,6 @@ the project supports.
 
 - A scenario's verdicts may differ across the bump. `harness_config` is what
   makes that attributable; nothing else would.
-- `evals-jev` is a new optional extra. Without it, `provider: jev` raises at
-  run time rather than at scenario create — a key and an extra are
-  environmental, and a stored scenario outlives the deployment it was written
-  against (Q9).
 - The `custom_system_prompt` → `instructions` composition is a trap with a
   silent failure mode, so it is guarded by
   `tests/unit/test_voicemail_classifier.py` rather than left to review.
