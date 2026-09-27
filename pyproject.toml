@@ -158,6 +158,8 @@ ignore = ["S101", "S104", "E501"]
 # what these files are about. Flagging every one of them says nothing.
 "src/turncall/domain/ipa.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/unit/test_tts_pronunciations.py" = ["RUF001", "RUF002", "RUF003"]
+"src/turncall/orchestrator/config_warnings.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/unit/test_agent_config_warnings.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/live/test_live_tts_pronunciations.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
