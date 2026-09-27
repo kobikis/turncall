@@ -18,19 +18,19 @@ import pytest
 
 from turncall.domain.enums import EvalKind, EvalRunStatus
 from turncall.domain.models import AgentConfig
-from turncall.evals.runner import (
+from turncall.evals.result_mapping import (
     IterationOutcome,
-    ResolvedTarget,
-    TargetError,
     derive_status,
     errored_entry,
-    harness_config,
     map_script_result,
     map_simulation_result,
-    resolve_target,
+)
+from turncall.evals.runner import (
+    harness_config,
     resolved_scenario_snapshot,
     tool_policy_of,
 )
+from turncall.evals.targets import ResolvedTarget, TargetError, resolve_target
 
 pytestmark = pytest.mark.unit
 

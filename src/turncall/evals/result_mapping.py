@@ -16,6 +16,9 @@ know which kind they are holding to find a transcript.
 
 `errored` is not a kind of `failed`. An iteration whose harness did not complete
 is neither a pass nor a fail, and `IterationOutcome.passed` is None to say so.
+`derive_status` is the one level up — the run's verdict and its two counts out
+of the outcomes — and lives here because it is a pure function of them, with the
+same rule to keep.
 """
 
 from __future__ import annotations
@@ -24,6 +27,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
+
+from turncall.domain.enums import EvalRunStatus
 
 # What the bot said, as pipecat names it. In text modality there is only
 # `llm_response`. In audio there are three views of one reply: `llm_response`
@@ -405,3 +410,27 @@ def errored_entry(
         entry=_entry(iteration, error=reason, tool_calls=list(tool_calls or [])),
         refused_tool=refused_tool,
     )
+
+
+def derive_status(outcomes: list[IterationOutcome]) -> tuple[EvalRunStatus, int, int]:
+    """The run's verdict and its two counts.
+
+    No iteration reached a verdict -> `errored`: the harness never told us
+    anything about the agent, and reporting that as a failure is how a suite
+    loses its audience. Otherwise any failed iteration fails the run, since a
+    scripted scenario that fails once has found something real.
+
+    An unmocked tool errors the **run**, whatever the other iterations did
+    (#71). The agent asked for something the scenario forgot to mock, so the
+    scenario is misconfigured and no rate over it means anything — and a
+    forgotten mock that reported PASSED because four other iterations never
+    reached the tool is exactly the accident the policy exists to prevent.
+    """
+    passed = sum(1 for o in outcomes if o.passed is True)
+    failed = sum(1 for o in outcomes if o.passed is False)
+    if any(o.refused_tool for o in outcomes):
+        return EvalRunStatus.ERRORED, 0, 0
+    if passed == 0 and failed == 0:
+        return EvalRunStatus.ERRORED, 0, 0
+    status = EvalRunStatus.FAILED if failed else EvalRunStatus.PASSED
+    return status, passed, failed

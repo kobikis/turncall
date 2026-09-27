@@ -132,15 +132,16 @@ class TestTheStoredSnapshot:
     async def test_the_run_row_stores_the_config_already_masked(self) -> None:
         """Nothing reads `resolved_config` back to execute anything, so the
         secret has no reason to sit in a JSONB column at all."""
+        from turncall.domain.models import AgentConfig
         from turncall.evals import runner as runner_mod
-        from turncall.evals.runner import ResolvedTarget
+        from turncall.evals.targets import ResolvedTarget
 
         run = _row(status="queued")
         start = AsyncMock()
         started_payloads: list[dict] = []
         target = ResolvedTarget(
             project_id=run.project_id,
-            config=runner_mod.AgentConfig(),
+            config=AgentConfig(),
             config_blob=SECRETFUL,
             agent_id=uuid4(),
         )

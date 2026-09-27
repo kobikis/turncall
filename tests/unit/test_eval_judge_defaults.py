@@ -18,7 +18,8 @@ import pytest
 
 from turncall.domain.enums import EvalModality
 from turncall.evals.judges import default_block
-from turncall.evals.runner import _parse_for_run, _warn_judge_changed, harness_config
+from turncall.evals.run_warnings import warn_judge_changed
+from turncall.evals.runner import _parse_for_run, harness_config
 
 pytestmark = pytest.mark.unit
 
@@ -160,7 +161,7 @@ class TestAChangedJudgeIsAnnounced:
     async def test_a_different_judge_warns_naming_both(self) -> None:
         current = {"judge_provider": "openai", "judge_model": "gpt-4o"}
         with self._previous({"judge_provider": "ollama", "judge_model": "gemma3"}):
-            warnings = await _warn_judge_changed(AsyncMock(), _run(), current)
+            warnings = await warn_judge_changed(AsyncMock(), _run(), current)
 
         assert [w["code"] for w in warnings] == ["judge_changed"]
         message = warnings[0]["message"]
@@ -174,12 +175,12 @@ class TestAChangedJudgeIsAnnounced:
     async def test_the_same_judge_says_nothing(self) -> None:
         same = {"judge_provider": "openai", "judge_model": "gpt-4o"}
         with self._previous(dict(same)):
-            assert await _warn_judge_changed(AsyncMock(), _run(), same) == []
+            assert await warn_judge_changed(AsyncMock(), _run(), same) == []
 
     @pytest.mark.asyncio
     async def test_the_first_run_of_a_scenario_carries_no_warning(self) -> None:
         with self._previous(None):
-            assert await _warn_judge_changed(AsyncMock(), _run(), {}) == []
+            assert await warn_judge_changed(AsyncMock(), _run(), {}) == []
 
     @pytest.mark.asyncio
     async def test_an_inline_scenario_has_no_history_to_differ_from(self) -> None:
@@ -187,7 +188,7 @@ class TestAChangedJudgeIsAnnounced:
         scenario — and the query would be against a null id."""
         with self._previous({"judge_model": "gemma3"}) as query:
             assert (
-                await _warn_judge_changed(AsyncMock(), _run(scenario_id=None), {}) == []
+                await warn_judge_changed(AsyncMock(), _run(scenario_id=None), {}) == []
             )
         query.assert_not_awaited()
 
@@ -206,7 +207,7 @@ class TestAChangedJudgeIsAnnounced:
             "judge_temperature": None,
         }
         with self._previous(previous):
-            assert await _warn_judge_changed(AsyncMock(), _run(), current) == []
+            assert await warn_judge_changed(AsyncMock(), _run(), current) == []
 
 
 class TestARunCannotSwapTheJudge:

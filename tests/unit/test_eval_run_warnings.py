@@ -14,7 +14,8 @@ from uuid import uuid4
 import pytest
 
 from turncall.domain.models import AgentConfig, MCPServerConfig, ToolDefinition
-from turncall.evals.runner import ResolvedTarget, _warn_unmatched_mocks
+from turncall.evals.run_warnings import warn_unmatched_mocks
+from turncall.evals.targets import ResolvedTarget
 
 pytestmark = pytest.mark.unit
 
@@ -39,7 +40,7 @@ def _target(*, tools=(), mcp_servers=()):
 
 class TestTheWarningIsReturnedNotJustLogged:
     def test_a_mock_naming_no_tool_is_reported(self) -> None:
-        warnings = _warn_unmatched_mocks(
+        warnings = warn_unmatched_mocks(
             {"book_table": {"ok": True}}, _target(tools=["check_hours"]), run_id=uuid4()
         )
         assert len(warnings) == 1
@@ -50,30 +51,30 @@ class TestTheWarningIsReturnedNotJustLogged:
     def test_an_mcp_agent_is_told_it_is_the_mcp_limitation(self) -> None:
         """The server count is the valuable half: it separates "evals never
         advertise MCP tools" from "you typo'd the name"."""
-        warnings = _warn_unmatched_mocks(
+        warnings = warn_unmatched_mocks(
             {"crm_lookup": {}}, _target(mcp_servers=["crm"]), run_id=uuid4()
         )
         assert warnings[0]["mcp_servers"] == 1
         assert "MCP" in warnings[0]["message"]
 
     def test_an_agent_without_mcp_is_told_to_check_the_name(self) -> None:
-        warnings = _warn_unmatched_mocks({"typo": {}}, _target(), run_id=uuid4())
+        warnings = warn_unmatched_mocks({"typo": {}}, _target(), run_id=uuid4())
         assert warnings[0]["mcp_servers"] == 0
         assert "tool name" in warnings[0]["message"]
 
     def test_mocks_that_all_match_warn_about_nothing(self) -> None:
         assert (
-            _warn_unmatched_mocks(
+            warn_unmatched_mocks(
                 {"check_hours": {}}, _target(tools=["check_hours"]), run_id=uuid4()
             )
             == []
         )
 
     def test_a_builtin_is_a_tool_the_run_can_call(self) -> None:
-        assert _warn_unmatched_mocks({"end_call": {}}, _target(), run_id=uuid4()) == []
+        assert warn_unmatched_mocks({"end_call": {}}, _target(), run_id=uuid4()) == []
 
     def test_no_mocks_at_all_warns_about_nothing(self) -> None:
-        assert _warn_unmatched_mocks({}, _target(tools=["a"]), run_id=uuid4()) == []
+        assert warn_unmatched_mocks({}, _target(tools=["a"]), run_id=uuid4()) == []
 
 
 @pytest.mark.asyncio

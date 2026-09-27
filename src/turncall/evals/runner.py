@@ -1,12 +1,16 @@
-"""Running one eval run: resolve the target, iterate, derive a verdict.
+"""Running one eval run: plan it, iterate, finish it.
 
 This module is the seam the worker calls and the unit tests drive. Everything
 that needs a pipeline and a socket lives behind the injected `execute` callable
-(`turncall.evals.harness.run_iteration` in production), so the loop, the status
-derivation and the counts are testable with canned pipecat result objects.
-Turning one of those results into a `results` entry is `result_mapping`, which
-this module imports: that half is a pure function of a pipecat result and reads
-better away from the orchestration.
+(`turncall.evals.harness.run_iteration` in production), so the loop, the
+snapshots and the iteration budgets are testable with canned pipecat result
+objects.
+
+Three siblings hold the parts that are pure functions rather than orchestration,
+all imported here and none importing this module back: `targets` resolves what
+the run points at, `result_mapping` turns one pipecat result into one `results`
+entry (and `derive_status` the run's verdict out of them), and `run_warnings`
+builds what the run has to tell its author that is not a verdict.
 
 Two rules from the design are load-bearing here:
 
@@ -34,150 +38,24 @@ from turncall.domain.enums import (
     EvalRunStatus,
     EvalToolPolicy,
 )
-from turncall.domain.models import AgentConfig
 from turncall.evals import scenario as scenario_mod
 from turncall.evals.build import worker_build
 from turncall.evals.result_mapping import (
     IterationOutcome,
+    derive_status,
     errored_entry,
     map_script_result,
     map_simulation_result,
 )
+from turncall.evals.run_warnings import (
+    warn_judge_changed,
+    warn_unmatched_mocks,
+    warn_worker_stale,
+)
+from turncall.evals.targets import ResolvedTarget, resolve_target
 from turncall.services.tool_mocks import ToolMocks
 
-
-class TargetError(ValueError):
-    """The run names a target that cannot be resolved."""
-
-
-@dataclass(frozen=True)
-class ResolvedTarget:
-    """What the run actually points at, snapshot included.
-
-    `agent_id` is None for an inline target — ADR-0017's first rule, no locally
-    invented sentinel in the column.
-    """
-
-    project_id: UUID
-    config: AgentConfig
-    config_blob: dict[str, Any]
-    agent_id: UUID | None = None
-    # Which version `agent_id` was. None for an inline target, which has no
-    # row and therefore no version (#74).
-    agent_version: int | None = None
-
-
 ExecuteIteration = Callable[..., Awaitable[Any]]
-
-
-# An agent row is one immutable version, so a target naming an id pins a
-# version forever: the moment someone publishes the next one, a scenario
-# pinned that way silently stops testing production. `agent_name` is the
-# answer — resolved at run time, recorded as the version it found.
-_TARGET_TYPES = ("agent", "agent_name", "inline")
-
-
-async def _resolve_by_id(
-    session: Any, *, project_id: UUID, raw_id: Any
-) -> ResolvedTarget:
-    from turncall.storage.repositories import agent_repo
-
-    if not raw_id:
-        raise TargetError("target type 'agent' needs an 'agent_id'")
-    agent = await agent_repo.get_agent_by_id(
-        session, UUID(str(raw_id)), project_id=project_id
-    )
-    if agent is None:
-        raise TargetError(f"agent {raw_id} not found in this project")
-    blob = dict(agent.config_blob or {})
-    return ResolvedTarget(
-        project_id=project_id,
-        config=AgentConfig.model_validate(blob),
-        config_blob=blob,
-        agent_id=agent.id,
-        agent_version=agent.version,
-    )
-
-
-async def _resolve_by_name(
-    session: Any, *, project_id: UUID, name: Any, environment: str
-) -> ResolvedTarget:
-    from turncall.storage.repositories import agent_repo
-
-    if not name:
-        raise TargetError("target type 'agent_name' needs a 'name'")
-    agent = await agent_repo.get_latest_published(
-        session, project_id, str(name), environment
-    )
-    if agent is None:
-        # Deliberately not falling back to a draft: "test what is live" is the
-        # whole reason to target by name, and quietly testing an unpublished
-        # draft instead would answer a different question with the same green
-        # tick.
-        raise TargetError(f"agent {name!r} has no published version in {environment!r}")
-    blob = dict(agent.config_blob or {})
-    return ResolvedTarget(
-        project_id=project_id,
-        config=AgentConfig.model_validate(blob),
-        config_blob=blob,
-        agent_id=agent.id,
-        agent_version=agent.version,
-    )
-
-
-def _resolve_inline(*, project_id: UUID, blob: Any) -> ResolvedTarget:
-    """An agent config with no row behind it — ADR-0017's case.
-
-    `agent_id` stays None rather than carrying the zero-UUID sentinel: the
-    sentinel exists so a *pipeline* can build, and writing it to a column would
-    claim a row that does not exist. The config itself is the record, which is
-    what `resolved_config` is for.
-    """
-    if not isinstance(blob, dict) or not blob:
-        raise TargetError("target type 'inline' needs an 'agent' configuration")
-    try:
-        config = AgentConfig.model_validate(blob)
-    except Exception as exc:
-        # Reached only if something slipped past the API's own validation —
-        # a run queued before a schema change, say. Better a clear errored run
-        # than a pipeline that fails halfway into a conversation.
-        raise TargetError(f"inline agent configuration is invalid: {exc}") from exc
-    return ResolvedTarget(
-        project_id=project_id,
-        config=config,
-        config_blob=dict(blob),
-        agent_id=None,
-        agent_version=None,
-    )
-
-
-async def resolve_target(
-    session: Any, *, project_id: UUID, target: dict[str, Any]
-) -> ResolvedTarget:
-    """Resolve a run's target into the config that will actually run.
-
-    Three forms (#74): a pinned `agent_id`, an `agent_name` resolved to
-    whatever is published right now, and an `inline` config with no row at all
-    — which is also the sandbox an operator points a scenario at when its tools
-    have real side effects.
-    """
-    kind = target.get("type")
-    if kind == "agent":
-        return await _resolve_by_id(
-            session, project_id=project_id, raw_id=target.get("agent_id")
-        )
-    if kind == "agent_name":
-        return await _resolve_by_name(
-            session,
-            project_id=project_id,
-            name=target.get("name"),
-            environment=str(target.get("environment") or "production"),
-        )
-    if kind == "inline":
-        return _resolve_inline(project_id=project_id, blob=target.get("agent"))
-    raise TargetError(
-        f"unsupported target type {kind!r} — one of {', '.join(_TARGET_TYPES)}"
-    )
 
 
 def harness_config(parsed: Any = None) -> dict[str, Any]:
@@ -292,30 +170,6 @@ def resolved_scenario_snapshot(
         "judge": judge,
         "simulator": simulator,
     }
-
-
-def derive_status(outcomes: list[IterationOutcome]) -> tuple[EvalRunStatus, int, int]:
-    """The run's verdict and its two counts.
-
-    No iteration reached a verdict -> `errored`: the harness never told us
-    anything about the agent, and reporting that as a failure is how a suite
-    loses its audience. Otherwise any failed iteration fails the run, since a
-    scripted scenario that fails once has found something real.
-
-    An unmocked tool errors the **run**, whatever the other iterations did
-    (#71). The agent asked for something the scenario forgot to mock, so the
-    scenario is misconfigured and no rate over it means anything — and a
-    forgotten mock that reported PASSED because four other iterations never
-    reached the tool is exactly the accident the policy exists to prevent.
-    """
-    passed = sum(1 for o in outcomes if o.passed is True)
-    failed = sum(1 for o in outcomes if o.passed is False)
-    if any(o.refused_tool for o in outcomes):
-        return EvalRunStatus.ERRORED, 0, 0
-    if passed == 0 and failed == 0:
-        return EvalRunStatus.ERRORED, 0, 0
-    status = EvalRunStatus.FAILED if failed else EvalRunStatus.PASSED
-    return status, passed, failed
 
 
 # The floor under a derived per-iteration budget (#93). The whole-run budget
@@ -622,63 +476,6 @@ async def _record_unrunnable(session: Any, run: Any, exc: Exception) -> None:
         )
 
 
-def _warn_unmatched_mocks(
-    tool_mocks: dict[str, Any], target: ResolvedTarget, *, run_id: UUID
-) -> list[dict[str, Any]]:
-    """Say so when a mock names a tool this run can never call.
-
-    An eval builds its pipeline through `build_call_pipeline`, which takes no
-    MCP manager, so an agent's MCP servers are neither connected nor
-    discovered: nothing is contacted (which is the point), but the model is
-    never shown those tools either, and a mock keyed to one sits there meaning
-    nothing. A typo in a mock's name looks exactly the same. Silence is the
-    worst of the three, since a mock that never fires reads as a tool that was
-    never called.
-
-    ponytail: a warning, not a rejection — the agent can be edited after the
-    scenario was written, and failing a queued run over a stale mock helps
-    nobody. Advertising mocked-but-undiscovered tools to the model is the real
-    fix, and needs a schema the mock does not carry today (#74's inline targets
-    are the sanctioned way to give an eval a tool surface of its own).
-    """
-    if not tool_mocks:
-        return []
-    from turncall.domain.models import BUILTIN_TOOL_NAMES
-
-    known = {t.name for t in target.config.tools} | set(BUILTIN_TOOL_NAMES)
-    unmatched = sorted(set(tool_mocks) - known)
-    if not unmatched:
-        return []
-    servers = len(target.config.mcp_servers)
-    logger.warning(
-        "eval_mock_matches_no_tool",
-        run_id=str(run_id),
-        tools=unmatched,
-        mcp_servers=servers,
-    )
-    # Returned as well as logged (#96): the log is the worker's container and
-    # the author reads the run. The MCP server count is the valuable half —
-    # it is what says "this is the MCP limitation, not your typo".
-    return [
-        {
-            "code": "mock_matches_no_tool",
-            "message": (
-                f"{len(unmatched)} mock(s) name a tool this run cannot call: "
-                + ", ".join(unmatched)
-                + (
-                    f". The agent has {servers} MCP server(s), whose tools an "
-                    "eval never connects or advertises — a mock naming one can "
-                    "never fire."
-                    if servers
-                    else ". Check the tool name against the agent's tools."
-                )
-            ),
-            "tools": unmatched,
-            "mcp_servers": servers,
-        }
-    ]
-
-
 def _parse_for_run(
     run: Any, modality: EvalModality, settings: Any = None
 ) -> tuple[EvalKind, Any]:
@@ -732,91 +529,6 @@ def _platform_models(
 # What makes two runs of one scenario comparable. A verdict is the judge's, so
 # a baseline that moved because the judge moved is not a regression — and read
 # off the row alone, the two are indistinguishable (#119).
-_JUDGE_KEYS = (
-    "judge_provider",
-    "judge_model",
-    "judge_temperature",
-    "judge_service",
-    "judge_factory",
-)
-
-
-async def _warn_judge_changed(
-    session: Any, run: Any, harness: dict[str, Any]
-) -> list[dict[str, Any]]:
-    """Say so when this scenario's last verdict came from a different judge.
-
-    One indexed query against `scenario_id`, and only for a stored scenario: an
-    inline one (#77) has no history to differ from, and neither does the first
-    run of anything.
-    """
-    from turncall.storage.repositories import eval_repo
-
-    if run.scenario_id is None:
-        return []
-    previous = await eval_repo.last_judged_harness(
-        session, scenario_id=run.scenario_id, excluding=run.id
-    )
-    if not isinstance(previous, dict) or not previous:
-        # Nothing to compare against: no earlier verdict, or a snapshot that is
-        # not a mapping — `harness_config` is JSONB and a row written by hand
-        # can hold anything.
-        return []
-
-    # Only keys the previous snapshot actually recorded. `judge_provider` and
-    # `judge_temperature` arrived with this slice, so every older row is
-    # missing them — comparing against that absence would announce a judge
-    # change on the next run of every scenario in the database.
-    changed = {
-        key: {"previous": previous.get(key), "current": harness.get(key)}
-        for key in _JUDGE_KEYS
-        if key in previous and previous.get(key) != harness.get(key)
-    }
-    if not changed:
-        return []
-    return [
-        {
-            "code": "judge_changed",
-            "message": (
-                "this scenario's previous verdict was decided by a different "
-                "judge: "
-                + "; ".join(
-                    f"{key} {entry['previous']!r} -> {entry['current']!r}"
-                    for key, entry in changed.items()
-                )
-                + ". A result that moved may be the judge moving, not the agent."
-            ),
-            "judge": changed,
-        }
-    ]
-
-
-def _warn_worker_stale(harness: dict[str, Any]) -> list[dict[str, Any]]:
-    """Say so when the worker is older than the code it is running.
-
-    The failure this exists for is silent by construction: the run succeeds,
-    the verdict looks ordinary, and the feature the scenario depends on was
-    simply not in the process. It belongs on the run rather than in a log,
-    because the log is not what anyone reads when a result surprises them.
-    """
-    if not harness.get("worker_stale"):
-        return []
-    return [
-        {
-            "code": "worker_stale",
-            "message": (
-                "this run was executed by a worker started at "
-                f"{harness.get('worker_started_at')}, before the code it runs "
-                f"was last changed ({harness.get('worker_source_mtime')}). "
-                "Anything added since is not in this result — restart the "
-                "eval worker."
-            ),
-            "worker_started_at": harness.get("worker_started_at"),
-            "worker_source_mtime": harness.get("worker_source_mtime"),
-        }
-    ]
-
-
 async def _plan_run(
     session: Any, run: Any, *, settings: Any, session_factory: Any
 ) -> IterationPlan | None:
@@ -846,9 +558,9 @@ async def _plan_run(
     # say about itself.
     harness = harness_config(parsed)
     warnings = scenario_mod.assertion_warnings(parsed)
-    warnings += _warn_unmatched_mocks(tool_mocks, target, run_id=run.id)
-    warnings += await _warn_judge_changed(session, run, harness)
-    warnings += _warn_worker_stale(harness)
+    warnings += warn_unmatched_mocks(tool_mocks, target, run_id=run.id)
+    warnings += await warn_judge_changed(session, run, harness)
+    warnings += warn_worker_stale(harness)
     if live_tools and (target.config.tools or target.config.mcp_servers):
         # The scenario typed the word, so this is allowed — but a real webhook
         # fires on every iteration, and the run's record is where someone

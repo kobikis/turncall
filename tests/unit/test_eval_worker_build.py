@@ -61,9 +61,9 @@ class TestTheSnapshotSaysWhatRanIt:
 
 class TestTheRunSaysSo:
     def test_a_stale_worker_warns_on_the_run(self) -> None:
-        from turncall.evals.runner import _warn_worker_stale
+        from turncall.evals.run_warnings import warn_worker_stale
 
-        warnings = _warn_worker_stale(
+        warnings = warn_worker_stale(
             {
                 "worker_stale": True,
                 "worker_started_at": "2026-09-25T05:59:00+00:00",
@@ -77,16 +77,16 @@ class TestTheRunSaysSo:
         assert "08:36" in warnings[0]["message"]
 
     def test_a_current_worker_says_nothing(self) -> None:
-        from turncall.evals.runner import _warn_worker_stale
+        from turncall.evals.run_warnings import warn_worker_stale
 
-        assert _warn_worker_stale({"worker_stale": False}) == []
+        assert warn_worker_stale({"worker_stale": False}) == []
 
     def test_an_older_run_without_the_field_says_nothing(self) -> None:
         """Every row written before this has no such key, and reading its
         absence as staleness would warn about every run in the database."""
-        from turncall.evals.runner import _warn_worker_stale
+        from turncall.evals.run_warnings import warn_worker_stale
 
-        assert _warn_worker_stale({}) == []
+        assert warn_worker_stale({}) == []
 
     def test_the_harness_snapshot_carries_it(self) -> None:
         from turncall.evals.runner import harness_config
