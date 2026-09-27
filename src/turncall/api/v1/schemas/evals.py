@@ -79,7 +79,9 @@ def _validated_kind(definition: dict[str, Any], name: str) -> EvalKind:
         raise ValueError(str(exc)) from exc
 
 
-def _validated_roles(judge: Any, simulator: Any) -> None:
+def _validated_roles(
+    judge: "EvalModelSchema | None", simulator: "EvalModelSchema | None"
+) -> None:
     """Refuse a block naming a provider that role cannot be (#141).
 
     The allowlist is split by role — a judge only answers questions, while a

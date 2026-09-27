@@ -19,7 +19,8 @@ import pytest
 from turncall.domain.enums import EvalModality
 from turncall.evals.judges import default_block
 from turncall.evals.run_warnings import warn_judge_changed
-from turncall.evals.runner import _parse_for_run, harness_config
+from turncall.evals.runner import _parse_for_run
+from turncall.evals.snapshots import harness_config
 
 pytestmark = pytest.mark.unit
 

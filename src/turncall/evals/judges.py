@@ -165,21 +165,11 @@ def jev(config: dict[str, Any]) -> Any:
     has to name one — pipecat's fallback for a classifier with no explainer is a
     local Ollama nobody configured (#139).
     """
-    try:
-        from pipecat.classifiers.jev.classifier import JevClassifier
-    except ImportError as exc:
-        # `pipecat-ai[jev]`, an extra the base install deliberately does not
-        # carry: no live call ever contacts this vendor.
-        raise JudgeUnavailable(
-            "the jev judge needs the 'jev' extra, which is not installed: "
-            f"pip install 'turncall[evals-jev]' ({exc})"
-        ) from exc
-
     api_key = _platform_key("typesafe")
     if not api_key:
         raise JudgeUnavailable(
             "the jev judge needs TYPESAFE_API_KEY, which this deployment has "
-            "not set. The extra is installed; only the credential is missing."
+            "not set. Only the credential is missing — not the extra."
         )
     built: dict[str, Any] = {"api_key": api_key}
     # Jev's own pinned defaults otherwise — a model and a base URL it chose so
@@ -188,7 +178,23 @@ def jev(config: dict[str, Any]) -> Any:
         built["model"] = config["model"]
     if config.get("endpoint"):
         built["base_url"] = config["endpoint"]
-    return JevClassifier(**built)
+
+    # The import *and* the construction, in one guard. `pipecat-ai[jev]` is
+    # `httpx[http2]`, and `JevClient` opens its pool with `http2=True` — so the
+    # extra's real absence is httpx raising `ImportError: Using http2=True, but
+    # the 'h2' package is not installed` from **inside** the constructor, not
+    # from the import above it. Guarding only the import left that as a raw
+    # ImportError naming h2 and nothing about how to fix it.
+    try:
+        from pipecat.classifiers.jev.classifier import JevClassifier
+
+        return JevClassifier(**built)
+    except ImportError as exc:
+        raise JudgeUnavailable(
+            "the jev judge needs the 'evals-jev' extra, which is not fully "
+            f"installed: pip install 'turncall[evals-jev]' ({exc}). The "
+            "credential is set; only the dependency is missing."
+        ) from exc
 
 
 def _platform_key(attr: str) -> str:

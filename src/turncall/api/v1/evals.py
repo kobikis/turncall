@@ -32,8 +32,9 @@ from turncall.auth import Auth, WriteAuth
 from turncall.config import get_settings
 from turncall.domain.enums import EvalKind, EvalRunStatus, EvalToolPolicy
 from turncall.evals import queue as eval_queue
-from turncall.evals.runner import batch_outcome, resolved_scenario_snapshot
+from turncall.evals.runner import batch_outcome
 from turncall.evals.scenario import ScenarioError, validate
+from turncall.evals.snapshots import resolved_scenario_snapshot
 from turncall.storage.repositories import eval_repo
 
 router = APIRouter(prefix="/eval-scenarios", tags=["evals"])

@@ -384,9 +384,15 @@ def compile_model_block(
         return None
     from turncall.evals.judges import JUDGE_PROVIDERS, PROVIDERS
 
-    # A judge may be anything that answers a question; a simulator has to be an
-    # LLM service, because the persona is linked into a pipeline to speak.
-    providers = JUDGE_PROVIDERS if role == "judge" else PROVIDERS
+    # A judge may be anything that answers a question; the other two roles have
+    # to be LLM services — the persona is linked into a pipeline to speak, and
+    # the explainer writes prose. Spelled out per role rather than as "judge or
+    # else", so an explainer's rule is a statement rather than a fall-through.
+    providers = {
+        "judge": JUDGE_PROVIDERS,
+        "simulator": PROVIDERS,
+        "explainer": PROVIDERS,
+    }.get(role, PROVIDERS)
 
     provider = str(block.get("provider") or "ollama")
     if provider not in providers:
@@ -413,15 +419,17 @@ def _takes_temperature(provider: str, model: str | None) -> bool:
 
     Anthropic never does — current Claude models answer `400 temperature is
     deprecated for this model`, which is the bug that made the service
-    unusable on the call path. An OpenAI reasoning model rejects it too. The
-    rule travels with the model rather than the caller, so a scenario that
-    names one is not punished for a parameter it never asked about.
+    unusable on the call path. An OpenAI reasoning model rejects it too, and a
+    classifier judge has no temperature to take. The rule travels with the
+    model rather than the caller, so a scenario that names one is not punished
+    for a parameter it never asked about.
     """
-    if provider == "anthropic":
-        return False
-    # Jev is a classifier, not a sampler: there is no temperature to send, and
-    # a recorded one would describe a request nobody made.
-    if provider == "jev":
+    from turncall.evals.judges import CLASSIFIER_ONLY_JUDGES
+
+    # Anthropic by vendor decision, a classifier because it is not a sampler at
+    # all — derived from the one set that already names them, so a second
+    # classifier judge does not have to remember this rule too.
+    if provider == "anthropic" or provider in CLASSIFIER_ONLY_JUDGES:
         return False
     name = (model or "").lower()
     return not any(name.startswith(prefix) for prefix in _REASONING_PREFIXES)

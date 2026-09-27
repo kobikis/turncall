@@ -4,7 +4,7 @@ from enum import StrEnum
 from functools import lru_cache
 
 from dotenv import load_dotenv
-from pydantic import Field, PostgresDsn, RedisDsn
+from pydantic import Field, PostgresDsn, RedisDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from turncall.domain.enums import EvalModelProvider
@@ -268,6 +268,29 @@ class EvalSettings(BaseSettings):
     simulator_provider: EvalModelProvider | None = None
     simulator_model: str | None = None
     simulator_temperature: float | None = None
+
+    @field_validator("simulator_provider")
+    @classmethod
+    def _persona_must_be_an_llm(
+        cls, value: EvalModelProvider | None
+    ) -> EvalModelProvider | None:
+        """A persona is linked into a pipeline to speak, so a classifier cannot
+        be one (#141) — the provider set is shared with the judge, which may be.
+
+        Refused at startup rather than per run: the alternative is every
+        simulation on the platform erroring with nothing saying the setting is
+        the cause.
+        """
+        from turncall.evals.judges import CLASSIFIER_ONLY_JUDGES
+
+        if value is not None and value.value in CLASSIFIER_ONLY_JUDGES:
+            raise ValueError(
+                f"EVAL_SIMULATOR_PROVIDER cannot be {value.value!r}: it is a "
+                "classifier, and the persona is an LLM linked into a pipeline "
+                "to speak. It is available as EVAL_JUDGE_PROVIDER."
+            )
+        return value
+
     # Where pipecat's caching TTS keeps the caller's synthesized turns (#72),
     # keyed by service/voice/model/language/speed/text. Pipecat's own default
     # is under $HOME, which a container loses on every recreate — a scripted

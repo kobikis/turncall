@@ -98,7 +98,7 @@ class TestTheCompiledBlock:
 
     def test_every_factory_reverse_resolves_to_its_provider(self) -> None:
         """`harness_config` names the provider by reading the mapping backwards
-        (`runner._judge_provider`), so a path missing from it records no
+        (`snapshots._judge_provider`), so a path missing from it records no
         provider at all and nothing fails. Merging the two maps as dicts
         collides on the provider *name* and silently loses `judges.ollama`."""
         from turncall.evals.judges import JUDGE_PROVIDERS, PROVIDER_BY_FACTORY
@@ -157,7 +157,7 @@ class TestTheRunRecordsIt:
     def test_the_snapshot_carries_the_judge(self) -> None:
         """A verdict cannot be compared with the next one without knowing which
         model answered — the argument `harness_config` already makes."""
-        from turncall.evals.runner import resolved_scenario_snapshot
+        from turncall.evals.snapshots import resolved_scenario_snapshot
 
         snapshot = resolved_scenario_snapshot(
             definition=SCRIPTED,

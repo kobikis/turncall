@@ -32,8 +32,9 @@ from turncall.evals.judges import (
     PROVIDERS,
     JudgeUnavailable,
 )
-from turncall.evals.runner import _parse_for_run, harness_config
+from turncall.evals.runner import _parse_for_run
 from turncall.evals.scenario import ScenarioError, compile_model_block
+from turncall.evals.snapshots import harness_config
 
 pytestmark = pytest.mark.unit
 
@@ -87,6 +88,15 @@ class TestJevIsJudgeOnly:
                 name="wrong block", definition=SCRIPTED, simulator={"provider": "jev"}
             )
 
+    def test_the_platform_setting_refuses_it_for_the_persona(self) -> None:
+        """Refused at startup rather than per run: every simulation on the
+        platform would otherwise error with nothing naming the cause."""
+        from turncall.config.settings import EvalSettings
+
+        assert EvalSettings(judge_provider="jev").judge_provider == "jev"
+        with pytest.raises(ValueError, match="EVAL_SIMULATOR_PROVIDER"):
+            EvalSettings(simulator_provider="jev")
+
     def test_an_update_refuses_it_too(self) -> None:
         with pytest.raises(ValueError, match="unknown simulator provider"):
             UpdateEvalScenarioRequest(simulator={"provider": "jev"})
@@ -130,6 +140,18 @@ class TestItBringsItsOwnExplainer:
         assert snapshot["explainer_provider"] == "openai"
         assert snapshot["explainer_model"] == "gpt-4o-mini"
 
+    def test_an_ollama_explainer_is_the_plain_llm_not_the_judges_wrapper(self) -> None:
+        """An explainer is asked for prose through `llm_service_from_config`, so
+        it has to be an LLM service. TurnCall's `ollama` judge factory returns an
+        `LLMClassifier` for its wider timeout, and that has no `run_inference`
+        contract the explainer can use."""
+        _kind, parsed = _parse_for_run(
+            _run(judge={"provider": "jev"}),
+            EvalModality.TEXT,
+            _settings(judge_provider="ollama", judge_model="gemma4:12b"),
+        )
+        assert parsed.judge["explainer"]["factory"] == "turncall.evals.judges.ollama"
+
     def test_with_no_platform_judge_reasons_are_off_not_broken(self) -> None:
         """Explicitly off, rather than left to resolve into a service nobody
         configured: probabilities and no prose beats a run that fails."""
@@ -138,6 +160,15 @@ class TestItBringsItsOwnExplainer:
         )
         assert parsed.judge["explainer"] is False
         assert harness_config(parsed)["explainer_used"] is False
+
+    def test_a_raw_classifier_block_records_pipecats_fallback(self) -> None:
+        """A raw `judge.eval:` wins by design, explainer included — and pipecat
+        explains a classifier that named none with its own default LLM. Recording
+        the judge there would claim a classifier wrote prose it cannot write."""
+        snapshot = harness_config(SimpleNamespace(judge={"factory": JEV_FACTORY}))
+        assert snapshot["judge_provider"] == "jev"
+        assert snapshot["explainer_used"] is True
+        assert snapshot["explainer_provider"] == "ollama"
 
     def test_jev_never_explains_itself(self) -> None:
         _kind, parsed = _parse_for_run(
@@ -215,12 +246,33 @@ class TestTheDeploymentDecidesAtRunTime:
 
         def _no_jev(name, *args, **kwargs):
             if name.startswith("pipecat.classifiers.jev"):
-                raise ImportError("No module named 'httpx'")
+                raise ImportError("No module named 'pipecat.classifiers.jev'")
             return real_import(name, *args, **kwargs)
 
         monkeypatch.setattr(builtins, "__import__", _no_jev)
+        monkeypatch.setattr(judges, "_platform_key", lambda attr: "ts-test")
         with pytest.raises(JudgeUnavailable, match="evals-jev"):
             judges.jev({})
+
+    def test_the_extra_is_http2_and_that_failure_is_caught_too(
+        self, monkeypatch
+    ) -> None:
+        """`pipecat-ai[jev]` is `httpx[http2]`, and `JevClient` opens its pool
+        with `http2=True` — so the extra's real absence is httpx raising from
+        *inside* the constructor. Guarding only the import left a raw
+        `ImportError: ... the 'h2' package is not installed`."""
+        import pipecat.classifiers.jev.classifier as jev_mod
+
+        def _no_h2(**_kwargs):
+            raise ImportError(
+                "Using http2=True, but the 'h2' package is not installed."
+            )
+
+        monkeypatch.setattr(jev_mod, "JevClassifier", _no_h2)
+        monkeypatch.setattr(judges, "_platform_key", lambda attr: "ts-test")
+        with pytest.raises(JudgeUnavailable, match="evals-jev") as caught:
+            judges.jev({})
+        assert "h2" in str(caught.value)
 
     def test_the_key_comes_from_the_platform(self, monkeypatch) -> None:
         import pipecat.classifiers.jev.classifier as jev_mod

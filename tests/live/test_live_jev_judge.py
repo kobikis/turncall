@@ -17,6 +17,8 @@ Cheap: two classifications. Live: needs TYPESAFE_API_KEY and the `evals-jev`
 extra. Skipped without either.
 """
 
+from typing import Any
+
 import pytest
 
 pytestmark = [pytest.mark.live, pytest.mark.asyncio]
@@ -27,7 +29,7 @@ CONVERSATION = [
 ]
 
 
-def _judge(judge_block: dict):
+def _judge(judge_block: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
     """The judge a run would build from a scenario naming `provider: jev`.
 
     `with_models` compiles the typed block and decides the explainer; pipecat's
