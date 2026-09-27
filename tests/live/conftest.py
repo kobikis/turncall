@@ -35,6 +35,18 @@ def google_key() -> str:
 
 
 @pytest.fixture
+def typesafe_key() -> str:
+    """Jev, the eval judge's classifier (#141). Also needs the `evals-jev`
+    extra, which the base install deliberately does not carry."""
+    key = require("TYPESAFE_API_KEY")
+    pytest.importorskip(
+        "pipecat.classifiers.jev.classifier",
+        reason="the 'evals-jev' extra is not installed",
+    )
+    return key
+
+
+@pytest.fixture
 def deepgram_key() -> str:
     return require("DEEPGRAM_API_KEY")
 

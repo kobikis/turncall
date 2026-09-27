@@ -83,6 +83,18 @@ class OpenRouterSettings(BaseSettings):
     api_key: str = Field(default="", alias="OPENROUTER_API_KEY")
 
 
+class TypeSafeSettings(BaseSettings):
+    """Jev, TypeSafe's classification model (#141).
+
+    Evals only. No live call contacts this vendor, and the dependency is an
+    optional extra (`turncall[evals-jev]`) for that reason.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="TYPESAFE_")
+
+    api_key: str = Field(default="", alias="TYPESAFE_API_KEY")
+
+
 class WhatsAppSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="WHATSAPP_")
 
@@ -293,6 +305,7 @@ class Settings(BaseSettings):
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     cartesia: CartesiaSettings = Field(default_factory=CartesiaSettings)
     openrouter: OpenRouterSettings = Field(default_factory=OpenRouterSettings)
+    typesafe: TypeSafeSettings = Field(default_factory=TypeSafeSettings)
     whatsapp: WhatsAppSettings = Field(default_factory=WhatsAppSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)

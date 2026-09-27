@@ -38,9 +38,13 @@ PROVIDERS: dict[str, str] = {
 # can be widened. Handing that wrapper to a simulator raises
 # `AttributeError: 'LLMClassifier' object has no attribute 'link'` at pipeline
 # build, which is why the two roles get two maps rather than one with a check.
+# `jev` is the reason this map is a superset rather than the same one: it is a
+# classifier and nothing else, so a persona naming it fails `PROVIDERS`' own
+# unknown-provider check with the role in the message — no rule of its own.
 JUDGE_PROVIDERS: dict[str, str] = {
     **PROVIDERS,
     "ollama": "turncall.evals.judges.ollama_judge",
+    "jev": "turncall.evals.judges.jev",
 }
 
 # The judge providers that are **only** a classifier — nothing an explainer
@@ -51,7 +55,7 @@ JUDGE_PROVIDERS: dict[str, str] = {
 #
 # `ollama` is not in here: its factory returns an `LLMClassifier`, and pipecat
 # explains with that classifier's own `llm` — the same model that judged.
-CLASSIFIER_ONLY_JUDGES: frozenset[str] = frozenset()
+CLASSIFIER_ONLY_JUDGES: frozenset[str] = frozenset({"jev"})
 
 # What each provider runs when a scenario names no model. Pipecat's own default
 # judge is a local Ollama; the hosted ones pick a small, cheap model, because a
@@ -137,6 +141,54 @@ def ollama_judge(config: dict[str, Any]) -> Any:
     from pipecat.classifiers.llm.classifier import LLMClassifier
 
     return LLMClassifier(llm=ollama(config), timeout=_LOCAL_JUDGE_TIMEOUT_S)
+
+
+class JudgeUnavailable(RuntimeError):
+    """A judge this deployment cannot build (#141).
+
+    Raised at run time, never at create: a credential and an installed extra
+    are properties of a deployment, and a stored scenario outlives the
+    deployment it was written against. Rejecting `provider: jev` at create
+    would invalidate a scenario written before the platform was provisioned.
+
+    The message has one job — say which of the two is missing. "the judge was
+    unreachable" sends someone looking at their scenario.
+    """
+
+
+def jev(config: dict[str, Any]) -> Any:
+    """TypeSafe's Jev as the judge: a classifier, not an LLM (#141).
+
+    A few hundred milliseconds per question against the several seconds a local
+    LLM takes, and a *calibrated* probability rather than a model's own guess at
+    its confidence. It writes no prose, which is why `scenario.explainer_for`
+    has to name one — pipecat's fallback for a classifier with no explainer is a
+    local Ollama nobody configured (#139).
+    """
+    try:
+        from pipecat.classifiers.jev.classifier import JevClassifier
+    except ImportError as exc:
+        # `pipecat-ai[jev]`, an extra the base install deliberately does not
+        # carry: no live call ever contacts this vendor.
+        raise JudgeUnavailable(
+            "the jev judge needs the 'jev' extra, which is not installed: "
+            f"pip install 'turncall[evals-jev]' ({exc})"
+        ) from exc
+
+    api_key = _platform_key("typesafe")
+    if not api_key:
+        raise JudgeUnavailable(
+            "the jev judge needs TYPESAFE_API_KEY, which this deployment has "
+            "not set. The extra is installed; only the credential is missing."
+        )
+    built: dict[str, Any] = {"api_key": api_key}
+    # Jev's own pinned defaults otherwise — a model and a base URL it chose so
+    # that thresholds tuned against them hold.
+    if config.get("model"):
+        built["model"] = config["model"]
+    if config.get("endpoint"):
+        built["base_url"] = config["endpoint"]
+    return JevClassifier(**built)
 
 
 def _platform_key(attr: str) -> str:

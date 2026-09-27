@@ -441,6 +441,18 @@ reasons, a second model, the **explainer**, is asked for the reason behind every
 every verdict it is unsure of. The explainer never changes a verdict; where the two
 disagree, the reason says so.
 
+Which model explains is TurnCall's choice, not pipecat's (#139). For an LLM-backed judge
+pipecat explains with the judging model itself, which is what anyone would expect and is
+left alone. For a judge that is **only** a classifier — `jev` — there is no such model,
+and pipecat's fallback is its own default LLM service, a local Ollama: a judge configured
+against a hosted vendor would silently acquire a dependency on a service nobody
+provisioned, and say so as an unreachable connection mid-run. So the explainer is compiled
+from the platform's configured judge, or reasons are turned **off** explicitly where the
+platform has configured none. `harness_config` records `explainer_used` /
+`explainer_provider` / `explainer_model`, and the `judge_changed` warning covers them.
+_Avoid_: reading a verdict with no prose as a broken run — probabilities and no reason is
+the deliberate outcome on an unconfigured platform.
+
 That confidence is recorded beside every verdict in a [[run]]'s `results` (#138), so a
 marginal call and a clear-cut failure stop reading the same — nothing aggregates it and
 nothing fails on it. `null` is "the judge reported none", which a `text_contains` or a
@@ -450,10 +462,22 @@ _Avoid_: averaging it into a run-level number, or reading `null` as an unsure ve
 
 A scenario names its own with `judge: {provider, model, temperature, endpoint}` and
 `simulator: {...}` — TurnCall columns beside `tool_mocks`, compiled into pipecat's blocks
-at parse time. `provider` is a closed set (`ollama`, `openai`, `anthropic`) mapping to
+at parse time. `provider` is a closed set (`ollama`, `openai`, `anthropic`, `jev`) mapping to
 factories **TurnCall ships**, because pipecat's own escape hatch is `factory`: a dotted
 path it hands to `importlib.import_module`, which from a request body is remote code
-execution. The key is the platform's, never the scenario's. `EVAL_JUDGE_PROVIDER` /
+execution. The key is the platform's, never the scenario's.
+
+`jev` (#141) is TypeSafe's [[classifier]]: a few hundred milliseconds per verdict against
+several seconds for a local LLM, and a *calibrated* probability rather than a model's own
+guess at its confidence. **Judge-only, and structurally so** — the allowlist is split by
+role (`PROVIDERS` is what a [[persona]] may be, since a persona is linked into a pipeline
+to speak; `JUDGE_PROVIDERS` is the superset), so a `simulator:` naming it fails the
+existing unknown-provider check with the role in the message rather than needing a rule of
+its own. It takes no temperature — a classifier is not a sampler. `TYPESAFE_API_KEY` and
+the `evals-jev` extra are both properties of a *deployment*, so a scenario naming `jev`
+stores and reads back on a platform with neither; the **run** is what fails, naming which
+of the two is missing. Not a candidate for [[voicemail detection|Voicemail detector]]:
+that is the live call path, where a new vendor gets its own measurement (ADR-0019). `EVAL_JUDGE_PROVIDER` /
 `_MODEL` / `_TEMPERATURE` set one for the whole platform; precedence is narrowest-wins
 and a block is taken whole. A **run** cannot override it — that would make two runs of one
 scenario incomparable with nothing on either row saying why.
@@ -461,7 +485,7 @@ scenario incomparable with nothing on either row saying why.
 The judge is the weakest component: verdicts are cached within a run but not across runs,
 so a scenario can flip with no code change, and a silent provider-side model update moves
 the whole baseline. `harness_config` records provider, model, temperature, service,
-factory and whether a judge was asked anything at all — and a run whose judge differs
+factory, the explainer's provider and model, and whether a judge was asked anything at all — and a run whose judge differs
 from this scenario's last verdict carries a `judge_changed` warning, because otherwise a
 red run reads identically whether the agent regressed or the judge moved. See ADR-0018.
 _Avoid_: reading a recorded judge model as proof one ran — `judge_used: false` means

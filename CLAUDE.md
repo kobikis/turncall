@@ -98,8 +98,9 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 | `API_KEY_HASH_SECRET` | Prod | Pepper for the HMAC-SHA256 hashing of API keys — a DB leak alone can't brute-force keys without it. **Set a strong value once and don't rotate** (rotating invalidates peppered keys; pre-pepper keys keep working via dual-read + upgrade-on-use). Default `change-me-in-production` gives no real protection until set |
 | `EVAL_TTS_CACHE_DIR` | No | Where the caller's synthesized turns are cached in audio runs (default `./storage/eval-tts-cache`). Pipecat's own default lives under `$HOME`, which a container loses on recreate — every repeat run would then re-synthesize every caller turn. Mount it |
 | `EVAL_MAX_CONCURRENT_RUNS` | No | Scenario-iterations the eval worker runs at once (default `4`). The worker runs the bot pipeline **and** the harness — which itself runs a persona LLM, a TTS, an STT and the judge — so in audio mode one run is roughly double a real call's service load in one event loop. A starting point, not a measurement. `EVAL_MAX_RUN_DURATION_SECONDS` (default `900`) is the janitor's cutoff for reclaiming a run a crashed worker left claimed, as `errored`; `EVAL_MAX_QUEUED_SECONDS` (`3600`) is the same cutoff for a run **nothing ever claimed** — the API committed the row then died before the queue push — and is longer, because waiting behind a backlog is normal where running for 15 minutes is not. `EVAL_JANITOR_INTERVAL_SECONDS` (`60`) bounds the sweep. One request's paid LLM work has **two** axes and needs both: `EVAL_MAX_ITERATIONS` (`50`) per run, and `EVAL_MAX_SCENARIOS_PER_REQUEST` (`50`) on a `tag`'s fan-out — a tag matching more than that is refused naming the count, never truncated, because a batch that ran 50 of 200 scenarios reports a verdict for a suite that never ran. See `adr/0018` |
-| `EVAL_JUDGE_PROVIDER` | No | The LLM that decides every verdict, set once for the platform (#119) — one of `ollama` (pipecat's own, the default when nothing is set), `openai`, `anthropic`. With `EVAL_JUDGE_MODEL` (that provider's own default when empty) and `EVAL_JUDGE_TEMPERATURE` (unset by default — a verdict that varies run to run is not a verdict; dropped entirely for Anthropic and the OpenAI reasoning families, as on the call path). `EVAL_SIMULATOR_PROVIDER` / `_MODEL` / `_TEMPERATURE` are the same three for the LLM that plays the caller in a simulation. A **scenario's** own `judge:`/`simulator:` block wins, taken whole; a `judge` on a **run** request is a 422, since a run is what it was queued as |
+| `EVAL_JUDGE_PROVIDER` | No | What decides every verdict, set once for the platform (#119) — one of `ollama` (pipecat's own, the default when nothing is set), `openai`, `anthropic`, `jev` (#141: TypeSafe's classifier — a few hundred ms per verdict with a *calibrated* probability, judge-only, needs `TYPESAFE_API_KEY` + the `evals-jev` extra, and supplies no prose so the **explainer** comes from this same setting). With `EVAL_JUDGE_MODEL` (that provider's own default when empty) and `EVAL_JUDGE_TEMPERATURE` (unset by default — a verdict that varies run to run is not a verdict; dropped entirely for Anthropic and the OpenAI reasoning families, as on the call path). `EVAL_SIMULATOR_PROVIDER` / `_MODEL` / `_TEMPERATURE` are the same three for the LLM that plays the caller in a simulation. A **scenario's** own `judge:`/`simulator:` block wins, taken whole; a `judge` on a **run** request is a 422, since a run is what it was queued as |
 | `PROJECT_PURGE_RETENTION_DAYS` | No | Days a soft-deleted project (ADR-0011) is kept before the hourly purge job hard-deletes it (cascade). Default `30`; `0` disables |
+| `TYPESAFE_API_KEY` | No | Jev, for a `jev` eval judge (#141). Evals only — no live call contacts this vendor, which is why the dependency is the optional `evals-jev` extra rather than a base one. Neither the key nor the extra is checked at scenario create: both are properties of a *deployment* and a stored scenario outlives the one it was written against, so the **run** fails, naming which of the two is missing |
 | `PLATFORM_API_KEY` | Prod | Privileged credential gating the unauthenticated bootstrap endpoints — project creation + first-API-key creation. Only the builder holds it; presented as the `X-Platform-Key` header. Empty default fails **closed** (rejects all bootstrap calls), so set it wherever those endpoints must work. TurnCall stays identity-free — this is a caller check, not a user |
 
 ## Providers (per-agent config)
@@ -659,11 +660,19 @@ The judge is pipecat's `EvalJudge`, **Ollama by default** — but a scenario can
 name another (#118): `judge: {provider, model, temperature, endpoint}` and
 `simulator: {...}` are TurnCall columns beside `tool_mocks`, compiled into
 pipecat's blocks at parse time. `provider` is a closed set (`ollama`, `openai`,
-`anthropic`) mapping to factories **TurnCall ships**, because pipecat's own
+`anthropic`, `jev`) mapping to factories **TurnCall ships**, because pipecat's own
 escape hatch is `factory` — a dotted path it hands to `importlib.import_module`,
 which from a request body is remote code execution. A definition naming one
-anywhere pipecat reads it (`judge.eval`, `judge.transcription`, `simulator`,
-`user.speech`) is refused at the API boundary. Temperature has no pipecat field
+anywhere pipecat reads it (`judge.eval`, `judge.eval.explainer`,
+`judge.transcription`, `simulator`, `user.speech`) is refused at the API boundary.
+
+`jev` (#141) is the one that is **judge-only**, and structurally rather than by
+a rule: the allowlist is split by role — `PROVIDERS` is what a persona may be,
+since it is linked into a pipeline to speak, and `JUDGE_PROVIDERS` is the
+superset pipecat accepts a classifier in — so `simulator: {provider: "jev"}`
+fails the existing unknown-provider check with the role in the message. It takes
+no temperature (a classifier is not a sampler), and it writes no prose, so the
+explainer question below is what makes it usable. Temperature has no pipecat field
 and rides in `extra`; it defaults to unset, and is dropped for models that
 reject it — Anthropic and the OpenAI reasoning families — by the same rule the
 call path follows. The **key is the platform's**, read from `ANTHROPIC_API_KEY`
@@ -691,16 +700,32 @@ carries its own, like the stored one it mirrors. On `PUT
 whenever they were sent, while every other field still only applies when it is
 not null. Without that a scenario's judge was permanent the moment it had one.
 
+**Who explained is TurnCall's choice too** (#139). Since 1.12 the verdict comes
+from a classifier, and a second model — the explainer — writes the reason behind
+every `no` and every verdict the judge was unsure of. For an LLM-backed judge
+pipecat explains with the judging model itself, which is left exactly alone. For
+a classifier-only judge (`jev`) there is no such model and pipecat falls back to
+**its own default LLM service, a local Ollama** — so a judge pointed at a hosted
+vendor would silently acquire a dependency on a service nobody provisioned, and
+say so as an unreachable connection mid-run. TurnCall compiles the explainer from
+the platform's configured judge instead, and where the platform has configured
+none it turns reasons **off** explicitly: a verdict with probabilities and no
+prose is worse than one with prose, and a verdict that *fails* on an
+unconfigured service is worse than both. A raw `explainer:` inside a stored
+`definition` still wins, like the rest of that block.
+
 Which judge answered is then recorded and **acted on**. `harness_config` carries
 `judge_provider` and `judge_temperature` beside `judge_service`/`judge_model`/
 `judge_factory` (the first two are what the dotted path and `extra` swallowed),
+plus `explainer_used`/`explainer_provider`/`explainer_model` — the absent-block
+case records the judging model, because that is the model that explained,
 and on `start_run` the resolved judge is compared with the last run of the same
 scenario that reached a verdict — one query on `ix_eval_runs_scenario`. A
 difference adds a `judge_changed` warning naming both, because a red run that
 nobody can attribute to a judge swap is the expensive version of this. Only keys
 the older snapshot actually recorded are compared: rows written before #119 have
-no `judge_provider`, and reading that absence as a change would announce one on
-every scenario's next run.
+no `judge_provider` and rows before #139 no `explainer_provider`, and reading
+that absence as a change would announce one on every scenario's next run.
 
 `harness_config` records **which code ran it** for the same reason:
 `worker_version`, `worker_started_at`, and `worker_stale` — true when the

@@ -419,6 +419,10 @@ def _takes_temperature(provider: str, model: str | None) -> bool:
     """
     if provider == "anthropic":
         return False
+    # Jev is a classifier, not a sampler: there is no temperature to send, and
+    # a recorded one would describe a request nobody made.
+    if provider == "jev":
+        return False
     name = (model or "").lower()
     return not any(name.startswith(prefix) for prefix in _REASONING_PREFIXES)
 

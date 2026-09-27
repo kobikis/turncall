@@ -229,11 +229,17 @@ class EvalModelProvider(StrEnum):
 
     `ollama` stays the default: it is pipecat's, it is local, and a judge that
     needs no key is what keeps an eval runnable on a laptop.
+
+    `jev` is judge-only, and structurally so: it is a classifier rather than an
+    LLM service, so it lives in `JUDGE_PROVIDERS` and not in `PROVIDERS`, and a
+    `simulator:` naming it fails the unknown-provider check with the role in the
+    message (#141).
     """
 
     OLLAMA = "ollama"
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    JEV = "jev"
 
 
 class EvalToolPolicy(StrEnum):
