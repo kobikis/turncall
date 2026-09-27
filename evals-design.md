@@ -643,6 +643,10 @@ it building the result objects the mappers read (the matcher for a scripted
 expectation, `_judge_conversation` for a simulation's), so every real run reads
 `null` today and starts carrying values with no change here.
 
+Both mappers live in `evals/result_mapping.py`, a pure function of a pipecat
+result with no session, settings or pipeline in sight; `evals/runner.py` keeps
+the orchestration that calls them.
+
 `EvalAssertionFailure` is the one result type pipecat shares across both kinds —
 that shared failure vocabulary is why one envelope works while the middles
 differ. `events_seen` and `debug_log` are large and only useful post-mortem:
