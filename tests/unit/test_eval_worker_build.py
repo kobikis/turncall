@@ -89,7 +89,7 @@ class TestTheRunSaysSo:
         assert warn_worker_stale({}) == []
 
     def test_the_harness_snapshot_carries_it(self) -> None:
-        from turncall.evals.runner import harness_config
+        from turncall.evals.snapshots import harness_config
 
         snapshot = harness_config(None)
         assert "worker_version" in snapshot

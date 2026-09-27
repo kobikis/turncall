@@ -38,10 +38,24 @@ PROVIDERS: dict[str, str] = {
 # can be widened. Handing that wrapper to a simulator raises
 # `AttributeError: 'LLMClassifier' object has no attribute 'link'` at pipeline
 # build, which is why the two roles get two maps rather than one with a check.
+# `jev` is the reason this map is a superset rather than the same one: it is a
+# classifier and nothing else, so a persona naming it fails `PROVIDERS`' own
+# unknown-provider check with the role in the message — no rule of its own.
 JUDGE_PROVIDERS: dict[str, str] = {
     **PROVIDERS,
     "ollama": "turncall.evals.judges.ollama_judge",
+    "jev": "turncall.evals.judges.jev",
 }
+
+# The judge providers that are **only** a classifier — nothing an explainer
+# could be. Pipecat resolves an absent `explainer:` for one of these to its own
+# default LLM service, a local Ollama, so a judge configured against a hosted
+# provider silently acquires a dependency on a service nobody provisioned and
+# the failure arrives as an unreachable connection mid-run (#139).
+#
+# `ollama` is not in here: its factory returns an `LLMClassifier`, and pipecat
+# explains with that classifier's own `llm` — the same model that judged.
+CLASSIFIER_ONLY_JUDGES: frozenset[str] = frozenset({"jev"})
 
 # What each provider runs when a scenario names no model. Pipecat's own default
 # judge is a local Ollama; the hosted ones pick a small, cheap model, because a
@@ -127,6 +141,60 @@ def ollama_judge(config: dict[str, Any]) -> Any:
     from pipecat.classifiers.llm.classifier import LLMClassifier
 
     return LLMClassifier(llm=ollama(config), timeout=_LOCAL_JUDGE_TIMEOUT_S)
+
+
+class JudgeUnavailable(RuntimeError):
+    """A judge this deployment cannot build (#141).
+
+    Raised at run time, never at create: a credential and an installed extra
+    are properties of a deployment, and a stored scenario outlives the
+    deployment it was written against. Rejecting `provider: jev` at create
+    would invalidate a scenario written before the platform was provisioned.
+
+    The message has one job — say which of the two is missing. "the judge was
+    unreachable" sends someone looking at their scenario.
+    """
+
+
+def jev(config: dict[str, Any]) -> Any:
+    """TypeSafe's Jev as the judge: a classifier, not an LLM (#141).
+
+    A few hundred milliseconds per question against the several seconds a local
+    LLM takes, and a *calibrated* probability rather than a model's own guess at
+    its confidence. It writes no prose, which is why `scenario.explainer_for`
+    has to name one — pipecat's fallback for a classifier with no explainer is a
+    local Ollama nobody configured (#139).
+    """
+    api_key = _platform_key("typesafe")
+    if not api_key:
+        raise JudgeUnavailable(
+            "the jev judge needs TYPESAFE_API_KEY, which this deployment has "
+            "not set. Only the credential is missing — not the extra."
+        )
+    built: dict[str, Any] = {"api_key": api_key}
+    # Jev's own pinned defaults otherwise — a model and a base URL it chose so
+    # that thresholds tuned against them hold.
+    if config.get("model"):
+        built["model"] = config["model"]
+    if config.get("endpoint"):
+        built["base_url"] = config["endpoint"]
+
+    # The import *and* the construction, in one guard. `pipecat-ai[jev]` is
+    # `httpx[http2]`, and `JevClient` opens its pool with `http2=True` — so the
+    # extra's real absence is httpx raising `ImportError: Using http2=True, but
+    # the 'h2' package is not installed` from **inside** the constructor, not
+    # from the import above it. Guarding only the import left that as a raw
+    # ImportError naming h2 and nothing about how to fix it.
+    try:
+        from pipecat.classifiers.jev.classifier import JevClassifier
+
+        return JevClassifier(**built)
+    except ImportError as exc:
+        raise JudgeUnavailable(
+            "the jev judge needs the 'evals-jev' extra, which is not fully "
+            f"installed: pip install 'turncall[evals-jev]' ({exc}). The "
+            "credential is set; only the dependency is missing."
+        ) from exc
 
 
 def _platform_key(attr: str) -> str:

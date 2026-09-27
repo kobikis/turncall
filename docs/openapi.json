@@ -6856,10 +6856,11 @@
         "enum": [
           "ollama",
           "openai",
-          "anthropic"
+          "anthropic",
+          "jev"
         ],
         "title": "EvalModelProvider",
-        "description": "Who runs an eval's judge, or its persona (#118).\n\nA closed set on purpose. Pipecat reaches anything but Ollama through\n`factory`, a dotted path it imports \u2014 so the provider name is what a\nrequest carries, and `evals.judges.PROVIDERS` maps it to a callable\nTurnCall ships. The set is the allowlist.\n\n`ollama` stays the default: it is pipecat's, it is local, and a judge that\nneeds no key is what keeps an eval runnable on a laptop."
+        "description": "Who runs an eval's judge, or its persona (#118).\n\nA closed set on purpose. Pipecat reaches anything but Ollama through\n`factory`, a dotted path it imports \u2014 so the provider name is what a\nrequest carries, and `evals.judges.PROVIDERS` maps it to a callable\nTurnCall ships. The set is the allowlist.\n\n`ollama` stays the default: it is pipecat's, it is local, and a judge that\nneeds no key is what keeps an eval runnable on a laptop.\n\n`jev` is judge-only, and structurally so: it is a classifier rather than an\nLLM service, so it lives in `JUDGE_PROVIDERS` and not in `PROVIDERS`, and a\n`simulator:` naming it fails the unknown-provider check with the role in the\nmessage (#141)."
       },
       "EvalModelSchema": {
         "properties": {

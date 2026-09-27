@@ -98,6 +98,13 @@ turncall = "turncall.cli.main:run"
 evals-audio = [
     "pipecat-ai[kokoro,moonshine]>=1.12.0,<2.0.0",
 ]
+# A `jev` judge (#141). TypeSafe is a vendor no live call ever contacts, so the
+# base install does not carry it — only the eval worker (and a `jev` live test)
+# ever builds one. Needs TYPESAFE_API_KEY; a run naming `jev` without either
+# fails saying which of the two is missing.
+evals-jev = [
+    "pipecat-ai[jev]>=1.12.0,<2.0.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",

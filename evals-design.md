@@ -643,6 +643,29 @@ it building the result objects the mappers read (the matcher for a scripted
 expectation, `_judge_conversation` for a simulation's), so every real run reads
 `null` today and starts carrying values with no change here.
 
+`provider: jev` (#141) is where that number becomes worth having: TypeSafe's
+classifier answers in a few hundred milliseconds with a **calibrated**
+probability, rather than a model's own guess at how sure it is. It is judge-only
+and structurally so — `PROVIDERS` (what a persona may be) and `JUDGE_PROVIDERS`
+(the superset pipecat accepts a classifier in) are two maps, so a `simulator:`
+naming it fails the existing unknown-provider check with the role in the
+message. It takes no temperature, needs `TYPESAFE_API_KEY` and the `evals-jev`
+extra, and fails at **run** time rather than at create naming whichever of the
+two is missing — a credential and an installed extra belong to a deployment, and
+a stored scenario outlives the one it was written against. What is deliberately
+untested is whether it *agrees* with an LLM judge: two judges disagreeing is
+data about the scenario, not a defect.
+
+It also supplies no prose, which is why the **explainer** is TurnCall's choice
+(#139). For an LLM-backed judge pipecat explains with the judging model and that
+is left alone; for a classifier-only judge its fallback is its own default LLM
+service — a local Ollama — so TurnCall compiles the explainer from the platform's
+configured judge and, where the platform has configured none, turns reasons off
+explicitly. `harness_config` records `explainer_used`/`explainer_provider`/
+`explainer_model` beside the judge's own, and the `judge_changed` warning covers
+them, because a reason written by a different model is the same class of event as
+a verdict decided by one.
+
 Both mappers live in `evals/result_mapping.py`, a pure function of a pipecat
 result with no session, settings or pipeline in sight; `evals/runner.py` keeps
 the orchestration that calls them.

@@ -26,6 +26,7 @@ from turncall.domain.enums import (
 from turncall.evals.scenario import (
     SCHEMA_VERSION,
     ScenarioError,
+    compile_model_block,
     reject_factories,
     validate,
 )
@@ -78,6 +79,26 @@ def _validated_kind(definition: dict[str, Any], name: str) -> EvalKind:
         raise ValueError(str(exc)) from exc
 
 
+def _validated_roles(
+    judge: "EvalModelSchema | None", simulator: "EvalModelSchema | None"
+) -> None:
+    """Refuse a block naming a provider that role cannot be (#141).
+
+    The allowlist is split by role — a judge only answers questions, while a
+    persona is linked into a pipeline to speak — so compiling both blocks here
+    is the whole check: `jev` is a classifier, absent from the simulator's map,
+    and the error names the role. Done at the boundary rather than at run time,
+    where the run would die at pipeline build with the scenario already stored.
+    """
+    try:
+        for role, block in (("judge", judge), ("simulator", simulator)):
+            compile_model_block(
+                block.model_dump(mode="json") if block else None, role=role
+            )
+    except ScenarioError as exc:
+        raise ValueError(str(exc)) from exc
+
+
 class EvalModelSchema(BaseModel):
     """One LLM an eval runs besides the agent's: the judge, or the persona (#118).
 
@@ -125,6 +146,7 @@ class CreateEvalScenarioRequest(BaseModel):
     @model_validator(mode="after")
     def validate_definition(self) -> "CreateEvalScenarioRequest":
         _validated_kind(self.definition, self.name)
+        _validated_roles(self.judge, self.simulator)
         return self
 
     @property
@@ -154,6 +176,7 @@ class UpdateEvalScenarioRequest(BaseModel):
     def validate_definition(self) -> "UpdateEvalScenarioRequest":
         if self.definition is not None:
             _validated_kind(self.definition, self.name or "scenario")
+        _validated_roles(self.judge, self.simulator)
         return self
 
 
@@ -320,6 +343,7 @@ class InlineScenario(BaseModel):
     @model_validator(mode="after")
     def validate_definition(self) -> "InlineScenario":
         _validated_kind(self.definition, self.name)
+        _validated_roles(self.judge, self.simulator)
         return self
 
     @property
