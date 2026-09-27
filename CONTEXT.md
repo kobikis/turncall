@@ -441,6 +441,13 @@ reasons, a second model, the **explainer**, is asked for the reason behind every
 every verdict it is unsure of. The explainer never changes a verdict; where the two
 disagree, the reason says so.
 
+That confidence is recorded beside every verdict in a [[run]]'s `results` (#138), so a
+marginal call and a clear-cut failure stop reading the same — nothing aggregates it and
+nothing fails on it. `null` is "the judge reported none", which a `text_contains` or a
+`function_call` always is; `0.0` is a judge certain of the opposite. Pipecat 1.12 drops
+the value building its result objects, so runs read `null` until it stops.
+_Avoid_: averaging it into a run-level number, or reading `null` as an unsure verdict.
+
 A scenario names its own with `judge: {provider, model, temperature, endpoint}` and
 `simulator: {...}` — TurnCall columns beside `tool_mocks`, compiled into pipecat's blocks
 at parse time. `provider` is a closed set (`ollama`, `openai`, `anthropic`) mapping to

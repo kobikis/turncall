@@ -729,7 +729,10 @@ platform's judge and persona, all unset by default (#119).
 
 ### Key Files
 - `evals/harness.py` — the bridge: real pipeline one end, pipecat's session the other
-- `evals/runner.py` — target resolution, the iteration loop, status derivation, result mapping
+- `evals/runner.py` — the iteration loop, the snapshots, the budgets
+- `evals/targets.py` — the three target forms; an id pins a version, a name resolves at run time
+- `evals/run_warnings.py` — what a run tells its author that is not a verdict (mock that cannot fire, judge changed, stale worker)
+- `evals/result_mapping.py` — one pipecat result -> one `results` entry, plus `derive_status`; the two mappers stay separate on purpose
 - `evals/worker.py` — `turncall-eval-worker`: queue consumer, concurrency cap, janitor
 - `evals/scenario.py` — parse/validate a stored definition; modality merge
 - `orchestrator/transport_factory.py` — `create_eval_transport()`

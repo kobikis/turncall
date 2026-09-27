@@ -609,20 +609,43 @@ yourself"). A column, not a table.
   "transcript": [{"role": "user", "content": "..."}],
   "failures": [{"turn_index": 2, "expectation_index": 0,
                 "event_name": "function_call", "kind": "no_match",
-                "reason": "expected transfer_call, got none"}],
+                "reason": "expected transfer_call, got none",
+                "confidence": null}],
 
   // kind = scripted
   "turns": [{"index": 0, "passed": true, "failures": []}],
   "skipped": null,
 
   // kind = simulation
-  "goal":    {"succeeded": true, "reason": "..."},
+  "goal":    {"succeeded": true, "reason": "...", "confidence": 0.88},
   "metrics": [{"name": "never_promised_refund", "passed": true,
                "score": 1.0, "reason": "..."}],
   "ended_by": "persona_end_call",
   "end_call": {"success": true, "reason": "booking moved"}
 }
 ```
+
+`confidence` (#138) is how sure the judge was of *that* verdict, 0..1, beside
+every verdict it gave, in both kinds' failures and at every other site one
+lands: a scripted expectation, a simulation's goal, and each per-turn verdict of
+a judged metric. `null` means the judge reported none — a `text_contains`, a
+`function_call` or a measured metric involves no judge at all, and a failed
+*metric* has no single verdict of its own, only the per-turn ones under
+`verdicts[]` — and is a different claim from `0.0`, which is a judge certain of
+the opposite. Only a real probability is stored: a value present but outside
+0..1, or not a number at all (a `bool` is an `int`, so `True` would read as
+certainty at the top of the scale), is `null` plus a log line, never an
+exception that would lose the whole run's results. Nothing aggregates it and nothing branches on it: a run-level
+average would be a third way of saying what `passed_count`/`failed_count`
+already say twice (§6), and thresholds are a later decision with evidence
+behind them. Pipecat 1.12 carries a confidence on `JudgeVerdict` and then drops
+it building the result objects the mappers read (the matcher for a scripted
+expectation, `_judge_conversation` for a simulation's), so every real run reads
+`null` today and starts carrying values with no change here.
+
+Both mappers live in `evals/result_mapping.py`, a pure function of a pipecat
+result with no session, settings or pipeline in sight; `evals/runner.py` keeps
+the orchestration that calls them.
 
 `EvalAssertionFailure` is the one result type pipecat shares across both kinds —
 that shared failure vocabulary is why one envelope works while the middles
