@@ -587,7 +587,11 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
         # `eleven_flash_v2` would trade what every caller hears for what one
         # might — `_warn_unusable_pronunciations` naming the resolved model is
         # the nudge. The set is pipecat's, never a copy; a bump that moves it is
-        # a red build in `test_tts_pronunciations.py`, naming the version.
+        # a red build in `test_tts_pronunciations.py`, naming the version. It is
+        # also measured-correct rather than conservative: on `eleven_flash_v2_5`
+        # a phoneme tag is *dropped* with SSML parsing on (a long IPA returns
+        # 0.78x the plain sentence's audio, where `eleven_flash_v2` returns
+        # 2.44x) and recited aloud with it off. Adding v2_5 would lose the word.
         enable_ssml_parsing = (
             True
             if config.tts.pronunciations and model in ELEVENLABS_PHONEME_MODELS
