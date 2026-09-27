@@ -395,6 +395,44 @@ def _transcript_from_script(result: Any, parsed: Any) -> list[dict[str, str]]:
     return transcript
 
 
+def _confidence(source: Any) -> float | None:
+    """How sure the judge was of this verdict, or None when it said nothing.
+
+    Read by `getattr` on purpose, at every site a judge's answer lands. Pipecat
+    1.12 carries a confidence on `JudgeVerdict` (a classifier's probability,
+    0..1) but drops it building the result objects we read — the matcher for a
+    scripted expectation, `_judge_conversation` for a simulation's turn
+    verdicts and goal — so today this is absent on every real run and lights up
+    with no change here when pipecat threads it through.
+
+    Absent is **not** zero: zero is "the judge was certain and said the
+    opposite", which is the strongest verdict there is, and a judge that
+    reports no confidence (`text_contains`, a `function_call`, a measured
+    metric — none of which involve a judge at all) has made no such claim.
+
+    Only a real probability is stored. Pipecat types this `float | None` in
+    0..1, and everything else it could become is a worse lie than absence: a
+    `bool` is an `int`, so `True` would read as the certainty at the top of the
+    scale, and `nan`/`inf`/`5.0` would ship to a subscriber as a probability.
+    Unusable is absent — never an exception that loses a whole run's results —
+    but logged, because a value that is present and unusable can only mean
+    pipecat's shape moved, and that is worth finding from a log line rather
+    than from a column of nulls.
+    """
+    value = getattr(source, "confidence", None)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        logger.warning("eval_confidence_not_a_number", value=repr(value))
+        return None
+    number = float(value)
+    # `nan` fails this comparison, which is the answer it should get.
+    if not 0.0 <= number <= 1.0:
+        logger.warning("eval_confidence_out_of_range", confidence=number)
+        return None
+    return number
+
+
 def _failures(items: Any) -> list[dict[str, Any]]:
     return [
         {
@@ -403,6 +441,7 @@ def _failures(items: Any) -> list[dict[str, Any]]:
             "event_name": f.event_name,
             "kind": f.kind,
             "reason": f.reason,
+            "confidence": _confidence(f),
         }
         for f in items or []
     ]
@@ -468,6 +507,7 @@ def map_script_result(
                         "event_name": e.event_name,
                         "passed": e.passed,
                         "matched": e.matched,
+                        "confidence": _confidence(e),
                     }
                     for e in t.expectations or []
                 ],
@@ -505,6 +545,7 @@ def _metric(metric: Any) -> dict[str, Any]:
                 "passed": v.passed,
                 "verdict": v.verdict,
                 "reason": v.reason,
+                "confidence": _confidence(v),
             }
             for v in getattr(metric, "verdicts", []) or []
         ],
@@ -512,14 +553,32 @@ def _metric(metric: Any) -> dict[str, Any]:
 
 
 def _simulation_failures(result: Any) -> list[dict[str, Any]]:
-    """Why this iteration did not pass, goal first then each short metric."""
+    """Why this iteration did not pass, goal first then each short metric.
+
+    Every entry carries a `confidence` because the scripted mapper's failures
+    do, and `_entry`'s rule is that a reader should not have to know which kind
+    it is holding to find a key. The goal's is the judge's verdict on the goal;
+    a metric has none of its own — its verdicts are per bot turn, each with its
+    own confidence under `metrics[].verdicts[]`, and averaging them into one
+    number here is the aggregate #138 deliberately does not build.
+    """
     failures: list[dict[str, Any]] = []
     if not result.succeeded:
         failures.append(
-            {"kind": "goal", "name": "success", "reason": result.reason or ""}
+            {
+                "kind": "goal",
+                "name": "success",
+                "reason": result.reason or "",
+                "confidence": _confidence(result),
+            }
         )
     failures.extend(
-        {"kind": "metric", "name": m.name, "reason": m.reason or ""}
+        {
+            "kind": "metric",
+            "name": m.name,
+            "reason": m.reason or "",
+            "confidence": None,
+        }
         for m in result.metrics or []
         if not m.passed
     )
@@ -575,7 +634,13 @@ def map_simulation_result(
         ],
         failures=_simulation_failures(result),
         tool_calls=list(tool_calls or []),
-        goal={"succeeded": bool(result.succeeded), "reason": result.reason or ""},
+        goal={
+            "succeeded": bool(result.succeeded),
+            "reason": result.reason or "",
+            # The goal verdict is flattened onto the result itself (`succeeded`
+            # + `reason`), so its confidence reads from there too.
+            "confidence": _confidence(result),
+        },
         metrics=[_metric(m) for m in result.metrics or []],
         # How the conversation ended: `end_call` is the persona hanging up,
         # `max_turns`/`max_duration`/`silence` are backstops, and a run they

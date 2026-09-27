@@ -46,12 +46,13 @@ def _failure(**over):
     )
 
 
-def _expectation(matched="Hello there", event_name="llm_response", passed=True):
+def _expectation(matched="Hello there", event_name="llm_response", passed=True, **over):
     return SimpleNamespace(
         expectation_index=0,
         event_name=event_name,
         passed=passed,
         matched=matched,
+        **over,
     )
 
 
@@ -326,6 +327,8 @@ class TestMapSimulationResult:
         assert outcome.entry["goal"] == {
             "succeeded": True,
             "reason": "the agent found the booking and read it back",
+            # Absent, because this result reports none — see TestVerdictConfidence.
+            "confidence": None,
         }
         assert outcome.entry["ended_by"] == "end_call"
         assert outcome.entry["persona_turns"] == 3
@@ -349,7 +352,14 @@ class TestMapSimulationResult:
         assert outcome.entry["metrics"][0]["score"] == 0.5
         assert outcome.entry["metrics"][0]["failure_kind"] == "judge_no"
         assert outcome.entry["failures"] == [
-            {"kind": "metric", "name": "politeness", "reason": "turn 2 was curt"}
+            {
+                "kind": "metric",
+                "name": "politeness",
+                "reason": "turn 2 was curt",
+                # A metric has no single verdict of its own; its per-turn ones
+                # each carry theirs under `metrics[].verdicts[]`.
+                "confidence": None,
+            }
         ]
 
     def test_a_reporting_metric_is_kept_even_though_it_fails_nothing(self) -> None:
@@ -378,7 +388,12 @@ class TestMapSimulationResult:
         )
         assert outcome.passed is False
         assert outcome.entry["failures"] == [
-            {"kind": "goal", "name": "success", "reason": "never found the booking"}
+            {
+                "kind": "goal",
+                "name": "success",
+                "reason": "never found the booking",
+                "confidence": None,
+            }
         ]
 
     def test_a_harness_error_is_errored_not_failed(self) -> None:
@@ -418,6 +433,155 @@ class TestMapSimulationResult:
         )
         assert outcome.entry["persona_claim"] is None
         assert outcome.entry["ended_by"] == "max_turns"
+
+
+def _verdict(turn=1, *, passed=True, **over):
+    return SimpleNamespace(
+        turn=turn,
+        passed=passed,
+        verdict="yes" if passed else "no",
+        reason="P(meets)=0.94",
+        **over,
+    )
+
+
+class TestVerdictConfidence:
+    """#138. How sure the judge was, recorded beside every verdict it gave.
+
+    Both mappers, because they are separate functions: handing a simulation
+    result to the scripted mapper reports nonsense confidently, which is why
+    they were split. Nothing aggregates these and nothing branches on them —
+    this slice records, and acting on a value is a later decision.
+
+    Pipecat 1.12 carries a confidence on `JudgeVerdict` and then drops it
+    building the result objects these mappers read, so a real run has none
+    today; the fabricated results below are the shape it will have when it
+    stops dropping it.
+    """
+
+    def test_a_scripted_expectation_carries_it(self) -> None:
+        outcome = map_script_result(
+            _script_result(
+                turns=[_turn_result(expectations=[_expectation(confidence=0.97)])]
+            ),
+            iteration=1,
+            parsed=_parsed("hi there"),
+        )
+        assert outcome.entry["turns"][0]["expectations"][0]["confidence"] == 0.97
+
+    def test_a_scripted_failure_carries_it(self) -> None:
+        failure = _failure(confidence=0.62)
+        outcome = map_script_result(
+            _script_result(
+                passed=False,
+                failures=[failure],
+                turns=[_turn_result(status="failed", failures=[failure])],
+            ),
+            iteration=1,
+            parsed=_parsed("book me in"),
+        )
+        assert outcome.entry["failures"][0]["confidence"] == 0.62
+        assert outcome.entry["turns"][0]["failures"][0]["confidence"] == 0.62
+
+    def test_a_simulations_goal_verdict_carries_it(self) -> None:
+        outcome = map_simulation_result(
+            _simulation_result(confidence=0.88), iteration=1
+        )
+        assert outcome.entry["goal"]["confidence"] == 0.88
+
+    def test_a_simulations_per_turn_verdict_carries_it(self) -> None:
+        metric = _metric_score(verdicts=[_verdict(confidence=0.71)])
+        outcome = map_simulation_result(
+            _simulation_result(metrics=[metric]), iteration=1
+        )
+        assert outcome.entry["metrics"][0]["verdicts"][0]["confidence"] == 0.71
+
+    def test_a_judge_that_reports_none_is_absent_not_zero(self) -> None:
+        """A missing measurement and a measurement of zero are different
+        claims: zero is "certain of the opposite", the strongest verdict there
+        is. `text_contains` and `function_call` build no judge at all."""
+        outcome = map_script_result(
+            _script_result(
+                passed=False,
+                failures=[_failure()],
+                turns=[_turn_result(status="failed", failures=[_failure()])],
+            ),
+            iteration=1,
+            parsed=_parsed("book me in"),
+        )
+        assert outcome.entry["failures"][0]["confidence"] is None
+
+        simulated = map_simulation_result(
+            _simulation_result(metrics=[_metric_score(verdicts=[_verdict()])]),
+            iteration=1,
+        )
+        assert simulated.entry["goal"]["confidence"] is None
+        assert simulated.entry["metrics"][0]["verdicts"][0]["confidence"] is None
+
+    def test_a_simulations_failure_entry_carries_the_goal_verdicts_confidence(
+        self,
+    ) -> None:
+        """The scripted mapper's failures carry one, so these do too: `_entry`'s
+        rule is that a reader should not have to know which kind it holds to
+        find a key. A metric's is None — its verdicts are per turn, and
+        averaging them here is the aggregate #138 does not build."""
+        short = _metric_score(passed=False, score=0.5)
+        outcome = map_simulation_result(
+            _simulation_result(succeeded=False, metrics=[short], confidence=0.55),
+            iteration=1,
+        )
+        goal, metric = outcome.entry["failures"]
+        assert goal["kind"] == "goal"
+        assert goal["confidence"] == 0.55
+        assert metric["kind"] == "metric"
+        assert metric["confidence"] is None
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("0.9", id="a string that looks like one"),
+            pytest.param(True, id="a bool, which is an int and would read 1.0"),
+            pytest.param(1.5, id="above one"),
+            pytest.param(-0.2, id="below zero"),
+            pytest.param(float("nan"), id="nan"),
+            pytest.param(float("inf"), id="inf"),
+        ],
+    )
+    def test_only_a_real_probability_is_stored(self, value) -> None:
+        """Everything pipecat's `float | None` could wrongly become is a worse
+        lie than absence — `True` would read as certainty at the top of the
+        scale — and none of it may raise, which would lose the whole run's
+        results."""
+        outcome = map_simulation_result(
+            _simulation_result(confidence=value), iteration=1
+        )
+        assert outcome.entry["goal"]["confidence"] is None
+
+    def test_an_int_is_stored_as_a_float(self) -> None:
+        """A judge certain of the verdict may report `1`, not `1.0`; the column
+        is a probability either way."""
+        outcome = map_simulation_result(_simulation_result(confidence=1), iteration=1)
+        assert outcome.entry["goal"]["confidence"] == 1.0
+        assert isinstance(outcome.entry["goal"]["confidence"], float)
+
+    def test_zero_is_kept_as_zero(self) -> None:
+        """The other half of the same rule: a judge certain the reply was wrong
+        reported 0.0, and storing that as absent would lose the clearest
+        verdict in the set."""
+        outcome = map_simulation_result(
+            _simulation_result(succeeded=False, confidence=0.0), iteration=1
+        )
+        assert outcome.entry["goal"]["confidence"] == 0.0
+
+    def test_nothing_aggregates_it(self) -> None:
+        """No run-level confidence, no average, no score column (#138): a
+        scripted 1/1 and a simulation 7/10 are already one representation read
+        twice."""
+        outcome = map_simulation_result(
+            _simulation_result(confidence=0.88), iteration=1
+        )
+        assert "confidence" not in outcome.entry
+        assert "score" not in outcome.entry
 
 
 class TestSimulationPassRate:
