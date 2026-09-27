@@ -362,3 +362,70 @@ class TestAJudgeIsBuiltWithACredential:
 
         with pytest.raises(ValueError, match="api_key"):
             EvalModelSchema(provider="openai", api_key="sk-leaked")
+
+
+class TestTheExplainerIsRecorded:
+    """Since pipecat 1.12 the verdict comes from a classifier, which gives no
+    reasons; a second model writes them. `harness_config` answered "which model
+    decided this" and quietly failed to answer "which model explained it" (#139).
+    """
+
+    def test_an_llm_judge_explains_with_itself(self) -> None:
+        """No `explainer:` block, which is pipecat's own resolution for an
+        LLM-backed judge — so the honest record is the judging model, not null."""
+        _kind, parsed = _parse_for_run(
+            _run(),
+            EvalModality.TEXT,
+            _settings(judge_provider="openai", judge_model="gpt-4o"),
+        )
+        snapshot = harness_config(parsed)
+
+        assert "explainer" not in parsed.judge
+        assert snapshot["explainer_used"] is True
+        assert snapshot["explainer_provider"] == "openai"
+        assert snapshot["explainer_model"] == "gpt-4o"
+
+    def test_reasons_turned_off_record_no_model(self) -> None:
+        snapshot = harness_config(
+            SimpleNamespace(judge={"factory": OPENAI_FACTORY, "explainer": False})
+        )
+        assert snapshot["explainer_used"] is False
+        assert snapshot["explainer_provider"] is None
+
+    def test_a_block_of_its_own_is_what_is_recorded(self) -> None:
+        """A scenario that wrote a raw `explainer:` keeps it — the whole
+        `judge.eval` block wins — and the snapshot names that model, not the
+        judge's."""
+        snapshot = harness_config(
+            SimpleNamespace(
+                judge={
+                    "service": "ollama",
+                    "model": "gemma3",
+                    "explainer": {"service": "openai", "model": "gpt-4o-mini"},
+                }
+            )
+        )
+        assert snapshot["explainer_provider"] == "openai"
+        assert snapshot["explainer_model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_a_changed_explainer_is_announced_too(self) -> None:
+        previous = {"judge_provider": "jev", "explainer_provider": "openai"}
+        current = {"judge_provider": "jev", "explainer_provider": "anthropic"}
+        with TestAChangedJudgeIsAnnounced._previous(previous):
+            warnings = await warn_judge_changed(AsyncMock(), _run(), current)
+
+        assert [w["code"] for w in warnings] == ["judge_changed"]
+        assert warnings[0]["judge"]["explainer_provider"] == {
+            "previous": "openai",
+            "current": "anthropic",
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_snapshot_predating_the_keys_reports_no_change(self) -> None:
+        """Every row written before #139 lacks them, and reading that absence
+        as a change would announce one on every scenario's next run."""
+        previous = {"judge_provider": "openai", "judge_model": "gpt-4o"}
+        current = {**previous, "explainer_provider": "openai", "explainer_used": True}
+        with TestAChangedJudgeIsAnnounced._previous(previous):
+            assert await warn_judge_changed(AsyncMock(), _run(), current) == []

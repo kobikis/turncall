@@ -97,6 +97,10 @@ def harness_config(parsed: Any = None) -> dict[str, Any]:
         # same way", which is the only question it exists to answer.
         "judge_provider": _judge_provider(judge),
         "judge_temperature": (judge.get("extra") or {}).get("temperature"),
+        # Who *explained*, which is a different question from who decided
+        # (#139). Two runs whose reasons came from different models are not
+        # comparable, and before this nothing on either row said so.
+        **_explainer_fields(judge),
         # Audio only. The caller's voice and the STT the judge read through are
         # as much a part of a result as the judge model: a different TTS says
         # the same line differently, and a different STT mishears it
@@ -125,6 +129,29 @@ def _judge_provider(judge: dict[str, Any]) -> str | None:
     if factory:
         return PROVIDER_BY_FACTORY.get(factory)
     return judge.get("service")
+
+
+def _explainer_fields(judge: dict[str, Any]) -> dict[str, Any]:
+    """Which model supplied the prose behind this run's verdicts (#139).
+
+    Three shapes, all of them pipecat's: `explainer: false` turns reasons off,
+    a block names its own model, and an absent one means the judging LLM
+    explains — so for that case the honest answer is the judge's own provider
+    and model, not a null.
+    """
+    block = judge.get("explainer")
+    if block is False:
+        return {
+            "explainer_used": False,
+            "explainer_provider": None,
+            "explainer_model": None,
+        }
+    source = block if isinstance(block, dict) else judge
+    return {
+        "explainer_used": True,
+        "explainer_provider": _judge_provider(source),
+        "explainer_model": source.get("model"),
+    }
 
 
 def _uses_judge(parsed: Any) -> bool:
@@ -497,6 +524,10 @@ def _parse_for_run(
         definition,
         judge=run.resolved_scenario.get("judge") or judge,
         simulator=run.resolved_scenario.get("simulator") or simulator,
+        # Only read to decide the explainer (#139): a classifier judge has no
+        # LLM of its own to write reasons with, and pipecat's fallback for one
+        # is a local Ollama nobody configured.
+        platform_judge=judge,
     )
     merged = scenario_mod.with_modality(definition, modality)
     return kind, scenario_mod.parse(merged, name=run.scenario_name)

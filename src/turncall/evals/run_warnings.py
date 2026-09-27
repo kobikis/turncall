@@ -83,6 +83,11 @@ _JUDGE_KEYS = (
     "judge_temperature",
     "judge_service",
     "judge_factory",
+    # The explainer writes the reason a red run is read by, so a reason that
+    # changed shape between two runs is the same class of event (#139).
+    "explainer_provider",
+    "explainer_model",
+    "explainer_used",
 )
 
 

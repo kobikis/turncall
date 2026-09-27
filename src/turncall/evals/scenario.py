@@ -329,6 +329,9 @@ def _warning_for(total: int, weak: list[str]) -> list[dict[str, Any]]:
 # scenario create into "import this module on the eval worker" (#118).
 _FACTORY_PATHS = (
     ("judge", "eval"),
+    # `llm_service_from_config` reads a `factory` here too, so an explainer
+    # block is the same import with one more level of nesting (#139).
+    ("judge", "eval", "explainer"),
     ("judge", "transcription"),
     ("simulator",),
     ("user", "speech"),
@@ -420,23 +423,62 @@ def _takes_temperature(provider: str, model: str | None) -> bool:
     return not any(name.startswith(prefix) for prefix in _REASONING_PREFIXES)
 
 
+def explainer_for(
+    judge: dict[str, Any] | None, platform_judge: dict[str, Any] | None
+) -> dict[str, Any] | bool | None:
+    """The model that supplies the prose behind a verdict, decided here (#139).
+
+    Since pipecat 1.12 the verdict itself comes from a classifier, which gives
+    no reasons; a second model — the explainer — writes them. Pipecat resolves
+    an absent one to `classifier.llm` when the judge is an `LLMClassifier`, and
+    otherwise to **its own default LLM service**: a local Ollama. So a judge
+    that is only a classifier would silently acquire a dependency on a service
+    nobody configured, and say so as an unreachable connection mid-run.
+
+    `None` means "leave it to pipecat", which for every LLM-backed judge is the
+    judging model itself — today's behaviour exactly, and the reason this is
+    not applied across the board. For a classifier-only judge the answer is the
+    platform's configured judge, or `False` — reasons off — when the platform
+    has configured none or configured another classifier. A verdict carrying
+    probabilities and no prose is worse than one with prose; a verdict that
+    *fails* on an unconfigured service is worse than both.
+    """
+    from turncall.evals.judges import CLASSIFIER_ONLY_JUDGES
+
+    provider = str((judge or {}).get("provider") or "ollama")
+    if provider not in CLASSIFIER_ONLY_JUDGES:
+        return None
+    fallback = str((platform_judge or {}).get("provider") or "")
+    if not fallback or fallback in CLASSIFIER_ONLY_JUDGES:
+        return False
+    return compile_model_block(platform_judge, role="explainer") or False
+
+
 def with_models(
     definition: dict[str, Any],
     *,
     judge: dict[str, Any] | None = None,
     simulator: dict[str, Any] | None = None,
+    platform_judge: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The definition with the scenario's judge and persona LLMs applied.
 
     A raw block already inside the definition **wins**. It was there first, and
     a stored scenario whose verdicts were decided by the judge it names must
     not start being decided by a different one because a typed field appeared
-    beside it.
+    beside it. That covers an `explainer:` a scenario wrote by hand too — the
+    whole `judge.eval` block is left alone, explainer included.
+
+    `platform_judge` is only read to decide the explainer; the judge itself is
+    already resolved by the caller (`runner._parse_for_run`).
     """
     merged = copy.deepcopy(definition)
 
     compiled_judge = compile_model_block(judge)
     if compiled_judge:
+        explainer = explainer_for(judge, platform_judge)
+        if explainer is not None:
+            compiled_judge["explainer"] = explainer
         block = merged.setdefault("judge", {})
         if isinstance(block, dict) and not block.get("eval"):
             block["eval"] = compiled_judge

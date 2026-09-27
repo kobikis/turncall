@@ -43,6 +43,16 @@ JUDGE_PROVIDERS: dict[str, str] = {
     "ollama": "turncall.evals.judges.ollama_judge",
 }
 
+# The judge providers that are **only** a classifier — nothing an explainer
+# could be. Pipecat resolves an absent `explainer:` for one of these to its own
+# default LLM service, a local Ollama, so a judge configured against a hosted
+# provider silently acquires a dependency on a service nobody provisioned and
+# the failure arrives as an unreachable connection mid-run (#139).
+#
+# `ollama` is not in here: its factory returns an `LLMClassifier`, and pipecat
+# explains with that classifier's own `llm` — the same model that judged.
+CLASSIFIER_ONLY_JUDGES: frozenset[str] = frozenset()
+
 # What each provider runs when a scenario names no model. Pipecat's own default
 # judge is a local Ollama; the hosted ones pick a small, cheap model, because a
 # judge reads one reply and answers a yes/no question.
