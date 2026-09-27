@@ -104,6 +104,19 @@ every read and never stored (#148, the shape #95 set). They are warnings and not
 refusals because `{"papa": "papa"}` is correct IPA: refusing correct input breaks
 a working agent, where accepting a respelling mispronounces one word.
 
+On ElevenLabs this means the older voice or no pronunciations, and that was
+**decided rather than overlooked** (#153, closed `wontfix`): `eleven_v3` reads
+IPA natively as `/mɛtˈfɔɹmɪn/` — no tags, no `enable_ssml_parsing` — but only off
+pipecat's `ElevenLabsHttpTTSService`, since the TTS `stream-input` WebSocket
+refuses both v3 ids with a 400. Measured: the dialect works (2.06x the plain
+audio on a long IPA), barge-in still stops immediately there, and it costs ~140ms
+more per turn (277ms → 415ms time-to-first-audio, pooled). Declined on that
+price against ElevenLabs' stated 80-90% consistency, not on feasibility; worth
+revisiting if v3 reaches the WebSocket. What outlives the decision: a stray
+`/IPA/` is **read aloud** by `eleven_flash_v2_5` (5.37x the audio), so any future
+slash dialect must be withheld by model even more strictly than the tag dialect —
+slashes need no flag to be spoken.
+
 _Avoid_: "pronunciation dictionary" for ElevenLabs' hosted, account-level
 `pronunciation_dictionary_locators`, which is a different thing entirely (#152
 closed `wontfix`: same model gate, and deprecated in pipecat 1.6.0); and
