@@ -4,7 +4,15 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from loguru import logger
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    computed_field,
+    model_validator,
+)
 
 from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
@@ -598,6 +606,29 @@ class AgentResponse(BaseModel):
     config: dict[str, Any]
     created_at: datetime
     published_at: datetime | None
+
+    # Derived, not stored (#148), the shape #95 set for eval scenarios: two
+    # things an author needs told that cannot be refusals — a "pronunciation"
+    # that is the spelling typed back (legal IPA notation, so the validator
+    # cannot see it) and a voice that will not read the markup (#147 said this
+    # in a build-time log, mid-call, to whoever reads server logs). Computed on
+    # every read, so an agent whose model changed under its pronunciations says
+    # so too.
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def warnings(self) -> list[dict[str, Any]]:
+        from turncall.domain.models import AgentConfig
+        from turncall.orchestrator.config_warnings import config_warnings
+
+        try:
+            parsed = AgentConfig.model_validate(self.config)
+        except ValidationError as exc:
+            # A stored config this cannot parse has a louder problem than any
+            # warning, and an advisory check must never cost the caller their
+            # agent read. Not silent: `coding-style.md`.
+            logger.debug("agent_warning_check_skipped: {error}", error=str(exc))
+            return []
+        return config_warnings(parsed)
 
     @classmethod
     def from_row(cls, row: Any) -> "AgentResponse":

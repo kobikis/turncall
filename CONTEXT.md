@@ -92,8 +92,21 @@ changes how all of that agent's text is read (#147). The model stays the
 author's — a phoneme-incapable one still warns rather than being downgraded, and
 has the markup withheld: a `<phoneme>` tag reaching a service that is not parsing
 SSML is read aloud, so "spoken as written" means the tag never goes.
+Validation is on **notation**, not phonology, so a respelling that happens to
+use only IPA-legal characters passes: `met-FOR-min` is a 422 on its hyphen and
+capitals, while `metformin` and `met for min` are accepted, stored, and sent to
+the voice as real markup (measured on Deepgram, `met for min` synthesizes 25%
+more audio than no markup at all — the word is pronounced from those letters).
+No validator can catch that class in general, so the config's two advisory
+checks — a pronunciation equal to its own spelling, and a voice that will not
+read the markup — ride back as **`warnings` on the agent read**, derived on
+every read and never stored (#148, the shape #95 set). They are warnings and not
+refusals because `{"papa": "papa"}` is correct IPA: refusing correct input breaks
+a working agent, where accepting a respelling mispronounces one word.
+
 _Avoid_: "pronunciation dictionary" for ElevenLabs' hosted, account-level
-`pronunciation_dictionary_locators`, which is a different thing entirely; and
+`pronunciation_dictionary_locators`, which is a different thing entirely (#152
+closed `wontfix`: same model gate, and deprecated in pipecat 1.6.0); and
 calling a respelling ("met-FOR-min") a pronunciation — only IPA is accepted,
 because only IPA can be turned into every provider's markup.
 
