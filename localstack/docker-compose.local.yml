@@ -84,8 +84,11 @@ services:
       dockerfile: Dockerfile
       args:
         # Audio-modality runs need the caller's voice and the bot-audio STT
-        # (#72). Only this image installs them.
-        INSTALL_EXTRAS: evals-audio
+        # (#72). A `jev` judge needs httpx's http2 support (#141) — the
+        # classifier module itself ships in the base pipecat wheel, so the
+        # extra that matters is `h2`, and without it a run errors at judge
+        # construction. Only this image installs either.
+        INSTALL_EXTRAS: evals-audio,evals-jev
     command: ["turncall-eval-worker"]
     env_file:
       - ../.env
