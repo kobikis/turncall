@@ -114,9 +114,23 @@ A scenario can name its own:
 }
 ```
 
-`provider` is a closed set — `ollama`, `openai`, `anthropic` — mapping to factories TurnCall ships. Pipecat's own escape hatch is `factory`, a dotted path it hands to `importlib.import_module`: fine for a file on your disk, remote code execution for a request body. A definition naming one anywhere pipecat reads it (`judge.eval`, `judge.transcription`, `simulator`, `user.speech`) is refused at the API boundary, and `api_key` is not a field — the key is the platform's, read from the same environment the agent's own LLM uses.
+`provider` is a closed set — `ollama`, `openai`, `anthropic`, `jev` — mapping to factories TurnCall ships. Pipecat's own escape hatch is `factory`, a dotted path it hands to `importlib.import_module`: fine for a file on your disk, remote code execution for a request body. A definition naming one anywhere pipecat reads it (`judge.eval`, `judge.transcription`, `simulator`, `user.speech`) is refused at the API boundary, and `api_key` is not a field — the key is the platform's, read from the same environment the agent's own LLM uses.
 
 `model` empty means that provider's default. `temperature` has no pipecat field and rides in `extra`; it is unset by default, because a verdict that varies run to run is not a verdict. It is **dropped** for models that reject it — Anthropic, and OpenAI's `o1`/`o3`/`o4`/`gpt-5` families — by the rule the call path already follows.
+
+### Jev, a judge that is not an LLM
+
+`jev` is [TypeSafe](https://typesafe.ai)'s classifier: a few hundred milliseconds per verdict, with a *calibrated* probability instead of a model's opinion of its own certainty. It needs `TYPESAFE_API_KEY` and the `evals-jev` extra — neither checked when the scenario is created, because both are properties of a deployment and a stored scenario outlives the one it was written against. The **run** fails, naming which of the two is missing.
+
+It is **judge-only**, and structurally so: the allowlist is split by role, because a simulator is linked into a live pipeline to speak and a classifier has nothing to link. `simulator: {"provider": "jev"}` is refused with the role in the message. It takes no `temperature` either — a classifier is not a sampler.
+
+### Who writes the reason
+
+Since pipecat 1.12 the verdict itself comes from a classifier, which gives no prose. A second model — the **explainer** — writes the reason behind every `no` and every verdict the judge was unsure of.
+
+For an LLM-backed judge, pipecat explains with the judging model, and TurnCall leaves that alone. For a classifier-only judge (`jev`) there is no such model, and pipecat's fallback is *its own default LLM service — a local Ollama*, so a judge pointed at a hosted vendor would silently acquire a dependency on a service nobody provisioned and report it as an unreachable connection mid-run. TurnCall compiles the explainer from the platform's configured judge instead, and where the platform has configured none it turns reasons **off** explicitly. A verdict with probabilities and no prose beats one that fails on a service nobody set up.
+
+A raw `explainer:` inside a stored `definition` still wins, like the rest of that block. `harness_config` records `explainer_used`, `explainer_provider` and `explainer_model`.
 
 ### Set it once
 
@@ -134,7 +148,7 @@ There is deliberately **no run-level override**: a `judge` on `POST /v1/eval-run
 
 ### Knowing which judge decided
 
-Every run's `harness_config` records `judge_provider`, `judge_model`, `judge_temperature`, `judge_service`, `judge_factory` and `judge_used` — the last because pipecat fills its default in whether or not a judge is ever asked anything, and a snapshot naming a model that never ran is the same lie as a policy that was never enforced.
+Every run's `harness_config` records `judge_provider`, `judge_model`, `judge_temperature`, `judge_service`, `judge_factory` and `judge_used` — plus the explainer trio above — the last because pipecat fills its default in whether or not a judge is ever asked anything, and a snapshot naming a model that never ran is the same lie as a policy that was never enforced.
 
 On top of that, a run whose judge differs from the last run of the same scenario to reach a verdict carries a **`judge_changed`** warning naming both. A scenario that passed yesterday and fails today otherwise reads identically whether the agent regressed or the judge moved underneath it.
 
@@ -217,6 +231,15 @@ curl http://localhost:8090/v1/eval-runs/batches/<batch_id> -H "Authorization: Be
 ```
 
 A run reports `passed_count`/`failed_count` out of `iterations` — there is no score. `errored` is neither: it means the harness could not complete, so it counts toward no rate at all.
+
+Every verdict a judge produced carries a **`confidence`** beside it — a scripted expectation and its failures, a simulation's goal verdict, and each per-turn verdict of a judged metric. `null` is not zero: zero is "the judge was certain of the opposite", the strongest verdict there is, while `null` means no judge made a claim at all (`text_contains`, a `function_call`, a measured metric). There is deliberately no aggregate — averaging per-turn probabilities into one number invents a figure nothing measured.
+
+<Note>
+  `confidence` reads `null` on every run today. Pipecat 1.12 carries it on its
+  own verdict object and then drops it building the results TurnCall reads, so
+  the field is wired and waiting: it starts reporting on the next pipecat bump
+  that threads it through, with no change here.
+</Note>
 
 A run also carries **`warnings`**: things its author needs to know that are not verdicts. A mock keyed to a tool this run can never call, an agent whose real tools are allowed to fire, a scenario nothing in which can fail, a judge that changed since the last verdict, a worker older than the code it runs. They ride on the run, the batch summary and `turncall eval show`, because the person reading a green verdict is rarely the one who wrote the scenario.
 

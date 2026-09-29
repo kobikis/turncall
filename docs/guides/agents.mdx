@@ -58,6 +58,36 @@ curl -X POST http://localhost:8090/v1/agents \
   both. See [AWS credentials](/guides/providers#credentials).
 </Note>
 
+## Warnings on a Read
+
+`GET /v1/agents/{id}` returns a **`warnings`** list beside the config: things
+worth telling you about a config that must not be refusals, because refusing
+them would break working agents.
+
+```json
+{
+  "id": "...",
+  "config": { "...": "..." },
+  "warnings": [
+    {
+      "code": "pronunciations_unreadable",
+      "message": "tts.pronunciations: elevenlabs (eleven_flash_v2_5) does not read pronunciation markup on model 'eleven_flash_v2_5', so these words are spoken as written: Metformin",
+      "words": ["Metformin"]
+    }
+  ]
+}
+```
+
+| Code | Means |
+|------|-------|
+| `pronunciation_looks_like_spelling` | A [pronunciation](/guides/providers#pronunciations) is the word typed back (`{"Metformin": "metformin"}`). Every character is legal IPA, so validation cannot refuse it — and it reaches the voice as real markup, so the word is now mispronounced *differently*. Ignore it if that really is the transcription |
+| `pronunciations_unreadable` | The resolved TTS provider and model will not read the markup, so those words are spoken as written |
+| `pronunciations_ignored_on_s2s` | `pipeline_mode: "s2s"` has no TTS stage for the markup to apply to |
+
+Warnings are **derived on every read**, never stored, so an agent whose model
+moved out from under its pronunciations starts saying so without being edited.
+An empty list means nothing to report.
+
 ## Template Variables
 
 Personalize agents per-call using `{{variable}}` placeholders:
@@ -135,6 +165,14 @@ than your exact string.
   decides you have finished your sentence. That one is measured in hundreds of
   milliseconds; this one in seconds, and only after the agent has spoken.
 </Note>
+
+A third case is neither timeout: a turn the VAD opened and closed with **no
+transcript** — a cough, a door, a word nothing recognized. One that *interrupted*
+the agent gets a single LLM run, so the agent asks the caller to repeat instead of
+stopping dead mid-sentence. One that arrives while the agent was already waiting
+is left unanswered, because replying to a passing truck is intrusive and the idle
+guard above already covers a caller who has genuinely gone quiet. On by default,
+and not configurable.
 
 ## Voicemail Detection
 

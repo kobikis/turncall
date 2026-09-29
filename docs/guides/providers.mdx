@@ -175,6 +175,7 @@ Set `"extra": {"profanity_filter": true}` if you want it on.
 | `model` | No | Provider default when unset: `aura-2-helena-en`, `tts-1`, `eleven_flash_v2_5`, `sonic-3.6` |
 | `voice` | No | Provider default when unset: `aura-2-helena-en`, `alloy`, `Rachel`. Cartesia voice ids are account-specific, so there is no default — set one |
 | `speed` | No | 0.25–4.0 (default 1.0, which sends nothing). Honoured by Deepgram (0.7–1.5), OpenAI and ElevenLabs |
+| `pronunciations` | No | Word → IPA map for words the voice says wrong. One spelling, each provider's own markup generated from it. See [Pronunciations](#pronunciations) |
 | `extra` | No | Passthrough to the provider. Keys naming a setting TurnCall already manages — `model`, `voice`, `speed`, and Cartesia's `language` / `emotion` — are ignored so they cannot silently override your config |
 
 <Note>
@@ -182,6 +183,59 @@ Each provider falls back to **its own** model and voice. Earlier versions leaked
 a Deepgram voice name into the other three, so an agent that chose Cartesia,
 OpenAI or ElevenLabs without naming a model and voice was misconfigured.
 </Note>
+
+### Pronunciations
+
+Words a voice says wrong — drug names, surnames, SKUs — go in
+`tts.pronunciations` as one flat word → IPA map. One IPA spelling works
+everywhere, because each provider's markup is generated from it. The outbound
+mirror of [`stt.keyterms`](#keyterms).
+
+```json
+"tts": {
+  "provider": "cartesia",
+  "model": "sonic-3.6",
+  "pronunciations": {"Metformin": "mɛtˈfɔɹmɪn", "Nguyen": "ˈwɪn"}
+}
+```
+
+| Provider | Markup generated |
+|----------|------------------|
+| Cartesia | Inline phonemes |
+| ElevenLabs | SSML `<phoneme>` — needs a phoneme-capable model, see below |
+| Deepgram | Inline pronunciation object |
+| OpenAI | None. It has no pronunciation surface, so the map is inert |
+
+The value must be **real IPA**. `{"Metformin": "met-FOR-min"}` is a `422` naming
+the word: pipecat's IPA helpers normalize and tokenize but never reject, so a
+respelling would be accepted, inserted into the markup, and change nothing you
+can hear. `/…/` and `[…]` wrappers are stripped and the value stored
+canonically, so two spellings of one pronunciation are one config. Blanks are
+dropped, and an empty map is the same as not setting one.
+
+<Note>
+**ElevenLabs needs a phoneme-capable model.** Pipecat reads `<phoneme>` tags only
+on the models in its own `ELEVENLABS_PHONEME_MODELS` set, and only with
+`enable_ssml_parsing` — a constructor argument no `tts.extra` can reach.
+TurnCall passes it for exactly the agents that have pronunciations *and* such a
+model, never for everyone: SSML parsing changes how **all** of that agent's text
+is read. Your model is never downgraded for you.
+</Note>
+
+On a voice that cannot read the markup, the markup is **withheld** rather than
+sent anyway: a `<phoneme>` tag reaching a service that is not parsing SSML is
+read out loud, measured at 3.5–4.3× the audio. One unusable word is spoken as
+written; it never silences the reply.
+
+Whether the built voice can read the markup depends on the model, which an author
+changes after the pronunciations are written — so it is a **warning**, never a
+refusal. That, and a "pronunciation" that is the word typed back at us, come
+back as [warnings on an agent read](/guides/agents#warnings-on-a-read).
+
+<Warning>
+  Cascade only. An S2S agent has no TTS stage for the markup to apply to, so the
+  field is ignored and the agent read says so.
+</Warning>
 
 ## AWS Bedrock
 
