@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
+from turncall import __version__
 from turncall.api.errors import register_error_handlers
 from turncall.api.middleware import RequestIdMiddleware, TimingMiddleware
 from turncall.api.v1.health import router as health_router
@@ -29,7 +30,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(
         "starting_turncall",
         environment=settings.environment,
-        version="0.1.0",
+        version=__version__,
     )
 
     # OpenTelemetry tracing (ADR-0010) — set up once; per-call spans are enabled
@@ -166,7 +167,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="TurnCall",
         description="Production voice agent platform API",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
         docs_url="/docs" if not settings.is_production else None,
         redoc_url="/redoc" if not settings.is_production else None,

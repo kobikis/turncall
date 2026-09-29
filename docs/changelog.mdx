@@ -3,7 +3,48 @@ title: Changelog
 description: "Latest updates and improvements to TurnCall"
 ---
 
-<Update label="Unreleased" description="Unreleased" tags={["Feature", "Update", "Fix"]}>
+<Update label="Unreleased" description="Unreleased" tags={["Feature"]}>
+
+</Update>
+
+<Update label="2026-09-29" description="September 29, 2026" tags={["Release", "Feature", "Update", "Fix"]}>
+
+## 2.0.0
+
+Evals — automated behavioural testing for agents — plus tool calling on text,
+per-agent pronunciations, and Pipecat 1.12. Major because two things break: six
+endpoints are removed and one agent config is now refused at create.
+
+## ⚠️ Upgrade notes
+
+**Run your migrations.** `alembic upgrade head`. Six of them: the eval tables and
+their later columns, `tool_invocations.session_id`, and the drop of the dead
+`test_suites` / `test_runs` stub. That drop is **one-way** by design — its
+downgrade raises rather than recreating tables whose rows described runs that
+never happened.
+
+**`/v1/test-suites` and `/v1/test-runs` are gone.** They accepted rows and did
+nothing; evals replace them.
+
+**Name a model on `ollama`, `custom_openai`, `bedrock` and `openrouter`.** An
+agent that names none is now a `422` at create. Such an agent never worked — the
+model *is* the deployment on those providers, so it failed on its first LLM turn —
+but a create that returned `201` returns `422` now, so anything provisioning
+agents should set `llm.model` explicitly before upgrading.
+
+**`mcp` 1.x is no longer supported** — Pipecat 1.12's `mcp` extra requires
+`>=2.1.1`.
+
+**Existing agents gain an idle hangup.** `user_idle_timeout_ms` defaults to
+`10000`, so a caller who goes quiet for ten seconds after the agent stops speaking
+hears `idle_message`, and a second silence ends the call with
+`ended_reason: customer_silent`. Set it to `0` to keep the old behaviour.
+
+**Evals need a second process.** `turncall-eval-worker` — same image, own
+entrypoint — plus Redis; without it a run is accepted and never executed. The
+default judge and persona are a **local Ollama**, so a simulation or an `eval:`
+assertion needs one reachable even when the agent's own LLM is hosted. Or set
+`EVAL_JUDGE_PROVIDER` / `EVAL_SIMULATOR_PROVIDER`.
 
 ## Added
 
@@ -20,8 +61,10 @@ and the run is errored naming it, so pointing a scenario at a real agent cannot
 book a real appointment ten times.
 
 **`turncall eval run` exits non-zero when your agent regressed**, so a pull
-request can be gated on behaviour. A failure exits 1 and an error exits 2 — a
-judge outage never reads as a regression.
+request can be gated on behaviour. A failure is `1`, an error `2`, a cancellation
+`3`, a batch still running when the command stopped waiting `4`, a usage mistake
+`64` — distinct because "your agent regressed" and "we could not check" want
+different alerts, and a judge outage must never read as a regression.
 
 **`eval.run.started` / `eval.run.completed` webhooks.** The completed event is
 comprehensive: status, counts, every iteration's transcript and failures, and
@@ -30,14 +73,75 @@ the configuration snapshots. The envelope gains a nullable `eval_run_id` beside
 
 **Choose the model that judges an eval.** A scenario names
 `judge: {provider, model, temperature}` and `simulator: {...}`; `provider` is a
-closed set — `ollama`, `openai`, `anthropic` — mapping to factories TurnCall
-ships, because pipecat's own escape hatch is a dotted import path and that is
+closed set — `ollama`, `openai`, `anthropic`, `jev` — mapping to factories
+TurnCall ships, because pipecat's own escape hatch is a dotted import path and that is
 remote code execution from a request body. `EVAL_JUDGE_PROVIDER` / `_MODEL` /
 `_TEMPERATURE` (and the `EVAL_SIMULATOR_*` trio) set one for the whole platform;
 the scenario's block wins, taken whole. A `judge` on a **run** request is
 refused, because a run is what it was queued as. Sending `"judge": null` on an
 update returns a scenario to the default. See
 [Choosing the judge](/guides/evals#choosing-the-judge).
+
+**`jev` as a judge** — TypeSafe's classifier, a few hundred milliseconds per
+verdict with a *calibrated* probability rather than a model's opinion of its own
+certainty. Judge-only, and structurally so: the provider allowlist is split by
+role, because a simulator is linked into a live pipeline to speak and a
+classifier has nothing to link, so `simulator: {"provider": "jev"}` is refused
+naming the role. Needs `TYPESAFE_API_KEY` and the `evals-jev` extra — neither
+checked at scenario create, because both belong to a deployment and a stored
+scenario outlives the one it was written against, so the **run** fails naming
+which is missing.
+
+**TurnCall decides who writes the reason.** Since pipecat 1.12 the verdict comes
+from a classifier and a second model — the explainer — writes the prose behind
+every `no`. For a classifier-only judge pipecat falls back to its own default LLM
+service, a local Ollama, so a judge pointed at a hosted vendor would silently
+acquire a dependency on a service nobody provisioned and report it as an
+unreachable connection mid-run. The explainer is compiled from the platform's
+configured judge instead, and where the platform configured none, reasons are
+turned **off** explicitly. LLM-backed judges are left exactly alone.
+`harness_config` records `explainer_used`, `explainer_provider` and
+`explainer_model`.
+
+**A confidence beside every verdict a judge produced** — a scripted expectation
+and its failures, a simulation's goal verdict, and each per-turn verdict of a
+judged metric. `null` is not zero: zero means the judge was certain of the
+opposite. There is deliberately no aggregate. Pipecat 1.12 carries a confidence
+and then drops it building the result objects TurnCall reads, so the field is
+`null` on runs today and starts reporting on the bump that threads it through.
+
+**A run carries its own `warnings`** instead of the worker's log — a mock keyed to
+a tool the run can never call, an agent whose real tools are allowed to fire, a
+scenario in which nothing can fail, a judge that changed since the last verdict,
+a worker older than the code it runs. They ride on the run, the batch summary,
+`eval.run.completed` and `turncall eval show`, because the person reading a green
+verdict is rarely the one who wrote the scenario.
+
+**A light read for a run, and paged eval lists.** `GET /v1/eval-runs/{id}?view=summary`
+answers "is it done yet" without every iteration's transcript and all three
+snapshots, and both eval lists page in the same `paginated` envelope the rest of
+the API uses. `eval.run.completed` stays comprehensive: that argument is about a
+subscriber who gets one event, not an endpoint on a timer.
+
+**`tts.pronunciations`** — a flat word → IPA map, the outbound mirror of
+`stt.keyterms`. One spelling, each provider's own markup generated from it:
+Cartesia inline phonemes, ElevenLabs SSML `<phoneme>`, Deepgram's inline object;
+OpenAI has no pronunciation surface. Validation is TurnCall's own, because
+pipecat's IPA helpers normalize and tokenize but never reject — so `met-FOR-min`
+would be accepted, inserted into the markup and change nothing audible, and is a
+`422` naming the word. On a voice that cannot read the markup the markup is
+**withheld**: a `<phoneme>` tag reaching a service that is not parsing SSML is
+read out loud, measured at 3.5–4.3× the audio, which is worse than the
+mispronunciation. See [Pronunciations](/guides/providers#pronunciations).
+
+**`warnings` on an agent read.** Two things an author needs told that cannot be
+refusals: a "pronunciation" equal to its own spelling (`{"Metformin": "metformin"}`
+— every character is legal IPA, so the validator cannot see it, and it reaches
+the voice as real markup), and a voice that will not read the markup, which was
+known at pipeline build and said only to a server log, mid-call, about a config
+written days earlier. Derived on every read and never stored, so an agent whose
+model moved out from under its pronunciations starts saying so without being
+edited.
 
 **A verdict says which judge decided it.** `harness_config` gains
 `judge_provider` and `judge_temperature` beside the model, service and factory
@@ -100,8 +204,35 @@ words it itself.
 
 ## Changed
 
-**Pipecat 1.11**, the `openai` 3 SDK, and support for both `mcp` SDK lines
-(`>=1.27,<3`).
+**Pipecat 1.12**, up from 1.9 via 1.10 and 1.11, and the `openai` 3 SDK. See
+`adr/0019`. Voicemail detection is now one processor over an explicit
+`LLMClassifier`, `nltk` is replaced by `sentencex`, and the `ollama` judge is an
+`LLMClassifier` with a 60s budget: 1.12 judges a simulation one bot turn per call
+and fires those calls together against a 10s default, and a local Ollama
+serializes them — measured at 18s each for four concurrent against 4.5–5.8s
+alone, so every turn timed out and the run reported `judge call failed`, which
+from outside is indistinguishable from an agent regression.
+
+**An empty user turn is handled rather than dropped**, and on by default. A turn
+VAD opened and closed with no transcript — a cough, a door, an unrecognized word
+— gets a single LLM run if it *interrupted* the agent, so the agent asks the
+caller to repeat instead of stopping dead mid-sentence. One arriving while the
+agent was already waiting is left alone: replying to a passing truck is
+intrusive, and the idle timeout already covers a caller who has genuinely gone
+quiet.
+
+<Warning>
+  **Breaking:** `mcp` 1.x is no longer supported. Pipecat 1.12's `mcp` extra
+  requires `>=2.1.1`, so the dual-spelling reads that briefly supported both
+  lines are gone — under that pin they could never match.
+</Warning>
+
+<Warning>
+  **Breaking:** `/v1/test-suites` and `/v1/test-runs` are removed. Six endpoints
+  accepted rows into two tables and the background worker their docstring
+  promised was never written; nothing outside the router and the models ever read
+  either. Evals replace the namespace. The migration is one-way.
+</Warning>
 
 **`stt.model` and `llm.model` now mean "the provider's own default" when
 empty**, instead of carrying one provider's model to all of them. Unset,
@@ -124,6 +255,73 @@ deliberately on an older model with `llm.extra`.
 whichever server answered the handshake first.
 
 ## Fixed
+
+**The caller sat in dead air, 2.4–5.7s per turn.** VAD and Smart Turn were charged
+one after the other rather than together — Smart Turn's silence counter cannot
+start until VAD has waited out its own window, which at the 800ms default put
+end-of-turn 1.8s after the caller stopped talking before the LLM was even called.
+With Smart Turn on, the model decides the turn and VAD uses pipecat's 0.2s.
+
+**Every eval run scored `errored` — no eval feature had ever reported a verdict.**
+Pipecat's harness is an RTVI client and the server half is a processor in the
+bot's pipeline plus an observer on the task; TurnCall built neither, so every
+iteration died at the `bot-ready` handshake. Because `errored` counts toward no
+rate, the outage read as "no signal".
+
+**A handoff could not survive the caller talking over it.** `handoff_to_agent`
+queues the target's prompt and tool schema as frames, and pipecat drains
+interruptible frames on barge-in — so a caller saying "okay, thanks" mid-handoff
+left the model running the previous agent's prompt, advertising the previous
+agent's tools, over a context already wiped. Nothing raised and nothing was
+logged. The switch is also atomic against cancellation now: an interruption
+cancels in-flight sync tool calls, and a DB round-trip after the commit left the
+call record handed off while the live pipeline kept the previous agent.
+
+**`tts.pronunciations` could never work on ElevenLabs.** Pipecat reads SSML
+`<phoneme>` tags only with a phoneme-capable model *and* `enable_ssml_parsing`, a
+constructor argument no `tts.extra` could reach. TurnCall passes it for exactly
+the agents that have pronunciations and such a model — never for everyone, since
+SSML parsing changes how all of that agent's text is read.
+
+**Cancelling a running eval run now stops it, and stays cancelled.** `DELETE` set
+the column and nothing else: every remaining iteration ran and was paid for, and
+the finisher then wrote `passed` over `cancelled` and announced
+`eval.run.completed` for a conversation the user had asked to stop.
+
+**A hung eval iteration is bounded**, and the janitor's cutoff is derived from the
+run's iterations rather than a flat 900s. Both were the same false alarm from
+opposite ends: an unbounded harness call held a worker slot for the life of the
+process, and a flat sweep reclaimed healthy multi-iteration runs mid-flight —
+which the CLI reported as a regression.
+
+**A tag's fan-out is capped.** One POST with a popular tag and `iterations: 50`
+queued `scenarios × iterations` full conversations, so a project with 200
+scenarios on `pre-publish` was 10,000 conversations away from one HTTP call.
+`EVAL_MAX_SCENARIOS_PER_REQUEST` (50) refuses it naming the count, never
+truncating.
+
+**The CLI's deadline fits the batch**, and a batch that outran it exits **4**, not
+2. The default was a per-run budget used as a whole-batch one, so ten scenarios
+behind a four-slot worker made the command give up on a healthy suite and report
+an outage. "We stopped waiting" and "nobody could tell" are now different codes,
+because they have different remedies.
+
+**A scenario that cannot fail is warned about.** Validation checks shape, not
+strength, so a scenario whose every expectation is a content-free event parses,
+stores, runs and reports `passed` forever against an agent whose LLM returns
+nothing — after a provider 404 pipecat still emits an empty `llm_response`. The
+create/update response and the run both carry `scenario_cannot_fail`, and such a
+run scores **`failed`**, never `errored`.
+
+**The eval worker's readiness probe stopped looking like a failure.** Every
+iteration logged `opening handshake failed` with a traceback and nothing was
+wrong. The cost was not the noise: a probe succeeding and a bot that could not be
+reached produced the same traceback.
+
+**A sentence the STT split in two became two scenario turns** in `from-call`, and
+audio evals work in Docker — pipecat's TTS cache default lives under `$HOME`,
+which a container loses on recreate, so `EVAL_TTS_CACHE_DIR` exists and is
+mounted.
 
 **MCP servers now connect on WebRTC and WhatsApp voice**, and S2S advertises the
 tools it was already holding sessions for. A tool name claimed by two servers no
@@ -149,6 +347,18 @@ analysis resolved its own default separately from the pipeline, so the two could
 disagree.
 
 ## Security
+
+**An agent's secrets leaked through an eval run.** The config masker guarded one
+exit — the agent response builder — and the eval feature added two more paths
+carrying the same config: `GET /v1/eval-runs/{id}`, where a viewer key read every
+credential in the clear, and `eval.run.completed`, which POSTed them to a webhook
+subscriber. An inline target leaked the same way. The masker now lives where no
+exit can miss it, and a run's stored `resolved_config` is masked on the way in.
+
+**A judge or simulator cannot name a `factory`.** Pipecat's escape hatch is a
+dotted path handed to `importlib.import_module` — fine for a file on disk, remote
+code execution from a request body. One naming a factory anywhere pipecat reads it
+is refused at the API boundary, and `api_key` is not a field.
 
 **The BYOM/MCP URL allowlist could be talked past.** `*` in an `fnmatch` pattern
 spans `/`, so `https://*.trusted.com/*` also accepted

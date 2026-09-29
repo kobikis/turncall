@@ -94,7 +94,7 @@ locally through Ollama and no audio leaves your network except to the telco.
 
 - **Twilio PSTN calls** — Inbound and outbound phone calls via Twilio
 - **WebRTC browser calls** — Talk to agents from the browser
-- **Video Avatar** — Optional HeyGen LiveAvatar (lip-synced video) on WebRTC cascade calls
+- **Video Avatar** — Optional HeyGen or Tavus (lip-synced video) on WebRTC cascade calls
 - **Multi-provider STT/LLM/TTS** — Deepgram, OpenAI, Anthropic Claude, ElevenLabs, Cartesia, Ollama, OpenRouter, AWS Bedrock, or any OpenAI-compatible endpoint (configurable per agent)
 - **Bring Your Own Model** — Use local LLMs via Ollama or remote endpoints (Together AI, Groq, vLLM, etc.)
 - **Speech-to-Speech** — ~300ms processing (vs ~800ms cascade) via OpenAI Realtime, GPT-Live-1 (full duplex), Gemini Live or Amazon Nova Sonic 2
@@ -112,6 +112,8 @@ locally through Ollama and no audio leaves your network except to the telco.
 - **Agent Versioning** — Publish immutable versions, auto-promote phone numbers, rollback with one API call
 - **A/B Testing** — Weighted traffic routing on phone numbers (50/50, 80/20, etc.), deterministic by caller
 - **Post-Call Analysis** — Automatic LLM-powered analysis: summary, success evaluation, sentiment, structured extraction, scoring rubric
+- **Evals** — Behavioural tests for agents: scripted conversations or LLM-played personas, run against the real pipeline in text or audio, tools mocked and failing closed. A CLI whose exit code gates a pull request
+- **Vocabulary control** — `stt.keyterms` for words the model mishears, `tts.pronunciations` (word → IPA) for words the voice says wrong, both mapped to each provider's own dialect
 - **Multi-tenant** — Project-scoped API keys with RBAC
 - **Observability** — Call events, transcripts, tool invocations, webhook delivery
 
@@ -355,6 +357,7 @@ See [examples/knowledge-base/](examples/knowledge-base/) for a complete setup de
 | [Providers](https://docs.turncall.io/guides/providers) | Choosing STT / LLM / TTS |
 | [Server events](https://docs.turncall.io/guides/server-events) | Bidirectional hooks |
 | [Knowledge base](https://docs.turncall.io/guides/knowledge-base) | RAG, three retrieval modes |
+| [Evals](https://docs.turncall.io/guides/evals) | Behavioural tests, judges, CI |
 | [QUICKSTART.md](QUICKSTART.md) | The same setup, in-repo |
 
 ## Tools
@@ -499,14 +502,14 @@ each one needs — several run with no phone number and no tunnel.
 | Component | Technology |
 |-----------|-----------|
 | Framework | FastAPI + Uvicorn |
-| Voice Pipeline | Pipecat 1.11 |
+| Voice Pipeline | Pipecat 1.12 |
 | Database | PostgreSQL + SQLAlchemy async + Alembic |
 | Cache | Redis |
 | Telephony | Twilio Voice + Media Streams |
 | Browser | WebRTC (SmallWebRTCTransport) |
-| Video Avatar | HeyGen LiveAvatar (Pipecat HeyGenVideoService) |
+| Video Avatar | HeyGen / Tavus (Pipecat avatar services) |
 | STT | Deepgram / OpenAI / ElevenLabs / Cartesia |
-| LLM | OpenAI / Anthropic Claude / Ollama / Any OpenAI-compatible |
+| LLM | OpenAI / Anthropic Claude / Ollama / OpenRouter / AWS Bedrock / Any OpenAI-compatible |
 | TTS | Deepgram / OpenAI / ElevenLabs / Cartesia |
 | S2S | OpenAI Realtime / GPT-Live-1 / Gemini Live / Nova Sonic 2 |
 | Knowledge Base | pgvector + OpenAI embeddings |
