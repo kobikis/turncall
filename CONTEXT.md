@@ -375,8 +375,23 @@ Per-agent *static* AWS keys — off by default, rejected at agent create when di
 the deliberate escape hatch rather than the normal path (mirroring `BYOM_ENABLED`). The
 default multi-tenant route is a per-agent `role_arn` assumed from platform credentials,
 which yields temporary credentials and persists no durable secret. The flag exists because
-`config_blob` is plain JSONB: secrets are masked on read but not encrypted at rest.
+`config_blob` is plain JSONB: secrets are masked on read but not encrypted at rest. It
+governs the *inline* path only — a [[Project credential]] is encrypted and outside agent
+config, so this flag neither gates nor describes one (ADR-0020). Read as "no static AWS
+keys here" it is a security flag misread in the unsafe direction.
 _Avoid_: conflating with [[Platform credential]], which gates bootstrap endpoints and is unrelated.
+
+**Project credential**:
+A provider account's key held per project in its own encrypted table, rather than in agent
+config — one row per provider *account*, never per role, since Deepgram is one key serving
+STT and TTS and OpenAI one key serving four. Resolved at pipeline build below an agent's
+own inline key and above the platform environment ("narrowest wins", the ordering the eval
+[[judge]] already uses). Exists because the alternative — an `api_key` on every config
+block — writes third-party secrets into `config_blob`, the unencrypted JSONB that
+[[Agent AWS credentials]] is switched off by default to stay out of. See ADR-0020.
+_Avoid_: "integration" (the Builder's word for the console-side record it is projected
+from), "the project's API key" (that is a `tc_...` [[API key]], authorizing calls *to*
+TurnCall rather than out of it).
 
 ## Evals
 
