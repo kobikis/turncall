@@ -39,6 +39,7 @@ class CallResponse(BaseModel):
     ended_reason: str | None = None
     agent_name: str | None = None
     agent_version: int | None = None
+    latency_summary: dict[str, Any] | None = None
 
     @classmethod
     def from_row(

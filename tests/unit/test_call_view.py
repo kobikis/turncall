@@ -56,3 +56,35 @@ def test_agent_name_and_version():
 def test_inline_or_deleted_agent_is_null_not_invented():
     view = derived_fields(_call(), CallFacts())
     assert view["agent_name"] is None and view["agent_version"] is None
+
+
+def _turn(n, user_to_bot, **stages):
+    return {
+        "turn": n,
+        "user_to_bot_ms": user_to_bot,
+        "stages": {k: {"ttfb_ms": v, "service": k.upper()} for k, v in stages.items()},
+    }
+
+
+def test_latency_summary_percentiles_and_slowest_turn():
+    turns = tuple(
+        _turn(i + 1, 800 + i * 100, stt=100 + i, llm=300 + i * 10, tts=200)
+        for i in range(10)
+    )
+    summary = derived_fields(_call(), CallFacts(turn_metrics=turns))["latency_summary"]
+    assert summary["turns"] == 10
+    assert summary["user_to_bot"] == {"p50_ms": 1200, "p95_ms": 1700, "count": 10}
+    assert summary["stages"]["llm"] == {"p50_ms": 340, "p95_ms": 390, "count": 10}
+    assert summary["stages"]["tts"]["p95_ms"] == 200
+    assert summary["slowest_turn"] == {"turn": 10, "user_to_bot_ms": 1700}
+
+
+def test_latency_summary_omits_a_stage_no_turn_had():
+    # An S2S call reports only the model's stage.
+    turns = (_turn(1, 700, llm=400), _turn(2, 900, llm=500))
+    summary = derived_fields(_call(), CallFacts(turn_metrics=turns))["latency_summary"]
+    assert set(summary["stages"]) == {"llm"}
+
+
+def test_no_turns_is_null_not_zeros():
+    assert derived_fields(_call(), CallFacts())["latency_summary"] is None

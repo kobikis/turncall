@@ -912,10 +912,16 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 `call.ended` payload: `status`, `ended_reason`, `from_number`, `to_number`, `direction`,
 `duration_ms`, `provider_call_sid`, `metadata`, `started_at`, `ended_at`,
 `recording_status`, `recording_url`, `summary`, `analysis`, `agent_name`,
-`agent_version`, and `transcript` (`[{role, text, timestamp}]`).
+`agent_version`, `latency_summary`, and `transcript` (`[{role, text, timestamp}]`).
+
+`latency_summary` is derived from the call's `metrics.turn` events (#179):
+`{turns, user_to_bot, stages: {stt|llm|tts}, slowest_turn}`, each spread being
+nearest-rank `p50_ms`/`p95_ms` plus `count`. Null with no measured turns (zeros
+would read as "instant"); a stage no turn reported is absent. Never stored, and
+the per-turn records never ride in the webhook.
 
 The call read (`GET /v1/calls[/{id}]`) carries the same derived fields —
-`ended_reason`, `agent_name`, `agent_version` — from the same function,
+`ended_reason`, `agent_name`, `agent_version`, `latency_summary` — from the same function,
 `services/call_view.py`, so the read and the webhook cannot disagree (#175).
 `ended_reason` is null on the read while the call is still live; agent fields
 are null for an inline agent and for a deleted agent row.

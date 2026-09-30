@@ -67,6 +67,14 @@ async def seeded(factory):
         )
         stored = await _ended_call(session, project.id, agent_id=agent.id, control=True)
         inline = await _ended_call(session, project.id)
+        for n, ms in ((1, 900), (2, 1500)):
+            await call_repo.create_call_event(
+                session,
+                call_id=stored.id,
+                event_type=CallEventType.METRICS_TURN,
+                payload={"turn": n, "user_to_bot_ms": ms, "stages": {}},
+                sequence_number=1 + n,
+            )
         await session.commit()
     return project.id, stored.id, inline.id
 
@@ -94,10 +102,15 @@ async def test_single_read_carries_derived_fields(client, seeded):
     stored = (await client.get(f"/v1/calls/{stored_id}")).json()["data"]
     assert stored["ended_reason"] == "assistant_ended_call"
     assert (stored["agent_name"], stored["agent_version"]) == ("support", 4)
+    assert stored["latency_summary"]["slowest_turn"] == {
+        "turn": 2,
+        "user_to_bot_ms": 1500,
+    }
 
     inline = (await client.get(f"/v1/calls/{inline_id}")).json()["data"]
     assert inline["ended_reason"] == "customer_ended_call"
     assert inline["agent_name"] is None and inline["agent_version"] is None
+    assert inline["latency_summary"] is None
 
 
 async def test_list_carries_each_calls_own_fields(client, seeded):
@@ -107,6 +120,8 @@ async def test_list_carries_each_calls_own_fields(client, seeded):
     assert items[str(stored_id)]["agent_name"] == "support"
     assert items[str(inline_id)]["ended_reason"] == "customer_ended_call"
     assert items[str(inline_id)]["agent_name"] is None
+    assert items[str(stored_id)]["latency_summary"]["turns"] == 2
+    assert items[str(inline_id)]["latency_summary"] is None
 
 
 async def test_deleted_agent_row_reads_as_null(factory, client, seeded):
@@ -143,5 +158,5 @@ async def test_call_ended_payload_matches_the_read(factory, client, seeded):
         )
     payload = dispatch.await_args.kwargs["payload"]
     read = (await client.get(f"/v1/calls/{stored_id}")).json()["data"]
-    for field in ("ended_reason", "agent_name", "agent_version"):
+    for field in ("ended_reason", "agent_name", "agent_version", "latency_summary"):
         assert payload[field] == read[field], field
