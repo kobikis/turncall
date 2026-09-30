@@ -1,0 +1,65 @@
+---
+title: Ambience
+description: "A room the agent sounds like it is in: background audio under every call"
+icon: "volume"
+---
+
+Upload a sound once, name it on any agent in the project, and it plays quietly under and between everything the agent says, for the whole call. A restaurant receptionist sounds like it is in the restaurant, not in an anechoic chamber.
+
+It works on every voice transport (Twilio, WebRTC and WhatsApp voice), S2S agents included, because the mixing happens in the transport rather than in the TTS stage. It is off unless configured.
+
+## 1. Upload a sound
+
+```bash
+curl -X POST https://api.example.com/v1/ambience-sounds \
+  -H "Authorization: Bearer tc_..." \
+  -F "file=@dining-room.wav"
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "42e6a805-8950-41cc-8586-5d10713aa5aa",
+    "name": "dining-room.wav",
+    "duration_ms": 30000,
+    "rates": [8000, 16000],
+    "warnings": []
+  }
+}
+```
+
+Every upload is decoded, forced to mono and stored once per sample rate a voice transport uses. The mixer plays nothing at any other rate and plays stereo at double speed, and it reports neither, so TurnCall normalizes at upload rather than trusting the file.
+
+| Limit | Response |
+|---|---|
+| Over 10 MB | `409` |
+| Longer than 60 s | `409`. Ambience loops, so a minute is plenty, and a longer file is held in memory on every call |
+| Not decodable (`.m4a` included) | `415`, naming the accepted formats. Convert an iPhone voice memo with `ffmpeg -i memo.m4a memo.wav` |
+
+<Warning>
+  **A sound can play and still be silent on a phone.** A phone line carries only 300–3400 Hz, so a low rumble never reaches the caller. When too little of a sound's energy is in that band, the upload succeeds with an `inaudible_on_phone` warning. Real room recordings (voices, cutlery) come through clearly; synthetic low-frequency noise does not.
+</Warning>
+
+To hear what a caller will, `GET /v1/ambience-sounds/{id}` returns `rendition_urls`, and `GET /v1/ambience-sounds/{id}/renditions/{rate}` streams the MP3 itself on every storage backend.
+
+## 2. Name it on an agent
+
+```json
+{
+  "ambience": {"sound": "42e6a805-8950-41cc-8586-5d10713aa5aa", "volume": 0.3}
+}
+```
+
+- `sound` is a sound id in the agent's project. A stored agent naming one that does not exist is a `422` at save.
+- `volume` is `0.0`–`1.0` and defaults to `0.3`. On a real PSTN call, `0.3` was clearly audible for a restaurant recording and caused no spurious interruptions.
+- Remove the block to turn it off.
+
+An [inline agent from call-init](/guides/call-init) can carry the same block. Its sound id resolves against the call's project.
+
+## Behaviour to know
+
+- **It never ends a call.** A missing sound, a missing rendition or a failed fetch logs a warning and leaves the room silent.
+- **It is not in the call recording**, and it keeps playing while the voicemail gate holds the agent's speech back.
+- **It does not run in evals.** An eval run on an agent with ambience carries an `ambience_skipped` warning instead.
+- **Deleting a sound** is refused with `409`, naming the agents, while any agent uses it. Once deleted, its stored files go too.

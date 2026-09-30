@@ -476,8 +476,8 @@ class AmbienceConfigSchema(BaseModel):
 
     sound: UUID = Field(description="An ambience sound in this project")
     # 0.3, not pipecat's 0.4: an 8 kHz companded line carries background energy
-    # more intrusively than a 16 kHz browser call. No ceiling below 1.0 was
-    # invented from that reasoning — #171 is what should move either number.
+    # more intrusively than a 16 kHz browser call. No ceiling below 1.0: the
+    # PSTN echo check (#171) found no spurious interruptions at 0.3.
     volume: float = Field(default=0.3, ge=0.0, le=1.0)
 
     @field_serializer("sound")

@@ -36,7 +36,7 @@ Negligible, and the frames' downstream traversal is an `isinstance` check in
 `_bot_stopped_speaking`, so `user_idle_timeout_ms` behaves as it does without a
 mixer. What is *not* answered by any benchmark is PSTN line echo — ambience
 coupling back on the caller's channel and opening a VAD turn. That needs a real
-call and is tracked separately.
+call and is tracked separately (#171; see Consequences for the result).
 
 **2. A wrong sample rate is silent.** `SoundfileMixer` loads a file whose rate
 does not match the transport by logging a warning and storing nothing; the mix
@@ -151,6 +151,9 @@ uploads and call recordings are already orphaned forever. The divergence is
 deliberate and narrow — an ambience object is referenced by id from a live agent
 config, so an orphan here is a thing that looks like it should still work. The
 pre-existing leak is filed separately rather than fixed in passing.
+*Update 2026-09-30:* that leak is fixed (#168, #183). Document and
+knowledge-base deletes now remove their objects too, so this is no longer a
+divergence.
 
 **12. Caps: 10 MB upload, 60 s duration.** The size cap and its two-stage check
 (`Content-Length` before reading the body, then the actual bytes) match the
@@ -175,7 +178,11 @@ a `call_control` path so that a model can change the room it is in.
   because an 8 kHz G.711 line carries background energy more intrusively than
   16 kHz WebRTC — reasoning, not a measurement, which is why no ceiling below
   1.0 was invented from it. The real-call echo check is what should move either
-  number.
+  number. *Update 2026-09-30:* the check (#171) found no spurious
+  interruptions and no empty turns at 0.3 on a real PSTN call, and a short call
+  at 0.75 was clean too, so both numbers stand. The evidence is thin (one
+  barge-in call, one short call, one line). Reopen #171 if an agent with
+  ambience is ever reported as cutting out.
 - `.m4a` is rejected. libsndfile reads 26 formats and AAC is not among them,
   which makes an iPhone voice memo the most likely first upload anyone tries.
   The 415 names both the accepted formats and the fix; an ffmpeg dependency for
