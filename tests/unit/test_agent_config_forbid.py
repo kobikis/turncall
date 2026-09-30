@@ -40,3 +40,16 @@ def test_schema_covers_domain_settable_fields():
     domain_fields = set(AgentConfig.model_fields)
     missing = domain_fields - schema_fields - {"knowledge_bases"}
     assert not missing, f"schema is missing domain fields: {missing}"
+
+
+@pytest.mark.unit
+def test_observability_rejects_a_misspelt_switch():
+    # A typo here would silently keep storing sensitive context (#177).
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AgentConfigSchema(observability={"store_contxt": False})
+
+
+@pytest.mark.unit
+def test_observability_round_trips_to_the_domain():
+    dumped = AgentConfigSchema(observability={"store_context": False}).model_dump()
+    assert AgentConfig.model_validate(dumped).observability.store_context is False

@@ -451,6 +451,16 @@ class MCPServerSchema(BaseModel):
         return self
 
 
+class ObservabilityConfigSchema(BaseModel):
+    """What a call keeps about itself beyond the transcript (#177)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Context snapshots hold the rendered prompt and every tool result; an
+    # agent carrying sensitive data switches them off here.
+    store_context: bool = True
+
+
 class AvatarConfigSchema(BaseModel):
     """Video avatar config (WebRTC + cascade only). HeyGen or Tavus."""
 
@@ -558,6 +568,9 @@ class AgentConfigSchema(BaseModel):
     s2s: S2SConfigSchema = Field(default_factory=S2SConfigSchema)
     aws: AWSConfigSchema = Field(default_factory=AWSConfigSchema)
     avatar: AvatarConfigSchema = Field(default_factory=AvatarConfigSchema)
+    observability: ObservabilityConfigSchema = Field(
+        default_factory=ObservabilityConfigSchema
+    )
     transport: str = Field(default="twilio", pattern=r"^(twilio|webrtc|both)$")
     server_url: ServerUrlConfigSchema = Field(default_factory=ServerUrlConfigSchema)
     metadata: dict[str, Any] = Field(default_factory=dict)

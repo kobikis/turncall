@@ -227,6 +227,11 @@ class CallSession:
             if self._duration_guard is not None:
                 self._duration_guard.cancel()
                 self._duration_guard = None
+            # Whatever ended the call, this is the one place every call passes
+            # through, so the last agent's context snapshot is written here.
+            from turncall.orchestrator import context_snapshot
+
+            await context_snapshot.flush_call(self.call_id)
             try:
                 await self._finalize_call()
             except Exception:

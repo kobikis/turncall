@@ -174,6 +174,14 @@ class S2SConfig(DomainModel):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
+class ObservabilityConfig(DomainModel):
+    """What a call keeps about itself beyond the transcript (#177)."""
+
+    # Context snapshots hold the rendered prompt and every tool result, so an
+    # agent carrying sensitive data can switch them off.
+    store_context: bool = True
+
+
 class AvatarConfig(DomainModel):
     """Video avatar config (WebRTC + cascade only). HeyGen or Tavus."""
 
@@ -283,6 +291,7 @@ class AgentConfig(DomainModel):
     s2s: S2SConfig = Field(default_factory=S2SConfig)
     aws: AWSConfig = Field(default_factory=AWSConfig)
     avatar: AvatarConfig = Field(default_factory=AvatarConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     transport: str = "twilio"  # "twilio" | "webrtc" | "both"
     server_url: ServerUrlConfig = Field(default_factory=ServerUrlConfig)
     metadata: dict[str, Any] = Field(default_factory=dict)
