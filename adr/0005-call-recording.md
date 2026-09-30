@@ -45,7 +45,9 @@ locally, S3 in prod) — which is what operators expect.
 - `started_at` is now also stamped by the pipeline (`call_session` on
   `IN_PROGRESS`) rather than depending on the Twilio status callback.
 - Recording is one WAV per call at `recordings/{call_id}.wav` in the storage
-  backend; mono mix (`num_channels=1`).
+  backend; mono mix (`num_channels=1`). **Amended (#178):** stereo since, caller
+  on the left channel and agent on the right (`num_channels=2`) — a mix hid who
+  talked over whom. Files written before stay mono.
 - Avatar calls: recorder sits after the avatar service (assumes it forwards
   audio). S2S: user audio may be partially captured since the realtime LLM
   consumes input audio directly. Both noted for follow-up.

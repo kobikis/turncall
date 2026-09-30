@@ -4,6 +4,7 @@ The recorder hands object storage a WAV, not raw PCM. This checks the header is
 valid and the samples round-trip unchanged.
 """
 
+import io
 import wave
 
 from turncall.orchestrator.call_recorder import _pcm16_to_wav
@@ -18,8 +19,6 @@ def test_pcm16_to_wav_roundtrips() -> None:
 
     assert wav[:4] == b"RIFF" and wav[8:12] == b"WAVE"
 
-    import io
-
     with wave.open(io.BytesIO(wav), "rb") as wf:
         assert wf.getframerate() == sample_rate
         assert wf.getnchannels() == num_channels
@@ -30,3 +29,57 @@ def test_pcm16_to_wav_roundtrips() -> None:
 if __name__ == "__main__":
     test_pcm16_to_wav_roundtrips()
     print("ok")
+
+
+async def test_recording_is_stereo_caller_left_agent_right():
+    """Frames in, WAV out (#178): each speaker on their own channel."""
+    import struct
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+    from uuid import uuid4
+
+    from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame
+    from pipecat.tests.utils import run_test
+
+    from turncall.orchestrator.call_recorder import CallRecorder
+
+    rate = 8000
+    n = rate // 10  # 100ms each
+    caller = struct.pack(f"<{n}h", *([1000] * n))
+    agent = struct.pack(f"<{n}h", *([-2000] * n))
+
+    uploaded: dict[str, bytes] = {}
+
+    async def upload(key, data, content_type):
+        uploaded[key] = data
+        return f"file:///{key}"
+
+    storage = SimpleNamespace(upload=upload)
+    ctx = SimpleNamespace(is_eval=False, call_id=uuid4(), project_id=uuid4())
+    recorder = CallRecorder(ctx, sample_rate=rate)
+    with (
+        patch(
+            "turncall.orchestrator.call_recorder.create_storage_adapter",
+            return_value=storage,
+        ),
+        patch.object(CallRecorder, "_persist", AsyncMock()),
+        patch.object(CallRecorder, "_set_status", AsyncMock()),
+    ):
+        await run_test(
+            recorder,
+            frames_to_send=[
+                InputAudioRawFrame(audio=caller, sample_rate=rate, num_channels=1),
+                OutputAudioRawFrame(audio=agent, sample_rate=rate, num_channels=1),
+            ],
+            ignore_start=False,
+            expected_down_frames=None,
+        )
+
+    [wav] = uploaded.values()
+    with wave.open(io.BytesIO(wav), "rb") as wf:
+        assert wf.getnchannels() == 2
+        frames = wf.readframes(wf.getnframes())
+    samples = struct.unpack(f"<{len(frames) // 2}h", frames)
+    left, right = samples[0::2], samples[1::2]
+    assert 1000 in left and 1000 not in right
+    assert -2000 in right and -2000 not in left
