@@ -65,7 +65,7 @@ class TestDocumentDelete:
         storage.delete.assert_awaited_once_with(doc.storage_key)
 
     def test_keeps_a_file_another_document_still_names(self, app, project_id, storage):
-        # Two uploads of one filename into one KB share a key.
+        # Rows from before per-upload keys: one filename, one shared key.
         kb = _kb(project_id)
         doc = SimpleNamespace(id=uuid.uuid4(), storage_key=f"kb/{kb.id}/docs/faq.pdf")
         r, _ = self._delete(app, kb, doc, key_in_use=True)
@@ -131,14 +131,17 @@ class TestRecordingKey:
 async def test_sweep_deletes_twilio_recordings_by_their_real_key():
     pid = uuid.uuid4()
     session = AsyncMock()
-    results = [
-        ["kb/k/docs/a.pdf"],  # document keys
-        ["s3://b/recordings/c1.wav", "s3://b/recordings/c2/RE9.wav"],  # urls
-    ]
-    session.execute.side_effect = [
-        SimpleNamespace(scalars=lambda r=r: SimpleNamespace(all=lambda: r))
-        for r in results
-    ]
+    c1, c2 = uuid.uuid4(), uuid.uuid4()
+    docs = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: ["kb/k/a"]))
+    recs = SimpleNamespace(
+        all=lambda: [
+            (c1, f"s3://b/recordings/{c1}.wav"),
+            # Twilio's callback overwrote recording_url: the recorder's WAV
+            # is still stored under the call id and must go too.
+            (c2, f"s3://b/recordings/{c2}/RE9.wav"),
+        ]
+    )
+    session.execute.side_effect = [docs, recs]
     storage = AsyncMock()
     with (
         patch.object(pd, "create_storage_adapter", return_value=storage),
@@ -153,8 +156,29 @@ async def test_sweep_deletes_twilio_recordings_by_their_real_key():
         )
         await pd._sweep_storage(session, SimpleNamespace(storage=storage_settings), pid)
     assert {c.args[0] for c in storage.delete.await_args_list} == {
-        "kb/k/docs/a.pdf",
-        "recordings/c1.wav",
-        "recordings/c2/RE9.wav",
+        "kb/k/a",
+        f"recordings/{c1}.wav",
+        f"recordings/{c2}.wav",
+        f"recordings/{c2}/RE9.wav",
         "ambience/x/8000.mp3",
     }
+
+
+@pytest.mark.asyncio
+async def test_two_uploads_of_one_filename_get_two_objects():
+    from turncall.services import document_ingestion as di
+
+    storage, kb = AsyncMock(), uuid.uuid4()
+    with patch.object(di.knowledge_repo, "create_document", AsyncMock()):
+        for _ in range(2):
+            await di.create_pending_document(
+                AsyncMock(),
+                storage,
+                knowledge_base_id=kb,
+                filename="faq.pdf",
+                content_type="application/pdf",
+                data=b"x",
+            )
+    a, b = (c.args[0] for c in storage.upload.await_args_list)
+    assert a != b
+    assert a.startswith(f"kb/{kb}/docs/") and a.endswith("/faq.pdf")

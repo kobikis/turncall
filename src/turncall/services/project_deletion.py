@@ -60,26 +60,25 @@ async def _sweep_storage(
         .scalars()
         .all()
     )
-    # Keys come from recording_url, not the call id: the call recorder and
-    # Twilio's callback write two different shapes (#168).
-    rec_urls = (
-        (
-            await session.execute(
-                select(CallRow.recording_url).where(
-                    CallRow.project_id == project_id,
-                    CallRow.recording_url.is_not(None),
-                )
+    # The recorder writes recordings/{call_id}.wav; Twilio's callback writes
+    # recordings/{call_id}/{sid}.wav and overwrites recording_url, which can
+    # then hide the first. Sweep both (#168).
+    recordings = (
+        await session.execute(
+            select(CallRow.id, CallRow.recording_url).where(
+                CallRow.project_id == project_id,
+                CallRow.recording_url.is_not(None),
             )
         )
-        .scalars()
-        .all()
-    )
+    ).all()
 
     # Ambience renditions (ADR-0021): the rows go with the purge's cascade, and
     # nothing else would ever name these objects again.
     ambience_keys = await ambience_repo.rendition_keys_for_project(session, project_id)
 
-    rec_keys = [recording_storage_key(url) for url in rec_urls]
+    rec_keys = {f"recordings/{cid}.wav" for cid, _ in recordings} | {
+        recording_storage_key(url) for _, url in recordings
+    }
     await delete_objects(
         storage,
         [k for k in doc_keys if k] + [k for k in rec_keys if k] + ambience_keys,

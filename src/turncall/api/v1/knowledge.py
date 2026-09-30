@@ -162,10 +162,11 @@ async def delete_knowledge_base(
             details={"agent_count": agent_count},
         )
 
+    storage = _storage()
     keys = await knowledge_repo.document_storage_keys(session, kb_id)
     await knowledge_repo.delete_knowledge_base(session, kb_id)
     await session.commit()
-    await delete_objects(_storage(), keys)
+    await delete_objects(storage, keys)
 
 
 # --- Documents ---
@@ -316,11 +317,15 @@ async def delete_document(
     if doc_row is None:
         raise NotFoundError("Document", str(doc_id))
 
+    storage = _storage()
     # Chunks cascade-deleted via FK
     await knowledge_repo.delete_document(session, doc_id)
+    # Rows from before per-upload keys can share one; asked inside the delete's
+    # transaction so nothing can raise between the commit and the object delete.
+    shared = await knowledge_repo.storage_key_in_use(session, doc_row.storage_key)
     await session.commit()
-    if not await knowledge_repo.storage_key_in_use(session, doc_row.storage_key):
-        await delete_objects(_storage(), [doc_row.storage_key])
+    if not shared:
+        await delete_objects(storage, [doc_row.storage_key])
 
 
 # --- Search ---

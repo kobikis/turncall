@@ -5,7 +5,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import tiktoken
 from loguru import logger
@@ -353,7 +353,9 @@ async def create_pending_document(
     safe_filename = os.path.basename(filename)
     if not safe_filename or safe_filename in (".", ".."):
         safe_filename = "untitled"
-    storage_key = f"kb/{knowledge_base_id}/docs/{safe_filename}"
+    # One prefix per upload: keyed by filename alone, a re-upload of one name
+    # overwrote the first document's file and deleting either lost both (#168).
+    storage_key = f"kb/{knowledge_base_id}/docs/{uuid4().hex}/{safe_filename}"
     await storage.upload(storage_key, data, content_type=content_type)
 
     doc_row = await knowledge_repo.create_document(
