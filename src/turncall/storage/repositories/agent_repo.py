@@ -46,6 +46,18 @@ async def get_agent_by_id(
     return result.scalar_one_or_none()
 
 
+async def get_names_and_versions(
+    session: AsyncSession, agent_ids: list[UUID]
+) -> dict[UUID, tuple[str, int]]:
+    """Name and version per agent id, for labelling calls. Missing ids are absent."""
+    result = await session.execute(
+        select(AgentRow.id, AgentRow.name, AgentRow.version).where(
+            AgentRow.id.in_(agent_ids)
+        )
+    )
+    return {row.id: (row.name, row.version) for row in result.all()}
+
+
 async def list_agents(
     session: AsyncSession,
     project_id: UUID,

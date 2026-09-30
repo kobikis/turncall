@@ -17,9 +17,9 @@ from uuid import UUID
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from turncall.domain.call_state import infer_ended_reason
-from turncall.domain.enums import CallEventType
+from turncall.domain.enums import CallEventType, EndedReason
 from turncall.domain.models import AnalysisConfig, AWSConfig, LLMConfig
+from turncall.services.call_view import call_view_fields
 
 
 async def _gather_transcript(
@@ -173,26 +173,18 @@ async def _run_post_call(
             session_factory, call_id
         )
 
-        # 4. Load call metadata + signals to derive ended_reason (ADR-0008)
+        # 4. Load the call and its derived fields (ended_reason, ADR-0008) —
+        # the same function the call read uses, so the two cannot disagree.
         async with session_factory() as session:
             call = await call_repo.get_call_by_id(session, call_id)
-            event_types = await call_repo.list_event_types(session, call_id)
-            end_events = await call_repo.list_call_events(
-                session, call_id, event_type=CallEventType.CALL_ENDED
-            )
-        assistant_ended = any(
-            (e.payload or {}).get("source") == "control" for e in end_events
-        )
-        ended_reason = infer_ended_reason(
-            call.status if call else "",
-            event_types,
-            assistant_ended=assistant_ended,
-        )
+            derived = (await call_view_fields(session, [call]))[call.id] if call else {}
 
         # 5. Build comprehensive call.ended payload
         call_ended_payload: dict[str, Any] = {
             "transcript": transcript,
-            "ended_reason": ended_reason.value,
+            **derived,
+            # A call.ended always names a reason, as it did before the view.
+            "ended_reason": derived.get("ended_reason") or EndedReason.UNKNOWN.value,
         }
         if call:
             call_ended_payload["status"] = call.status

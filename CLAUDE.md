@@ -910,8 +910,14 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 
 `call.ended` payload: `status`, `ended_reason`, `from_number`, `to_number`, `direction`,
 `duration_ms`, `provider_call_sid`, `metadata`, `started_at`, `ended_at`,
-`recording_status`, `recording_url`, `summary`, `analysis`, and
-`transcript` (`[{role, text, timestamp}]`).
+`recording_status`, `recording_url`, `summary`, `analysis`, `agent_name`,
+`agent_version`, and `transcript` (`[{role, text, timestamp}]`).
+
+The call read (`GET /v1/calls[/{id}]`) carries the same derived fields —
+`ended_reason`, `agent_name`, `agent_version` — from the same function,
+`services/call_view.py`, so the read and the webhook cannot disagree (#175).
+`ended_reason` is null on the read while the call is still live; agent fields
+are null for an inline agent and for a deleted agent row.
 
 `ended_reason` (derived, not stored): `customer_ended_call`, `assistant_ended_call`,
 `customer_did_not_answer`, `customer_busy`, `customer_silent`, `voicemail`, `transferred`,

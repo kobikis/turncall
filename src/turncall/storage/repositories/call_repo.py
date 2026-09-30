@@ -198,6 +198,37 @@ async def list_event_types(session: AsyncSession, call_id: UUID) -> set[str]:
     return set(result.scalars().all())
 
 
+async def list_event_types_by_call(
+    session: AsyncSession, call_ids: list[UUID]
+) -> dict[UUID, set[str]]:
+    """`list_event_types` for a page of calls, in one query."""
+    result = await session.execute(
+        select(CallEventRow.call_id, CallEventRow.event_type)
+        .where(CallEventRow.call_id.in_(call_ids))
+        .distinct()
+    )
+    by_call: dict[UUID, set[str]] = {}
+    for call_id, event_type in result.all():
+        by_call.setdefault(call_id, set()).add(event_type)
+    return by_call
+
+
+async def list_control_ended_calls(
+    session: AsyncSession, call_ids: list[UUID]
+) -> set[UUID]:
+    """The calls among `call_ids` the end_call tool hung up (ADR-0008)."""
+    result = await session.execute(
+        select(CallEventRow.call_id)
+        .where(
+            CallEventRow.call_id.in_(call_ids),
+            CallEventRow.event_type == "call.ended",
+            CallEventRow.payload["source"].astext == "control",
+        )
+        .distinct()
+    )
+    return set(result.scalars().all())
+
+
 async def list_call_events(
     session: AsyncSession,
     call_id: UUID,

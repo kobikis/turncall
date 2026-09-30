@@ -1,0 +1,147 @@
+"""The call read against a real Postgres (#175).
+
+Seeds calls, their events and agents, then reads them through the HTTP routes.
+The loader batches per page, so this is also where an N+1 would show up as a
+wrong answer for the second call rather than only as slowness.
+"""
+
+import uuid
+from datetime import UTC, datetime
+
+import httpx
+import pytest
+
+from turncall.api.deps import get_session
+from turncall.app import create_app
+from turncall.auth.context import AuthContext
+from turncall.auth.dependencies import resolve_auth_context
+from turncall.config.settings import Settings
+from turncall.domain.enums import CallEventType, ProjectRole
+from turncall.storage.database import create_engine, create_session_factory
+from turncall.storage.models import ProjectRow
+from turncall.storage.repositories import agent_repo, call_repo
+
+pytestmark = pytest.mark.integration
+
+ENDED = datetime(2026, 9, 30, 12, 42, tzinfo=UTC)
+
+
+@pytest.fixture
+async def factory():
+    engine = create_engine(Settings().database)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            await session.connection()
+    except Exception:
+        pytest.skip("Postgres not reachable")
+    yield session_factory
+    await engine.dispose()
+
+
+async def _ended_call(session, project_id, *, agent_id=None, control=False):
+    call = await call_repo.create_call(
+        session, project_id=project_id, direction="inbound", active_agent_id=agent_id
+    )
+    await call_repo.update_call_status(
+        session, call.id, status="completed", ended_at=ENDED
+    )
+    await call_repo.create_call_event(
+        session,
+        call_id=call.id,
+        event_type=CallEventType.CALL_ENDED,
+        payload={"source": "control"} if control else {},
+        sequence_number=1,
+    )
+    return call
+
+
+@pytest.fixture
+async def seeded(factory):
+    async with factory() as session:
+        project = ProjectRow(name=f"call-view-{uuid.uuid4().hex[:6]}")
+        session.add(project)
+        await session.flush()
+        agent = await agent_repo.create_agent(
+            session, project_id=project.id, name="support", version=4, config_blob={}
+        )
+        stored = await _ended_call(session, project.id, agent_id=agent.id, control=True)
+        inline = await _ended_call(session, project.id)
+        await session.commit()
+    return project.id, stored.id, inline.id
+
+
+@pytest.fixture
+async def client(factory, seeded):
+    project_id = seeded[0]
+    app = create_app(Settings())
+
+    async def _session():
+        async with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _session
+    app.dependency_overrides[resolve_auth_context] = lambda: AuthContext(
+        project_id=project_id, api_key_id=uuid.uuid4(), role=ProjectRole.ADMIN
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        yield c
+
+
+async def test_single_read_carries_derived_fields(client, seeded):
+    _, stored_id, inline_id = seeded
+    stored = (await client.get(f"/v1/calls/{stored_id}")).json()["data"]
+    assert stored["ended_reason"] == "assistant_ended_call"
+    assert (stored["agent_name"], stored["agent_version"]) == ("support", 4)
+
+    inline = (await client.get(f"/v1/calls/{inline_id}")).json()["data"]
+    assert inline["ended_reason"] == "customer_ended_call"
+    assert inline["agent_name"] is None and inline["agent_version"] is None
+
+
+async def test_list_carries_each_calls_own_fields(client, seeded):
+    _, stored_id, inline_id = seeded
+    items = {c["id"]: c for c in (await client.get("/v1/calls")).json()["data"]}
+    assert items[str(stored_id)]["ended_reason"] == "assistant_ended_call"
+    assert items[str(stored_id)]["agent_name"] == "support"
+    assert items[str(inline_id)]["ended_reason"] == "customer_ended_call"
+    assert items[str(inline_id)]["agent_name"] is None
+
+
+async def test_deleted_agent_row_reads_as_null(factory, client, seeded):
+    _, stored_id, _ = seeded
+    async with factory() as session:
+        call = await call_repo.get_call_by_id(session, stored_id)
+        agent = await agent_repo.get_agent_by_id(session, call.active_agent_id)
+        await session.delete(agent)
+        await session.commit()
+    body = (await client.get(f"/v1/calls/{stored_id}")).json()["data"]
+    assert body["agent_name"] is None and body["agent_version"] is None
+
+
+async def test_call_ended_payload_matches_the_read(factory, client, seeded):
+    """The webhook takes its derived fields from the same function as the read."""
+    from unittest.mock import AsyncMock, patch
+
+    from turncall.domain.models import AnalysisConfig, LLMConfig
+    from turncall.services import call_analysis_trigger
+
+    project_id, stored_id, _ = seeded
+    async with factory() as session:
+        await call_repo.update_call_recording_status(session, stored_id, "failed")
+        await session.commit()
+    dispatch = AsyncMock()
+    with patch("turncall.events.dispatcher.dispatch_event", dispatch):
+        await call_analysis_trigger._run_post_call(
+            factory,
+            stored_id,
+            project_id,
+            AnalysisConfig(enabled=False),
+            LLMConfig(),
+            "",
+        )
+    payload = dispatch.await_args.kwargs["payload"]
+    read = (await client.get(f"/v1/calls/{stored_id}")).json()["data"]
+    for field in ("ended_reason", "agent_name", "agent_version"):
+        assert payload[field] == read[field], field
