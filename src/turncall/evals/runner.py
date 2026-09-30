@@ -48,6 +48,7 @@ from turncall.evals.result_mapping import (
     map_simulation_result,
 )
 from turncall.evals.run_warnings import (
+    warn_ambience_skipped,
     warn_judge_changed,
     warn_unmatched_mocks,
     warn_worker_stale,
@@ -452,6 +453,7 @@ async def _plan_run(
     warnings += warn_unmatched_mocks(tool_mocks, target, run_id=run.id)
     warnings += await warn_judge_changed(session, run, harness)
     warnings += warn_worker_stale(harness)
+    warnings += warn_ambience_skipped(target)
     if live_tools and (target.config.tools or target.config.mcp_servers):
         # The scenario typed the word, so this is allowed — but a real webhook
         # fires on every iteration, and the run's record is where someone

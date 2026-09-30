@@ -11,6 +11,21 @@ and is not part of this repository's history.
 
 ## [Unreleased]
 
+### Added
+
+- **Ambience — a room the agent sounds like it is in** (#166). Upload a sound
+  once (`POST /v1/ambience-sounds`) and any agent in the project names it:
+  `"ambience": {"sound": "<id>", "volume": 0.3}`. It plays quietly under and
+  between everything the agent says, for the whole call, on Twilio, WebRTC and
+  WhatsApp voice — S2S included. Each upload is decoded, forced to mono and
+  stored once per transport rate, because the mixer plays nothing at any other
+  shape and says nothing about it; the read returns a URL per rendition so you
+  can hear what a caller will. 10 MB / 60 s caps; `.m4a` is refused with the
+  conversion that fixes it. A sound is refused deletion (409, naming the
+  agents) while any agent uses it. Off unless configured, never in evals (the
+  run says so in `warnings`), and never able to end a call. New setting:
+  `AMBIENCE_CACHE_DIR`. See `adr/0021`.
+
 ## [2.0.0]
 
 Evals — automated behavioural testing for agents — plus tool calling on text,

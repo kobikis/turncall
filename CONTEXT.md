@@ -196,6 +196,41 @@ different state:
 _Avoid_: "empty turn" for a turn the caller genuinely stayed silent through —
 that is [[user idle|the three timeouts]], and nothing opened a turn at all.
 
+## Ambience
+
+**Ambience**:
+The room an agent sounds like it is in — a continuous, quiet bed of sound under
+everything it says, playing for the whole call rather than only while it speaks.
+It exists so an agent does not sound like it is calling from an anechoic chamber.
+Off unless an agent asks for it, and mixed into the *outbound* audio only: it
+never reaches the STT, so it cannot be mistaken for the caller.
+_Avoid_: "background noise" — that is the thing VAD and STT exist to remove, and
+reusing the word here reads as a defect. _Avoid_: "background music" — music is
+not what this is for, and it carries a licensing question ambience does not.
+
+**Ambience sound**:
+One piece of audio a project uploaded to be used as [[ambience]], owned by the
+project and shared by as many agents as reference it. What a caller hears is
+never the file that was uploaded: each sound is normalized once, on the way in,
+and stored as a [[rendition]] per rate. A sound cannot be deleted while an agent
+still names it.
+_Avoid_: calling the uploaded file itself the ambience sound — the uploaded bytes
+are a source, and nothing plays them.
+
+**Rendition**:
+One rate-specific, mono copy of an [[ambience sound]], produced at upload for
+each output rate a voice transport runs at. A rendition exists per rate because
+the mixer refuses audio at any other rate **silently** — it warns once and then
+mixes nothing, so the caller hears no ambience and nothing raises. A missing
+rendition is therefore indistinguishable from a working call, which is why they
+are made in advance rather than converted on the way out.
+
+**Ambience is absent from the [[call recording]]**:
+Not an omission. The recorder sits in the pipeline and the mixing happens
+downstream of it, inside the transport, so the caller hears the room and the
+stored WAV does not. This keeps transcripts and post-call analysis identical to
+an agent without ambience.
+
 ## Voicemail
 
 **Voicemail detector**:

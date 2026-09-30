@@ -221,6 +221,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(takeaways_router, prefix="/v1")
 
+    from turncall.api.v1.ambience import router as ambience_router
+
+    app.include_router(ambience_router, prefix="/v1")
+
     from turncall.api.v1.evals import router as eval_scenarios_router
     from turncall.api.v1.evals import runs_router as eval_runs_router
     from turncall.api.v1.tools import router as tools_router

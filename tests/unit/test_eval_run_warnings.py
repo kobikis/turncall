@@ -14,7 +14,7 @@ from uuid import uuid4
 import pytest
 
 from turncall.domain.models import AgentConfig, MCPServerConfig, ToolDefinition
-from turncall.evals.run_warnings import warn_unmatched_mocks
+from turncall.evals.run_warnings import warn_ambience_skipped, warn_unmatched_mocks
 from turncall.evals.targets import ResolvedTarget
 
 pytestmark = pytest.mark.unit
@@ -77,6 +77,26 @@ class TestTheWarningIsReturnedNotJustLogged:
         assert warn_unmatched_mocks({}, _target(tools=["a"]), run_id=uuid4()) == []
 
 
+class TestAmbienceIsSaidToBeSkipped:
+    """#170: an eval never plays ambience, and the run says so."""
+
+    def test_an_agent_with_ambience_is_told(self) -> None:
+        target = _target()
+        sound = uuid4()
+        target = ResolvedTarget(
+            project_id=target.project_id,
+            config=AgentConfig.model_validate({"ambience": {"sound": str(sound)}}),
+            config_blob={},
+            agent_id=target.agent_id,
+        )
+        (warning,) = warn_ambience_skipped(target)
+        assert warning["code"] == "ambience_skipped"
+        assert warning["sound"] == str(sound)
+
+    def test_an_agent_without_ambience_hears_nothing_about_it(self) -> None:
+        assert warn_ambience_skipped(_target()) == []
+
+
 @pytest.mark.asyncio
 class TestTheyReachTheRunAndTheEvent:
     @staticmethod
@@ -137,6 +157,30 @@ class TestTheyReachTheRunAndTheEvent:
         written = start.await_args.kwargs["warnings"]
         # Alongside whatever else the run has to say about itself (#95).
         assert "mock_matches_no_tool" in [w["code"] for w in written]
+
+    async def test_the_ambience_warning_is_written_to_the_run(self) -> None:
+        from turncall.evals import runner as runner_mod
+
+        target = ResolvedTarget(
+            project_id=uuid4(),
+            config=AgentConfig.model_validate({"ambience": {"sound": str(uuid4())}}),
+            config_blob={},
+            agent_id=uuid4(),
+        )
+        start = AsyncMock()
+        with (
+            patch("turncall.storage.repositories.eval_repo.start_run", start),
+            patch.object(runner_mod, "resolve_target", AsyncMock(return_value=target)),
+            patch.object(runner_mod, "_dispatch_run_event", AsyncMock()),
+        ):
+            await runner_mod._plan_run(
+                AsyncMock(),
+                self._run_row(),
+                settings=SimpleNamespace(),
+                session_factory=MagicMock(),
+            )
+        written = start.await_args.kwargs["warnings"]
+        assert "ambience_skipped" in [w["code"] for w in written]
 
     async def test_the_completed_event_carries_them(self) -> None:
         """It is built off the row, so this comes free — but free is not the

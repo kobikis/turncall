@@ -11,6 +11,7 @@ from pydantic import (
     Field,
     ValidationError,
     computed_field,
+    field_serializer,
     model_validator,
 )
 
@@ -464,6 +465,27 @@ class AvatarConfigSchema(BaseModel):
     persona_id: str = Field(default="pipecat-stream", max_length=256)
 
 
+class AmbienceConfigSchema(BaseModel):
+    """A room the agent sounds like it is in (ADR-0021). Absent means off.
+
+    No `enabled` flag: the sound id's absence already says off, and two ways
+    to say it are two things that can disagree.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    sound: UUID = Field(description="An ambience sound in this project")
+    # 0.3, not pipecat's 0.4: an 8 kHz companded line carries background energy
+    # more intrusively than a 16 kHz browser call. No ceiling below 1.0 was
+    # invented from that reasoning — #171 is what should move either number.
+    volume: float = Field(default=0.3, ge=0.0, le=1.0)
+
+    @field_serializer("sound")
+    def _sound_as_str(self, sound: UUID) -> str:
+        # config_blob is JSONB and model_dump() is python-mode.
+        return str(sound)
+
+
 class AWSConfigSchema(BaseModel):
     """AWS credentials/region shared by the bedrock LLM and aws S2S providers.
 
@@ -558,6 +580,7 @@ class AgentConfigSchema(BaseModel):
     s2s: S2SConfigSchema = Field(default_factory=S2SConfigSchema)
     aws: AWSConfigSchema = Field(default_factory=AWSConfigSchema)
     avatar: AvatarConfigSchema = Field(default_factory=AvatarConfigSchema)
+    ambience: AmbienceConfigSchema | None = None
     transport: str = Field(default="twilio", pattern=r"^(twilio|webrtc|both)$")
     server_url: ServerUrlConfigSchema = Field(default_factory=ServerUrlConfigSchema)
     metadata: dict[str, Any] = Field(default_factory=dict)

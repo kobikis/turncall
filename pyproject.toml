@@ -76,6 +76,10 @@ dependencies = [
     # OTLP span exporter (pipecat[tracing] ships otel api/sdk but not an exporter).
     # See ADR-0010.
     "opentelemetry-exporter-otlp>=1.43.0",
+    # Ambience ingest (ADR-0021) decodes, resamples and MP3-encodes uploads.
+    # Both already arrive through pipecat; declared because we import them.
+    "soundfile~=0.13.1",
+    "soxr~=1.0.0",
 
     # Knowledge Base (RAG)
     "pgvector>=0.3.0",
@@ -182,5 +186,5 @@ warn_return_any = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["twilio.*", "redis.*", "boto3.*", "botocore.*", "aioboto3.*", "tiktoken.*", "pypdf.*", "aiofiles.*", "defusedxml.*"]
+module = ["twilio.*", "redis.*", "boto3.*", "botocore.*", "aioboto3.*", "tiktoken.*", "pypdf.*", "aiofiles.*", "defusedxml.*", "soundfile.*", "soxr.*"]
 ignore_missing_imports = true

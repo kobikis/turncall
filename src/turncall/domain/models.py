@@ -4,7 +4,15 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from loguru import logger
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+)
 
 from turncall.domain.enums import (
     AgentState,
@@ -187,6 +195,17 @@ class AvatarConfig(DomainModel):
     persona_id: str = "pipecat-stream"  # lip-syncs Pipecat TTS audio
 
 
+class AmbienceConfig(DomainModel):
+    """A room the agent sounds like it is in (ADR-0021). Absent means off.
+
+    `sound` names a project's ambience sound; it is mixed into the outbound
+    audio of every voice transport, S2S included, and never into an eval.
+    """
+
+    sound: UUID
+    volume: float = Field(default=0.3, ge=0.0, le=1.0)
+
+
 class SuccessEvaluationConfig(DomainModel):
     """How to evaluate call success."""
 
@@ -283,6 +302,26 @@ class AgentConfig(DomainModel):
     s2s: S2SConfig = Field(default_factory=S2SConfig)
     aws: AWSConfig = Field(default_factory=AWSConfig)
     avatar: AvatarConfig = Field(default_factory=AvatarConfig)
+    ambience: AmbienceConfig | None = None
+
+    @field_validator("ambience", mode="wrap")
+    @classmethod
+    def _unusable_ambience_is_off(
+        cls, value: Any, handler: ValidatorFunctionWrapHandler
+    ) -> AmbienceConfig | None:
+        """Ambience can never end a call (ADR-0021). A stored agent's block
+        passed the API schema, but an inline one arrives from a call-init
+        webhook — a malformed block there drops the room, not the call."""
+        try:
+            return handler(value)  # type: ignore[no-any-return]
+        except ValidationError as exc:
+            logger.warning(
+                "ambience_skipped: unusable ambience block, call runs without "
+                "ambience: {err}",
+                err=str(exc),
+            )
+            return None
+
     transport: str = "twilio"  # "twilio" | "webrtc" | "both"
     server_url: ServerUrlConfig = Field(default_factory=ServerUrlConfig)
     metadata: dict[str, Any] = Field(default_factory=dict)

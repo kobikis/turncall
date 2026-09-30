@@ -20,9 +20,13 @@ from turncall.api.deps import DbSession
 from turncall.config import get_settings
 from turncall.domain.enums import CallDirection, CallEventType
 from turncall.domain.models import AgentConfig
+from turncall.orchestrator.ambience import build_ambience_mixer
 from turncall.orchestrator.pipeline_builder import start_call_pipeline
 from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
-from turncall.orchestrator.transport_factory import create_whatsapp_transport
+from turncall.orchestrator.transport_factory import (
+    WEBRTC_SAMPLE_RATE,
+    create_whatsapp_transport,
+)
 from turncall.storage.database import create_session_factory, get_engine
 from turncall.storage.repositories import (
     agent_repo,
@@ -340,7 +344,14 @@ async def _start_voice_pipeline(
     )
 
     # Build transport and pipeline
-    transport = create_whatsapp_transport(connection)
+    mixer = await build_ambience_mixer(
+        config,
+        project_id=call_context.project_id,
+        sample_rate=WEBRTC_SAMPLE_RATE,
+        session_factory=session_factory,
+        settings=settings,
+    )
+    transport = create_whatsapp_transport(connection, mixer=mixer)
 
     await start_call_pipeline(
         config=config,
@@ -348,7 +359,7 @@ async def _start_voice_pipeline(
         call_context=call_context,
         settings=settings,
         session_factory=session_factory,
-        audio_sample_rate=16000,
+        audio_sample_rate=WEBRTC_SAMPLE_RATE,
     )
 
     logger.info(
