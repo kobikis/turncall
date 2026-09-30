@@ -1,6 +1,5 @@
 """Call management endpoints."""
 
-from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -14,9 +13,8 @@ from turncall.api.responses import ok, paginated
 from turncall.api.v1.schemas.calls import CallEventResponse, CallResponse
 from turncall.auth import Auth
 from turncall.config.settings import get_settings
-from turncall.services.call_analysis_trigger import config_for_call
 from turncall.services.call_view import call_view_fields
-from turncall.storage.repositories import call_repo, context_snapshot_repo
+from turncall.storage.repositories import call_repo
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -125,47 +123,6 @@ async def get_call_transcript(
             "call_id": str(call_id),
             "entries": transcript_entries,
             "count": len(transcript_entries),
-        }
-    )
-
-
-@router.get("/{call_id}/context")
-async def get_call_context(
-    call_id: UUID,
-    auth: Auth,
-    session: DbSession,
-) -> dict[str, Any]:
-    """What the model was given, one snapshot per agent segment (#177).
-
-    `status` separates "this agent had snapshots switched off" from "nothing
-    was captured" (a call that failed before its pipeline started). Served
-    here only — a snapshot never rides in a webhook.
-    """
-    call = await call_repo.get_call_by_id(session, call_id, project_id=auth.project_id)
-    if call is None:
-        raise NotFoundError("Call", str(call_id))
-
-    rows = await context_snapshot_repo.list_snapshots(session, call_id)
-    if rows:
-        status = "captured"
-    else:
-        config = await config_for_call(session, call) or {}
-        stored = (config.get("observability") or {}).get("store_context", True)
-        status = "not_captured" if stored else "switched_off"
-    return ok(
-        {
-            "call_id": str(call_id),
-            "status": status,
-            "segments": [
-                {
-                    "segment": r.segment,
-                    "agent_id": str(r.agent_id) if r.agent_id else None,
-                    "system_instruction": r.system_instruction,
-                    "messages": r.messages,
-                    "created_at": r.created_at.isoformat(),
-                }
-                for r in rows
-            ],
         }
     )
 

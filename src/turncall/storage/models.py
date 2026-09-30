@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from sqlalchemy import (
     CheckConstraint,
@@ -231,42 +231,6 @@ class CallRow(Base):
         # GET /v1/calls filters project_id and sorts created_at DESC — this
         # composite serves both, so an append-forever table stays fast.
         Index("ix_calls_project_created", "project_id", "created_at"),
-    )
-
-
-class CallContextSnapshotRow(Base):
-    """What the model was given during one agent segment of a call (#177).
-
-    Its own table, not a call event: `/events` returns every event type, and a
-    snapshot is large and holds whatever the prompt and the tools returned.
-    """
-
-    __tablename__ = "call_context_snapshots"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=new_uuid
-    )
-    call_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("calls.id", ondelete="CASCADE"), nullable=False
-    )
-    # Null for an inline agent (ADR-0017). No FK: the agent row may be deleted.
-    agent_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
-    segment: Mapped[int] = mapped_column(Integer, nullable=False)
-    system_instruction: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    messages: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now
-    )
-
-    __table_args__ = (
-        Index(
-            "ix_call_context_snapshots_call_segment",
-            "call_id",
-            "segment",
-            unique=True,
-        ),
     )
 
 

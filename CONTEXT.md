@@ -358,13 +358,6 @@ record, unlike an [[observer]]'s output, which is only logged. A call's
 **latency summary** is derived from its turn metrics and never stored.
 _Avoid_: "latency logs".
 
-**Context snapshot**:
-What the model actually saw: the rendered system prompt, the injected knowledge,
-and every tool call and result. It is captured once per agent the call ran,
-because a [[handoff]] replaces the context. This differs from the transcript,
-which is what was *said*. _Avoid_: "messages" (in chat, that word means the
-stored session messages).
-
 **trace_include_pii**:
 The switch (default **on**) that puts `from_number`/`to_number` on spans. Phone
 numbers are PII landing in an external tracing backend; flip it off for

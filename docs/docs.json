@@ -146,7 +146,6 @@
               "GET /v1/calls/{call_id}/events",
               "GET /v1/calls/{call_id}/transcript",
               "GET /v1/calls/{call_id}/recording",
-              "GET /v1/calls/{call_id}/context",
               "GET /v1/calls/{call_id}/analysis",
               "POST /v1/calls/{call_id}/analysis/rerun"
             ]

@@ -1445,9 +1445,6 @@ def create_pipeline(
         tts_voice=config.tts.voice,
     )
 
-    from turncall.orchestrator import context_snapshot
-
-    context_snapshot.register(call_context, context, system_instruction, config)
     return Pipeline(processors)
 
 
@@ -1615,10 +1612,4 @@ def _create_s2s_pipeline(
         turn=config.s2s.turn_detection,
     )
 
-    from turncall.orchestrator import context_snapshot
-    from turncall.orchestrator.s2s_config import _build_s2s_system_prompt
-
-    context_snapshot.register(
-        call_context, context, _build_s2s_system_prompt(config), config
-    )
     return Pipeline(processors)

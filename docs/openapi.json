@@ -1380,68 +1380,6 @@
         }
       }
     },
-    "/v1/calls/{call_id}/context": {
-      "get": {
-        "tags": [
-          "calls"
-        ],
-        "summary": "Get Call Context",
-        "description": "What the model was given, one snapshot per agent segment (#177).\n\n`status` separates \"this agent had snapshots switched off\" from \"nothing\nwas captured\" (a call that failed before its pipeline started). Served\nhere only \u2014 a snapshot never rides in a webhook.",
-        "operationId": "get_call_context_v1_calls__call_id__context_get",
-        "parameters": [
-          {
-            "name": "call_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Call Id"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Call Context V1 Calls  Call Id  Context Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/calls/{call_id}/recording": {
       "get": {
         "tags": [
@@ -6082,9 +6020,6 @@
           "avatar": {
             "$ref": "#/components/schemas/AvatarConfigSchema"
           },
-          "observability": {
-            "$ref": "#/components/schemas/ObservabilityConfigSchema"
-          },
           "transport": {
             "type": "string",
             "pattern": "^(twilio|webrtc|both)$",
@@ -7445,19 +7380,6 @@
         ],
         "title": "MCPServerSchema",
         "description": "MCP server connection configuration."
-      },
-      "ObservabilityConfigSchema": {
-        "properties": {
-          "store_context": {
-            "type": "boolean",
-            "title": "Store Context",
-            "default": true
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "ObservabilityConfigSchema",
-        "description": "What a call keeps about itself beyond the transcript (#177)."
       },
       "ProjectRole": {
         "type": "string",

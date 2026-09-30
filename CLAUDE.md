@@ -885,7 +885,6 @@ All Pipecat imports isolated in `orchestrator/`. No other module imports Pipecat
 - `call_session.py` — Per-call lifecycle, first message, cleanup
 - `tool_bridge.py` — Registers tools + writes ToolInvocation records
 - `observability.py` — Logs transcripts/events to DB + dispatches webhooks
-- `context_snapshot.py` — what the model was given (rendered system instruction + context messages: retrieved knowledge, tool calls and results), one snapshot per agent segment in `call_context_snapshots`, written when the call ends (#177). Served only by `GET /v1/calls/{id}/context` (`status`: `captured` \| `switched_off` \| `not_captured`), never in a webhook. On by default; an agent turns it off with `observability.store_context: false`. None in an eval
 - `turn_metrics.py` — one `metrics.turn` call event per turn (STT/LLM/TTS TTFB + user-to-bot latency), from pipecat's latency observer; stored, never dispatched, none in an eval (#176). Read them with `GET /v1/calls/{id}/events?event_type=metrics.turn`
 - `telemetry.py` — OpenTelemetry tracing setup + Pipecat observers (latency/turn/LLM/transcription/startup). See ADR-0010
 - `session_manager.py` — Active session registry

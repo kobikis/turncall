@@ -18,7 +18,6 @@ from loguru import logger
 
 from turncall.domain.enums import ToolExecutionMode
 from turncall.domain.models import BUILTIN_TOOL_NAMES, ToolDefinition
-from turncall.orchestrator import context_snapshot
 from turncall.services import call_control
 from turncall.services.tool_mocks import EXECUTED, intercept
 from turncall.services.tool_webhook import classify_tool_result, post_tool_webhook
@@ -205,14 +204,9 @@ class PreparedHandoff(NamedTuple):
     name: str
     config: AgentConfig
     frames: tuple[Any, ...]
-    # For the outgoing agent's context snapshot and the incoming one's (#180).
-    agent_id: UUID | None = None
-    system_instruction: str = ""
 
 
-def _build_handoff_frames(
-    config: AgentConfig, system_instruction: str
-) -> tuple[Any, Any]:
+def _build_handoff_frames(config: AgentConfig) -> tuple[Any, Any]:
     """Build the two frames that carry a handoff, marked uninterruptible.
 
     Called before the switch is committed, where raising is still safe.
@@ -221,7 +215,10 @@ def _build_handoff_frames(
     from pipecat.processors.aggregators.llm_context import NOT_GIVEN
     from pipecat.services.llm_service import LLMSettings
 
-    from turncall.orchestrator.pipeline_factory import _build_tools_schema
+    from turncall.orchestrator.pipeline_factory import (
+        _build_system_instruction,
+        _build_tools_schema,
+    )
 
     # The prompt lives on the LLM service, not in the context, so switching
     # agents is a settings update rather than a rewritten first message. Doing
@@ -229,7 +226,9 @@ def _build_handoff_frames(
     # system_instruction to the context messages, so the previous agent's
     # instructions would survive the handoff.
     prompt_frame = _mark_uninterruptible(
-        LLMUpdateSettingsFrame(delta=LLMSettings(system_instruction=system_instruction))
+        LLMUpdateSettingsFrame(
+            delta=LLMSettings(system_instruction=_build_system_instruction(config))
+        )
     )
     # Tools live in two places: the handler registry and the advertised
     # schema. Moving only the prompt left the model believing it was the new
@@ -275,10 +274,7 @@ async def _prepare_handoff(
                 return None
             config = AgentConfig.model_validate(target.config_blob)
 
-        from turncall.orchestrator.pipeline_factory import _build_system_instruction
-
-        system_instruction = _build_system_instruction(config)
-        frames = _build_handoff_frames(config, system_instruction)
+        frames = _build_handoff_frames(config)
     except Exception:
         logger.exception("handoff_context: failed to prepare the handoff")
         return None
@@ -293,13 +289,7 @@ async def _prepare_handoff(
             servers=[s.name for s in config.mcp_servers],
         )
 
-    return PreparedHandoff(
-        name=target.name,
-        config=config,
-        frames=frames,
-        agent_id=UUID(target_id),
-        system_instruction=system_instruction,
-    )
+    return PreparedHandoff(name=target.name, config=config, frames=frames)
 
 
 async def _apply_handoff_context(
@@ -319,16 +309,6 @@ async def _apply_handoff_context(
     built cannot survive a drain. `test_handoff_switch_is_atomic.py` fails if
     it happens.
     """
-    # The outgoing agent's context is about to be cleared: snapshot it first
-    # (#180). A dict lookup and a synchronous copy that never raises — nothing
-    # here suspends.
-    snapshotter = context_snapshot.for_call(call_context.call_id)
-    if snapshotter is not None:
-        snapshotter.capture_for_handoff(
-            agent_id=prepared.agent_id,
-            system_instruction=prepared.system_instruction,
-            store_context=prepared.config.observability.store_context,
-        )
     params.context.set_messages([])
     if prepared.config.tools:
         register_tools(params.llm, list(prepared.config.tools), call_context)
