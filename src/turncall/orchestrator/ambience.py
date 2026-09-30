@@ -25,6 +25,9 @@ from turncall.adapters.storage import create_storage_adapter
 from turncall.domain.models import AgentConfig
 from turncall.storage.repositories import ambience_repo
 
+# A rendition is ~70-130 KB; past this the call starts without its room.
+FETCH_TIMEOUT_SECONDS = 5.0
+
 
 async def build_ambience_mixer(
     config: AgentConfig,
@@ -105,7 +108,9 @@ async def _rendition_path(
             s3_bucket=storage_settings.s3_bucket,
             aws_region=storage_settings.aws_region,
         )
-        data = await storage.download(key)
+        # Bounded: on WebRTC and WhatsApp this runs before the SDP answer, so a
+        # hung fetch is a caller hearing nothing at all.
+        data = await asyncio.wait_for(storage.download(key), FETCH_TIMEOUT_SECONDS)
         await asyncio.to_thread(_write_atomically, path, data)
     return path
 

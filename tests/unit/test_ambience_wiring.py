@@ -66,6 +66,21 @@ class TestConfigSchema:
         assert AgentConfig.model_validate(blob).ambience.sound == sound
 
 
+class TestAnUnusableInlineBlockIsOffNotFatal:
+    """An inline config is validated by the domain model only, so its ambience
+    block is untrusted: a bad one must cost the room, never the call."""
+
+    @pytest.mark.parametrize(
+        "block",
+        [{"sound": "not-a-uuid"}, {"sound": str(uuid.uuid4()), "volume": 50}],
+        ids=["bad-id", "volume-out-of-range"],
+    )
+    def test_it_parses_with_ambience_off(self, block) -> None:
+        cfg = AgentConfig.model_validate({"system_prompt": "hi", "ambience": block})
+        assert cfg.ambience is None
+        assert cfg.system_prompt == "hi"
+
+
 class TestTransports:
     @pytest.mark.parametrize("name", sorted(VOICE_FACTORIES))
     def test_every_voice_transport_carries_the_mixer_it_is_given(self, name) -> None:
@@ -220,6 +235,32 @@ class TestBuildAmbienceMixer:
     async def test_a_missing_rendition_plays_nothing(self, tmp_path) -> None:
         row = SimpleNamespace(renditions={"16000": "k/16.mp3"})
         mixer, _, _ = await self._build(self._config(), row, tmp_path)
+        assert mixer is None
+
+    async def test_a_hung_fetch_gives_up(self, tmp_path) -> None:
+        import asyncio
+
+        async def _hang(key):
+            await asyncio.sleep(10)
+
+        factory, get = _session_factory(self._row())
+        storage = AsyncMock()
+        storage.download.side_effect = _hang
+        with (
+            patch("turncall.orchestrator.ambience.ambience_repo.get_by_id", get),
+            patch(
+                "turncall.orchestrator.ambience.create_storage_adapter",
+                return_value=storage,
+            ),
+            patch("turncall.orchestrator.ambience.FETCH_TIMEOUT_SECONDS", 0.01),
+        ):
+            mixer = await build_ambience_mixer(
+                self._config(),
+                project_id=self.CALL_PROJECT,
+                sample_rate=8000,
+                session_factory=factory,
+                settings=_settings(tmp_path),
+            )
         assert mixer is None
 
     async def test_a_failed_fetch_never_raises(self, tmp_path) -> None:
