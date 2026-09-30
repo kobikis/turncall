@@ -148,3 +148,54 @@ async def test_registry_is_per_call_and_skips_evals():
     context_snapshot.discard(live.call_id)
     assert context_snapshot.for_call(live.call_id) is None
     assert isinstance(live.call_id, UUID)
+
+
+async def test_applying_a_handoff_snapshots_the_outgoing_agent_first():
+    """#180: the real handoff path, not the snapshotter alone."""
+    from turncall.domain.models import AgentConfig
+    from turncall.orchestrator.tool_bridge import (
+        PreparedHandoff,
+        _apply_handoff_context,
+    )
+
+    first, second = uuid4(), uuid4()
+    ctx = SimpleNamespace(call_id=uuid4(), agent_id=first, is_eval=False)
+    context = _Context()
+    context.messages = [{"role": "user", "content": "put me through to billing"}]
+    config = SimpleNamespace(observability=SimpleNamespace(store_context=True))
+    snap = context_snapshot.register(ctx, context, "You are Riley.", config)
+    written: list[dict] = []
+
+    async def write(snapshot):
+        written.append(snapshot)
+
+    snap._write = write
+    queued: list = []
+
+    async def queue_frame(frame):
+        queued.append(frame)
+
+    params = SimpleNamespace(
+        llm=None,
+        context=context,
+        pipeline_worker=SimpleNamespace(queue_frame=queue_frame),
+    )
+    prepared = PreparedHandoff(
+        name="Billing",
+        config=AgentConfig(),
+        frames=(),
+        agent_id=second,
+        system_instruction="You are billing.",
+    )
+    await _apply_handoff_context(prepared, ctx, params)
+    context.messages = [{"role": "user", "content": "my invoice"}]
+    await context_snapshot.flush_call(ctx.call_id)
+    await _settle()
+
+    written.sort(key=lambda w: w["segment"])
+    assert [(w["segment"], w["agent_id"]) for w in written] == [(0, first), (1, second)]
+    assert written[0]["messages"] == [
+        {"role": "user", "content": "put me through to billing"}
+    ]
+    assert written[1]["system_instruction"] == "You are billing."
+    assert context_snapshot.for_call(ctx.call_id) is None
