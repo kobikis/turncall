@@ -14,6 +14,7 @@ from turncall.api.v1.schemas.calls import CallEventResponse, CallResponse
 from turncall.auth import Auth
 from turncall.config.settings import get_settings
 from turncall.services.call_view import call_view_fields
+from turncall.services.recording_storage import recording_storage_key
 from turncall.storage.repositories import call_repo
 
 router = APIRouter(prefix="/calls", tags=["calls"])
@@ -137,8 +138,8 @@ async def get_call_recording(
     call = await call_repo.get_call_by_id(session, call_id, project_id=auth.project_id)
     if call is None:
         raise NotFoundError("Call", str(call_id))
-    url = call.recording_url or ""
-    if "recordings/" not in url:
+    key = recording_storage_key(call.recording_url)
+    if key is None:
         raise NotFoundError("Recording", str(call_id))
 
     settings = get_settings()
@@ -148,12 +149,6 @@ async def get_call_recording(
         s3_bucket=settings.storage.s3_bucket,
         aws_region=settings.storage.aws_region,
     )
-    # Both backends embed the storage key in the URL. Parse s3:// properly —
-    # a substring search would match inside the bucket name ("call-recordings").
-    if url.startswith("s3://"):
-        key = url.split("/", 3)[3]  # s3://<bucket>/<key>
-    else:
-        key = url[url.rindex("recordings/") :]  # local path ends with the key
     try:
         audio = await storage.download(key)
     except Exception as exc:

@@ -3459,7 +3459,7 @@
           "knowledge-bases"
         ],
         "summary": "Delete Document",
-        "description": "Delete a document and its chunks.",
+        "description": "Delete a document, its chunks and its stored file.",
         "operationId": "delete_document_v1_knowledge_bases__kb_id__documents__doc_id__delete",
         "parameters": [
           {

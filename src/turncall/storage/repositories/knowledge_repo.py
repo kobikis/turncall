@@ -230,6 +230,24 @@ async def delete_document(
     return result.rowcount > 0
 
 
+async def storage_key_in_use(session: AsyncSession, storage_key: str) -> bool:
+    """Whether any document still names this object. Keys are per filename, so
+    two uploads of one name into one KB share one."""
+    result = await session.execute(
+        select(DocumentRow.id).where(DocumentRow.storage_key == storage_key).limit(1)
+    )
+    return result.first() is not None
+
+
+async def document_storage_keys(session: AsyncSession, kb_id: UUID) -> list[str]:
+    result = await session.execute(
+        select(DocumentRow.storage_key)
+        .where(DocumentRow.knowledge_base_id == kb_id)
+        .distinct()
+    )
+    return list(result.scalars().all())
+
+
 # --- Document Chunks ---
 
 

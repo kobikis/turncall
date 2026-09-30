@@ -11,12 +11,12 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import UUID
 
-from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from turncall.adapters.storage import create_storage_adapter
+from turncall.adapters.storage import create_storage_adapter, delete_objects
 from turncall.config.settings import Settings
+from turncall.services.recording_storage import recording_storage_key
 from turncall.storage.models import CallRow, DocumentRow, KnowledgeBaseRow, utc_now
 from turncall.storage.repositories import (
     ambience_repo,
@@ -60,37 +60,29 @@ async def _sweep_storage(
         .scalars()
         .all()
     )
-    # Recording keys are deterministic (recordings/{call_id}.wav) — no need to
-    # parse recording_url back into a storage key.
-    rec_ids = (
-        (
-            await session.execute(
-                select(CallRow.id).where(
-                    CallRow.project_id == project_id,
-                    CallRow.recording_url.is_not(None),
-                )
+    # The recorder writes recordings/{call_id}.wav; Twilio's callback writes
+    # recordings/{call_id}/{sid}.wav and overwrites recording_url, which can
+    # then hide the first. Sweep both (#168).
+    recordings = (
+        await session.execute(
+            select(CallRow.id, CallRow.recording_url).where(
+                CallRow.project_id == project_id,
+                CallRow.recording_url.is_not(None),
             )
         )
-        .scalars()
-        .all()
-    )
+    ).all()
 
     # Ambience renditions (ADR-0021): the rows go with the purge's cascade, and
     # nothing else would ever name these objects again.
     ambience_keys = await ambience_repo.rendition_keys_for_project(session, project_id)
 
-    keys = (
-        [k for k in doc_keys if k]
-        + [f"recordings/{cid}.wav" for cid in rec_ids]
-        + ambience_keys
+    rec_keys = {f"recordings/{cid}.wav" for cid, _ in recordings} | {
+        recording_storage_key(url) for _, url in recordings
+    }
+    await delete_objects(
+        storage,
+        [k for k in doc_keys if k] + [k for k in rec_keys if k] + ambience_keys,
     )
-    for key in keys:
-        try:
-            await storage.delete(key)
-        except Exception as exc:
-            logger.warning(
-                "project_delete_storage_orphan key={key}: {err}", key=key, err=exc
-            )
 
 
 async def delete_project(

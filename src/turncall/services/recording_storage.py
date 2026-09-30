@@ -72,3 +72,17 @@ async def download_and_store_recording(
     )
 
     return storage_url
+
+
+def recording_storage_key(url: str | None) -> str | None:
+    """The storage key inside a stored `recording_url`, or None when nothing
+    was stored. Two writers use two shapes — the call recorder's
+    `recordings/{call_id}.wav` and Twilio's callback's
+    `recordings/{call_id}/{sid}.wav` — so the URL is the only reliable source.
+    Parse s3:// properly: a substring search would match inside the bucket name
+    ("call-recordings")."""
+    if not url or "recordings/" not in url:
+        return None
+    if url.startswith("s3://"):
+        return url.split("/", 3)[3]  # s3://<bucket>/<key>
+    return url[url.rindex("recordings/") :]  # local path ends with the key
