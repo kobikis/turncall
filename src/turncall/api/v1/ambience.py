@@ -7,14 +7,16 @@ says nothing, for audio at any other shape.
 """
 
 import asyncio
-from collections.abc import Iterable
 from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Response, UploadFile
-from loguru import logger
 
-from turncall.adapters.storage import ObjectStorageAdapter, create_storage_adapter
+from turncall.adapters.storage import (
+    ObjectStorageAdapter,
+    create_storage_adapter,
+    delete_objects,
+)
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.api.responses import ok
@@ -98,7 +100,7 @@ async def upload_sound(
         await session.commit()
     except Exception:
         # No row means nothing can ever name these objects — don't leave them.
-        await _delete_objects(storage, keys.values())
+        await delete_objects(storage, keys.values())
         raise
     return ok(AmbienceSoundResponse.from_row(row, warnings=sound.warnings))
 
@@ -158,15 +160,5 @@ async def delete_sound(
     keys = list(row.renditions.values())
     await ambience_repo.delete_sound(session, row)
     await session.commit()
-    # Unlike documents (#168), the objects go too: an orphan here is a thing
-    # that looks like it should still play.
-    await _delete_objects(_storage(), keys)
+    await delete_objects(_storage(), keys)
     return ok({"deleted": True})
-
-
-async def _delete_objects(storage: ObjectStorageAdapter, keys: Iterable[str]) -> None:
-    for key in keys:
-        try:
-            await storage.delete(key)
-        except Exception as exc:
-            logger.warning("ambience_storage_orphan key={key}: {err}", key=key, err=exc)

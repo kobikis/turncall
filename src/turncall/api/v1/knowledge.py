@@ -4,7 +4,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, UploadFile
 
-from turncall.adapters.storage import create_storage_adapter
+from turncall.adapters.storage import (
+    ObjectStorageAdapter,
+    create_storage_adapter,
+    delete_objects,
+)
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.api.responses import ok, paginated
@@ -43,6 +47,16 @@ ALLOWED_CONTENT_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/msword",
 }
+
+
+def _storage() -> ObjectStorageAdapter:
+    s = get_settings().storage
+    return create_storage_adapter(
+        s.backend,
+        local_path=s.local_path,
+        s3_bucket=s.s3_bucket,
+        aws_region=s.aws_region,
+    )
 
 
 # --- Knowledge Bases ---
@@ -148,8 +162,10 @@ async def delete_knowledge_base(
             details={"agent_count": agent_count},
         )
 
+    keys = await knowledge_repo.document_storage_keys(session, kb_id)
     await knowledge_repo.delete_knowledge_base(session, kb_id)
     await session.commit()
+    await delete_objects(_storage(), keys)
 
 
 # --- Documents ---
@@ -197,13 +213,7 @@ async def upload_document(
             f"File too large: {len(data)} bytes. Maximum: {MAX_UPLOAD_SIZE} bytes."
         )
 
-    settings = get_settings()
-    storage = create_storage_adapter(
-        settings.storage.backend,
-        local_path=settings.storage.local_path,
-        s3_bucket=settings.storage.s3_bucket,
-        aws_region=settings.storage.aws_region,
-    )
+    storage = _storage()
 
     filename = file.filename or "untitled"
     doc_row = await create_pending_document(
@@ -228,7 +238,7 @@ async def upload_document(
         filename=filename,
         content_type=content_type,
         data=data,
-        openai_api_key=settings.openai.api_key,
+        openai_api_key=get_settings().openai.api_key,
         embedding_model=kb_row.embedding_model,
         chunk_size=kb_row.chunk_size,
         chunk_overlap=kb_row.chunk_overlap,
@@ -293,7 +303,7 @@ async def delete_document(
     auth: WriteAuth,
     session: DbSession,
 ) -> None:
-    """Delete a document and its chunks."""
+    """Delete a document, its chunks and its stored file."""
     kb_row = await knowledge_repo.get_knowledge_base_by_id(
         session, kb_id, project_id=auth.project_id
     )
@@ -309,6 +319,8 @@ async def delete_document(
     # Chunks cascade-deleted via FK
     await knowledge_repo.delete_document(session, doc_id)
     await session.commit()
+    if not await knowledge_repo.storage_key_in_use(session, doc_row.storage_key):
+        await delete_objects(_storage(), [doc_row.storage_key])
 
 
 # --- Search ---

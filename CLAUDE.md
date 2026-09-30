@@ -361,12 +361,12 @@ POST   /v1/knowledge-bases                              # Create KB
 GET    /v1/knowledge-bases                              # List KBs
 GET    /v1/knowledge-bases/{kb_id}                      # Get KB
 PUT    /v1/knowledge-bases/{kb_id}                      # Update KB
-DELETE /v1/knowledge-bases/{kb_id}                      # Delete KB (blocked if agents depend on it)
+DELETE /v1/knowledge-bases/{kb_id}                      # Delete KB + its files (blocked if agents depend on it)
 
 POST   /v1/knowledge-bases/{kb_id}/documents            # Upload document (multipart)
 GET    /v1/knowledge-bases/{kb_id}/documents            # List documents
 GET    /v1/knowledge-bases/{kb_id}/documents/{doc_id}   # Get document
-DELETE /v1/knowledge-bases/{kb_id}/documents/{doc_id}   # Delete document + chunks
+DELETE /v1/knowledge-bases/{kb_id}/documents/{doc_id}   # Delete document + chunks + stored file
 
 POST   /v1/knowledge-bases/{kb_id}/search               # Test search (debug)
 
