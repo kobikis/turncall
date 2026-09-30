@@ -72,7 +72,7 @@ def ingest_sound(data: bytes, content_type: str, rates: Iterable[int]) -> Ingest
             io.BytesIO(data), dtype="float32", always_2d=True
         )
     except sf.SoundFileError as exc:
-        raise _unreadable(f"Could not decode the file ({exc})") from exc
+        raise _unreadable("Could not decode the file") from exc
     if samples.shape[0] == 0:
         raise _unreadable("The file contains no audio")
 
