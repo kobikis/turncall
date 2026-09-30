@@ -1,6 +1,6 @@
 """App-side call recording.
 
-Captures merged user+bot audio via Pipecat's AudioBufferProcessor across all
+Captures user+bot audio via Pipecat's AudioBufferProcessor across all
 transports (Twilio, WebRTC, WhatsApp), writes a WAV to the configured object
 storage on call end, and records the URL + status on the call.
 
@@ -61,10 +61,12 @@ def _pcm16_to_wav(pcm: bytes, sample_rate: int, num_channels: int) -> bytes:
 
 
 class CallRecorder(AudioBufferProcessor):
-    """Records the call to object storage. Mono mix of user + bot audio."""
+    """Records the call to object storage, in stereo: caller on the left
+    channel, agent on the right (#178). A mono mix hid who talked over whom and
+    left no clean caller track to reprocess."""
 
     def __init__(self, call_context: CallContext, *, sample_rate: int) -> None:
-        super().__init__(sample_rate=sample_rate, num_channels=1)
+        super().__init__(sample_rate=sample_rate, num_channels=2)
         self._call_context = call_context
         # Register the flush handler (fired on stop_recording / EndFrame).
         self.event_handler("on_audio_data")(self._on_audio_data)

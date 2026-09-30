@@ -885,6 +885,7 @@ All Pipecat imports isolated in `orchestrator/`. No other module imports Pipecat
 - `call_session.py` — Per-call lifecycle, first message, cleanup
 - `tool_bridge.py` — Registers tools + writes ToolInvocation records
 - `observability.py` — Logs transcripts/events to DB + dispatches webhooks
+- `turn_metrics.py` — one `metrics.turn` call event per turn (STT/LLM/TTS TTFB + user-to-bot latency), from pipecat's latency observer; stored, never dispatched, none in an eval (#176). Read them with `GET /v1/calls/{id}/events?event_type=metrics.turn`
 - `telemetry.py` — OpenTelemetry tracing setup + Pipecat observers (latency/turn/LLM/transcription/startup). See ADR-0010
 - `session_manager.py` — Active session registry
 
@@ -910,8 +911,20 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 
 `call.ended` payload: `status`, `ended_reason`, `from_number`, `to_number`, `direction`,
 `duration_ms`, `provider_call_sid`, `metadata`, `started_at`, `ended_at`,
-`recording_status`, `recording_url`, `summary`, `analysis`, and
-`transcript` (`[{role, text, timestamp}]`).
+`recording_status`, `recording_url`, `summary`, `analysis`, `agent_name`,
+`agent_version`, `latency_summary`, and `transcript` (`[{role, text, timestamp}]`).
+
+`latency_summary` is derived from the call's `metrics.turn` events (#179):
+`{turns, user_to_bot, stages: {stt|llm|tts}, slowest_turn}`, each spread being
+nearest-rank `p50_ms`/`p95_ms` plus `count`. Null with no measured turns (zeros
+would read as "instant"); a stage no turn reported is absent. Never stored, and
+the per-turn records never ride in the webhook.
+
+The call read (`GET /v1/calls[/{id}]`) carries the same derived fields —
+`ended_reason`, `agent_name`, `agent_version`, `latency_summary` — from the same function,
+`services/call_view.py`, so the read and the webhook cannot disagree (#175).
+`ended_reason` is null on the read while the call is still live; agent fields
+are null for an inline agent and for a deleted agent row.
 
 `ended_reason` (derived, not stored): `customer_ended_call`, `assistant_ended_call`,
 `customer_did_not_answer`, `customer_busy`, `customer_silent`, `voicemail`, `transferred`,

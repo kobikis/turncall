@@ -34,10 +34,19 @@ class CallResponse(BaseModel):
     metadata: dict[str, Any]
     analysis: dict[str, Any] | None = None
     created_at: datetime
+    # Derived, never stored — see services/call_view. Null when the reader
+    # didn't load them (e.g. the outbound-create response, a call not yet over).
+    ended_reason: str | None = None
+    agent_name: str | None = None
+    agent_version: int | None = None
+    latency_summary: dict[str, Any] | None = None
 
     @classmethod
-    def from_row(cls, row: Any) -> "CallResponse":
+    def from_row(
+        cls, row: Any, derived: dict[str, Any] | None = None
+    ) -> "CallResponse":
         return cls(
+            **(derived or {}),
             id=row.id,
             project_id=row.project_id,
             provider=row.provider,

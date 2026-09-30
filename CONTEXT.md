@@ -218,6 +218,11 @@ Stored at `recordings/{call_id}.wav`; the call row carries [[recording status]]
 and `recording_url`. See ADR-0005. _Avoid_: "Twilio recording" (that path exists
 in code but is never enabled).
 
+**Recording channels**:
+A [[call recording]] is stereo: the caller on the left channel, the agent on the
+right. It is never a mono mix, because a mix hides who talked over whom and gives
+no clean caller track to reprocess. _Avoid_: "mixed recording".
+
 **Recording status** (`recording_status`):
 Lifecycle of a call's recording: `none` (default, never started) → `in_progress`
 (capture started, set on StartFrame) → `completed` (WAV written) / `failed`. A
@@ -345,6 +350,13 @@ already-enabled `enable_metrics`). The trace's `conversation_id` **is the
 `call_id`**, so a span joins straight back to the call record. Exported to an OTLP
 backend; **never console-exported in production** (sync stdout I/O would stall the
 audio path — see ADR-0004). See ADR-0010. _Avoid_: console export in prod.
+
+**Turn metrics**:
+The timing record of one conversational turn: time to first byte for each STT,
+LLM and TTS stage, plus user-to-bot latency. It is kept as part of the call
+record, unlike an [[observer]]'s output, which is only logged. A call's
+**latency summary** is derived from its turn metrics and never stored.
+_Avoid_: "latency logs".
 
 **trace_include_pii**:
 The switch (default **on**) that puts `from_number`/`to_number` on spans. Phone

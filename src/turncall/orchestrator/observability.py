@@ -1,8 +1,8 @@
 """Pipecat frame processor for observability.
 
-Taps into the frame flow to log transcripts, tool calls,
-and latency metrics to the database. Dispatches events to
-webhook subscribers.
+Taps into the frame flow to log transcripts and tool calls to the
+database. Dispatches events to webhook subscribers. Latency is not here:
+turn metrics are recorded by an observer, in `turn_metrics.py`.
 
 TranscriptTapProcessor is placed early in the pipeline (after STT)
 to capture transcription frames before they are consumed by the

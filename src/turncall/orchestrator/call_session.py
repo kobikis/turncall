@@ -129,8 +129,15 @@ class CallSession:
         # this one is the protocol, not instrumentation, and the harness's
         # handshake configures it. Empty on every live call.
         from turncall.orchestrator.pipeline_factory import eval_rtvi_observers
+        from turncall.orchestrator.turn_metrics import turn_metrics_observers
 
-        observers = [*observers, *eval_rtvi_observers(self._pipeline)]
+        # Turn metrics are product data (#176), not instrumentation, so they sit
+        # outside PIPECAT_ENABLE_OBSERVERS like the RTVI bridge. None in an eval.
+        observers = [
+            *observers,
+            *eval_rtvi_observers(self._pipeline),
+            *turn_metrics_observers(self._call_context),
+        ]
         self._task = PipelineWorker(
             self._pipeline,
             params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),

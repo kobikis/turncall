@@ -13,6 +13,7 @@ from turncall.api.responses import ok, paginated
 from turncall.api.v1.schemas.calls import CallEventResponse, CallResponse
 from turncall.auth import Auth
 from turncall.config.settings import get_settings
+from turncall.services.call_view import call_view_fields
 from turncall.storage.repositories import call_repo
 
 router = APIRouter(prefix="/calls", tags=["calls"])
@@ -28,7 +29,8 @@ async def get_call(
     row = await call_repo.get_call_by_id(session, call_id, project_id=auth.project_id)
     if row is None:
         raise NotFoundError("Call", str(call_id))
-    return ok(CallResponse.from_row(row))
+    derived = await call_view_fields(session, [row])
+    return ok(CallResponse.from_row(row, derived[row.id]))
 
 
 @router.get("")
@@ -51,8 +53,9 @@ async def list_calls(
         offset=offset,
     )
     total = await call_repo.count_calls(session, auth.project_id, status=status)
+    derived = await call_view_fields(session, rows)
     return paginated(
-        data=[CallResponse.from_row(r) for r in rows],
+        data=[CallResponse.from_row(r, derived[r.id]) for r in rows],
         total=total,
         page=page,
         limit=limit,

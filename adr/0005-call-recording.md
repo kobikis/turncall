@@ -29,6 +29,14 @@ locally, S3 in prod) — which is what operators expect.
    `tts`, and user audio (`InputAudioRawFrame`, a `SystemFrame` that STT
    re-pushes downstream).
 
+   **Superseded (#178):** pipecat 1.12's output transport pushes each audio
+   frame downstream once it has written it to the wire, so the recorder now
+   sits *after* `transport.output()`. Before it, the recorder saw TTS audio in
+   generation-speed bursts; `AudioBufferProcessor` pads each channel to the
+   other, so every burst advanced the caller's channel as well, and a 203s
+   Twilio call recorded as 300s, drifting further from the transcript with
+   every reply. `test_recorder_placement.py` holds the new position.
+
 2. **Flush is driven by `on_client_disconnected`, not by an end frame.**
    `AudioBufferProcessor` only flushes (`stop_recording` → `on_audio_data`) on
    `EndFrame`/`CancelFrame`. But the common Twilio path — the caller hangs up —
@@ -45,7 +53,9 @@ locally, S3 in prod) — which is what operators expect.
 - `started_at` is now also stamped by the pipeline (`call_session` on
   `IN_PROGRESS`) rather than depending on the Twilio status callback.
 - Recording is one WAV per call at `recordings/{call_id}.wav` in the storage
-  backend; mono mix (`num_channels=1`).
+  backend; mono mix (`num_channels=1`). **Amended (#178):** stereo since, caller
+  on the left channel and agent on the right (`num_channels=2`) — a mix hid who
+  talked over whom. Files written before stay mono.
 - Avatar calls: recorder sits after the avatar service (assumes it forwards
   audio). S2S: user audio may be partially captured since the realtime LLM
   consumes input audio directly. Both noted for follow-up.

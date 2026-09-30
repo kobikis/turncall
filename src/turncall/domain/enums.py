@@ -91,6 +91,9 @@ class CallEventType(StrEnum):
     TRANSCRIPT_PARTIAL = "transcript.partial"
     TRANSCRIPT_FINAL = "transcript.final"
 
+    # Per-turn timings (#176). Stored, never dispatched as a webhook.
+    METRICS_TURN = "metrics.turn"
+
     # Tools
     TOOL_CALLED = "tool.called"
     TOOL_RESULT = "tool.result"

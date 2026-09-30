@@ -1,0 +1,90 @@
+"""The derived half of a call's representation (#175).
+
+`ended_reason`, `agent_name` and `agent_version` are worked out, never stored,
+and the call read and `call.ended` both take them from `derived_fields` — so the
+two views of one call cannot disagree about why it ended.
+"""
+
+from datetime import UTC, datetime
+from types import SimpleNamespace
+
+import pytest
+
+from turncall.services.call_view import CallFacts, derived_fields
+
+pytestmark = pytest.mark.unit
+
+ENDED = datetime(2026, 9, 30, 12, 42, tzinfo=UTC)
+
+
+def _call(status="completed", ended_at=ENDED):
+    return SimpleNamespace(status=status, ended_at=ended_at)
+
+
+def test_completed_call_ended_by_customer():
+    view = derived_fields(_call(), CallFacts(event_types=frozenset({"call.ended"})))
+    assert view["ended_reason"] == "customer_ended_call"
+
+
+def test_assistant_ended_follows_the_facts():
+    view = derived_fields(_call(), CallFacts(assistant_ended=True))
+    assert view["ended_reason"] == "assistant_ended_call"
+
+
+def test_voicemail_event_wins():
+    facts = CallFacts(event_types=frozenset({"voicemail.detected"}))
+    assert derived_fields(_call(), facts)["ended_reason"] == "voicemail"
+
+
+def test_live_call_has_no_ended_reason():
+    # "unknown" on a call that is still talking would read as a verdict.
+    view = derived_fields(_call(status="in_progress", ended_at=None), CallFacts())
+    assert view["ended_reason"] is None
+
+
+def test_ended_but_still_marked_handed_off_gets_a_reason():
+    # ended_at is the signal the call is over, whatever the status says.
+    view = derived_fields(_call(status="handed_off"), CallFacts())
+    assert view["ended_reason"] == "unknown"
+
+
+def test_agent_name_and_version():
+    view = derived_fields(_call(), CallFacts(agent_name="support", agent_version=3))
+    assert (view["agent_name"], view["agent_version"]) == ("support", 3)
+
+
+def test_inline_or_deleted_agent_is_null_not_invented():
+    view = derived_fields(_call(), CallFacts())
+    assert view["agent_name"] is None and view["agent_version"] is None
+
+
+def _turn(n, user_to_bot, **stages):
+    return {
+        "turn": n,
+        "user_to_bot_ms": user_to_bot,
+        "stages": {k: {"ttfb_ms": v, "service": k.upper()} for k, v in stages.items()},
+    }
+
+
+def test_latency_summary_percentiles_and_slowest_turn():
+    turns = tuple(
+        _turn(i + 1, 800 + i * 100, stt=100 + i, llm=300 + i * 10, tts=200)
+        for i in range(10)
+    )
+    summary = derived_fields(_call(), CallFacts(turn_metrics=turns))["latency_summary"]
+    assert summary["turns"] == 10
+    assert summary["user_to_bot"] == {"p50_ms": 1200, "p95_ms": 1700, "count": 10}
+    assert summary["stages"]["llm"] == {"p50_ms": 340, "p95_ms": 390, "count": 10}
+    assert summary["stages"]["tts"]["p95_ms"] == 200
+    assert summary["slowest_turn"] == {"turn": 10, "user_to_bot_ms": 1700}
+
+
+def test_latency_summary_omits_a_stage_no_turn_had():
+    # An S2S call reports only the model's stage.
+    turns = (_turn(1, 700, llm=400), _turn(2, 900, llm=500))
+    summary = derived_fields(_call(), CallFacts(turn_metrics=turns))["latency_summary"]
+    assert set(summary["stages"]) == {"llm"}
+
+
+def test_no_turns_is_null_not_zeros():
+    assert derived_fields(_call(), CallFacts())["latency_summary"] is None
