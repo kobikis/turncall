@@ -885,6 +885,7 @@ All Pipecat imports isolated in `orchestrator/`. No other module imports Pipecat
 - `call_session.py` — Per-call lifecycle, first message, cleanup
 - `tool_bridge.py` — Registers tools + writes ToolInvocation records
 - `observability.py` — Logs transcripts/events to DB + dispatches webhooks
+- `turn_metrics.py` — one `metrics.turn` call event per turn (STT/LLM/TTS TTFB + user-to-bot latency), from pipecat's latency observer; stored, never dispatched, none in an eval (#176). Read them with `GET /v1/calls/{id}/events?event_type=metrics.turn`
 - `telemetry.py` — OpenTelemetry tracing setup + Pipecat observers (latency/turn/LLM/transcription/startup). See ADR-0010
 - `session_manager.py` — Active session registry
 
