@@ -202,6 +202,7 @@
               "POST /v1/ambience-sounds",
               "GET /v1/ambience-sounds",
               "GET /v1/ambience-sounds/{sound_id}",
+              "GET /v1/ambience-sounds/{sound_id}/renditions/{rate}",
               "DELETE /v1/ambience-sounds/{sound_id}"
             ]
           },

@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, UploadFile
+from fastapi import APIRouter, Response, UploadFile
 from loguru import logger
 
 from turncall.adapters.storage import ObjectStorageAdapter, create_storage_adapter
@@ -100,7 +100,7 @@ async def upload_sound(
         # No row means nothing can ever name these objects — don't leave them.
         await _delete_objects(storage, keys.values())
         raise
-    return ok(AmbienceSoundResponse.from_row(row))
+    return ok(AmbienceSoundResponse.from_row(row, warnings=sound.warnings))
 
 
 @router.get("")
@@ -120,6 +120,20 @@ async def get_sound(sound_id: UUID, auth: Auth, session: DbSession) -> dict[str,
         for rate, key in row.renditions.items()
     }
     return ok(AmbienceSoundResponse.from_row(row, rendition_urls=urls))
+
+
+@router.get("/{sound_id}/renditions/{rate}")
+async def get_rendition_audio(
+    sound_id: UUID, rate: int, auth: Auth, session: DbSession
+) -> Response:
+    """The rendition's MP3 itself. `rendition_urls` are file paths on local
+    storage, which no browser can open — this plays on every backend."""
+    row = await ambience_repo.get_by_id(session, sound_id, project_id=auth.project_id)
+    key = row.renditions.get(str(rate)) if row is not None else None
+    if key is None:
+        raise NotFoundError("AmbienceRendition", f"{sound_id}/{rate}")
+    data = await _storage().download(key)
+    return Response(content=data, media_type="audio/mpeg")
 
 
 @router.delete("/{sound_id}")

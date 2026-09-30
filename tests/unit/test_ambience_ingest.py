@@ -61,6 +61,25 @@ class TestRenditions:
         assert ingest_sound(_wav(3), "audio/wav", [8000]).duration_ms == 3000
 
 
+class TestPhoneBandWarning:
+    """A sound can upload, play and be inaudible on a phone line — measured on a
+    real call. The upload says so rather than leaving the caller to find out."""
+
+    def _rumble(self) -> bytes:
+        t = np.linspace(0, 2, 2 * 48000, endpoint=False)
+        buf = io.BytesIO()
+        sf.write(buf, 0.5 * np.sin(2 * np.pi * 60 * t), 48000, format="WAV")
+        return buf.getvalue()
+
+    def test_a_low_rumble_is_warned_about(self) -> None:
+        sound = ingest_sound(self._rumble(), "audio/wav", VOICE_OUTPUT_RATES)
+        assert [w["code"] for w in sound.warnings] == ["inaudible_on_phone"]
+        assert sound.renditions  # advisory: still stored
+
+    def test_a_sound_in_the_phone_band_is_not(self) -> None:
+        assert ingest_sound(_wav(1), "audio/wav", VOICE_OUTPUT_RATES).warnings == []
+
+
 class TestRefusals:
     def test_over_the_duration_cap(self) -> None:
         with pytest.raises(AudioTooLongError, match=f"{MAX_DURATION_SECONDS}s"):

@@ -4317,6 +4317,73 @@
         }
       }
     },
+    "/v1/ambience-sounds/{sound_id}/renditions/{rate}": {
+      "get": {
+        "tags": [
+          "ambience"
+        ],
+        "summary": "Get Rendition Audio",
+        "description": "The rendition's MP3 itself. `rendition_urls` are file paths on local\nstorage, which no browser can open \u2014 this plays on every backend.",
+        "operationId": "get_rendition_audio_v1_ambience_sounds__sound_id__renditions__rate__get",
+        "parameters": [
+          {
+            "name": "sound_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sound Id"
+            }
+          },
+          {
+            "name": "rate",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Rate"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/tools": {
       "post": {
         "tags": [

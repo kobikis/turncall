@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import io
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import soundfile as sf
@@ -35,11 +35,52 @@ class AudioTooLongError(ValueError):
     """The upload decodes, but runs past MAX_DURATION_SECONDS."""
 
 
+# What a phone call actually carries (G.711 and the handsets either side).
+PHONE_BAND_HZ = (300.0, 3400.0)
+# Below this in-band level, before `volume`, a sound uploads and plays and
+# nobody on a phone call hears it: measured on a real call, a synthetic rumble at
+# -57 dBFS in-band was silent where a restaurant recording at -29 was clear.
+# ponytail: one threshold from two data points; #171's real-call work can move it.
+MIN_PHONE_BAND_DBFS = -50.0
+
+
 @dataclass(frozen=True)
 class IngestedSound:
     duration_ms: int
     # rate (Hz) -> mono MP3 bytes at that rate.
     renditions: dict[int, bytes]
+    # Advisory only ({code, message}): the upload succeeded either way.
+    warnings: list[dict[str, str]] = field(default_factory=list)
+
+
+def phone_band_dbfs(mono: np.ndarray, rate: int) -> float:
+    """RMS level of `mono` inside PHONE_BAND_HZ, in dBFS."""
+    spectrum = np.fft.rfft(mono)
+    freqs = np.fft.rfftfreq(len(mono), 1 / rate)
+    low, high = PHONE_BAND_HZ
+    in_band = np.fft.irfft(
+        np.where((freqs >= low) & (freqs <= high), spectrum, 0), len(mono)
+    )
+    rms = float(np.sqrt(np.mean(in_band**2)))
+    return 20 * float(np.log10(rms)) if rms > 0 else float("-inf")
+
+
+def _phone_band_warnings(mono: np.ndarray, rate: int) -> list[dict[str, str]]:
+    level = phone_band_dbfs(mono, rate)
+    if level >= MIN_PHONE_BAND_DBFS:
+        return []
+    return [
+        {
+            "code": "inaudible_on_phone",
+            "message": (
+                f"Almost none of this sound is in the {PHONE_BAND_HZ[0]:.0f}-"
+                f"{PHONE_BAND_HZ[1]:.0f} Hz band a phone call carries (it plays at "
+                f"{level:.0f} dBFS there), so a caller on a phone will hear "
+                "little or nothing. Browser calls carry more of it. A recording "
+                "of a real room — voices, dishes — works; a low rumble does not."
+            ),
+        }
+    ]
 
 
 def _unreadable(detail: str) -> UnreadableAudioError:
@@ -79,13 +120,18 @@ def ingest_sound(data: bytes, content_type: str, rates: Iterable[int]) -> Ingest
     # Stereo read as mono is interleaved: double speed, channels alternating.
     mono = samples.mean(axis=1, dtype=np.float32)
     renditions: dict[int, bytes] = {}
+    warnings: list[dict[str, str]] = []
     for rate in sorted(set(rates)):
         # soxr.resample is one-shot, so no stream state leaks between rate pairs.
         audio = mono if rate == source_rate else soxr.resample(mono, source_rate, rate)
+        if not renditions:
+            # The lowest rate is the phone's, and the one that loses the most.
+            warnings = _phone_band_warnings(audio, rate)
         out = io.BytesIO()
         sf.write(out, audio, rate, format="MP3")
         renditions[rate] = out.getvalue()
     return IngestedSound(
         duration_ms=round(samples.shape[0] * 1000 / source_rate),
         renditions=renditions,
+        warnings=warnings,
     )

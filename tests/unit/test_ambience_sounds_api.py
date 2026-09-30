@@ -80,6 +80,10 @@ class TestUpload:
             f"{rate}.mp3" for rate in VOICE_OUTPUT_RATES
         }
         assert all(k.startswith(f"ambience/{project_id}/") for k in stored)
+        # The fixture is silence, which a phone carries none of: the warning
+        # rides back on the upload response.
+        codes = [w["code"] for w in r.json()["data"]["warnings"]]
+        assert codes == ["inaudible_on_phone"]
 
     def test_unreadable_is_415_naming_the_fix(self, app, project_id, storage):
         r = app.post(
@@ -134,6 +138,32 @@ class TestRead:
             r = app.get(f"/v1/ambience-sounds/{sid}", headers=H)
         assert r.status_code == 404
         assert get.await_args.kwargs["project_id"] == project_id
+
+
+class TestRenditionAudio:
+    def test_streams_the_mp3(self, app, project_id, storage):
+        row = _row(project_id)
+        storage.download.return_value = b"ID3mp3"
+        with patch(f"{REPO}.get_by_id", AsyncMock(return_value=row)):
+            r = app.get(f"/v1/ambience-sounds/{row.id}/renditions/8000", headers=H)
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "audio/mpeg"
+        assert r.content == b"ID3mp3"
+        storage.download.assert_awaited_once_with(row.renditions["8000"])
+
+    def test_a_rate_with_no_rendition_is_404(self, app, project_id, storage):
+        row = _row(project_id)
+        with patch(f"{REPO}.get_by_id", AsyncMock(return_value=row)):
+            r = app.get(f"/v1/ambience-sounds/{row.id}/renditions/44100", headers=H)
+        assert r.status_code == 404
+
+    def test_another_projects_sound_is_404(self, app, project_id, storage):
+        with patch(f"{REPO}.get_by_id", AsyncMock(return_value=None)):
+            r = app.get(
+                f"/v1/ambience-sounds/{uuid.uuid4()}/renditions/8000", headers=H
+            )
+        assert r.status_code == 404
+        storage.download.assert_not_awaited()
 
 
 class TestDelete:

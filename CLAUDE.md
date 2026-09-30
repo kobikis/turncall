@@ -236,6 +236,7 @@ mixed quietly under and between everything the agent says, for the whole call.
 POST   /v1/ambience-sounds            # multipart upload -> one mono MP3 per transport rate
 GET    /v1/ambience-sounds            # list
 GET    /v1/ambience-sounds/{id}       # + rendition_urls, to hear what a caller will
+GET    /v1/ambience-sounds/{id}/renditions/{rate}   # the MP3 itself — rendition_urls are file paths on local storage
 DELETE /v1/ambience-sounds/{id}       # 409 naming the agents while any names it; deletes the objects too
 ```
 
@@ -250,6 +251,11 @@ DELETE /v1/ambience-sounds/{id}       # 409 naming the agents while any names it
   builds from. 10 MB (409, checked on `Content-Length` and the bytes), 60 s
   (409 — the mixer holds the file per call), 415 on anything libsndfile cannot
   decode, naming the formats and the `.m4a` fix.
+- **The upload warns when a phone won't carry it** (`inaudible_on_phone`,
+  advisory — the sound is stored either way). A sound can play and be silent:
+  a phone line carries 300–3400 Hz, and a low rumble lives below it. Measured on
+  a real call — a synthetic rumble at −57 dBFS in-band was inaudible where a
+  restaurant recording at −29 was clear. The threshold is −50 dBFS in-band.
 - **The sound id resolves against the call's project**, for stored and inline
   agents alike (#173). Stored agents are also checked at save (422).
 - **Every voice transport, S2S included; never evals.** The mixer lives in the

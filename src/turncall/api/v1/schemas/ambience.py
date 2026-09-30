@@ -18,10 +18,15 @@ class AmbienceSoundResponse(BaseModel):
     # at 8 kHz is a large audible change, and without this the only way to hear
     # what a caller hears is to place a call.
     rendition_urls: dict[str, str] | None = None
+    # On the upload only: advisory, the sound was stored either way.
+    warnings: list[dict[str, str]] = []
 
     @classmethod
     def from_row(
-        cls, row: Any, rendition_urls: dict[str, str] | None = None
+        cls,
+        row: Any,
+        rendition_urls: dict[str, str] | None = None,
+        warnings: list[dict[str, str]] | None = None,
     ) -> "AmbienceSoundResponse":
         return cls(
             id=row.id,
@@ -30,4 +35,5 @@ class AmbienceSoundResponse(BaseModel):
             duration_ms=row.duration_ms,
             rates=sorted(int(r) for r in row.renditions),
             rendition_urls=rendition_urls,
+            warnings=warnings or [],
         )
