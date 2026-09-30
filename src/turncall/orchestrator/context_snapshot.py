@@ -35,7 +35,7 @@ Snapshot = dict[str, Any]
 _REGISTRY: dict[UUID, ContextSnapshotter] = {}
 
 
-def _agent_or_none(agent_id: UUID) -> UUID | None:
+def _agent_or_none(agent_id: UUID | None) -> UUID | None:
     from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID
 
     # An inline agent has no row (ADR-0017): null, never the sentinel.
@@ -78,7 +78,7 @@ class ContextSnapshotter:
         }
 
     def capture_for_handoff(
-        self, *, agent_id: UUID, system_instruction: str, store_context: bool
+        self, *, agent_id: UUID | None, system_instruction: str, store_context: bool
     ) -> None:
         """Close the current segment and open the target agent's. Sync, and
         never raises: it runs inside a committed handoff."""

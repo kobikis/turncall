@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from turncall.domain.enums import CallEventType
 from turncall.storage.models import CallEventRow, CallRow
 
 
@@ -221,7 +222,7 @@ async def list_control_ended_calls(
         select(CallEventRow.call_id)
         .where(
             CallEventRow.call_id.in_(call_ids),
-            CallEventRow.event_type == "call.ended",
+            CallEventRow.event_type == CallEventType.CALL_ENDED,
             CallEventRow.payload["source"].astext == "control",
         )
         .distinct()
@@ -237,7 +238,7 @@ async def list_turn_metrics_by_call(
         select(CallEventRow.call_id, CallEventRow.payload)
         .where(
             CallEventRow.call_id.in_(call_ids),
-            CallEventRow.event_type == "metrics.turn",
+            CallEventRow.event_type == CallEventType.METRICS_TURN,
         )
         .order_by(CallEventRow.call_id, CallEventRow.sequence_number)
     )

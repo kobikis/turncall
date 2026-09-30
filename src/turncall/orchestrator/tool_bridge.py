@@ -325,7 +325,7 @@ async def _apply_handoff_context(
     snapshotter = context_snapshot.for_call(call_context.call_id)
     if snapshotter is not None:
         snapshotter.capture_for_handoff(
-            agent_id=prepared.agent_id or call_context.agent_id,
+            agent_id=prepared.agent_id,
             system_instruction=prepared.system_instruction,
             store_context=prepared.config.observability.store_context,
         )
