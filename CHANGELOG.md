@@ -24,7 +24,20 @@ and is not part of this repository's history.
   conversion that fixes it. A sound is refused deletion (409, naming the
   agents) while any agent uses it. Off unless configured, never in evals (the
   run says so in `warnings`), and never able to end a call. New setting:
-  `AMBIENCE_CACHE_DIR`. See `adr/0021`.
+  `AMBIENCE_CACHE_DIR`. See `adr/0021`. Checked on a real PSTN call: no
+  spurious interruptions and no empty turns at the default volume (#171).
+
+### Fixed
+
+- **Deleted documents and knowledge bases left their files in object storage
+  forever** (#168). Both deletes now remove the stored files after the commit,
+  best-effort: a failure is logged, never raised. Documents also get a
+  per-upload storage key, so re-uploading a filename to one knowledge base no
+  longer overwrites the first document's file. Project deletion already swept
+  storage, but missed recordings stored by Twilio's recording callback
+  (`recordings/{call_id}/{sid}.wav`); it now sweeps both recording shapes.
+  The `ambience_storage_orphan` and `project_delete_storage_orphan` log events
+  are now one event, `storage_orphan`. Update any alert on the old names.
 
 ## [2.0.0]
 

@@ -3,7 +3,24 @@ title: Changelog
 description: "Latest updates and improvements to TurnCall"
 ---
 
-<Update label="Unreleased" description="Unreleased" tags={["Feature"]}>
+<Update label="Unreleased" description="Unreleased" tags={["Feature", "Fix"]}>
+
+## Added
+
+**Ambience: a room the agent sounds like it is in.** Upload a sound once
+(`POST /v1/ambience-sounds`) and any agent in the project names it:
+`"ambience": {"sound": "<id>", "volume": 0.3}`. It plays quietly under
+everything the agent says, on Twilio, WebRTC and WhatsApp voice, S2S included.
+Uploads are normalized for every transport, and a sound too low to survive a
+phone line is flagged at upload. See [Ambience](/guides/ambience).
+
+## Fixed
+
+**Deleting a document or a knowledge base now deletes its files.** Before, the
+rows went and the uploaded files stayed in storage forever. Re-uploading a
+filename to one knowledge base also no longer overwrites the first document's
+file. Deleting a project now also removes recordings stored through Twilio's
+recording callback.
 
 </Update>
 
