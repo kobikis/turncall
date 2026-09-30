@@ -29,6 +29,14 @@ locally, S3 in prod) — which is what operators expect.
    `tts`, and user audio (`InputAudioRawFrame`, a `SystemFrame` that STT
    re-pushes downstream).
 
+   **Superseded (#178):** pipecat 1.12's output transport pushes each audio
+   frame downstream once it has written it to the wire, so the recorder now
+   sits *after* `transport.output()`. Before it, the recorder saw TTS audio in
+   generation-speed bursts; `AudioBufferProcessor` pads each channel to the
+   other, so every burst advanced the caller's channel as well, and a 203s
+   Twilio call recorded as 300s, drifting further from the transcript with
+   every reply. `test_recorder_placement.py` holds the new position.
+
 2. **Flush is driven by `on_client_disconnected`, not by an end frame.**
    `AudioBufferProcessor` only flushes (`stop_recording` → `on_audio_data`) on
    `EndFrame`/`CancelFrame`. But the common Twilio path — the caller hangs up —

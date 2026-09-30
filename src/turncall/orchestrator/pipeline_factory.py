@@ -1402,8 +1402,10 @@ def create_pipeline(
             tts,
             voicemail_detector.gate(),
             *([avatar] if avatar else []),
-            recorder,
             transport.output(),
+            # After the output: audio arrives here as it is played (see
+            # test_recorder_placement). Before it, TTS bursts stretched the timeline.
+            recorder,
             context_aggregator.assistant(),
             observability,
         ]
@@ -1419,8 +1421,10 @@ def create_pipeline(
             assistant_tap,
             tts,
             *([avatar] if avatar else []),
-            recorder,
             transport.output(),
+            # After the output: audio arrives here as it is played (see
+            # test_recorder_placement). Before it, TTS bursts stretched the timeline.
+            recorder,
             context_aggregator.assistant(),
             observability,
         ]
@@ -1595,8 +1599,10 @@ def _create_s2s_pipeline(
         s2s_llm,
         assistant_tap,
         *([output_resampler] if output_resampler else []),
-        recorder,
         transport.output(),
+        # After the output: audio arrives here as it is played (see
+        # test_recorder_placement). Before it, TTS bursts stretched the timeline.
+        recorder,
         context_aggregator.assistant(),
         observability,
     ]
