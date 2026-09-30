@@ -4,19 +4,37 @@ from uuid import UUID
 
 from fastapi import APIRouter
 from loguru import logger
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.deps import DbSession
-from turncall.api.errors import ConflictError, NotFoundError
+from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.api.responses import ok, paginated
 from turncall.api.v1.schemas.agents import (
+    AgentConfigSchema,
     AgentResponse,
     CreateAgentRequest,
     UpdateAgentRequest,
 )
 from turncall.auth import Auth, WriteAuth
-from turncall.storage.repositories import agent_repo
+from turncall.storage.repositories import agent_repo, ambience_repo
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+async def _check_ambience(
+    session: AsyncSession, project_id: UUID, config: AgentConfigSchema | None
+) -> None:
+    """A typo'd sound id fails here, at save, rather than silently on a call."""
+    if config is None or config.ambience is None:
+        return
+    sound = config.ambience.sound
+    if await ambience_repo.get_by_id(session, sound, project_id=project_id) is None:
+        raise ApiError(
+            status_code=422,
+            code=ErrorCode.INVALID_AGENT_CONFIG,
+            message=f"ambience.sound {sound} is not an ambience sound in this project",
+            details={"field": "ambience.sound", "sound": str(sound)},
+        )
 
 
 @router.post("", status_code=201)
@@ -26,6 +44,7 @@ async def create_agent(
     session: DbSession,
 ) -> dict:
     """Create a new draft agent."""
+    await _check_ambience(session, auth.project_id, body.config)
     next_version = await agent_repo.get_next_version(
         session, auth.project_id, body.name
     )
@@ -110,6 +129,7 @@ async def update_agent(
             details={"state": existing.state, "version": existing.version},
         )
 
+    await _check_ambience(session, auth.project_id, body.config)
     config_blob = body.config.model_dump() if body.config else existing.config_blob
     row = await agent_repo.update_agent_config(
         session,

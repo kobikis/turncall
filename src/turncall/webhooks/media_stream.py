@@ -162,9 +162,20 @@ async def media_stream_websocket(websocket: WebSocket) -> None:
         )
 
         # Create Twilio transport via factory
-        from turncall.orchestrator.transport_factory import create_twilio_transport
+        from turncall.orchestrator.ambience import build_ambience_mixer
+        from turncall.orchestrator.transport_factory import (
+            TWILIO_SAMPLE_RATE,
+            create_twilio_transport,
+        )
 
-        transport = create_twilio_transport(websocket, stream_sid)
+        mixer = await build_ambience_mixer(
+            config,
+            project_id=call_context.project_id,
+            sample_rate=TWILIO_SAMPLE_RATE,
+            session_factory=session_factory,
+            settings=settings,
+        )
+        transport = create_twilio_transport(websocket, stream_sid, mixer=mixer)
 
         call_session = await build_call_pipeline(
             config=config,

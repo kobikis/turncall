@@ -88,6 +88,7 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | No | Arbitrary token for webhook URL verification handshake |
 | `STORAGE_BACKEND` | No | Object storage backend: `local` (default) or `s3` |
 | `LOCAL_STORAGE_PATH` | No | Local storage directory (default: `./storage`) |
+| `AMBIENCE_CACHE_DIR` | No | Where a call's ambience renditions are fetched to before the mixer reads them (default `./storage/ambience-cache`). **Mount it** — a container recreate otherwise re-fetches every sound. No eviction: bounded by the number of distinct sounds. See `adr/0021` |
 | `S3_BUCKET_NAME` | No | S3 bucket for file storage (required if STORAGE_BACKEND=s3) |
 | `AWS_REGION` | No | Default AWS region for S3 **and** the `bedrock`/`aws` providers (default: `us-east-1`). Per-agent `config.aws.region` overrides it — Bedrock model availability is region-specific and rarely matches your bucket. See `adr/0016` |
 | `AWS_AGENT_CREDENTIALS_ENABLED` | No | Allow per-agent **static** AWS keys in the agent config (default `false`). They persist in `config_blob`, which is unencrypted JSONB, so agents supplying them are rejected at create unless this is on. The unrestricted path is `config.aws.role_arn`, which stores no durable secret. See `adr/0016` |
@@ -225,6 +226,44 @@ TurnCall's SmallWebRTC transport carries the video to the browser.
 - `orchestrator/transport_factory.py` — `video_out` enables live video on SmallWebRTC
 - `api/v1/webrtc.py` — gates the avatar to webrtc+cascade
 - See `adr/0002-heygen-avatar.md`
+
+## Ambience
+
+A room the agent sounds like it is in (ADR-0021): a project's uploaded sound,
+mixed quietly under and between everything the agent says, for the whole call.
+
+```
+POST   /v1/ambience-sounds            # multipart upload -> one mono MP3 per transport rate
+GET    /v1/ambience-sounds            # list
+GET    /v1/ambience-sounds/{id}       # + rendition_urls, to hear what a caller will
+DELETE /v1/ambience-sounds/{id}       # 409 naming the agents while any names it; deletes the objects too
+```
+
+```json
+"ambience": {"sound": "<ambience sound id>", "volume": 0.3}
+```
+
+- **Normalized at upload, never validated.** pipecat's `SoundfileMixer` is
+  silent on a wrong rate (mixes nothing) and on stereo (double speed), so every
+  upload is decoded, forced to mono and rendered per rate in
+  `transport_factory.VOICE_OUTPUT_RATES` — the constant every voice transport
+  builds from. 10 MB (409, checked on `Content-Length` and the bytes), 60 s
+  (409 — the mixer holds the file per call), 415 on anything libsndfile cannot
+  decode, naming the formats and the `.m4a` fix.
+- **The sound id resolves against the call's project**, for stored and inline
+  agents alike (#173). Stored agents are also checked at save (422).
+- **Every voice transport, S2S included; never evals.** The mixer lives in the
+  transport, so there is no TTS stage to gate on. An eval run carries an
+  `ambience_skipped` warning instead. Every entry point hands its voice
+  transport a `mixer=` — `tests/unit/test_ambience_wiring.py` fails on one
+  that does not.
+- **It can never end a call.** Missing sound, missing rendition, failed fetch:
+  a warning, and a silent room.
+- Absent from the call recording and still playing under the voicemail gate —
+  both on purpose, see the ADR.
+
+Key files: `services/ambience_ingest.py`, `api/v1/ambience.py`,
+`orchestrator/ambience.py`, `storage/repositories/ambience_repo.py`.
 
 ## Pre-Call Initialization (call-init)
 

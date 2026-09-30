@@ -111,6 +111,13 @@ class StorageSettings(BaseSettings):
     local_path: str = Field(default="./storage", alias="LOCAL_STORAGE_PATH")
     s3_bucket: str = Field(default="turncall-artifacts", alias="S3_BUCKET_NAME")
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
+    # Where a call's ambience renditions are fetched to, since the mixer takes a
+    # path and storage returns bytes (ADR-0021). Mount it: under a container's
+    # own filesystem every recreate re-fetches every sound, the lesson
+    # EVAL_TTS_CACHE_DIR already paid for.
+    ambience_cache_dir: str = Field(
+        default="./storage/ambience-cache", alias="AMBIENCE_CACHE_DIR"
+    )
 
 
 class AWSSettings(BaseSettings):

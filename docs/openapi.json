@@ -4085,6 +4085,238 @@
         }
       }
     },
+    "/v1/ambience-sounds": {
+      "post": {
+        "tags": [
+          "ambience"
+        ],
+        "summary": "Upload Sound",
+        "description": "Upload a sound. Stored as one mono MP3 per voice transport rate.",
+        "operationId": "upload_sound_v1_ambience_sounds_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_sound_v1_ambience_sounds_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Upload Sound V1 Ambience Sounds Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "ambience"
+        ],
+        "summary": "List Sounds",
+        "operationId": "list_sounds_v1_ambience_sounds_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Sounds V1 Ambience Sounds Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ambience-sounds/{sound_id}": {
+      "get": {
+        "tags": [
+          "ambience"
+        ],
+        "summary": "Get Sound",
+        "operationId": "get_sound_v1_ambience_sounds__sound_id__get",
+        "parameters": [
+          {
+            "name": "sound_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sound Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Sound V1 Ambience Sounds  Sound Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "ambience"
+        ],
+        "summary": "Delete Sound",
+        "description": "Delete a sound and its stored renditions. Refused while an agent names it.",
+        "operationId": "delete_sound_v1_ambience_sounds__sound_id__delete",
+        "parameters": [
+          {
+            "name": "sound_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sound Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Sound V1 Ambience Sounds  Sound Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/tools": {
       "post": {
         "tags": [
@@ -6020,6 +6252,16 @@
           "avatar": {
             "$ref": "#/components/schemas/AvatarConfigSchema"
           },
+          "ambience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AmbienceConfigSchema"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "transport": {
             "type": "string",
             "pattern": "^(twilio|webrtc|both)$",
@@ -6038,6 +6280,30 @@
         "additionalProperties": false,
         "type": "object",
         "title": "AgentConfigSchema"
+      },
+      "AmbienceConfigSchema": {
+        "properties": {
+          "sound": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Sound",
+            "description": "An ambience sound in this project"
+          },
+          "volume": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Volume",
+            "default": 0.3
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sound"
+        ],
+        "title": "AmbienceConfigSchema",
+        "description": "A room the agent sounds like it is in (ADR-0021). Absent means off.\n\nNo `enabled` flag: the sound id's absence already says off, and two ways\nto say it are two things that can disagree."
       },
       "AnalysisSchema": {
         "properties": {
@@ -6427,6 +6693,20 @@
           "file"
         ],
         "title": "Body_upload_document_v1_knowledge_bases__kb_id__documents_post"
+      },
+      "Body_upload_sound_v1_ambience_sounds_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_sound_v1_ambience_sounds_post"
       },
       "BriefingSummary": {
         "properties": {

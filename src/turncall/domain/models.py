@@ -187,6 +187,17 @@ class AvatarConfig(DomainModel):
     persona_id: str = "pipecat-stream"  # lip-syncs Pipecat TTS audio
 
 
+class AmbienceConfig(DomainModel):
+    """A room the agent sounds like it is in (ADR-0021). Absent means off.
+
+    `sound` names a project's ambience sound; it is mixed into the outbound
+    audio of every voice transport, S2S included, and never into an eval.
+    """
+
+    sound: UUID
+    volume: float = 0.3
+
+
 class SuccessEvaluationConfig(DomainModel):
     """How to evaluate call success."""
 
@@ -283,6 +294,7 @@ class AgentConfig(DomainModel):
     s2s: S2SConfig = Field(default_factory=S2SConfig)
     aws: AWSConfig = Field(default_factory=AWSConfig)
     avatar: AvatarConfig = Field(default_factory=AvatarConfig)
+    ambience: AmbienceConfig | None = None
     transport: str = "twilio"  # "twilio" | "webrtc" | "both"
     server_url: ServerUrlConfig = Field(default_factory=ServerUrlConfig)
     metadata: dict[str, Any] = Field(default_factory=dict)

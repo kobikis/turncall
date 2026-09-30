@@ -26,10 +26,12 @@ from turncall.api.errors import ApiError, ErrorCode, NotFoundError
 from turncall.auth import Auth
 from turncall.config import get_settings
 from turncall.domain.models import AgentConfig
+from turncall.orchestrator.ambience import build_ambience_mixer
 from turncall.orchestrator.pipeline_builder import start_call_pipeline
 from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
 from turncall.orchestrator.transport_factory import (
     STUN_SERVERS,
+    WEBRTC_SAMPLE_RATE,
     create_whatsapp_transport,
 )
 from turncall.storage.database import create_session_factory, get_engine
@@ -234,7 +236,16 @@ async def webrtc_connect(
         if config.avatar.enabled and config.pipeline_mode != "cascade":
             logger.warning("Avatar requested on non-cascade pipeline; skipping")
 
-        transport = create_whatsapp_transport(connection, video_out=avatar_on)
+        mixer = await build_ambience_mixer(
+            config,
+            project_id=call_context.project_id,
+            sample_rate=WEBRTC_SAMPLE_RATE,
+            session_factory=session_factory,
+            settings=settings,
+        )
+        transport = create_whatsapp_transport(
+            connection, video_out=avatar_on, mixer=mixer
+        )
 
         try:
             # Returns once the pipeline is built; the call runs in a task of its
@@ -245,7 +256,7 @@ async def webrtc_connect(
                 call_context=call_context,
                 settings=settings,
                 session_factory=session_factory,
-                audio_sample_rate=16000,
+                audio_sample_rate=WEBRTC_SAMPLE_RATE,
                 avatar_enabled=avatar_on,
             )
         except Exception:

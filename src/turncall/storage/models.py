@@ -515,6 +515,33 @@ class AgentKnowledgeBaseRow(Base):
     )
 
 
+class AmbienceSoundRow(Base):
+    """A project's uploaded ambience sound (ADR-0021).
+
+    The uploaded bytes are not kept: what plays is a mono MP3 rendition per
+    voice transport rate, made at upload. `renditions` maps the rate (as a
+    string — JSONB keys) to its object-storage key. Immutable once created, so
+    a cached rendition never goes stale.
+    """
+
+    __tablename__ = "ambience_sounds"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    renditions: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+
+    __table_args__ = (Index("ix_ambience_sounds_project_id", "project_id"),)
+
+
 class TakeawayRow(Base):
     """A reusable post-call structured-output definition (Takeaway, ADR-0013).
 

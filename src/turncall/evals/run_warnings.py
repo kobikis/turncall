@@ -77,6 +77,30 @@ def warn_unmatched_mocks(
     ]
 
 
+def warn_ambience_skipped(target: ResolvedTarget) -> list[dict[str, Any]]:
+    """Say so when the agent has ambience, which an eval never plays (ADR-0021).
+
+    Forced off on purpose — in audio mode the judge reads a transcription of the
+    agent's own output, and a room under it is variance unrelated to the agent.
+    Silent, it reads two wrong ways: as ambience being broken, or, from a passing
+    audio run, as ambience being safe on a call it was never part of.
+    """
+    ambience = target.config.ambience
+    if ambience is None:
+        return []
+    return [
+        {
+            "code": "ambience_skipped",
+            "message": (
+                f"the agent's ambience (sound {ambience.sound}) did not play: "
+                "evals always run without it, so a verdict never moves because "
+                "of audio unrelated to the agent's behaviour."
+            ),
+            "sound": str(ambience.sound),
+        }
+    ]
+
+
 _JUDGE_KEYS = (
     "judge_provider",
     "judge_model",

@@ -18,7 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from turncall.adapters.storage import create_storage_adapter
 from turncall.config.settings import Settings
 from turncall.storage.models import CallRow, DocumentRow, KnowledgeBaseRow, utc_now
-from turncall.storage.repositories import phone_number_repo, project_repo
+from turncall.storage.repositories import (
+    ambience_repo,
+    phone_number_repo,
+    project_repo,
+)
 
 
 async def _clear_twilio_number(settings: Settings, sid: str) -> None:
@@ -71,7 +75,15 @@ async def _sweep_storage(
         .all()
     )
 
-    keys = [k for k in doc_keys if k] + [f"recordings/{cid}.wav" for cid in rec_ids]
+    # Ambience renditions (ADR-0021): the rows go with the purge's cascade, and
+    # nothing else would ever name these objects again.
+    ambience_keys = await ambience_repo.rendition_keys_for_project(session, project_id)
+
+    keys = (
+        [k for k in doc_keys if k]
+        + [f"recordings/{cid}.wav" for cid in rec_ids]
+        + ambience_keys
+    )
     for key in keys:
         try:
             await storage.delete(key)

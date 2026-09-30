@@ -14,6 +14,17 @@ from turncall.orchestrator.serializer import TwilioFrameSerializer
 
 STUN_SERVERS = ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]
 
+# Twilio Media Streams carry 8kHz mulaw — the carrier's rate, not a choice.
+TWILIO_SAMPLE_RATE = 8000
+# Browser WebRTC and WhatsApp voice (both SmallWebRTC): 16kHz is what the STT
+# and TTS services want natively, and the peer connection resamples to Opus.
+WEBRTC_SAMPLE_RATE = 16000
+
+# Every rate a voice transport sends audio at. Ambience renditions are made for
+# exactly these (ADR-0021): the mixer silently plays nothing at any other rate,
+# so a transport added with a new rate must land here or its calls go quiet.
+VOICE_OUTPUT_RATES = frozenset({TWILIO_SAMPLE_RATE, WEBRTC_SAMPLE_RATE})
+
 # Evals run over loopback, so there is no carrier to match: 16kHz is what the
 # STT and TTS services want natively, and avoids a resample on both ends.
 EVAL_SAMPLE_RATE = 16000
@@ -22,8 +33,14 @@ EVAL_SAMPLE_RATE = 16000
 def create_twilio_transport(
     websocket: WebSocket,
     stream_sid: str,
+    *,
+    mixer: Any = None,
 ) -> Any:
-    """Create a Twilio Media Stream transport."""
+    """Create a Twilio Media Stream transport.
+
+    `mixer` is the call's ambience (ADR-0021), or None for none. Every voice
+    transport takes one; the eval transport deliberately does not.
+    """
     from pipecat.transports.websocket.fastapi import (
         FastAPIWebsocketParams,
         FastAPIWebsocketTransport,
@@ -35,17 +52,18 @@ def create_twilio_transport(
         websocket=websocket,
         params=FastAPIWebsocketParams(
             audio_in_enabled=True,
-            audio_in_sample_rate=8000,
+            audio_in_sample_rate=TWILIO_SAMPLE_RATE,
             audio_in_channels=1,
             audio_out_enabled=True,
-            audio_out_sample_rate=8000,
+            audio_out_sample_rate=TWILIO_SAMPLE_RATE,
             audio_out_channels=1,
+            audio_out_mixer=mixer,
             serializer=serializer,
         ),
     )
 
 
-def create_webrtc_transport() -> Any:
+def create_webrtc_transport(*, mixer: Any = None) -> Any:
     """Create a WebRTC transport for browser-based calls."""
     from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
     from pipecat.transports.smallwebrtc.transport import (
@@ -61,18 +79,21 @@ def create_webrtc_transport() -> Any:
             webrtc_connection=connection,
             params=TransportParams(
                 audio_in_enabled=True,
-                audio_in_sample_rate=16000,
+                audio_in_sample_rate=WEBRTC_SAMPLE_RATE,
                 audio_in_channels=1,
                 audio_out_enabled=True,
-                audio_out_sample_rate=16000,
+                audio_out_sample_rate=WEBRTC_SAMPLE_RATE,
                 audio_out_channels=1,
+                audio_out_mixer=mixer,
             ),
         ),
         connection,
     )
 
 
-def create_whatsapp_transport(connection: Any, *, video_out: bool = False) -> Any:
+def create_whatsapp_transport(
+    connection: Any, *, video_out: bool = False, mixer: Any = None
+) -> Any:
     """Wrap a pre-established SmallWebRTCConnection in a transport.
 
     Used for both WhatsApp voice and browser WebRTC (both wrap a
@@ -84,11 +105,12 @@ def create_whatsapp_transport(connection: Any, *, video_out: bool = False) -> An
 
     params = TransportParams(
         audio_in_enabled=True,
-        audio_in_sample_rate=16000,
+        audio_in_sample_rate=WEBRTC_SAMPLE_RATE,
         audio_in_channels=1,
         audio_out_enabled=True,
-        audio_out_sample_rate=16000,
+        audio_out_sample_rate=WEBRTC_SAMPLE_RATE,
         audio_out_channels=1,
+        audio_out_mixer=mixer,
     )
     if video_out:
         params.video_out_enabled = True

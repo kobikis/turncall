@@ -197,6 +197,15 @@
             ]
           },
           {
+            "group": "Ambience",
+            "pages": [
+              "POST /v1/ambience-sounds",
+              "GET /v1/ambience-sounds",
+              "GET /v1/ambience-sounds/{sound_id}",
+              "DELETE /v1/ambience-sounds/{sound_id}"
+            ]
+          },
+          {
             "group": "Evals",
             "pages": [
               "POST /v1/eval-scenarios",
