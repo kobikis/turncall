@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from sqlalchemy import (
     CheckConstraint,
@@ -255,7 +255,7 @@ class CallContextSnapshotRow(Base):
     )
     segment: Mapped[int] = mapped_column(Integer, nullable=False)
     system_instruction: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    messages: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    messages: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )

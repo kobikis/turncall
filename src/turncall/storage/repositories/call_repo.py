@@ -242,8 +242,8 @@ async def list_turn_metrics_by_call(
         .order_by(CallEventRow.call_id, CallEventRow.sequence_number)
     )
     by_call: dict[UUID, list[dict[str, Any]]] = {}
-    for call_id, payload in result.all():
-        by_call.setdefault(call_id, []).append(payload)
+    for row in result.all():
+        by_call.setdefault(row.call_id, []).append(row.payload)
     return by_call
 
 

@@ -1,5 +1,6 @@
 """Call management endpoints."""
 
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -132,7 +133,7 @@ async def get_call_context(
     call_id: UUID,
     auth: Auth,
     session: DbSession,
-) -> dict:
+) -> dict[str, Any]:
     """What the model was given, one snapshot per agent segment (#177).
 
     `status` separates "this agent had snapshots switched off" from "nothing
