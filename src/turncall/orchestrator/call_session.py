@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -465,10 +466,20 @@ class CallSession:
         """Keep the first error that ends the call, on its event log too."""
         if self._error is not None or self._call_context.is_eval:
             return
-        self._error = str(error)
+        self._error = readable_error(error)
         await self._log_event(
             CallEventType.ERROR_RAISED, {"stage": stage, "error": self._error}
         )
+
+
+# Provider SDKs put the whole request in their message (Deepgram: every header,
+# the token redacted), which buries the one sentence a person needs.
+_REQUEST_HEADERS = re.compile(r"headers: \{.*?\}, ")
+
+
+def readable_error(error: object) -> str:
+    """An error as the call's event log keeps it: the reason, not the request."""
+    return _REQUEST_HEADERS.sub("", str(error))[:500]
 
 
 async def log_call_event(
@@ -545,7 +556,7 @@ async def fail_unstarted_call(call_context: CallContext, error: BaseException) -
         await log_call_event(
             call_context,
             CallEventType.ERROR_RAISED,
-            {"stage": "pipeline_build", "error": str(error)},
+            {"stage": "pipeline_build", "error": readable_error(error)},
         )
         await finalize_call(
             call_context.session_factory, call_context.call_id, failed=True

@@ -304,3 +304,19 @@ class TestUnstartedCall:
             patch.object(mod, "finalize_call", AsyncMock(side_effect=OSError("db"))),
         ):
             await mod.fail_unstarted_call(self._ctx(), RuntimeError("x"))
+
+
+@pytest.mark.unit
+def test_a_provider_error_keeps_the_reason_not_the_request() -> None:
+    from turncall.orchestrator.call_session import readable_error
+
+    raw = (
+        "Deepgram rejected the connection (status 401): headers: {'User-Agent': "
+        "'deepgram-sdk/7.11.0', 'Authorization': 'Token [REDACTED]'}, "
+        "status_code: 401, body: Websocket initialized with invalid credentials."
+    )
+    assert readable_error(raw) == (
+        "Deepgram rejected the connection (status 401): status_code: 401, "
+        "body: Websocket initialized with invalid credentials."
+    )
+    assert len(readable_error("x" * 2000)) == 500
