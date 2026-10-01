@@ -133,6 +133,8 @@ async def resolve_briefing_text(
     llm_config = LLMConfig(**(agent.config_blob.get("llm") or {}))
     aws_config = AWSConfig(**(agent.config_blob.get("aws") or {}))
     try:
+        from turncall.services.credentials import for_project
+
         result = await complete_text(
             llm_config,
             [
@@ -140,6 +142,7 @@ async def resolve_briefing_text(
                 {"role": "user", "content": f"Transcript:\n{transcript}"},
             ],
             aws=aws_config,
+            credentials=await for_project(session, call.project_id),
         )
         return result.text.strip() or "The caller is being transferred to you."
     except Exception:

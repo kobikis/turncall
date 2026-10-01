@@ -127,14 +127,18 @@ DELETE /v1/credentials/{provider}   # idempotent; the project falls back to the 
 GET    /v1/providers                # roles -> providers; per account platform_key + project_credential
 ```
 
-Every key the **voice pipeline** uses resolves through
-`services/credentials.Credentials`: agent inline (`llm.api_key`, `config.aws`) →
-project credential → platform env. Built per call by
-`pipeline_builder.load_call_credentials`, so writes apply to the next call. No
-pipeline code reads `os.environ` for a key. Everything outside a call — the
-chat/SMS text path, post-call analysis and takeaways, KB ingestion, the eval
-judge — still reads `llm.api_key` then the platform key, and does **not**
-consult project credentials yet.
+Every provider key resolves through `services/credentials.Credentials`: agent
+inline (`llm.api_key`, `config.aws`) → project credential → platform env. One
+order everywhere a project's work runs: the voice pipeline
+(`pipeline_builder.load_call_credentials`), chat/SMS/WhatsApp text turns,
+post-call analysis and takeaways, the transfer briefing, KB upload/search
+embeddings (`credentials.for_project`), and the eval judge (via
+`credentials.scope`, since pipecat builds it from a factory path). Read fresh
+each time, so writes apply to the next call or message. So a deployment can run
+with every provider key in `.env` and no project credentials, or with none in
+`.env` and every key per project — or any mix. `custom_openai` never receives a
+project's OpenAI key (its endpoint is the agent's own). No code reads
+`os.environ` for a key.
 
 ## Pipeline
 

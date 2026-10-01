@@ -57,13 +57,20 @@ async def _validate_twilio_request(
     token, matched by the `AccountSid` Twilio puts in every webhook; anything
     else is checked against the platform's (services/twilio_accounts.py).
     """
-    from turncall.services.twilio_accounts import token_for_account_sid
+    from turncall.services.twilio_accounts import (
+        any_number_has_own_account,
+        token_for_account_sid,
+    )
 
     token = await token_for_account_sid(
         session, params.get("AccountSid"), get_settings()
     )
     if not token:
-        return True  # Skip validation if no auth token configured (dev mode)
+        # No platform token and no number on this account. With no Twilio
+        # credentials anywhere this is a dev setup and passes, as before; once
+        # numbers bring their own accounts, an unverifiable webhook is refused —
+        # an operator who keeps Twilio only per number must not lose the check.
+        return not await any_number_has_own_account(session)
     url = _public_url(request)
     return validate_twilio_signature(token, signature, url, params)
 

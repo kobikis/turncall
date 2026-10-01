@@ -96,8 +96,10 @@ and `GET /v1/providers`; the resolver is `services/credentials.py`
 The account namespace lives in `domain/providers.py`: `openai_live` bills to
 `openai`, `bedrock` and the `aws` S2S provider share `aws`, and `ollama` /
 `custom_openai` have no account — their key, if any, belongs to the endpoint
-their own `base_url` names. The text path (chat/SMS) still reads `llm.api_key`
-then the platform key; it does not consult project credentials yet.
+their own `base_url` names. Work outside a call — text turns, post-call
+analysis, takeaways, the transfer briefing, KB embeddings, the eval judge —
+resolves in the same order through `credentials.for_project`, so the platform
+environment is a fallback everywhere and a requirement nowhere.
 
 Telephony, listed below as staying platform-level, was later given a narrower
 answer: a **phone number** may carry its own Twilio account

@@ -498,3 +498,89 @@ class TestSecretMasking:
             AgentConfigSchema.model_validate({"stt": {"provider": provider}})
         with pytest.raises(ValidationError):
             AgentConfigSchema.model_validate({"stt": {"provider": "whisperx"}})
+
+
+class TestOutsideTheCall:
+    """Text turns, post-call analysis, the briefing and the eval judge resolve
+    in the same order a voice call does — so a deployment with nothing in .env
+    runs entirely on the project's keys, and one with only .env keeps working."""
+
+    @pytest.mark.asyncio
+    async def test_a_text_completion_uses_the_projects_key(self) -> None:
+        import httpx
+
+        from turncall.services.llm_text import complete_text
+
+        sent = {}
+
+        async def post(url, json=None, headers=None, **kw):
+            sent["auth"] = headers.get("Authorization")
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "ok"}}]},
+                request=httpx.Request("POST", url),
+            )
+
+        client = MagicMock()
+        client.post = post
+        with patch("turncall.services.llm_text.get_http_client", return_value=client):
+            await complete_text(
+                LLMConfig(provider="openai", model="gpt-4o-mini"),
+                [{"role": "user", "content": "hi"}],
+                credentials=_creds({"openai": {"api_key": "proj-key"}}, openai="env"),
+            )
+        assert sent["auth"] == "Bearer proj-key"
+
+    @pytest.mark.asyncio
+    async def test_post_call_analysis_reads_the_calls_project(self) -> None:
+        from turncall.services import call_analysis_trigger
+
+        session = AsyncMock()
+
+        class _Factory:
+            async def __aenter__(self):
+                return session
+
+            async def __aexit__(self, *a):
+                return False
+
+        with patch(
+            f"{REPO}.load_documents",
+            AsyncMock(return_value={"anthropic": {"api_key": "proj"}}),
+        ) as load:
+            creds = await call_analysis_trigger._project_credentials(
+                _Factory, uuid.UUID(int=7)
+            )
+        assert load.await_args.args[1] == uuid.UUID(int=7)
+        assert creds.api_key("anthropic") == "proj"
+
+    def test_the_eval_judge_uses_the_runs_project(self) -> None:
+        from turncall.evals import judges
+        from turncall.services.credentials import scope
+
+        with scope(_creds({"openai": {"api_key": "proj"}}, openai="env")):
+            assert judges._platform_key("openai") == "proj"
+        assert judges._platform_key("openai") == get_settings().openai.api_key
+
+
+class TestTwilioSignatureWithoutAPlatformAccount:
+    @pytest.mark.asyncio
+    async def test_unverifiable_webhooks_are_refused_once_numbers_own_accounts(
+        self, monkeypatch
+    ) -> None:
+        from turncall.webhooks import twilio_handlers as th
+
+        monkeypatch.setattr(
+            "turncall.services.twilio_accounts.token_for_account_sid",
+            AsyncMock(return_value=None),
+        )
+        request = MagicMock()
+        for owned, expected in ((True, False), (False, True)):
+            monkeypatch.setattr(
+                "turncall.services.twilio_accounts.any_number_has_own_account",
+                AsyncMock(return_value=owned),
+            )
+            ok = await th._validate_twilio_request(
+                request, AsyncMock(), "sig", {"AccountSid": "AC" + "9" * 32}
+            )
+            assert ok is expected

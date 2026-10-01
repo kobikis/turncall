@@ -15,7 +15,9 @@ next one with no restart.
 from __future__ import annotations
 
 import functools
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -24,6 +26,10 @@ from loguru import logger
 from turncall.domain.providers import AWS_ACCOUNT
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from turncall.config.settings import Settings
     from turncall.domain.models import AWSConfig
 
@@ -101,3 +107,45 @@ class Credentials:
             return inline
         merged = {**stored, "region": inline.region or stored.get("region")}
         return inline.model_validate(merged)
+
+
+async def for_project(
+    session: AsyncSession, project_id: UUID, settings: Settings | None = None
+) -> Credentials:
+    """Every level of key for work done on one project's behalf — a call, a
+    chat turn, a post-call analysis, a document upload, an eval run. Read fresh
+    each time, so a credential written a moment ago is the one used."""
+    from turncall.config.settings import get_settings
+    from turncall.storage.repositories import credential_repo
+
+    settings = settings or get_settings()
+    project = await credential_repo.load_documents(session, project_id, settings)
+    return Credentials.from_settings(settings, project)
+
+
+# Only for code that cannot be handed `Credentials` as an argument: the eval
+# judge and persona, which pipecat constructs from a factory path inside the run.
+_current: ContextVar[Credentials | None] = ContextVar(
+    "turncall_credentials", default=None
+)
+
+
+def current(settings: Settings | None = None) -> Credentials:
+    """The credentials of the project whose work is running, else the platform's."""
+    found = _current.get()
+    if found is not None:
+        return found
+    from turncall.config.settings import get_settings
+
+    return Credentials.from_settings(settings or get_settings())
+
+
+@contextmanager
+def scope(credentials: Credentials) -> Iterator[None]:
+    """Make `credentials` what `current()` answers inside this block (and in
+    every task started from it — asyncio copies the context)."""
+    token = _current.set(credentials)
+    try:
+        yield
+    finally:
+        _current.reset(token)

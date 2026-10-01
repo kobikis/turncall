@@ -25,6 +25,7 @@ from turncall.api.v1.schemas.knowledge import (
 )
 from turncall.auth import Auth, WriteAuth
 from turncall.config.settings import get_settings
+from turncall.services.credentials import for_project
 from turncall.services.document_ingestion import (
     create_pending_document,
     ingest_in_background,
@@ -239,7 +240,9 @@ async def upload_document(
         filename=filename,
         content_type=content_type,
         data=data,
-        openai_api_key=get_settings().openai.api_key,
+        # The project's OpenAI key before the platform's (ADR-0020): embedding
+        # and chunk enrichment are billed to whoever the calls are billed to.
+        openai_api_key=(await for_project(session, auth.project_id)).api_key("openai"),
         embedding_model=kb_row.embedding_model,
         chunk_size=kb_row.chunk_size,
         chunk_overlap=kb_row.chunk_overlap,
@@ -345,14 +348,13 @@ async def search_knowledge_base(
     if kb_row is None:
         raise NotFoundError("KnowledgeBase", str(kb_id))
 
-    settings = get_settings()
     result = await retrieve(
         session,
         query=body.query,
         knowledge_base_ids=[kb_id],
         top_k=body.top_k,
         similarity_threshold=body.similarity_threshold,
-        openai_api_key=settings.openai.api_key,
+        openai_api_key=(await for_project(session, auth.project_id)).api_key("openai"),
         embedding_model=kb_row.embedding_model,
     )
 

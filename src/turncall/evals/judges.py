@@ -208,7 +208,14 @@ def _platform_key(attr: str) -> str:
     """
     from turncall.config.settings import get_settings
 
-    return getattr(get_settings(), attr).api_key
+    if attr in ("openai", "anthropic"):
+        # The project whose run this is, ahead of the platform (ADR-0020):
+        # pipecat builds the judge from a factory path, so the runner hands the
+        # project's keys over through `credentials.scope`, not an argument.
+        from turncall.services.credentials import current
+
+        return current().api_key(attr)
+    return str(getattr(get_settings(), attr).api_key)
 
 
 def openai(config: dict[str, Any]) -> Any:

@@ -94,3 +94,18 @@ async def token_for_account_sid(
         if ciphertext:
             return str(credential_repo.decrypt(ciphertext, settings)["auth_token"])
     return settings.twilio.auth_token or None
+
+
+async def any_number_has_own_account(session: AsyncSession) -> bool:
+    """Whether Twilio is configured per number anywhere on this deployment.
+
+    Decides what an unverifiable webhook means: with no Twilio token at all it
+    is a dev setup and passes, as it always did; once numbers carry their own
+    accounts, a webhook nothing here can verify is refused.
+    """
+    found = await session.scalar(
+        select(PhoneNumberRow.id)
+        .where(PhoneNumberRow.twilio_auth_token_ciphertext.is_not(None))
+        .limit(1)
+    )
+    return found is not None

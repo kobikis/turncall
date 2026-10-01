@@ -42,7 +42,10 @@ and is not part of this repository's history.
   booleans: `platform_key` and `project_credential`. New setting:
   `CREDENTIAL_ENCRYPTION_KEY` (set once; startup fails if credentials exist and
   it is unset). Deepgram, ElevenLabs, HeyGen and Tavus keys are now read
-  through settings like every other provider's.
+  through settings like every other provider's. The same order applies outside
+  calls — chat/SMS/WhatsApp text turns, post-call analysis and takeaways, the
+  transfer briefing, knowledge-base embeddings and the eval judge — so the
+  platform `.env` keys are a fallback, never a requirement.
 
 - **Ambience — a room the agent sounds like it is in** (#166). Upload a sound
   once (`POST /v1/ambience-sounds`) and any agent in the project names it:

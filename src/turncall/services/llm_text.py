@@ -20,8 +20,9 @@ from typing import Any
 from loguru import logger
 
 from turncall.adapters.http_client import get_http_client
-from turncall.config.settings import get_settings
 from turncall.domain.models import AWSConfig, LLMConfig
+from turncall.domain.providers import account_for
+from turncall.services.credentials import Credentials, current
 from turncall.services.llm_models import resolve_llm_model
 
 # Runs one tool and returns its result as a string. Owns its own errors —
@@ -41,18 +42,18 @@ class CompletionResult:
     total_tokens: int
 
 
-def _resolve_api_key(config: LLMConfig) -> str:
-    """Resolve the API key from config or environment."""
-    if config.api_key:
-        return config.api_key
-    settings = get_settings()
-    if config.provider in ("openai", "custom_openai"):
-        return settings.openai.api_key
-    if config.provider == "anthropic":
-        return settings.anthropic.api_key
-    if config.provider == "openrouter":
-        return settings.openrouter.api_key
-    return ""
+def _resolve_api_key(config: LLMConfig, credentials: Credentials) -> str:
+    """Agent inline key, then the project's credential, then the platform's —
+    the same order a voice call resolves in (ADR-0020)."""
+    if config.provider == "custom_openai":
+        # No account: the endpoint is the agent's own. The platform OpenAI key
+        # was always the fallback here and still is; a project's is not sent to
+        # an arbitrary base_url.
+        return config.api_key or credentials.platform.get("openai", "")
+    account = account_for(config.provider)
+    if account is None:
+        return config.api_key or ""
+    return credentials.api_key(account, config.api_key)
 
 
 def _resolve_base_url(config: LLMConfig) -> str:
@@ -420,8 +421,13 @@ async def complete_text(
     aws: AWSConfig | None = None,
     tools: list[dict[str, Any]] | None = None,
     execute_tool: ToolExecutor | None = None,
+    credentials: Credentials | None = None,
 ) -> CompletionResult:
     """Generate a text completion using the agent's LLM config.
+
+    `credentials` are the project's (services/credentials.for_project), so chat,
+    SMS, post-call analysis and the transfer briefing run on the account a
+    voice call on the same project would. Omitted = the platform's keys.
 
     Supports: openai, ollama, custom_openai (BYOM), anthropic (Claude),
     openrouter, bedrock.
@@ -448,7 +454,8 @@ async def complete_text(
         update={"model": resolve_llm_model(config.provider, config.model)}
     )
 
-    api_key = _resolve_api_key(config)
+    credentials = credentials or current()
+    api_key = _resolve_api_key(config, credentials)
 
     logger.debug(
         "llm_text_request",
@@ -459,7 +466,7 @@ async def complete_text(
 
     if config.provider == "bedrock":
         result = await _complete_text_bedrock(
-            config, aws or AWSConfig(), messages, tools, execute_tool
+            config, credentials.aws(aws or AWSConfig()), messages, tools, execute_tool
         )
     elif config.provider == "anthropic":
         result = await _complete_text_anthropic(
