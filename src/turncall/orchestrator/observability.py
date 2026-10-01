@@ -13,7 +13,7 @@ of the pipeline for non-transcript events.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from loguru import logger
 from pipecat.frames.frames import (
@@ -120,6 +120,13 @@ class TranscriptTapProcessor(FrameProcessor):
             )
 
 
+class CanBeUnusable(Protocol):
+    """What the tap reads off a TTS service: pipecat's own usability verdict."""
+
+    @property
+    def is_usable(self) -> bool: ...
+
+
 class AssistantTranscriptTapProcessor(FrameProcessor):
     """Placed after LLM to capture assistant responses.
 
@@ -131,7 +138,7 @@ class AssistantTranscriptTapProcessor(FrameProcessor):
         self,
         call_context: CallContext,
         llm_service: object | None = None,
-        tts_service: object | None = None,
+        tts_service: CanBeUnusable | None = None,
         **kwargs: object,
     ) -> None:
         super().__init__(**kwargs)
@@ -180,9 +187,7 @@ class AssistantTranscriptTapProcessor(FrameProcessor):
             return None
 
     async def _log_transcript(self, text: str) -> None:
-        if self._tts_service is not None and not getattr(
-            self._tts_service, "is_usable", True
-        ):
+        if self._tts_service is not None and not self._tts_service.is_usable:
             logger.info(
                 "assistant_transcript_unspoken", call_id=str(self._call_context.call_id)
             )

@@ -16,7 +16,9 @@ from turncall.orchestrator.observability import AssistantTranscriptTapProcessor
 pytestmark = pytest.mark.unit
 
 
-def _tap(tts_usable: bool | None):
+def _tap(
+    tts_usable: bool | None,
+) -> tuple[AssistantTranscriptTapProcessor, MagicMock]:
     factory = MagicMock()
     ctx = SimpleNamespace(call_id=uuid4(), project_id=uuid4(), session_factory=factory)
     tts = None if tts_usable is None else SimpleNamespace(is_usable=tts_usable)
