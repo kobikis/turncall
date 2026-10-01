@@ -92,16 +92,21 @@ services:
     # Restarts on any change under src/ (#190). src is bind-mounted, so a worker
     # left running while the code moves under it mixes old and new modules —
     # an ImportError naming a symbol that is plainly in the file. SIGINT lets
-    # it drain in-flight runs first; the timeout matches
-    # EVAL_MAX_RUN_DURATION_SECONDS so a long run is not cut off mid-verdict.
-    # The packaged image's entrypoint is unchanged.
+    # it drain in-flight runs first. The drain is bounded by the runs' own
+    # budget, so the SIGKILL backstop is the longest run can take:
+    # max(EVAL_MAX_RUN_DURATION_SECONDS, 180s × EVAL_MAX_ITERATIONS) + 60s, the
+    # janitor's arithmetic (180 = runner.MIN_ITERATION_BUDGET_S). Read from the
+    # same env the worker reads, so a change there moves this too. `$$` is
+    # compose's escape for a literal `$`. The packaged image is unchanged.
     command:
-      - watchfiles
-      - --target-type=command
-      - --filter=python
-      - --sigint-timeout=900
-      - turncall-eval-worker
-      - /app/src
+      - sh
+      - -c
+      - >-
+        t=$$(( $${EVAL_MAX_ITERATIONS:-50} * 180 ));
+        d=$${EVAL_MAX_RUN_DURATION_SECONDS:-900};
+        [ "$$d" -gt "$$t" ] && t=$$d;
+        exec watchfiles --target-type=command --filter=python
+        --sigint-timeout=$$(( t + 60 )) turncall-eval-worker /app/src
     env_file:
       - ../.env
     environment:
