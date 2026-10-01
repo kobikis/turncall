@@ -130,8 +130,12 @@ async def run_iteration(
     run_id: UUID,
     tool_mocks: Any,
     timeout_s: float | None = None,
+    agent_errors: list[str] | None = None,
 ) -> Any:
     """Run one scenario-iteration end to end and return pipecat's result.
+
+    `agent_errors`, when given, receives every error the agent's pipeline
+    reported, whatever the outcome — the reason behind a reply that never came.
 
     Builds the agent's real pipeline against an eval transport, starts it, and
     drives it with pipecat's harness over loopback. Always tears the bot down,
@@ -185,6 +189,8 @@ async def run_iteration(
         result = await _run_harness(harness, timeout_s, run_id)
     finally:
         await _stop_bot(bot, run_id)
+        if agent_errors is not None:
+            agent_errors.extend(session.pipeline_errors)
 
     # A pipeline that *raised* is a platform fault, so the iteration proves
     # nothing and is errored. A pipeline that a provider refused is not: see

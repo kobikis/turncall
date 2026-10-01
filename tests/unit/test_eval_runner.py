@@ -231,6 +231,38 @@ class TestExecuteRun:
         assert (kwargs["passed_count"], kwargs["failed_count"]) == (3, 0)
         assert len(kwargs["results"]) == 3
 
+    async def test_a_provider_error_explains_a_failed_iteration(self) -> None:
+        """Bedrock refusing every request leaves the agent silent; the only
+        assertion failure is "no response". The provider's reason has to lead,
+        or nobody can tell an agent regression from an account problem."""
+        refused = (
+            "AWSBedrockLLMService#0: Model use case details have not been submitted"
+        )
+
+        async def execute(**kwargs):
+            kwargs["agent_errors"].append(refused)
+            return script_result(
+                passed=False,
+                failures=[failure()],
+                turns=[turn_result(status="failed")],
+            )
+
+        finish, _ = await self._execute(self._run_row(), execute)
+        entry = finish.await_args.kwargs["results"][0]
+        assert entry["agent_errors"] == [refused]
+        assert entry["failures"][0] == {"kind": "agent_error", "reason": refused}
+        assert len(entry["failures"]) == 2  # the assertion's own failure stays
+
+    async def test_a_passing_iteration_keeps_its_failures_empty(self) -> None:
+        async def execute(**kwargs):
+            kwargs["agent_errors"].append("x: a blip it recovered from")
+            return script_result(turns=[turn_result()])
+
+        finish, _ = await self._execute(self._run_row(), execute)
+        entry = finish.await_args.kwargs["results"][0]
+        assert entry["agent_errors"] == ["x: a blip it recovered from"]
+        assert entry["failures"] == []
+
     async def test_one_failing_iteration_fails_the_run(self) -> None:
         results = [
             script_result(turns=[turn_result()]),

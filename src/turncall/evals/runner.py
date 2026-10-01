@@ -26,7 +26,7 @@ Two rules from the design are load-bearing here:
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import UUID
 
@@ -229,12 +229,20 @@ async def run_iterations(
             )
             break
         mocks = plan.fresh_mocks()
+        agent_errors: list[str] = []
         try:
-            result = await execute(**plan.execute_kwargs(), tool_mocks=mocks)
+            result = await execute(
+                **plan.execute_kwargs(), tool_mocks=mocks, agent_errors=agent_errors
+            )
         except Exception as exc:
             logger.exception("eval_iteration_error", run_id=str(plan.run_id))
             outcomes.append(
-                errored_entry(iteration, describe_failure(exc), tool_calls=mocks.calls)
+                with_agent_errors(
+                    errored_entry(
+                        iteration, describe_failure(exc), tool_calls=mocks.calls
+                    ),
+                    agent_errors,
+                )
             )
             continue
         if mocks.refused:
@@ -254,21 +262,36 @@ async def run_iterations(
             )
             break
         if plan.kind is EvalKind.SIMULATION:
-            outcomes.append(
-                map_simulation_result(
-                    result, iteration=iteration, tool_calls=mocks.calls
-                )
+            outcome = map_simulation_result(
+                result, iteration=iteration, tool_calls=mocks.calls
             )
         else:
-            outcomes.append(
-                map_script_result(
-                    result,
-                    iteration=iteration,
-                    parsed=plan.parsed,
-                    tool_calls=mocks.calls,
-                )
+            outcome = map_script_result(
+                result,
+                iteration=iteration,
+                parsed=plan.parsed,
+                tool_calls=mocks.calls,
             )
+        outcomes.append(with_agent_errors(outcome, agent_errors))
     return outcomes
+
+
+def with_agent_errors(
+    outcome: IterationOutcome, agent_errors: list[str]
+) -> IterationOutcome:
+    """Attach what the agent's pipeline reported to the iteration's entry.
+
+    On an iteration that failed they also lead its `failures`, because they are
+    usually the reason: a provider that refused every request makes the agent
+    say nothing, and the assertion that notices only says "no response".
+    """
+    if not agent_errors:
+        return outcome
+    entry = {**outcome.entry, "agent_errors": list(agent_errors)}
+    if outcome.passed is False:
+        leading = [{"kind": "agent_error", "reason": e} for e in agent_errors]
+        entry["failures"] = leading + list(entry.get("failures") or [])
+    return replace(outcome, entry=entry)
 
 
 def _completed_payload(run: Any) -> dict[str, Any]:

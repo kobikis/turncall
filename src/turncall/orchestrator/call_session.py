@@ -72,6 +72,11 @@ class CallSession:
         # using (bad key, unknown model) ends the pipeline gracefully, so
         # without this a 401 on the first turn read as the caller hanging up.
         self._error: str | None = None
+        # Every error the pipeline reported, ending or not. A provider that
+        # refuses a request without being marked unusable (Bedrock's model
+        # access check, say) leaves the pipeline running and silent; an eval
+        # then fails on "no response" with nothing saying why.
+        self.pipeline_errors: list[str] = []
 
     @property
     def call_id(self) -> UUID:
@@ -261,6 +266,9 @@ class CallSession:
         """Record an error that ends the pipeline, so the call is finalized as
         failed with the reason on its event log (ADR-0008)."""
         processor = frame.processor
+        noted = f"{processor}: {readable_error(frame.error)}"
+        if noted not in self.pipeline_errors and len(self.pipeline_errors) < 5:
+            self.pipeline_errors.append(noted)
         if not (frame.fatal or (processor is not None and not processor.is_usable)):
             return
         error = readable_error(frame.error)
