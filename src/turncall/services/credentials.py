@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from turncall.domain.providers import AWS_ACCOUNT
+from turncall.domain.providers import AWS_ACCOUNT, account_for
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from turncall.config.settings import Settings
-    from turncall.domain.models import AWSConfig
+    from turncall.domain.models import AgentConfig, AWSConfig
 
 
 def platform_keys(settings: Settings) -> dict[str, str]:
@@ -108,6 +108,43 @@ class Credentials:
             return inline
         merged = {**stored, "region": inline.region or stored.get("region")}
         return inline.model_validate(merged)
+
+    def missing_keys(self, config: AgentConfig) -> list[str]:
+        """The accounts this agent needs and no level holds a key for.
+
+        Without one the provider refuses mid-call — or the SDK refuses at build
+        — and either way the caller hears nothing. AWS is not checked: its
+        ambient chain is not a key this can see.
+        """
+        if config.pipeline_mode == "s2s":
+            needed = [(config.s2s.provider, None)]
+        else:
+            needed = [
+                (config.stt.provider, None),
+                (config.llm.provider, config.llm.api_key),
+                (config.tts.provider, None),
+            ]
+            if config.avatar.enabled:
+                needed.append((config.avatar.provider, None))
+        missing: list[str] = []
+        for provider, inline in needed:
+            account = account_for(provider)
+            if account in (None, AWS_ACCOUNT) or account in missing:
+                continue
+            if not self.api_key(account, inline):
+                missing.append(account)
+        return missing
+
+
+class MissingProviderKeyError(RuntimeError):
+    """An agent names a provider no level holds a key for (ADR-0020)."""
+
+    def __init__(self, accounts: list[str]) -> None:
+        self.accounts = accounts
+        super().__init__(
+            f"No API key for {', '.join(accounts)}: add it as a project "
+            "credential or set it in the platform environment"
+        )
 
 
 async def for_project(

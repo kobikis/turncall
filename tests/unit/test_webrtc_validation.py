@@ -140,3 +140,52 @@ class _SessionCM:
 
 def _session_cm():
     return _SessionCM()
+
+
+@pytest.mark.unit
+def test_a_missing_key_rides_back_as_a_list(app, monkeypatch):
+    """So a console can name the key without parsing the sentence."""
+    from types import SimpleNamespace
+
+    from turncall.api.v1 import webrtc
+    from turncall.domain.models import AgentConfig
+    from turncall.services.credentials import MissingProviderKeyError
+
+    _auth(app)
+    resolved = (AgentConfig(), uuid.uuid4(), None, None, None, None)
+    monkeypatch.setattr(webrtc, "_resolve_agent", AsyncMock(return_value=resolved))
+    monkeypatch.setattr(webrtc, "get_engine", lambda: None)
+    monkeypatch.setattr(webrtc, "create_session_factory", lambda _e: _session_cm)
+    monkeypatch.setattr(webrtc, "build_ambience_mixer", AsyncMock(return_value=None))
+    monkeypatch.setattr(webrtc, "create_whatsapp_transport", lambda *a, **k: None)
+    monkeypatch.setattr(
+        webrtc,
+        "start_call_pipeline",
+        AsyncMock(side_effect=MissingProviderKeyError(["deepgram"])),
+    )
+    monkeypatch.setattr(
+        "turncall.storage.repositories.call_repo.create_call",
+        AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())),
+    )
+    monkeypatch.setattr(
+        "turncall.storage.repositories.call_repo.get_next_sequence_number",
+        AsyncMock(return_value=1),
+    )
+    monkeypatch.setattr(
+        "turncall.storage.repositories.call_repo.create_call_event", AsyncMock()
+    )
+
+    async def handle(_request, callback):
+        with contextlib.suppress(Exception):
+            await callback(SimpleNamespace(disconnect=AsyncMock()))
+        return {"sdp": "v=0", "type": "answer", "pc_id": "pc"}
+
+    monkeypatch.setattr(webrtc._request_handler, "handle_web_request", handle)
+    r = app.post(
+        "/v1/webrtc/connect",
+        json={"sdp": "v=0", "type": "offer", "agent_id": str(uuid.uuid4())},
+        headers={"Authorization": "Bearer x"},
+    )
+    assert r.status_code == 500
+    assert r.json()["details"] == {"missing_keys": ["deepgram"]}
+    assert "No API key for deepgram" in r.json()["error"]

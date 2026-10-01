@@ -320,3 +320,48 @@ def test_a_provider_error_keeps_the_reason_not_the_request() -> None:
         "body: Websocket initialized with invalid credentials."
     )
     assert len(readable_error("x" * 2000)) == 500
+
+
+@pytest.mark.unit
+async def test_a_rejected_key_names_its_provider() -> None:
+    """A key that is present but wrong: pipecat says AUTHENTICATION; the call
+    says which vendor's key to fix."""
+    from pipecat.utils.errors import ErrorCategory
+
+    cs = _make_call_session(uuid4())
+    stt_class = type(
+        "DeepgramSTTService",
+        (),
+        {"__module__": "pipecat.services.deepgram.stt", "is_usable": False},
+    )
+    processor = stt_class()
+    frame = SimpleNamespace(
+        error="Deepgram rejected the connection (status 401)",
+        fatal=False,
+        processor=processor,
+        category=ErrorCategory.AUTHENTICATION,
+    )
+    with patch.object(cs, "_log_event", AsyncMock()) as log_event:
+        await cs._on_pipeline_error(frame)
+    payload = log_event.await_args.args[1]
+    assert payload["error"] == (
+        "The deepgram API key was rejected: "
+        "Deepgram rejected the connection (status 401)"
+    )
+    assert (payload["provider"], payload["key_rejected"]) == ("deepgram", True)
+
+
+@pytest.mark.unit
+async def test_a_missing_key_is_named_on_the_event() -> None:
+    from turncall.orchestrator import call_session as mod
+    from turncall.services.credentials import MissingProviderKeyError
+
+    ctx = SimpleNamespace(
+        call_id=uuid4(), project_id=uuid4(), session_factory=MagicMock(), is_eval=False
+    )
+    with (
+        patch.object(mod, "log_call_event", AsyncMock()) as log_event,
+        patch.object(mod, "finalize_call", AsyncMock()),
+    ):
+        await mod.fail_unstarted_call(ctx, MissingProviderKeyError(["deepgram"]))
+    assert log_event.await_args.args[2]["missing_keys"] == ["deepgram"]

@@ -17,6 +17,7 @@ from pipecat.pipeline.worker import (
     PipelineWorker,
     ProcessorUnusablePolicy,
 )
+from pipecat.utils.errors import ErrorCategory
 from pipecat.workers.runner import WorkerRunner
 
 from turncall.config import get_settings
@@ -27,6 +28,7 @@ from turncall.orchestrator.telemetry import (
     build_span_attributes,
     is_tracing_active,
 )
+from turncall.services.credentials import MissingProviderKeyError
 
 
 class CallSession:
@@ -259,8 +261,18 @@ class CallSession:
         """Record an error that ends the pipeline, so the call is finalized as
         failed with the reason on its event log (ADR-0008)."""
         processor = frame.processor
-        if frame.fatal or (processor is not None and not processor.is_usable):
-            await self._record_error(str(processor), frame.error)
+        if not (frame.fatal or (processor is not None and not processor.is_usable)):
+            return
+        error = readable_error(frame.error)
+        provider = provider_of(processor)
+        if provider and frame.category in _KEY_REFUSED:
+            # A key that is there but wrong (a missing one never gets this far).
+            error = f"The {provider} API key was rejected: {error}"
+            await self._record_error(
+                str(processor), error, provider=provider, key_rejected=True
+            )
+            return
+        await self._record_error(str(processor), error)
 
     def _arm_idle_guard(self) -> None:
         """React when the caller goes quiet after the agent has spoken.
@@ -462,19 +474,30 @@ class CallSession:
         """Log a call event to the database and dispatch webhook."""
         await log_call_event(self._call_context, event_type, payload)
 
-    async def _record_error(self, stage: str, error: object) -> None:
+    async def _record_error(self, stage: str, error: object, **detail: Any) -> None:
         """Keep the first error that ends the call, on its event log too."""
         if self._error is not None or self._call_context.is_eval:
             return
         self._error = readable_error(error)
         await self._log_event(
-            CallEventType.ERROR_RAISED, {"stage": stage, "error": self._error}
+            CallEventType.ERROR_RAISED,
+            {"stage": stage, "error": self._error, **detail},
         )
 
 
 # Provider SDKs put the whole request in their message (Deepgram: every header,
 # the token redacted), which buries the one sentence a person needs.
 _REQUEST_HEADERS = re.compile(r"headers: \{.*?\}, ")
+
+
+_KEY_REFUSED = (ErrorCategory.AUTHENTICATION, ErrorCategory.AUTHORIZATION)
+
+
+def provider_of(processor: object) -> str | None:
+    """The vendor a pipecat service belongs to, read off its module
+    (`pipecat.services.deepgram.stt` -> `deepgram`); None for anything else."""
+    parts = type(processor).__module__.split(".")
+    return parts[2] if parts[:2] == ["pipecat", "services"] and len(parts) > 2 else None
 
 
 def readable_error(error: object) -> str:
@@ -556,7 +579,15 @@ async def fail_unstarted_call(call_context: CallContext, error: BaseException) -
         await log_call_event(
             call_context,
             CallEventType.ERROR_RAISED,
-            {"stage": "pipeline_build", "error": readable_error(error)},
+            {
+                "stage": "pipeline_build",
+                "error": readable_error(error),
+                **(
+                    {"missing_keys": error.accounts}
+                    if isinstance(error, MissingProviderKeyError)
+                    else {}
+                ),
+            },
         )
         await finalize_call(
             call_context.session_factory, call_context.call_id, failed=True

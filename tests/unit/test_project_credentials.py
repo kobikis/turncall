@@ -54,6 +54,25 @@ class TestCredentialResolution:
     def test_no_level_holds_one(self) -> None:
         assert _creds().api_key("deepgram") == ""
 
+    def test_missing_keys_names_each_account_once(self) -> None:
+        """Deepgram serving STT and TTS is one missing account, not two."""
+        config = AgentConfig()  # deepgram STT + TTS, openai LLM
+        assert _creds().missing_keys(config) == ["deepgram", "openai"]
+        assert _creds(deepgram="k", openai="k").missing_keys(config) == []
+
+    def test_missing_keys_honours_inline_and_s2s(self) -> None:
+        inline = AgentConfig(llm=LLMConfig(api_key="mine"))
+        assert _creds(deepgram="k").missing_keys(inline) == []
+        s2s = AgentConfig(pipeline_mode="s2s", s2s=S2SConfig(provider="openai_live"))
+        assert _creds(deepgram="k").missing_keys(s2s) == ["openai"]
+        assert _creds({"openai": {"api_key": "p"}}).missing_keys(s2s) == []
+
+    def test_missing_keys_skips_keyless_and_aws(self) -> None:
+        local = AgentConfig(llm=LLMConfig(provider="ollama"))
+        assert _creds(deepgram="k").missing_keys(local) == []
+        bedrock = AgentConfig(llm=LLMConfig(provider="bedrock", model="m"))
+        assert _creds(deepgram="k").missing_keys(bedrock) == []
+
     def test_one_account_serves_every_role(self) -> None:
         served = accounts()
         assert set(served["deepgram"]) == {"stt", "tts"}

@@ -21,7 +21,7 @@ from turncall.domain.models import AgentConfig
 from turncall.orchestrator.call_session import CallSession, fail_unstarted_call
 from turncall.orchestrator.pipeline_factory import CallContext, create_pipeline
 from turncall.orchestrator.tool_bridge import register_tools
-from turncall.services.credentials import Credentials
+from turncall.services.credentials import Credentials, MissingProviderKeyError
 
 
 async def load_call_credentials(
@@ -97,6 +97,13 @@ async def _assemble(
     credentials = await load_call_credentials(
         session_factory, call_context.project_id, settings
     )
+    # Checked before anything is built, so a call that cannot work says which
+    # key it lacks rather than "Missing credentials" from one SDK or a 401
+    # mid-call from another. Not in an eval: text mode never opens the speech
+    # providers, and a run there must not need their keys.
+    missing = credentials.missing_keys(config)
+    if missing and not call_context.is_eval:
+        raise MissingProviderKeyError(missing)
 
     pipeline = create_pipeline(
         config=config,

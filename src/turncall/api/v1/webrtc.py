@@ -34,6 +34,7 @@ from turncall.orchestrator.transport_factory import (
     WEBRTC_SAMPLE_RATE,
     create_whatsapp_transport,
 )
+from turncall.services.credentials import MissingProviderKeyError
 from turncall.storage.database import create_session_factory, get_engine
 from turncall.storage.repositories import agent_repo
 
@@ -249,6 +250,11 @@ async def webrtc_connect(
             status_code=500,
             code=ErrorCode.PIPELINE_START_FAILED,
             message=f"The agent could not start (call {call.id}): {exc}",
+            details=(
+                {"missing_keys": exc.accounts}
+                if isinstance(exc, MissingProviderKeyError)
+                else None
+            ),
         )
 
     if answer is None:

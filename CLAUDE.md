@@ -1022,6 +1022,13 @@ it.) Or a provider pipecat stops using mid-call, like a 401 or an unknown model:
 pipecat then ends the pipeline *gracefully*, so without the event the call read
 as `customer_ended_call`. Either way `call.ended` still goes out.
 
+A provider with **no key at any level** is caught before the build
+(`Credentials.missing_keys`, never in an eval since text mode opens no speech
+provider). The event and the WebRTC 500 both carry `missing_keys: [account]`.
+A key that is present but refused mid-call (pipecat's `AUTHENTICATION` /
+`AUTHORIZATION`) carries `provider` and `key_rejected: true`, so a console can
+name the key without parsing the vendor's sentence.
+
 Since pipecat 1.12 a user turn that VAD opened and closed with **no
 transcript** — a cough, a door, an unrecognized word — is handled rather than
 dropped, and it is on by default. One that *interrupted* the agent gets a
