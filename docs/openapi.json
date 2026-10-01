@@ -4384,6 +4384,241 @@
         }
       }
     },
+    "/v1/credentials/{provider}": {
+      "put": {
+        "tags": [
+          "credentials"
+        ],
+        "summary": "Put Credential",
+        "description": "Store (or replace) the project's credential for one provider account.\n\nTakes effect on the project's next call \u2014 resolved per call, no restart.",
+        "operationId": "put_credential_v1_credentials__provider__put",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Provider"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Put Credential V1 Credentials  Provider  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "credentials"
+        ],
+        "summary": "Delete Credential",
+        "description": "Remove a credential; the project falls back to the platform key.\n\nIdempotent: deleting one that is not there answers `deleted: false`, so a\nrevocation retried under incident pressure never errors.",
+        "operationId": "delete_credential_v1_credentials__provider__delete",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Provider"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Credential V1 Credentials  Provider  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/credentials": {
+      "get": {
+        "tags": [
+          "credentials"
+        ],
+        "summary": "List Credentials",
+        "operationId": "list_credentials_v1_credentials_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Credentials V1 Credentials Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/providers": {
+      "get": {
+        "tags": [
+          "credentials"
+        ],
+        "summary": "List Providers",
+        "description": "Valid providers per role, and two presence signals per account.\n\n`platform_key` and `project_credential` stay separate on purpose: together\nthey say whether removing the credential falls back or fails (#163).",
+        "operationId": "list_providers_v1_providers_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Providers V1 Providers Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/tools": {
       "post": {
         "tags": [
@@ -6518,10 +6753,42 @@
       },
       "BindPhoneNumberRequest": {
         "properties": {
+          "twilio_account_sid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^AC[0-9a-fA-F]{32}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Twilio Account Sid"
+          },
+          "twilio_auth_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Twilio Auth Token"
+          },
           "external_number_sid": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "External Number Sid"
           },
           "e164_number": {
@@ -6571,7 +6838,6 @@
         },
         "type": "object",
         "required": [
-          "external_number_sid",
           "e164_number",
           "routing_target_type"
         ],
@@ -8575,6 +8841,31 @@
       },
       "UpdatePhoneNumberRequest": {
         "properties": {
+          "twilio_account_sid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^AC[0-9a-fA-F]{32}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Twilio Account Sid"
+          },
+          "twilio_auth_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Twilio Auth Token"
+          },
           "routing_target_type": {
             "type": "string",
             "pattern": "^(agent|workflow|webhook)$",

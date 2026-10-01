@@ -114,13 +114,13 @@ A scenario can name its own:
 }
 ```
 
-`provider` is a closed set — `ollama`, `openai`, `anthropic`, `jev` — mapping to factories TurnCall ships. Pipecat's own escape hatch is `factory`, a dotted path it hands to `importlib.import_module`: fine for a file on your disk, remote code execution for a request body. A definition naming one anywhere pipecat reads it (`judge.eval`, `judge.transcription`, `simulator`, `user.speech`) is refused at the API boundary, and `api_key` is not a field — the key is the platform's, read from the same environment the agent's own LLM uses.
+`provider` is a closed set — `ollama`, `openai`, `anthropic`, `jev` — mapping to factories TurnCall ships. Pipecat's own escape hatch is `factory`, a dotted path it hands to `importlib.import_module`: fine for a file on your disk, remote code execution for a request body. A definition naming one anywhere pipecat reads it (`judge.eval`, `judge.transcription`, `simulator`, `user.speech`) is refused at the API boundary, and `api_key` is not a field — the key comes from the same place the agent's own LLM's does: the project's credential for that provider, else the platform environment (see [API keys](/guides/providers#api-keys)).
 
 `model` empty means that provider's default. `temperature` has no pipecat field and rides in `extra`; it is unset by default, because a verdict that varies run to run is not a verdict. It is **dropped** for models that reject it — Anthropic, and OpenAI's `o1`/`o3`/`o4`/`gpt-5` families — by the rule the call path already follows.
 
 ### Jev, a judge that is not an LLM
 
-`jev` is [TypeSafe](https://typesafe.ai)'s classifier: a few hundred milliseconds per verdict, with a *calibrated* probability instead of a model's opinion of its own certainty. It needs `TYPESAFE_API_KEY` and the `evals-jev` extra — neither checked when the scenario is created, because both are properties of a deployment and a stored scenario outlives the one it was written against. The **run** fails, naming which of the two is missing.
+`jev` is [TypeSafe](https://typesafe.ai)'s classifier: a few hundred milliseconds per verdict, with a *calibrated* probability instead of a model's opinion of its own certainty. It needs a TypeSafe key — the project's `typesafe` credential, else `TYPESAFE_API_KEY` — and the `evals-jev` extra — neither checked when the scenario is created, because both are properties of a deployment and a stored scenario outlives the one it was written against. The **run** fails, naming which of the two is missing.
 
 It is **judge-only**, and structurally so: the allowlist is split by role, because a simulator is linked into a live pipeline to speak and a classifier has nothing to link. `simulator: {"provider": "jev"}` is refused with the role in the message. It takes no `temperature` either — a classifier is not a sampler.
 

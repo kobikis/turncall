@@ -67,6 +67,11 @@ TWILIO_AUTH_TOKEN=
 ELEVENLABS_API_KEY=      # optional, a different TTS voice
 ```
 
+Every provider key here is a **fallback**. A project can bring its own instead
+(`PUT /v1/credentials/{provider}`, and a phone number its own Twilio account) —
+set `CREDENTIAL_ENCRYPTION_KEY` once if you will store any. See the Providers
+guide, "API keys".
+
 ## 3. Start Everything
 
 This one command builds and runs the whole stack — Postgres, Redis, and the

@@ -29,6 +29,9 @@ and is not part of this repository's history.
   (`number` | `platform`). Webhook configuration, outbound calls, hangup,
   transfer, DTMF, recording download and inbound signature checks for that
   number all use its account. Numbers without one behave exactly as before.
+  With no platform Twilio account, an inbound webhook TurnCall cannot verify
+  passes only while no number carries its own account; once any does, it is
+  refused — removing `TWILIO_*` from the environment never turns the check off.
 
 - **Project credentials — a project runs on its own provider accounts** (#159,
   ADR-0020). `PUT /v1/credentials/{provider}` stores one key per provider
@@ -45,7 +48,9 @@ and is not part of this repository's history.
   through settings like every other provider's. The same order applies outside
   calls — chat/SMS/WhatsApp text turns, post-call analysis and takeaways, the
   transfer briefing, knowledge-base embeddings and the eval judge — so the
-  platform `.env` keys are a fallback, never a requirement.
+  platform `.env` keys are a fallback, never a requirement. `typesafe` (the
+  `jev` eval judge) is an account too, so `TYPESAFE_API_KEY` is a fallback like
+  the rest.
 
 - **Ambience — a room the agent sounds like it is in** (#166). Upload a sound
   once (`POST /v1/ambience-sounds`) and any agent in the project names it:
