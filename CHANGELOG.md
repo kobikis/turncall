@@ -86,6 +86,12 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **A call with no recorded audio kept `recording_status: in_progress`
+  forever** (#189). pipecat skips its flush when nothing was buffered (a call
+  whose providers refused before anyone spoke), so the status never moved and
+  `call.ended` waited out its 15-second recording timeout. It now ends
+  `failed`, the same as an empty flush, and `call.ended` goes out at once.
+
 - **An eval that failed because a provider refused the agent said only "no
   response".** A provider error that leaves the pipeline running (Bedrock's
   model-access check, say) made the agent silent, and the iteration failed on

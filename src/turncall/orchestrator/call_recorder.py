@@ -70,6 +70,11 @@ class CallRecorder(AudioBufferProcessor):
         self._call_context = call_context
         # Register the flush handler (fired on stop_recording / EndFrame).
         self.event_handler("on_audio_data")(self._on_audio_data)
+        # pipecat skips on_audio_data when nothing was buffered — a call whose
+        # providers refused before anyone spoke — which left the status at
+        # in_progress forever and call.ended waiting out its timeout (#189).
+        self._flushed = False
+        self.event_handler("on_recording_stopped")(self._on_recording_stopped)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -86,6 +91,7 @@ class CallRecorder(AudioBufferProcessor):
         sample_rate: int,
         num_channels: int,
     ) -> None:
+        self._flushed = True
         if self._call_context.is_eval:
             # An eval has no `calls` row (ADR-0018), so the WAV would be a file
             # nothing points at and the `recording.ready` event a foreign-key
@@ -113,6 +119,11 @@ class CallRecorder(AudioBufferProcessor):
                 "call_recording_store_error",
                 call_id=str(self._call_context.call_id),
             )
+            await self._set_status(RecordingStatus.FAILED)
+
+    async def _on_recording_stopped(self, _buffer: AudioBufferProcessor) -> None:
+        if not self._flushed:
+            # Same outcome as an empty flush: there is no recording to wait for.
             await self._set_status(RecordingStatus.FAILED)
 
     async def _persist(self, url: str) -> None:
