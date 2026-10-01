@@ -1167,7 +1167,7 @@ def create_pipeline(
 
     customer_tap = TranscriptTapProcessor(call_context=call_context)
     assistant_tap = AssistantTranscriptTapProcessor(
-        call_context=call_context, llm_service=llm
+        call_context=call_context, llm_service=llm, tts_service=tts
     )
     observability = ObservabilityProcessor(call_context=call_context)
 
