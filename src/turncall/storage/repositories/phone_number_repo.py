@@ -30,8 +30,7 @@ async def bind_phone_number(
     server_url_secret: str | None = None,
     sms_enabled: bool = False,
     metadata_json: dict | None = None,
-    twilio_account_sid: str | None = None,
-    twilio_auth_token_ciphertext: str | None = None,
+    twilio_account: StoredTwilioAccount | None = None,
 ) -> PhoneNumberRow:
     """Bind a Twilio phone number to a routing target."""
     row = PhoneNumberRow(
@@ -44,8 +43,10 @@ async def bind_phone_number(
         server_url_secret=server_url_secret,
         sms_enabled=sms_enabled,
         metadata_json=metadata_json or {},
-        twilio_account_sid=twilio_account_sid,
-        twilio_auth_token_ciphertext=twilio_auth_token_ciphertext,
+        twilio_account_sid=twilio_account.account_sid if twilio_account else None,
+        twilio_auth_token_ciphertext=(
+            twilio_account.token_ciphertext if twilio_account else None
+        ),
     )
     session.add(row)
     await session.flush()

@@ -62,8 +62,7 @@ async def bind_phone_number(
         server_url_secret=server_url_secret,
         sms_enabled=body.sms_enabled,
         metadata_json=body.metadata,
-        twilio_account_sid=own.account_sid if own else None,
-        twilio_auth_token_ciphertext=own.token_ciphertext if own else None,
+        twilio_account=own,
     )
 
     configured = await _configure_twilio_webhooks(row, body.sms_enabled)
