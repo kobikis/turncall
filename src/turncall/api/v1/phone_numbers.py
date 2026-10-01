@@ -23,6 +23,7 @@ from turncall.config.settings import Settings, get_settings
 from turncall.services import twilio_accounts
 from turncall.services.twilio_accounts import TwilioAccount
 from turncall.storage.repositories import credential_repo, phone_number_repo
+from turncall.storage.repositories.phone_number_repo import StoredTwilioAccount
 
 router = APIRouter(prefix="/phone-numbers", tags=["phone-numbers"])
 
@@ -44,7 +45,7 @@ async def bind_phone_number(
     server_url_secret = secrets_mod.token_urlsafe(32) if body.server_url else None
     settings = get_settings()
     number_sid = body.external_number_sid
-    own: tuple[str, str] | None = None
+    own: StoredTwilioAccount | None = None
     if body.has_own_twilio:
         number_sid, own = await _own_twilio(
             body, body.e164_number, body.external_number_sid, settings
@@ -61,8 +62,8 @@ async def bind_phone_number(
         server_url_secret=server_url_secret,
         sms_enabled=body.sms_enabled,
         metadata_json=body.metadata,
-        twilio_account_sid=own[0] if own else None,
-        twilio_auth_token_ciphertext=own[1] if own else None,
+        twilio_account_sid=own.account_sid if own else None,
+        twilio_auth_token_ciphertext=own.token_ciphertext if own else None,
     )
 
     configured = await _configure_twilio_webhooks(row, body.sms_enabled)
@@ -81,10 +82,10 @@ def _unprocessable(message: str) -> ApiError:
 
 async def _own_twilio(
     body: TwilioAccountFields, e164: str, given_sid: str | None, settings: Settings
-) -> tuple[str, tuple[str, str]]:
+) -> tuple[str, StoredTwilioAccount]:
     """Prove the supplied Twilio account owns the number, and seal its token.
 
-    Returns (the number's PN SID, (account_sid, token ciphertext)). Checked
+    Returns the number's PN SID and the account as it will be stored. Checked
     here, at write time, rather than when the first call fails to arrive.
     """
     from twilio.base.exceptions import TwilioRestException
@@ -112,9 +113,9 @@ async def _own_twilio(
         ciphertext = twilio_accounts.encrypt_token(account.auth_token, settings)
     except credential_repo.CredentialKeyError as exc:
         raise ApiError(
-            status_code=503, code=ErrorCode.INTERNAL_ERROR, message=str(exc)
+            status_code=503, code=ErrorCode.CREDENTIAL_KEY_UNAVAILABLE, message=str(exc)
         ) from exc
-    return found, (account.account_sid, ciphertext)
+    return found, StoredTwilioAccount(account.account_sid, ciphertext)
 
 
 async def _configure_twilio_webhooks(row: Any, sms_enabled: bool) -> bool:
@@ -217,7 +218,7 @@ async def update_phone_number(
 
     # A new account pair replaces the stored one (rotating a token); omitted
     # keeps it. Verified against the number exactly as on bind.
-    own: tuple[str, str] | None = None
+    own: StoredTwilioAccount | None = None
     if body.has_own_twilio:
         _, own = await _own_twilio(
             body, row.e164_number, row.external_number_sid, get_settings()

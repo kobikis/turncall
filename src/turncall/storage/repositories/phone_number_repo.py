@@ -1,11 +1,21 @@
 """Phone number repository - data access for phone number bindings."""
 
+from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.storage.models import PhoneNumberRow
+
+
+@dataclass(frozen=True)
+class StoredTwilioAccount:
+    """A number's own Twilio account as stored: the SID in the clear, the token
+    sealed under CREDENTIAL_ENCRYPTION_KEY."""
+
+    account_sid: str
+    token_ciphertext: str
 
 
 async def bind_phone_number(
@@ -118,10 +128,10 @@ async def update_phone_number(
     server_url_secret: str | None,
     sms_enabled: bool,
     metadata_json: dict | None = None,
-    twilio_account: tuple[str, str] | None = None,
+    twilio_account: StoredTwilioAccount | None = None,
 ) -> PhoneNumberRow | None:
     """Update a binding in place — same row id, secret only as supplied.
-    `twilio_account` is (account_sid, token ciphertext); None keeps the stored."""
+    `twilio_account` replaces the number's own account; None keeps the stored."""
     values: dict = {
         "routing_target_type": routing_target_type,
         "routing_target_id": routing_target_id,
@@ -132,9 +142,8 @@ async def update_phone_number(
     if metadata_json is not None:
         values["metadata_json"] = metadata_json
     if twilio_account is not None:
-        values["twilio_account_sid"], values["twilio_auth_token_ciphertext"] = (
-            twilio_account
-        )
+        values["twilio_account_sid"] = twilio_account.account_sid
+        values["twilio_auth_token_ciphertext"] = twilio_account.token_ciphertext
     result = await session.execute(
         update(PhoneNumberRow)
         .where(PhoneNumberRow.id == phone_number_id)
@@ -171,3 +180,25 @@ async def clear_routing_weights(
         .returning(PhoneNumberRow)
     )
     return result.scalar_one_or_none()
+
+
+async def token_ciphertext_for_account(
+    session: AsyncSession, account_sid: str
+) -> str | None:
+    """The sealed token of any number carrying this Twilio account, or None."""
+    return await session.scalar(
+        select(PhoneNumberRow.twilio_auth_token_ciphertext)
+        .where(PhoneNumberRow.twilio_account_sid == account_sid)
+        .where(PhoneNumberRow.twilio_auth_token_ciphertext.is_not(None))
+        .limit(1)
+    )
+
+
+async def any_has_own_twilio_account(session: AsyncSession) -> bool:
+    """Whether any number on this deployment carries its own Twilio account."""
+    found = await session.scalar(
+        select(PhoneNumberRow.id)
+        .where(PhoneNumberRow.twilio_auth_token_ciphertext.is_not(None))
+        .limit(1)
+    )
+    return found is not None

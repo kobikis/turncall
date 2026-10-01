@@ -45,7 +45,7 @@ async def create_outbound_call(
     if account is None:
         raise ApiError(
             status_code=503,
-            code=ErrorCode.INTERNAL_ERROR,
+            code=ErrorCode.NO_TWILIO_ACCOUNT,
             message=(
                 "No Twilio account for this number: bind it with its own "
                 "twilio_account_sid + twilio_auth_token, or set TWILIO_ACCOUNT_SID "

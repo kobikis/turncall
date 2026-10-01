@@ -21,7 +21,11 @@ from turncall.domain.models import AgentConfig
 from turncall.orchestrator.call_session import CallSession, fail_unstarted_call
 from turncall.orchestrator.pipeline_factory import CallContext, create_pipeline
 from turncall.orchestrator.tool_bridge import register_tools
-from turncall.services.credentials import Credentials, MissingProviderKeyError
+from turncall.services.credentials import (
+    Credentials,
+    MissingProviderKeyError,
+    for_project,
+)
 
 
 async def load_call_credentials(
@@ -32,11 +36,8 @@ async def load_call_credentials(
     Read at build rather than cached, so a credential written or deleted
     between two calls is what the next one runs on, with no restart.
     """
-    from turncall.storage.repositories import credential_repo
-
     async with session_factory() as session:
-        project = await credential_repo.load_documents(session, project_id, settings)
-    return Credentials.from_settings(settings, project)
+        return await for_project(session, project_id, settings)
 
 
 async def build_call_pipeline(

@@ -11,7 +11,7 @@ When a call completes, this module:
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from loguru import logger
@@ -20,6 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from turncall.domain.enums import CallEventType, EndedReason
 from turncall.domain.models import AnalysisConfig, AWSConfig, LLMConfig
 from turncall.services.call_view import call_view_fields
+
+if TYPE_CHECKING:
+    from turncall.services.credentials import Credentials
 
 
 async def _gather_transcript(
@@ -100,7 +103,7 @@ async def _wait_for_recording(
 
 async def _project_credentials(
     session_factory: async_sessionmaker[AsyncSession], project_id: UUID
-) -> Any:
+) -> Credentials | None:
     """The project's keys for the analysis LLM — the account its calls ran on.
     Unreadable falls back to the platform's (None) with a log: analysis is
     best-effort, and call.ended must still go out."""
@@ -286,7 +289,7 @@ async def _extract_takeaways(
     transcript_payloads: list[dict[str, Any]],
     system_prompt: str,
     aws_config: AWSConfig | None = None,
-    credentials: Any = None,
+    credentials: Credentials | None = None,
 ) -> dict[str, Any] | None:
     """Load the agent's attached takeaways and extract them concurrently.
     Best-effort: failures produce valid=False entries, never an exception."""
