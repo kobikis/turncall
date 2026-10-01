@@ -83,3 +83,27 @@ async def test_recording_is_stereo_caller_left_agent_right():
     left, right = samples[0::2], samples[1::2]
     assert 1000 in left and 1000 not in right
     assert -2000 in right and -2000 not in left
+
+
+async def test_a_call_with_no_audio_still_ends_its_recording():
+    """pipecat skips on_audio_data when nothing was buffered — a call whose
+    providers refused before anyone spoke. The status has to reach a terminal
+    value anyway, or call.ended waits out its whole timeout for it (#189)."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+    from uuid import uuid4
+
+    from pipecat.tests.utils import run_test
+
+    from turncall.domain.enums import RecordingStatus
+    from turncall.orchestrator.call_recorder import CallRecorder
+
+    ctx = SimpleNamespace(is_eval=False, call_id=uuid4(), project_id=uuid4())
+    recorder = CallRecorder(ctx, sample_rate=8000)
+    with patch.object(CallRecorder, "_set_status", AsyncMock()) as set_status:
+        await run_test(
+            recorder, frames_to_send=[], ignore_start=False, expected_down_frames=None
+        )
+
+    statuses = [c.args[0] for c in set_status.await_args_list]
+    assert statuses == [RecordingStatus.IN_PROGRESS, RecordingStatus.FAILED]
