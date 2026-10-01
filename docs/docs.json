@@ -110,6 +110,15 @@
             ]
           },
           {
+            "group": "Credentials",
+            "pages": [
+              "PUT /v1/credentials/{provider}",
+              "GET /v1/credentials",
+              "DELETE /v1/credentials/{provider}",
+              "GET /v1/providers"
+            ]
+          },
+          {
             "group": "Agents",
             "pages": [
               "POST /v1/agents",
