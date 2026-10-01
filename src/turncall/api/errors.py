@@ -37,6 +37,10 @@ class ErrorCode(StrEnum):
     INVALID_STATE_TRANSITION = "invalid_state_transition"
     PIPELINE_START_FAILED = "pipeline_start_failed"
 
+    # Credentials (ADR-0020)
+    CREDENTIAL_KEY_UNAVAILABLE = "credential_key_unavailable"
+    NO_TWILIO_ACCOUNT = "no_twilio_account"
+
     # Phone Number
     PHONE_NUMBER_NOT_FOUND = "phone_number_not_found"
     PHONE_NUMBER_ALREADY_BOUND = "phone_number_already_bound"

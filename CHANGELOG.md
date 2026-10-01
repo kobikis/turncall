@@ -13,6 +13,12 @@ and is not part of this repository's history.
 
 ### Changed
 
+- **Two credential failures have their own error codes** (#191). A 503 from
+  storing a credential or binding a number's own Twilio account while
+  `CREDENTIAL_ENCRYPTION_KEY` is unset or wrong is now
+  `credential_key_unavailable`, and an outbound call from a number with no
+  Twilio account anywhere is `no_twilio_account`. Both were `internal_error`.
+
 - **A call that fails reads as failed, and says why.** A provider that stops
   working mid-call (a refused key, an unknown model) used to end the pipeline
   gracefully, so the call finished `completed` with an `ended_reason` of

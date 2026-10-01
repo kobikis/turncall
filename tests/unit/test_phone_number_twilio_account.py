@@ -149,6 +149,11 @@ def _row(**kw):
         **kw,
     }
     row["metadata_json"] = row.get("metadata_json") or {}
+    # What bind_phone_number stores from its StoredTwilioAccount argument.
+    account = row.pop("twilio_account", None)
+    if account is not None:
+        row["twilio_account_sid"] = account.account_sid
+        row["twilio_auth_token_ciphertext"] = account.token_ciphertext
     return SimpleNamespace(**row)
 
 
@@ -176,8 +181,8 @@ class TestBind:
         assert r.status_code == 201, r.text
         kw = bind.await_args.kwargs
         assert kw["external_number_sid"] == "PNfound"
-        assert kw["twilio_account_sid"] == SID
-        assert TOKEN not in kw["twilio_auth_token_ciphertext"]
+        assert kw["twilio_account"].account_sid == SID
+        assert TOKEN not in kw["twilio_account"].token_ciphertext
         data = r.json()["data"]
         assert data["twilio_credentials"] == "number"
         assert data["twilio_account_sid"] == SID

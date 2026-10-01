@@ -50,7 +50,7 @@ async def put_credential(
     except credential_repo.CredentialKeyError as exc:
         # Fail closed, legibly: the operator must set the key, not read a 500.
         raise ApiError(
-            status_code=503, code=ErrorCode.INTERNAL_ERROR, message=str(exc)
+            status_code=503, code=ErrorCode.CREDENTIAL_KEY_UNAVAILABLE, message=str(exc)
         ) from exc
     await session.commit()
     return ok(CredentialResponse.from_row(row))

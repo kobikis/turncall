@@ -2,12 +2,12 @@
 
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
-from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Form, Header, Request
 from fastapi.responses import Response
 from loguru import logger
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.deps import DbSession
 from turncall.config import get_settings
@@ -47,7 +47,7 @@ def _public_url(request: Request) -> str:
 
 async def _validate_twilio_request(
     request: Request,
-    session: Any,
+    session: AsyncSession,
     signature: str,
     params: dict[str, str],
 ) -> bool:

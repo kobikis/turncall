@@ -40,12 +40,19 @@ async def create_outbound_call(
 
     # The caller-id number's own Twilio account, else the platform's.
     from turncall.services.twilio_accounts import account_for_number
+    from turncall.storage.repositories.credential_repo import CredentialKeyError
 
-    account = account_for_number(phone_number, settings)
+    try:
+        account = account_for_number(phone_number, settings)
+    except CredentialKeyError as exc:
+        # The number's own token is sealed under a key this process lacks.
+        raise ApiError(
+            status_code=503, code=ErrorCode.CREDENTIAL_KEY_UNAVAILABLE, message=str(exc)
+        ) from exc
     if account is None:
         raise ApiError(
             status_code=503,
-            code=ErrorCode.INTERNAL_ERROR,
+            code=ErrorCode.NO_TWILIO_ACCOUNT,
             message=(
                 "No Twilio account for this number: bind it with its own "
                 "twilio_account_sid + twilio_auth_token, or set TWILIO_ACCOUNT_SID "

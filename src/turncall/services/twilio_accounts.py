@@ -17,10 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
-
 from turncall.storage.models import PhoneNumberRow
-from turncall.storage.repositories import credential_repo
+from turncall.storage.repositories import credential_repo, phone_number_repo
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,7 +50,9 @@ def encrypt_token(auth_token: str, settings: Settings) -> str:
     return credential_repo.encrypt({"auth_token": auth_token}, settings)
 
 
-def account_for_number(row: Any, settings: Settings) -> TwilioAccount | None:
+def account_for_number(
+    row: PhoneNumberRow | None, settings: Settings
+) -> TwilioAccount | None:
     """The number's own account if it has one, else the platform's (or None)."""
     if row is not None and row.twilio_account_sid and row.twilio_auth_token_ciphertext:
         token = credential_repo.decrypt(row.twilio_auth_token_ciphertext, settings)[
@@ -67,8 +67,6 @@ async def account_for_call(
 ) -> TwilioAccount | None:
     """The account of the TurnCall number on this call: the dialled number on an
     inbound call, the caller-id number on an outbound one."""
-    from turncall.storage.repositories import phone_number_repo
-
     e164 = call.from_number if call.direction == "outbound" else call.to_number
     row = await phone_number_repo.get_by_e164(session, e164) if e164 else None
     return account_for_number(row, settings)
@@ -85,11 +83,8 @@ async def token_for_account_sid(
     signature. None when no token is known at all (dev mode, as before).
     """
     if account_sid and account_sid != settings.twilio.account_sid:
-        ciphertext = await session.scalar(
-            select(PhoneNumberRow.twilio_auth_token_ciphertext)
-            .where(PhoneNumberRow.twilio_account_sid == account_sid)
-            .where(PhoneNumberRow.twilio_auth_token_ciphertext.is_not(None))
-            .limit(1)
+        ciphertext = await phone_number_repo.token_ciphertext_for_account(
+            session, account_sid
         )
         if ciphertext:
             return str(credential_repo.decrypt(ciphertext, settings)["auth_token"])
@@ -103,9 +98,4 @@ async def any_number_has_own_account(session: AsyncSession) -> bool:
     is a dev setup and passes, as it always did; once numbers carry their own
     accounts, a webhook nothing here can verify is refused.
     """
-    found = await session.scalar(
-        select(PhoneNumberRow.id)
-        .where(PhoneNumberRow.twilio_auth_token_ciphertext.is_not(None))
-        .limit(1)
-    )
-    return found is not None
+    return await phone_number_repo.any_has_own_twilio_account(session)
