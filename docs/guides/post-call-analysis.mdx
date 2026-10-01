@@ -98,6 +98,24 @@ Envelope identifiers live at the top level; event-specific data sits under `payl
 
 If you need the recording earlier than `call.ended`, subscribe to [`recording.ready`](/guides/server-events), which fires as soon as the file lands in storage.
 
+### When a call fails
+
+A call that broke ends with `status: "failed"` and `ended_reason: "pipeline_error"`, and `call.ended` still fires. The reason is an **`error.raised`** event, both on the call's event log (`GET /v1/calls/{id}/events?event_type=error.raised`) and as a webhook:
+
+| Field | When | Meaning |
+|-------|------|---------|
+| `stage` | always | Where it broke: `pipeline_build`, or the service that stopped (`DeepgramSTTService#0`) |
+| `error` | always | The reason, with the provider's request details stripped |
+| `missing_keys` | the pipeline was never built | The provider accounts no level holds a key for, e.g. `["deepgram"]` |
+| `provider`, `key_rejected` | a key was refused mid-call | e.g. `"deepgram"`, `true`: the key is there, and wrong |
+
+```json
+{"stage": "DeepgramSTTService#0", "provider": "deepgram", "key_rejected": true,
+ "error": "The deepgram API key was rejected: Deepgram rejected the connection (status 401): status_code: 401, body: Websocket initialized with invalid credentials."}
+```
+
+Read `missing_keys` / `provider` rather than parsing `error`: the sentence is the vendor's and changes with them.
+
 ## Fetch a Recording
 
 Stream the WAV directly from TurnCall — useful when you don't want to expose your object-storage URLs to clients, or when the stored URL is presigned and short-lived:

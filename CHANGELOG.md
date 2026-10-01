@@ -13,6 +13,24 @@ and is not part of this repository's history.
 
 ### Changed
 
+- **A call that fails reads as failed, and says why.** A provider that stops
+  working mid-call (a refused key, an unknown model) used to end the pipeline
+  gracefully, so the call finished `completed` with an `ended_reason` of
+  `customer_ended_call`. It now ends `failed` / `pipeline_error`, and the call's
+  event log carries an `error.raised` event, `{stage, error}`, also dispatched
+  to webhook subscribers. A key that is present but refused adds `provider` and
+  `key_rejected: true`. If you alert on `customer_ended_call`, calls that broke
+  on a provider no longer land there.
+
+- **A provider with no key at any level is refused before the call starts.**
+  Every provider the agent names is checked (agent inline, project credential,
+  platform environment) before the pipeline is built, on every transport. A
+  missing one fails the call with `error.raised` carrying
+  `missing_keys: [account]`, instead of one SDK's "Missing credentials" or a
+  401 partway into the greeting. `POST /v1/webrtc/connect` answers
+  `500 pipeline_start_failed` with the same list in `details.missing_keys`.
+  Eval runs are exempt: text mode opens no speech provider.
+
 - **`AWS_AGENT_CREDENTIALS_ENABLED` governs agent config only** (#164). With it
   false, static AWS keys are still refused inside an agent's `aws` block, but an
   `aws` project credential is accepted — it is encrypted and outside agent
@@ -67,6 +85,28 @@ and is not part of this repository's history.
   spurious interruptions and no empty turns at the default volume (#171).
 
 ### Fixed
+
+- **A call whose pipeline could not be built never sent `call.ended`.** It was
+  marked `failed` with no reason recorded, and subscribers heard nothing. It
+  now records `error.raised` and dispatches `call.ended`, on every transport.
+  `call.ended` also no longer waits out the 15-second recording timeout for a
+  call that never started.
+
+- **`POST /v1/webrtc/connect` answered the offer even when the agent could not
+  start.** pipecat's request handler logs an exception from the connection
+  callback and answers anyway, so the browser connected to a peer with no
+  pipeline behind it and heard silence. It now gets
+  `500 pipeline_start_failed`, naming the reason and the call id, and the
+  half-made connection is closed.
+
+- **An eval run whose project credentials could not be decrypted was graded on
+  the platform's keys.** It is now `errored` before any iteration runs, naming
+  the reason (ADR-0020 fails closed).
+
+- **An eval worker running older code than its files reported a bare
+  `ImportError`.** A dev worker left running while its bind-mounted source
+  changes mixes old and new modules. The run's error now says to restart the
+  eval worker.
 
 - **`llm.api_key` was silently discarded on the `openai` provider** (#161). It
   now wins over the platform key, as it already did for `anthropic`,
