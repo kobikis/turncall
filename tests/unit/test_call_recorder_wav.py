@@ -7,7 +7,11 @@ valid and the samples round-trip unchanged.
 import io
 import wave
 
+import pytest
+
 from turncall.orchestrator.call_recorder import _pcm16_to_wav
+
+pytestmark = pytest.mark.unit
 
 
 def test_pcm16_to_wav_roundtrips() -> None:
@@ -31,7 +35,7 @@ if __name__ == "__main__":
     print("ok")
 
 
-async def test_recording_is_stereo_caller_left_agent_right():
+async def test_recording_is_stereo_caller_left_agent_right() -> None:
     """Frames in, WAV out (#178): each speaker on their own channel."""
     import struct
     from types import SimpleNamespace
@@ -85,7 +89,7 @@ async def test_recording_is_stereo_caller_left_agent_right():
     assert -2000 in right and -2000 not in left
 
 
-async def test_a_call_with_no_audio_still_ends_its_recording():
+async def test_a_call_with_no_audio_still_ends_its_recording() -> None:
     """pipecat skips on_audio_data when nothing was buffered — a call whose
     providers refused before anyone spoke. The status has to reach a terminal
     value anyway, or call.ended waits out its whole timeout for it (#189)."""
