@@ -168,8 +168,9 @@ def jev(config: dict[str, Any]) -> Any:
     api_key = _platform_key("typesafe")
     if not api_key:
         raise JudgeUnavailable(
-            "the jev judge needs TYPESAFE_API_KEY, which this deployment has "
-            "not set. Only the credential is missing — not the extra."
+            "the jev judge needs a TypeSafe key: connect one for this project "
+            "(a typesafe project credential) or set TYPESAFE_API_KEY. Only the "
+            "credential is missing — not the extra."
         )
     built: dict[str, Any] = {"api_key": api_key}
     # Jev's own pinned defaults otherwise — a model and a base URL it chose so
@@ -208,7 +209,7 @@ def _platform_key(attr: str) -> str:
     """
     from turncall.config.settings import get_settings
 
-    if attr in ("openai", "anthropic"):
+    if attr in ("openai", "anthropic", "typesafe"):
         # The project whose run this is, ahead of the platform (ADR-0020):
         # pipecat builds the judge from a factory path, so the runner hands the
         # project's keys over through `credentials.scope`, not an argument.

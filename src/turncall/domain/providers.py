@@ -21,6 +21,10 @@ LLM_PROVIDERS = (
 TTS_PROVIDERS = ("deepgram", "openai", "elevenlabs", "cartesia")
 S2S_PROVIDERS = ("openai", "openai_live", "google", "aws")
 AVATAR_PROVIDERS = ("heygen", "tavus")
+# What grades an eval run (EVAL_JUDGE_PROVIDER or a scenario's judge block).
+# Listed so a project can hold the key it runs on; `ollama` is local and needs
+# none. Not an agent config role — no agent validator reads it.
+JUDGE_PROVIDERS = ("openai", "anthropic", "jev")
 
 ROLE_PROVIDERS: dict[str, tuple[str, ...]] = {
     "stt": STT_PROVIDERS,
@@ -28,6 +32,7 @@ ROLE_PROVIDERS: dict[str, tuple[str, ...]] = {
     "tts": TTS_PROVIDERS,
     "s2s": S2S_PROVIDERS,
     "avatar": AVATAR_PROVIDERS,
+    "judge": JUDGE_PROVIDERS,
 }
 
 AWS_ACCOUNT = "aws"
@@ -35,7 +40,7 @@ AWS_ACCOUNT = "aws"
 # Role providers whose account is spelled differently. `ollama` and
 # `custom_openai` have none: the key, if any, belongs to whatever endpoint the
 # agent's own base_url names, so only `llm.api_key` can carry it.
-_ACCOUNT_ALIASES = {"openai_live": "openai", "bedrock": AWS_ACCOUNT}
+_ACCOUNT_ALIASES = {"openai_live": "openai", "bedrock": AWS_ACCOUNT, "jev": "typesafe"}
 _NO_ACCOUNT = frozenset({"ollama", "custom_openai"})
 
 

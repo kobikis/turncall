@@ -46,6 +46,7 @@ def platform_keys(settings: Settings) -> dict[str, str]:
         "cartesia": settings.cartesia.api_key,
         "heygen": settings.heygen.api_key,
         "tavus": settings.tavus.api_key,
+        "typesafe": settings.typesafe.api_key,
     }
 
 

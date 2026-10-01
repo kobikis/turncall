@@ -57,7 +57,8 @@ class TestCredentialResolution:
     def test_one_account_serves_every_role(self) -> None:
         served = accounts()
         assert set(served["deepgram"]) == {"stt", "tts"}
-        assert set(served["openai"]) == {"stt", "llm", "tts", "s2s"}
+        assert set(served["openai"]) == {"stt", "llm", "tts", "s2s", "judge"}
+        assert served["typesafe"] == {"judge": ["jev"]}
         assert served["openai"]["s2s"] == ["openai", "openai_live"]
         assert served["aws"] == {"llm": ["bedrock"], "s2s": ["aws"]}
         assert account_for("ollama") is None
