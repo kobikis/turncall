@@ -86,6 +86,13 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **An eval that failed because a provider refused the agent said only "no
+  response".** A provider error that leaves the pipeline running (Bedrock's
+  model-access check, say) made the agent silent, and the iteration failed on
+  `not satisfied within 60000ms: no response text yet`. Each iteration's entry
+  now carries `agent_errors`, everything the agent's pipeline reported, and on
+  a failed iteration they lead `failures` as `{kind: "agent_error", reason}`.
+
 - **A call whose pipeline could not be built never sent `call.ended`.** It was
   marked `failed` with no reason recorded, and subscribers heard nothing. It
   now records `error.raised` and dispatches `call.ended`, on every transport.

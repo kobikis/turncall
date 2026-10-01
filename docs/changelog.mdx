@@ -48,6 +48,11 @@ project credential is accepted — it is encrypted and outside agent config.
 
 ## Fixed
 
+**An eval that failed because a provider refused the agent now says so.** The
+iteration's failures lead with the provider's error (for example Bedrock's
+"Model use case details have not been submitted") instead of only "no response
+text yet".
+
 **A call that could not start went silent.** WebRTC answered the offer anyway
 and connected the browser to nothing, and no `call.ended` was sent. It now
 returns an error and sends `call.ended` without waiting for a recording that
