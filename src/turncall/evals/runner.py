@@ -40,6 +40,7 @@ from turncall.domain.enums import (
     EvalToolPolicy,
 )
 from turncall.evals import scenario as scenario_mod
+from turncall.evals.build import worker_build
 from turncall.evals.result_mapping import (
     IterationOutcome,
     derive_status,
@@ -109,6 +110,23 @@ def run_budget_seconds(settings: Any, iterations: int) -> float:
     return (
         iterations * iteration_budget_seconds(settings, iterations) + RECLAIM_MARGIN_S
     )
+
+
+def describe_failure(exc: BaseException, *, prefix_type: bool = True) -> str:
+    """An error as the run records it.
+
+    An ImportError in a worker older than its source is not a bug in the code
+    it names: the process holds the old version of one module and has just
+    loaded the new version of another. Said plainly, because the bare message
+    sends whoever reads it looking for a missing name that is right there.
+    """
+    text = f"{type(exc).__name__}: {exc}" if prefix_type else str(exc)
+    if isinstance(exc, ImportError) and worker_build()["worker_stale"]:
+        text += (
+            " — the eval worker started before its code last changed, so it is "
+            "mixing old and new modules. Restart the eval worker and run again."
+        )
+    return text
 
 
 @dataclass(frozen=True)
@@ -216,9 +234,7 @@ async def run_iterations(
         except Exception as exc:
             logger.exception("eval_iteration_error", run_id=str(plan.run_id))
             outcomes.append(
-                errored_entry(
-                    iteration, f"{type(exc).__name__}: {exc}", tool_calls=mocks.calls
-                )
+                errored_entry(iteration, describe_failure(exc), tool_calls=mocks.calls)
             )
             continue
         if mocks.refused:
@@ -345,7 +361,7 @@ async def _record_unrunnable(session: Any, run: Any, exc: Exception) -> None:
         passed_count=0,
         failed_count=0,
         results=[],
-        error=str(exc),
+        error=describe_failure(exc, prefix_type=False),
     )
     await session.commit()
     logger.warning("eval_run_unrunnable", run_id=str(run.id), error=str(exc))

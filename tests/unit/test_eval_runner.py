@@ -525,3 +525,30 @@ class TestExecuteRun:
         await self._execute(self._run_row(status="cancelled"), execute, finish=finish)
         execute.assert_not_awaited()
         finish.assert_not_awaited()
+
+
+class TestDescribeFailure:
+    """A worker older than its source mixes old and new modules; the ImportError
+    that produces names a symbol that is plainly in the file."""
+
+    def test_a_stale_worker_says_to_restart(self) -> None:
+        from turncall.evals import runner as runner_mod
+
+        exc = ImportError("cannot import name 'X' from 'turncall.services.credentials'")
+        with patch.object(
+            runner_mod, "worker_build", return_value={"worker_stale": True}
+        ):
+            text = runner_mod.describe_failure(exc)
+        assert text.startswith("ImportError: cannot import name 'X'")
+        assert "Restart the eval worker" in text
+
+    def test_a_fresh_worker_reports_the_error_as_is(self) -> None:
+        from turncall.evals import runner as runner_mod
+
+        with patch.object(
+            runner_mod, "worker_build", return_value={"worker_stale": False}
+        ):
+            assert runner_mod.describe_failure(ImportError("x")) == "ImportError: x"
+            assert (
+                runner_mod.describe_failure(ValueError("y"), prefix_type=False) == "y"
+            )
