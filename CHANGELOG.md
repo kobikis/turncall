@@ -20,6 +20,16 @@ and is not part of this repository's history.
 
 ### Added
 
+- **A phone number can bring its own Twilio account.** `POST /v1/phone-numbers`
+  and `PUT /v1/phone-numbers/{id}` take `twilio_account_sid` +
+  `twilio_auth_token`. The number is looked up on that account — so
+  `external_number_sid` is optional, and credentials that do not own the number
+  are refused (422) before anything is bound. The token is stored encrypted and
+  never returned; the read gains `twilio_account_sid` and `twilio_credentials`
+  (`number` | `platform`). Webhook configuration, outbound calls, hangup,
+  transfer, DTMF, recording download and inbound signature checks for that
+  number all use its account. Numbers without one behave exactly as before.
+
 - **Project credentials — a project runs on its own provider accounts** (#159,
   ADR-0020). `PUT /v1/credentials/{provider}` stores one key per provider
   *account* (Deepgram once for STT and TTS, OpenAI once for four roles; `aws`

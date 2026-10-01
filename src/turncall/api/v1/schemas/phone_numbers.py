@@ -7,8 +7,29 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class BindPhoneNumberRequest(BaseModel):
-    external_number_sid: str = Field(..., min_length=1, max_length=64)
+class TwilioAccountFields(BaseModel):
+    """A number's own Twilio account. Both or neither: neither means the
+    platform's TWILIO_* account. The token is write-only."""
+
+    twilio_account_sid: str | None = Field(default=None, pattern=r"^AC[0-9a-fA-F]{32}$")
+    twilio_auth_token: str | None = Field(default=None, min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def validate_twilio_pair(self) -> "TwilioAccountFields":
+        if bool(self.twilio_account_sid) != bool(self.twilio_auth_token):
+            msg = "twilio_account_sid and twilio_auth_token must be set together"
+            raise ValueError(msg)
+        return self
+
+    @property
+    def has_own_twilio(self) -> bool:
+        return bool(self.twilio_account_sid and self.twilio_auth_token)
+
+
+class BindPhoneNumberRequest(TwilioAccountFields):
+    # Optional with the number's own account: TurnCall looks the SID up by
+    # E.164 there, which is also what proves the credentials own the number.
+    external_number_sid: str | None = Field(default=None, min_length=1, max_length=64)
     e164_number: str = Field(..., pattern=r"^\+[1-9]\d{1,14}$")
     routing_target_type: str = Field(..., pattern=r"^(agent|workflow|webhook)$")
     routing_target_id: UUID | None = None
@@ -18,6 +39,12 @@ class BindPhoneNumberRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_routing(self) -> "BindPhoneNumberRequest":
+        if not self.external_number_sid and not self.has_own_twilio:
+            msg = (
+                "external_number_sid is required unless the number brings its own "
+                "Twilio account (twilio_account_sid + twilio_auth_token)"
+            )
+            raise ValueError(msg)
         if self.routing_target_type == "webhook":
             if not self.server_url:
                 msg = "server_url is required when routing_target_type is 'webhook'"
@@ -28,7 +55,7 @@ class BindPhoneNumberRequest(BaseModel):
         return self
 
 
-class UpdatePhoneNumberRequest(BaseModel):
+class UpdatePhoneNumberRequest(TwilioAccountFields):
     """In-place update of a binding's routing/SMS config.
 
     The number's identity (SID, E.164) and its server_url_secret are stable —
@@ -102,9 +129,13 @@ class PhoneNumberResponse(BaseModel):
     routing_weights: list[dict[str, Any]] | None
     metadata: dict[str, Any]
     created_at: datetime
+    # The number's own Twilio account, or null for the platform's. Never the token.
+    twilio_account_sid: str | None = None
+    twilio_credentials: str = "platform"  # "number" | "platform"
 
     @classmethod
     def from_row(cls, row: Any) -> "PhoneNumberResponse":
+        own = bool(getattr(row, "twilio_auth_token_ciphertext", None))
         return cls(
             id=row.id,
             project_id=row.project_id,
@@ -119,4 +150,8 @@ class PhoneNumberResponse(BaseModel):
             routing_weights=row.routing_weights,
             metadata=row.metadata_json,
             created_at=row.created_at,
+            twilio_account_sid=getattr(row, "twilio_account_sid", None)
+            if own
+            else None,
+            twilio_credentials="number" if own else "platform",
         )

@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.config.settings import Settings
-from turncall.storage.models import ProjectCredentialRow, utc_now
+from turncall.storage.models import PhoneNumberRow, ProjectCredentialRow, utc_now
 
 
 class CredentialKeyError(RuntimeError):
@@ -128,6 +128,11 @@ async def ensure_readable(session: AsyncSession, settings: Settings) -> None:
     """
     if settings.credentials.encryption_key:
         _fernet(settings)  # malformed is an error whether or not rows exist
-    first = await session.scalar(select(ProjectCredentialRow.ciphertext).limit(1))
-    if first is not None:
-        decrypt(first, settings)
+    # Phone numbers' own Twilio tokens are sealed with the same key.
+    for column in (
+        ProjectCredentialRow.ciphertext,
+        PhoneNumberRow.twilio_auth_token_ciphertext,
+    ):
+        first = await session.scalar(select(column).where(column.is_not(None)).limit(1))
+        if first is not None:
+            decrypt(first, settings)

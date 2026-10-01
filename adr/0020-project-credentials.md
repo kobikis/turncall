@@ -98,3 +98,9 @@ The account namespace lives in `domain/providers.py`: `openai_live` bills to
 `custom_openai` have no account — their key, if any, belongs to the endpoint
 their own `base_url` names. The text path (chat/SMS) still reads `llm.api_key`
 then the platform key; it does not consult project credentials yet.
+
+Telephony, listed below as staying platform-level, was later given a narrower
+answer: a **phone number** may carry its own Twilio account
+(`services/twilio_accounts.py`), sealed with the same key. Per number rather
+than per project because Twilio's own unit is the number — webhooks name their
+account by `AccountSid`, and one project can hold numbers from two accounts.

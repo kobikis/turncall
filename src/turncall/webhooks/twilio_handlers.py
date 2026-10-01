@@ -2,6 +2,7 @@
 
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Form, Header, Request
@@ -44,17 +45,27 @@ def _public_url(request: Request) -> str:
     return url
 
 
-def _validate_twilio_request(
+async def _validate_twilio_request(
     request: Request,
+    session: Any,
     signature: str,
     params: dict[str, str],
 ) -> bool:
-    """Validate Twilio signature using env var credentials."""
-    settings = get_settings()
-    if not settings.twilio.auth_token:
+    """Validate a Twilio signature with the token of the account that sent it.
+
+    A number bound with its own Twilio account is signed by that account's
+    token, matched by the `AccountSid` Twilio puts in every webhook; anything
+    else is checked against the platform's (services/twilio_accounts.py).
+    """
+    from turncall.services.twilio_accounts import token_for_account_sid
+
+    token = await token_for_account_sid(
+        session, params.get("AccountSid"), get_settings()
+    )
+    if not token:
         return True  # Skip validation if no auth token configured (dev mode)
     url = _public_url(request)
-    return validate_twilio_signature(settings.twilio.auth_token, signature, url, params)
+    return validate_twilio_signature(token, signature, url, params)
 
 
 @router.post("/sms/inbound")
@@ -73,7 +84,9 @@ async def inbound_sms_webhook(
     through the chat service, and returns a TwiML reply.
     """
     form_data = await request.form()
-    if not _validate_twilio_request(request, x_twilio_signature, dict(form_data)):
+    if not await _validate_twilio_request(
+        request, session, x_twilio_signature, dict(form_data)
+    ):
         logger.warning("twilio_sms_invalid_signature")
         return Response(status_code=403)
 
@@ -171,7 +184,9 @@ async def inbound_voice_webhook(
     """
     # Validate Twilio signature
     form_data = await request.form()
-    if not _validate_twilio_request(request, x_twilio_signature, dict(form_data)):
+    if not await _validate_twilio_request(
+        request, session, x_twilio_signature, dict(form_data)
+    ):
         logger.warning("twilio_invalid_signature")
         return Response(status_code=403)
 
@@ -367,7 +382,9 @@ async def outbound_voice_webhook(
     not by phone number. This is the key difference from inbound.
     """
     form_data = await request.form()
-    if not _validate_twilio_request(request, x_twilio_signature, dict(form_data)):
+    if not await _validate_twilio_request(
+        request, session, x_twilio_signature, dict(form_data)
+    ):
         return Response(status_code=403)
 
     logger.info("twilio_outbound_call", call_sid=call_sid)
@@ -433,7 +450,9 @@ async def status_callback(
 ) -> Response:
     """Handle Twilio status callback. Updates internal call state."""
     form_data = await request.form()
-    if not _validate_twilio_request(request, x_twilio_signature, dict(form_data)):
+    if not await _validate_twilio_request(
+        request, session, x_twilio_signature, dict(form_data)
+    ):
         return Response(status_code=403)
 
     logger.info(
@@ -559,7 +578,9 @@ async def recording_callback(
 ) -> Response:
     """Handle Twilio recording callback."""
     form_data = await request.form()
-    if not _validate_twilio_request(request, x_twilio_signature, dict(form_data)):
+    if not await _validate_twilio_request(
+        request, session, x_twilio_signature, dict(form_data)
+    ):
         return Response(status_code=403)
 
     logger.info(
@@ -581,9 +602,14 @@ async def recording_callback(
             from turncall.services.recording_storage import (
                 download_and_store_recording,
             )
+            from turncall.services.twilio_accounts import account_for_call
 
+            account = await account_for_call(session, call, get_settings())
             stored_url = await download_and_store_recording(
-                recording_url, call.id, recording_sid
+                recording_url,
+                call.id,
+                recording_sid,
+                auth=(account.account_sid, account.auth_token) if account else None,
             )
             await call_repo.update_call_recording_url(session, call.id, stored_url)
         except Exception:
@@ -669,7 +695,9 @@ async def transfer_whisper(
 ) -> Response:
     """Briefing played to the operator on a warm transfer, before bridging."""
     form_data = await request.form()
-    if not _validate_twilio_request(request, x_twilio_signature, dict(form_data)):
+    if not await _validate_twilio_request(
+        request, session, x_twilio_signature, dict(form_data)
+    ):
         return Response(status_code=403)
 
     from turncall.services import transfer as transfer_svc
@@ -695,7 +723,9 @@ async def transfer_result(
 ) -> Response:
     """Dial-result callback — graceful fallback when the operator doesn't answer."""
     form_data = await request.form()
-    if not _validate_twilio_request(request, x_twilio_signature, dict(form_data)):
+    if not await _validate_twilio_request(
+        request, session, x_twilio_signature, dict(form_data)
+    ):
         return Response(status_code=403)
 
     # "completed" means the legs bridged and then ended — nothing more to say.
@@ -726,7 +756,9 @@ async def transfer_amd(
 ) -> Response:
     """AMD notify — record whether the operator leg was a human or voicemail."""
     form_data = await request.form()
-    if not _validate_twilio_request(request, x_twilio_signature, dict(form_data)):
+    if not await _validate_twilio_request(
+        request, session, x_twilio_signature, dict(form_data)
+    ):
         return Response(status_code=403)
 
     call = await call_repo.get_call_by_id(session, call_id)

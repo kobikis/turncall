@@ -64,8 +64,8 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `TWILIO_ACCOUNT_SID` | Yes | Twilio account SID |
-| `TWILIO_AUTH_TOKEN` | Yes | Twilio auth token |
+| `TWILIO_ACCOUNT_SID` | Yes* | Twilio account SID — the platform account. *A number bound with its own `twilio_account_sid` + `twilio_auth_token` uses those instead |
+| `TWILIO_AUTH_TOKEN` | Yes* | Twilio auth token (platform account; see above) |
 | `OPENAI_API_KEY` | Yes* | OpenAI API key (LLM + optional STT/TTS). *Not required if using Ollama/custom LLM |
 | `DEEPGRAM_API_KEY` | Yes | Deepgram API key (streaming STT/TTS) |
 | `ELEVENLABS_API_KEY` | No | ElevenLabs API key (optional STT/TTS) |
@@ -185,6 +185,16 @@ Context threading: use `session_id` (group messages) or `previous_chat_id` (line
 ### Phone Number Config
 - `sms_enabled: true` on bind → auto-configures Twilio SMS webhook
 - Same number handles both voice calls and SMS
+- **Own Twilio account per number**: `twilio_account_sid` + `twilio_auth_token` on
+  `POST/PUT /v1/phone-numbers` (both or neither). TurnCall looks the number up on
+  that account (which proves it owns it, and makes `external_number_sid`
+  optional), stores the token encrypted under `CREDENTIAL_ENCRYPTION_KEY`, and
+  returns only `twilio_account_sid` + `twilio_credentials: number|platform`.
+  Every Twilio REST call for that number — webhook config, outbound, hangup,
+  transfer, DTMF, recording download, project deletion — and every inbound
+  signature check (matched by the webhook's `AccountSid`) uses that account.
+  `services/twilio_accounts.py` is the one place that decides; nothing else
+  constructs a `TwilioAdapter`.
 
 ## WhatsApp
 

@@ -72,19 +72,40 @@ async def test_unbind_failure_aborts_before_soft_delete():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_no_twilio_creds_skips_unbind():
+async def test_numbers_are_cleared_without_platform_creds():
+    """A number bound with its own Twilio account must be pointed away from
+    TurnCall even when the platform has no Twilio account of its own."""
     pid = uuid.uuid4()
+    own = SimpleNamespace(
+        external_number_sid="PN1",
+        twilio_account_sid=None,
+        twilio_auth_token_ciphertext=None,
+    )
     with (
-        patch.object(pd.phone_number_repo, "list_for_project", new=AsyncMock()) as lst,
+        patch.object(
+            pd.phone_number_repo, "list_for_project", new=AsyncMock(return_value=[own])
+        ),
         patch.object(pd, "_clear_twilio_number", new=AsyncMock()) as clear,
         patch.object(pd, "_sweep_storage", new=AsyncMock()),
         patch.object(pd.project_repo, "soft_delete_project", new=AsyncMock()) as soft,
     ):
         await pd.delete_project(AsyncMock(), _settings(twilio=False), pid)
 
-    lst.assert_not_called()
-    clear.assert_not_called()
-    soft.assert_awaited_once()  # still soft-deletes
+    clear.assert_awaited_once()  # it decides which account, or none
+    soft.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_number_with_no_account_anywhere_is_skipped():
+    number = SimpleNamespace(
+        external_number_sid="PN1",
+        twilio_account_sid=None,
+        twilio_auth_token_ciphertext=None,
+    )
+    with patch("turncall.adapters.telephony.twilio_adapter.TwilioAdapter") as adapter:
+        await pd._clear_twilio_number(_settings(twilio=False), number)
+    adapter.assert_not_called()
 
 
 def _session_factory():

@@ -24,13 +24,6 @@ async def create_outbound_call(
     """Create an outbound call via Twilio."""
     settings = get_settings()
 
-    if not settings.twilio.account_sid or not settings.twilio.auth_token:
-        raise ApiError(
-            status_code=503,
-            code=ErrorCode.INTERNAL_ERROR,
-            message="Twilio credentials not configured (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)",
-        )
-
     # Verify agent exists
     agent = await agent_repo.get_agent_by_id(
         session, body.agent_id, project_id=auth.project_id
@@ -44,6 +37,21 @@ async def create_outbound_call(
     )
     if phone_number is None:
         raise NotFoundError("PhoneNumber", str(body.from_number_id))
+
+    # The caller-id number's own Twilio account, else the platform's.
+    from turncall.services.twilio_accounts import account_for_number
+
+    account = account_for_number(phone_number, settings)
+    if account is None:
+        raise ApiError(
+            status_code=503,
+            code=ErrorCode.INTERNAL_ERROR,
+            message=(
+                "No Twilio account for this number: bind it with its own "
+                "twilio_account_sid + twilio_auth_token, or set TWILIO_ACCOUNT_SID "
+                "and TWILIO_AUTH_TOKEN"
+            ),
+        )
 
     # Create internal call record
     call = await call_repo.create_call(
@@ -68,10 +76,7 @@ async def create_outbound_call(
     voice_url = f"{base_url}/webhooks/twilio/voice/outbound"
     status_url = f"{base_url}/webhooks/twilio/status"
 
-    # Initiate call via Twilio (env var credentials)
-    from turncall.adapters.telephony.twilio_adapter import TwilioAdapter
-
-    adapter = TwilioAdapter(settings.twilio.account_sid, settings.twilio.auth_token)
+    adapter = account.adapter()
     provider_call_sid = await adapter.initiate_outbound_call(
         from_number=phone_number.e164_number,
         to_number=body.to_number,

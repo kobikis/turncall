@@ -148,11 +148,21 @@ class PhoneNumberRow(Base):
     whatsapp_enabled: Mapped[bool] = mapped_column(default=False)
     routing_weights: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # The number's own Twilio account (services/twilio_accounts.py). Null = the
+    # platform's TWILIO_* account. The SID is an identifier (webhooks are matched
+    # by it); the token is Fernet ciphertext, never returned by any read.
+    twilio_account_sid: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    twilio_auth_token_ciphertext: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )
 
-    __table_args__ = (Index("ix_phone_numbers_project_id", "project_id"),)
+    __table_args__ = (
+        Index("ix_phone_numbers_project_id", "project_id"),
+        Index("ix_phone_numbers_twilio_account_sid", "twilio_account_sid"),
+    )
 
 
 class CallRow(Base):
