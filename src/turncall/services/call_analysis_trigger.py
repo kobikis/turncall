@@ -84,6 +84,9 @@ async def _wait_for_recording(
                 url = call.recording_url
         if status in _TERMINAL_RECORDING:
             return url, status
+        if call and call.started_at is None:
+            # Its pipeline never ran (a build failure), so nothing is recording.
+            return url, status
         if waited >= RECORDING_WAIT_TIMEOUT_S:
             logger.warning(
                 "post_call_recording_wait_timeout",

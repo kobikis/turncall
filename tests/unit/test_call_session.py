@@ -200,3 +200,107 @@ class TestFinalizeCall:
 
             update_status.assert_not_awaited()
             trigger.assert_not_called()
+
+
+@pytest.mark.unit
+class TestProviderError:
+    """A provider pipecat stopped using ends the pipeline gracefully; the call
+    must still read as failed, with the reason on its event log."""
+
+    @staticmethod
+    def _frame(*, usable: bool, fatal: bool = False):
+        return SimpleNamespace(
+            error="Error connecting: HTTP 401",
+            fatal=fatal,
+            processor=SimpleNamespace(is_usable=usable),
+        )
+
+    async def test_an_unusable_provider_fails_the_call(self) -> None:
+        call_id = uuid4()
+        cs = _make_call_session(call_id)
+        call = SimpleNamespace(
+            id=call_id,
+            project_id=uuid4(),
+            status="in_progress",
+            started_at=datetime.now(UTC),
+            active_agent_id=uuid4(),
+        )
+        with (
+            patch.object(cs, "_log_event", AsyncMock()) as log_event,
+            patch(
+                "turncall.storage.repositories.call_repo.get_call_by_id",
+                AsyncMock(return_value=call),
+            ),
+            patch(
+                "turncall.storage.repositories.call_repo.update_call_status",
+                AsyncMock(),
+            ) as update_status,
+            patch(
+                "turncall.services.call_analysis_trigger.config_for_call",
+                AsyncMock(return_value={}),
+            ),
+            patch(
+                "turncall.services.call_analysis_trigger.trigger_post_call_analysis",
+                MagicMock(),
+            ) as trigger,
+        ):
+            await cs._on_pipeline_error(self._frame(usable=False))
+            await cs._on_pipeline_error(self._frame(usable=False))
+            await cs._finalize_call()
+
+        log_event.assert_awaited_once()
+        assert log_event.await_args.args[0] == "error.raised"
+        assert "401" in log_event.await_args.args[1]["error"]
+        assert update_status.await_args.kwargs["status"] == "failed"
+        trigger.assert_called_once()  # call.ended still goes out
+
+    async def test_a_recoverable_error_is_not_recorded(self) -> None:
+        cs = _make_call_session(uuid4())
+        with patch.object(cs, "_log_event", AsyncMock()) as log_event:
+            await cs._on_pipeline_error(self._frame(usable=True))
+        log_event.assert_not_awaited()
+
+
+@pytest.mark.unit
+class TestUnstartedCall:
+    """A pipeline that never built: failed, with why, and call.ended."""
+
+    @staticmethod
+    def _ctx(*, is_eval: bool = False):
+        return SimpleNamespace(
+            call_id=uuid4(),
+            project_id=uuid4(),
+            session_factory=MagicMock(),
+            is_eval=is_eval,
+        )
+
+    async def test_records_why_and_finalizes_as_failed(self) -> None:
+        from turncall.orchestrator import call_session as mod
+
+        ctx = self._ctx()
+        with (
+            patch.object(mod, "log_call_event", AsyncMock()) as log_event,
+            patch.object(mod, "finalize_call", AsyncMock()) as finalize,
+        ):
+            await mod.fail_unstarted_call(ctx, RuntimeError("Missing credentials"))
+
+        event_type, payload = log_event.await_args.args[1:]
+        assert event_type == "error.raised"
+        assert payload == {"stage": "pipeline_build", "error": "Missing credentials"}
+        finalize.assert_awaited_once_with(ctx.session_factory, ctx.call_id, failed=True)
+
+    async def test_an_eval_has_no_call_to_fail(self) -> None:
+        from turncall.orchestrator import call_session as mod
+
+        with patch.object(mod, "finalize_call", AsyncMock()) as finalize:
+            await mod.fail_unstarted_call(self._ctx(is_eval=True), RuntimeError("x"))
+        finalize.assert_not_awaited()
+
+    async def test_never_masks_the_original_error(self) -> None:
+        from turncall.orchestrator import call_session as mod
+
+        with (
+            patch.object(mod, "log_call_event", AsyncMock()),
+            patch.object(mod, "finalize_call", AsyncMock(side_effect=OSError("db"))),
+        ):
+            await mod.fail_unstarted_call(self._ctx(), RuntimeError("x"))

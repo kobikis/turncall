@@ -18,7 +18,7 @@ from typing import Any
 
 from turncall.config.settings import Settings
 from turncall.domain.models import AgentConfig
-from turncall.orchestrator.call_session import CallSession
+from turncall.orchestrator.call_session import CallSession, fail_unstarted_call
 from turncall.orchestrator.pipeline_factory import CallContext, create_pipeline
 from turncall.orchestrator.tool_bridge import register_tools
 from turncall.services.credentials import Credentials
@@ -46,13 +46,42 @@ async def build_call_pipeline(
     call_context: CallContext,
     settings: Settings,
     session_factory: Any,
+    **options: Any,
+) -> CallSession:
+    """Assemble the pipeline and return an unstarted CallSession.
+
+    A build that raises — a provider SDK refusing an empty key, say — fails the
+    call here, for every transport, with the reason and `call.ended`; the error
+    still propagates to the caller.
+    """
+    try:
+        return await _assemble(
+            config=config,
+            transport=transport,
+            call_context=call_context,
+            settings=settings,
+            session_factory=session_factory,
+            **options,
+        )
+    except Exception as exc:
+        await fail_unstarted_call(call_context, exc)
+        raise
+
+
+async def _assemble(
+    *,
+    config: AgentConfig,
+    transport: Any,
+    call_context: CallContext,
+    settings: Settings,
+    session_factory: Any,
     audio_sample_rate: int = 8000,
     mcp_tools: list[Any] | None = None,
     avatar_enabled: bool = False,
 ) -> CallSession:
-    """Assemble the pipeline (KB retrieval + tools wired in) and return an
-    unstarted CallSession. audio_sample_rate defaults to 8000 (Twilio mulaw);
-    WebRTC/WhatsApp pass 16000. mcp_tools/avatar are transport-specific."""
+    """Assemble the pipeline (KB retrieval + tools wired in). audio_sample_rate
+    defaults to 8000 (Twilio mulaw); WebRTC/WhatsApp pass 16000. mcp_tools/avatar
+    are transport-specific."""
     from turncall.orchestrator.knowledge_processor import load_agent_kb_attachments
     from turncall.services.retrieval import build_knowledge_preamble
 

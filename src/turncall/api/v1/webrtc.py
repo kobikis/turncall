@@ -52,36 +52,6 @@ _request_handler = SmallWebRTCRequestHandler(
 )
 
 
-async def _finalize_failed(session_factory: Any, call_id: UUID) -> None:
-    """Mark a call FAILED when its pipeline never started (idempotent)."""
-    from datetime import UTC, datetime
-
-    from turncall.domain.enums import CallStatus
-    from turncall.storage.repositories import call_repo
-
-    try:
-        async with session_factory() as db:
-            call = await call_repo.get_call_by_id(db, call_id)
-            if not call or call.status in ("completed", "failed"):
-                return
-            ended_at = datetime.now(UTC)
-            duration = (
-                int((ended_at - call.started_at).total_seconds() * 1000)
-                if call.started_at
-                else None
-            )
-            await call_repo.update_call_status(
-                db,
-                call_id=call_id,
-                status=CallStatus.FAILED.value,
-                ended_at=ended_at,
-                duration_ms=duration,
-            )
-            await db.commit()
-    except Exception:
-        logger.exception("failed to finalize orphaned call", call_id=str(call_id))
-
-
 @router.post("/connect", status_code=200)
 async def webrtc_connect(
     request: Request,
@@ -228,6 +198,11 @@ async def webrtc_connect(
         session_factory=session_factory,
     )
 
+    # pipecat's handler logs an exception from this callback and answers the
+    # offer anyway, so a call that could not start used to connect the browser
+    # to a peer with no pipeline behind it: silence, then nothing.
+    build_failure: list[tuple[SmallWebRTCConnection, Exception]] = []
+
     # Use SmallWebRTCRequestHandler — it creates/reuses the connection
     async def on_connection(connection: SmallWebRTCConnection) -> None:
         """Callback invoked when a new WebRTC connection is established."""
@@ -259,15 +234,22 @@ async def webrtc_connect(
                 audio_sample_rate=WEBRTC_SAMPLE_RATE,
                 avatar_enabled=avatar_on,
             )
-        except Exception:
-            # The pipeline never started, so call_session's finalize-on-exit
-            # won't run — mark the call FAILED here or it's stuck at 'initiated'
-            # forever (e.g. a provider misconfig raising during service build).
+        except Exception as exc:
+            # The call is already failed with its reason (build_call_pipeline).
             logger.exception("webrtc pipeline build failed", call_id=str(call.id))
-            await _finalize_failed(session_factory, call.id)
+            build_failure.append((connection, exc))
             raise
 
     answer = await _request_handler.handle_web_request(webrtc_request, on_connection)
+
+    if build_failure:
+        connection, exc = build_failure[0]
+        await connection.disconnect()
+        raise ApiError(
+            status_code=500,
+            code=ErrorCode.PIPELINE_START_FAILED,
+            message=f"The agent could not start (call {call.id}): {exc}",
+        )
 
     if answer is None:
         raise ApiError(

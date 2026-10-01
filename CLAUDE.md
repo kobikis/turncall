@@ -1012,6 +1012,16 @@ are null for an inline agent and for a deleted agent row.
 `customer_did_not_answer`, `customer_busy`, `customer_silent`, `voicemail`, `transferred`,
 `max_duration_reached`, `pipeline_error`, `telephony_failed`, `unknown`.
 
+`pipeline_error` is a call that **failed**, and the call's event log says why
+in an `error.raised` event (`{stage, error}`). There are two ways in. A build
+that raises: no `CallSession` exists, so `build_call_pipeline` fails the call
+itself for every transport, and WebRTC answers `500 pipeline_start_failed`
+instead of an SDP answer. (pipecat's handler logs a callback error and answers
+anyway, which used to connect the browser to a peer with no pipeline behind
+it.) Or a provider pipecat stops using mid-call, like a 401 or an unknown model:
+pipecat then ends the pipeline *gracefully*, so without the event the call read
+as `customer_ended_call`. Either way `call.ended` still goes out.
+
 Since pipecat 1.12 a user turn that VAD opened and closed with **no
 transcript** — a cough, a door, an unrecognized word — is handled rather than
 dropped, and it is on by default. One that *interrupted* the agent gets a

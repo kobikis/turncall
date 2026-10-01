@@ -111,3 +111,34 @@ async def test_registers_static_plus_mcp_tools():
     proc_arg, tools_arg, _ctx = reg.call_args.args
     assert proc_arg is llm  # registered on the LLM proc, not the other one
     assert len(tools_arg) == 2  # static (1) + mcp (1)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_build_that_raises_fails_the_call_and_still_raises():
+    """A provider SDK refusing an empty key raises at construction (cascade's
+    OpenAI LLM does). No CallSession exists to finalize it, so the builder does,
+    for every transport — then lets the caller see the error too."""
+    ctx = SimpleNamespace(agent_id="a1", project_id="p1")
+    boom = RuntimeError("Missing credentials")
+
+    with (
+        patch.object(pipeline_builder, "create_pipeline", side_effect=boom),
+        patch.object(
+            pipeline_builder, "load_call_credentials", new=AsyncMock(return_value=None)
+        ),
+        patch(
+            "turncall.orchestrator.knowledge_processor.load_agent_kb_attachments",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch.object(pipeline_builder, "fail_unstarted_call", new=AsyncMock()) as fail,
+        pytest.raises(RuntimeError, match="Missing credentials"),
+    ):
+        await pipeline_builder.build_call_pipeline(
+            config=AgentConfig(),
+            transport="T",
+            call_context=ctx,
+            settings=_settings(),
+            session_factory="SF",
+        )
+    fail.assert_awaited_once_with(ctx, boom)
