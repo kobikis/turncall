@@ -127,11 +127,14 @@ DELETE /v1/credentials/{provider}   # idempotent; the project falls back to the 
 GET    /v1/providers                # roles -> providers; per account platform_key + project_credential
 ```
 
-Every key resolves through `services/credentials.Credentials`: agent inline
-(`llm.api_key`, `config.aws`) → project credential → platform env. Built per
-call by `pipeline_builder.load_call_credentials`, so writes apply to the next
-call. No pipeline code reads `os.environ` for a key. The chat/SMS text path does
-**not** consult project credentials yet.
+Every key the **voice pipeline** uses resolves through
+`services/credentials.Credentials`: agent inline (`llm.api_key`, `config.aws`) →
+project credential → platform env. Built per call by
+`pipeline_builder.load_call_credentials`, so writes apply to the next call. No
+pipeline code reads `os.environ` for a key. Everything outside a call — the
+chat/SMS text path, post-call analysis and takeaways, KB ingestion, the eval
+judge — still reads `llm.api_key` then the platform key, and does **not**
+consult project credentials yet.
 
 ## Pipeline
 

@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Body
 
 from turncall.api.deps import DbSession
+from turncall.api.errors import ApiError, ErrorCode
 from turncall.api.responses import ok
 from turncall.api.v1.schemas.credentials import (
     CredentialResponse,
@@ -38,13 +39,19 @@ async def put_credential(
     Takes effect on the project's next call — resolved per call, no restart.
     """
     document = parse_credential(provider, body)
-    row = await credential_repo.upsert(
-        session,
-        project_id=auth.project_id,
-        provider=provider,
-        document=document,
-        settings=get_settings(),
-    )
+    try:
+        row = await credential_repo.upsert(
+            session,
+            project_id=auth.project_id,
+            provider=provider,
+            document=document,
+            settings=get_settings(),
+        )
+    except credential_repo.CredentialKeyError as exc:
+        # Fail closed, legibly: the operator must set the key, not read a 500.
+        raise ApiError(
+            status_code=503, code=ErrorCode.INTERNAL_ERROR, message=str(exc)
+        ) from exc
     await session.commit()
     return ok(CredentialResponse.from_row(row))
 

@@ -394,7 +394,10 @@ def _create_llm_service(
         if byom_settings:
             _validate_byom_url(base_url, byom_settings)
         return OpenAILLMService(
-            api_key=config.llm.api_key or "no-key",
+            # No account: the key belongs to whatever endpoint base_url names,
+            # so only the agent's own can apply (domain/providers.py).
+            api_key=credentials.api_key("custom_openai", config.llm.api_key)
+            or "no-key",
             base_url=base_url,
             settings=OpenAILLMService.Settings(
                 model=model,
@@ -960,7 +963,8 @@ def _create_avatar_service(avatar: Any, credentials: Credentials) -> Any:
         key = credentials.api_key("heygen")
         if not key:
             logger.warning(
-                "Avatar enabled but HEYGEN_LIVE_AVATAR_API_KEY unset; skipping"
+                "Avatar enabled but no HeyGen key (project credential or "
+                "HEYGEN_LIVE_AVATAR_API_KEY); skipping"
             )
             return None
         logger.info("Avatar enabled: HeyGen {aid}", aid=avatar.avatar_id)
@@ -979,7 +983,10 @@ def _create_avatar_service(avatar: Any, credentials: Credentials) -> Any:
 
         key = credentials.api_key("tavus")
         if not key:
-            logger.warning("Avatar enabled but TAVUS_API_KEY unset; skipping")
+            logger.warning(
+                "Avatar enabled but no Tavus key (project credential or "
+                "TAVUS_API_KEY); skipping"
+            )
             return None
         if not avatar.replica_id:
             logger.warning("Tavus avatar requires replica_id; skipping")

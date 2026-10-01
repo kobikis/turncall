@@ -427,6 +427,19 @@ class TestSchemaBoundary:
         assert d.await_args.args[1] == project_id
 
 
+class TestFailsClosed:
+    def test_a_write_without_the_key_says_which_setting(
+        self, app, project_id, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "turncall.api.v1.credentials.get_settings",
+            lambda: _settings_with_key(),
+        )
+        r = app.put("/v1/credentials/deepgram", headers=H, json={"api_key": "k"})
+        assert r.status_code == 503
+        assert "CREDENTIAL_ENCRYPTION_KEY" in r.json()["error"]
+
+
 class TestSecretMasking:
     def test_write_response_carries_no_value(self, app, project_id) -> None:
         with patch(f"{REPO}.upsert", AsyncMock(return_value=_row("openai"))):

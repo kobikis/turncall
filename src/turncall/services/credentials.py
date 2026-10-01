@@ -19,6 +19,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 from turncall.domain.providers import AWS_ACCOUNT
 
 if TYPE_CHECKING:
@@ -55,6 +57,7 @@ def ambient_aws_available() -> bool:
 
         return boto3.Session().get_credentials() is not None
     except Exception:
+        logger.exception("ambient_aws_probe_failed")
         return False
 
 
