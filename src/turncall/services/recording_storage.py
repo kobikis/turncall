@@ -19,6 +19,8 @@ async def download_and_store_recording(
     twilio_recording_url: str,
     call_id: UUID,
     recording_sid: str,
+    *,
+    auth: tuple[str, str] | None = None,
 ) -> str:
     """Download a recording from Twilio and upload to storage.
 
@@ -26,6 +28,8 @@ async def download_and_store_recording(
         twilio_recording_url: Twilio recording URL (without extension).
         call_id: Call ID for the storage key.
         recording_sid: Twilio recording SID for the filename.
+        auth: (account_sid, auth_token) of the account that recorded it; the
+            platform's TWILIO_* when omitted.
 
     Returns:
         The storage URL (local path or S3 URI).
@@ -34,7 +38,7 @@ async def download_and_store_recording(
 
     # Twilio recording URL needs .wav extension and basic auth
     download_url = f"{twilio_recording_url}.wav"
-    auth = (settings.twilio.account_sid, settings.twilio.auth_token)
+    auth = auth or (settings.twilio.account_sid, settings.twilio.auth_token)
 
     logger.info(
         "recording_download_start",

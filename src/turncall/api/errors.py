@@ -35,6 +35,7 @@ class ErrorCode(StrEnum):
     CALL_NOT_FOUND = "call_not_found"
     CALL_NOT_ACTIVE = "call_not_active"
     INVALID_STATE_TRANSITION = "invalid_state_transition"
+    PIPELINE_START_FAILED = "pipeline_start_failed"
 
     # Phone Number
     PHONE_NUMBER_NOT_FOUND = "phone_number_not_found"

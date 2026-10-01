@@ -6,6 +6,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from tests.conftest import creds
 from turncall.api.v1.schemas.agents import LLMConfigSchema
 from turncall.domain.models import AgentConfig, LLMConfig
 from turncall.orchestrator.pipeline_factory import _create_llm_service
@@ -54,7 +55,7 @@ class TestOpenRouterFactory:
             model="anthropic/claude-3.5-sonnet",
             fallback_models=["openai/gpt-4o", "google/gemini-flash-1.5"],
         )
-        svc = _create_llm_service(config, "", openrouter_api_key="sk-or-test")
+        svc = _create_llm_service(config, creds("", openrouter="sk-or-test"))
         assert svc._settings.extra == {
             "extra_body": {
                 "models": [
@@ -69,12 +70,12 @@ class TestOpenRouterFactory:
         config = _agent_config(
             provider="openrouter", model="anthropic/claude-3.5-sonnet"
         )
-        svc = _create_llm_service(config, "", openrouter_api_key="sk-or-test")
+        svc = _create_llm_service(config, creds("", openrouter="sk-or-test"))
         assert svc._settings.extra == {}
 
     def test_per_agent_key_overrides_env(self) -> None:
         config = _agent_config(provider="openrouter", model="x", api_key="sk-or-agent")
-        svc = _create_llm_service(config, "", openrouter_api_key="sk-or-env")
+        svc = _create_llm_service(config, creds("", openrouter="sk-or-env"))
         assert svc._client.api_key == "sk-or-agent"
 
 

@@ -187,6 +187,12 @@ async def _process_chat_message(
             system_prompt, {k: str(v) for k, v in agent_config.metadata.items()}
         )
 
+    # The project's keys, so a text turn runs on the account a voice call on
+    # the same project would (ADR-0020): agent inline, project, platform.
+    from turncall.services.credentials import for_project
+
+    credentials = await for_project(db, project_id)
+
     # Inject knowledge base context if agent has KBs attached
     system_prompt = await _inject_kb_context(
         db,
@@ -194,6 +200,7 @@ async def _process_chat_message(
         agent_config=agent_config,
         system_prompt=system_prompt,
         user_message=message,
+        openai_api_key=credentials.api_key("openai"),
     )
 
     llm_messages = await _build_llm_messages(db, session_row.id, system_prompt)
@@ -211,6 +218,7 @@ async def _process_chat_message(
             aws=agent_config.aws,
             tools=chat_tools.schemas or None,
             execute_tool=chat_tools.execute,
+            credentials=credentials,
         )
     finally:
         await chat_tools.aclose()
@@ -385,6 +393,7 @@ async def _inject_kb_context(
     agent_config: AgentConfig,
     system_prompt: str,
     user_message: str,
+    openai_api_key: str,
 ) -> str:
     """Inject knowledge base context into system prompt for chat.
 
@@ -393,7 +402,6 @@ async def _inject_kb_context(
     - auto: Retrieval based on user message, context prepended
     - tool: Skipped (tool mode not supported in text chat)
     """
-    from turncall.config.settings import get_settings
     from turncall.services.retrieval import (
         format_retrieved_context,
         get_full_text_context,
@@ -404,8 +412,6 @@ async def _inject_kb_context(
     attachments = await knowledge_repo.get_agent_knowledge_bases(db, agent_id)
     if not attachments:
         return system_prompt
-
-    settings = get_settings()
 
     # Prompt mode: inject full document text
     prompt_kb_ids = [a.knowledge_base_id for a in attachments if a.mode == "prompt"]
@@ -424,7 +430,7 @@ async def _inject_kb_context(
             knowledge_base_ids=auto_kb_ids,
             top_k=first_auto.top_k,
             similarity_threshold=first_auto.similarity_threshold,
-            openai_api_key=settings.openai.api_key,
+            openai_api_key=openai_api_key,
         )
         if result.chunks:
             context_text = format_retrieved_context(result)

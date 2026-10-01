@@ -204,6 +204,11 @@ class TestExecuteRun:
             patch("turncall.storage.repositories.eval_repo.start_run", start),
             patch("turncall.storage.repositories.eval_repo.finish_run", finish),
             patch.object(runner_mod, "resolve_target", AsyncMock(return_value=target)),
+            patch.object(
+                runner_mod,
+                "for_project",
+                AsyncMock(return_value=runner_mod.Credentials()),
+            ),
         ):
             await runner_mod.execute_run(
                 run_row.id,
@@ -387,6 +392,45 @@ class TestExecuteRun:
         assert finish.await_args.kwargs["status"] is EvalRunStatus.ERRORED
         assert finish.await_args.kwargs["error"] == "agent not found"
 
+    async def test_unreadable_project_credentials_error_the_run(self) -> None:
+        """ADR-0020 fails closed: a run whose project keys cannot be decrypted
+        is errored, never judged on the platform's account instead."""
+        from turncall.evals import runner as runner_mod
+        from turncall.storage.repositories import credential_repo
+
+        factory, _ = self._session_factory()
+        run = self._run_row()
+        execute = AsyncMock()
+        start = AsyncMock()
+        finish = AsyncMock()
+        target = ResolvedTarget(
+            project_id=run.project_id, config=AgentConfig(), config_blob={}
+        )
+        with (
+            patch(
+                "turncall.storage.repositories.eval_repo.get_run",
+                AsyncMock(return_value=run),
+            ),
+            patch("turncall.storage.repositories.eval_repo.start_run", start),
+            patch("turncall.storage.repositories.eval_repo.finish_run", finish),
+            patch.object(runner_mod, "resolve_target", AsyncMock(return_value=target)),
+            patch.object(
+                credential_repo,
+                "load_documents",
+                AsyncMock(side_effect=credential_repo.CredentialKeyError("rotated")),
+            ),
+        ):
+            await runner_mod.execute_run(
+                run.id,
+                session_factory=factory,
+                settings=SimpleNamespace(),
+                execute=execute,
+            )
+        execute.assert_not_awaited()
+        start.assert_not_awaited()
+        assert finish.await_args.kwargs["status"] is EvalRunStatus.ERRORED
+        assert finish.await_args.kwargs["error"] == "rotated"
+
     async def test_both_run_events_are_dispatched(self) -> None:
         """#76: one event when the run starts, one comprehensive event when it
         finishes. A subscriber should never have to poll."""
@@ -481,3 +525,30 @@ class TestExecuteRun:
         await self._execute(self._run_row(status="cancelled"), execute, finish=finish)
         execute.assert_not_awaited()
         finish.assert_not_awaited()
+
+
+class TestDescribeFailure:
+    """A worker older than its source mixes old and new modules; the ImportError
+    that produces names a symbol that is plainly in the file."""
+
+    def test_a_stale_worker_says_to_restart(self) -> None:
+        from turncall.evals import runner as runner_mod
+
+        exc = ImportError("cannot import name 'X' from 'turncall.services.credentials'")
+        with patch.object(
+            runner_mod, "worker_build", return_value={"worker_stale": True}
+        ):
+            text = runner_mod.describe_failure(exc)
+        assert text.startswith("ImportError: cannot import name 'X'")
+        assert "Restart the eval worker" in text
+
+    def test_a_fresh_worker_reports_the_error_as_is(self) -> None:
+        from turncall.evals import runner as runner_mod
+
+        with patch.object(
+            runner_mod, "worker_build", return_value={"worker_stale": False}
+        ):
+            assert runner_mod.describe_failure(ImportError("x")) == "ImportError: x"
+            assert (
+                runner_mod.describe_failure(ValueError("y"), prefix_type=False) == "y"
+            )

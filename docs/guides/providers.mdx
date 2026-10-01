@@ -279,6 +279,7 @@ resolved by the **server**, in this order:
 | Assume role | `aws.role_arn` (+ optional `aws.external_id`) | Preferred for multi-tenant setups — yields temporary credentials, stores no secret |
 | Static keys | `aws.access_key_id` + `aws.secret_access_key` | Off by default, see below |
 | Named profile | `aws.profile` | How an SSO login is selected |
+| Project credential | `PUT /v1/credentials/aws` | Used when the agent's block names no source of its own — see [Project credentials](#project-credentials) |
 | Ambient chain | *(nothing set)* | Env vars, SSO cache, EC2 instance profile, ECS task role, EKS IRSA |
 
 ```json
@@ -316,7 +317,22 @@ resolved by the **server**, in this order:
 See `adr/0016-bedrock-and-nova-sonic.md`
 for why credentials are resolved this way.
 
-## Required API Keys
+## API keys
+
+Every provider key resolves in one order, everywhere a project's work runs —
+voice calls, chat/SMS/WhatsApp turns, post-call analysis and takeaways, the
+transfer briefing, knowledge-base embeddings and the eval judge:
+
+1. **The agent's own key** — `llm.api_key` (or the agent's `aws` block).
+2. **The project's credential** — see [Project credentials](#project-credentials).
+3. **The platform environment** — the variables below.
+
+So a deployment can keep every key in its environment, none at all with each
+project bringing its own, or any mix. Keys are read fresh for every call and
+every message: a credential written a moment ago is the one the next call uses,
+with no restart.
+
+### Platform environment
 
 | Provider | Environment Variable |
 |----------|---------------------|
@@ -331,6 +347,61 @@ for why credentials are resolved this way.
 | Tavus (video avatar) | `TAVUS_API_KEY` |
 | AWS (Bedrock / Nova Sonic) | *No key* — see [Credentials](#credentials). `AWS_REGION` sets the default region |
 
+| TypeSafe (Jev eval judge) | `TYPESAFE_API_KEY` |
+
 <Info>
   Ollama requires no API key — just install it locally and run `ollama pull <model>`.
+  `custom_openai` sends only the agent's own `llm.api_key` (falling back to
+  `OPENAI_API_KEY`); a project's OpenAI credential is never sent to an endpoint
+  the agent names itself.
 </Info>
+
+### Project credentials
+
+A project can hold its own key per provider **account** — one Deepgram key
+serves both transcription and voice, one OpenAI key serves STT, LLM, TTS, S2S
+and the eval judge. Keys are encrypted at rest under `CREDENTIAL_ENCRYPTION_KEY`
+and never returned by any read.
+
+```bash
+# Store (or replace) — takes effect on the next call
+curl -X PUT http://localhost:8090/v1/credentials/deepgram \
+  -H "Authorization: Bearer tc_xxx" -H "Content-Type: application/json" \
+  -d '{"api_key": "dg_..."}'
+
+# AWS takes the agent aws block's shape instead
+curl -X PUT http://localhost:8090/v1/credentials/aws \
+  -H "Authorization: Bearer tc_xxx" -H "Content-Type: application/json" \
+  -d '{"role_arn": "arn:aws:iam::123456789012:role/turncall", "region": "us-west-2"}'
+
+curl http://localhost:8090/v1/credentials -H "Authorization: Bearer tc_xxx"          # presence only
+curl -X DELETE http://localhost:8090/v1/credentials/deepgram -H "Authorization: Bearer tc_xxx"
+```
+
+| Account | Serves |
+|---------|--------|
+| `openai` | STT, LLM, TTS, S2S (`openai`, `openai_live`), eval judge |
+| `anthropic` | LLM, eval judge |
+| `openrouter` | LLM |
+| `google` | S2S (Gemini Live) |
+| `deepgram`, `elevenlabs`, `cartesia` | STT, TTS |
+| `heygen`, `tavus` | Video avatar |
+| `aws` | Bedrock LLM, Nova Sonic S2S |
+| `typesafe` | Eval judge (`jev`) |
+
+Deleting a credential is idempotent and returns the project to the platform key.
+An `aws` project credential is **not** gated by `AWS_AGENT_CREDENTIALS_ENABLED`
+— that flag governs static keys inside agent config only, because those are
+the ones stored unencrypted.
+
+`GET /v1/providers` lists the valid providers per role and, per account, two
+separate signals: `platform_key` (the environment has one) and
+`project_credential` (this project has one). Together they say whether removing
+a credential falls back or ends in failed calls.
+
+<Warning>
+  `CREDENTIAL_ENCRYPTION_KEY` is set once. Rotating it orphans every stored
+  credential, and the service refuses to start when credentials exist and the
+  key is unset or wrong. Generate one with
+  `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
+</Warning>

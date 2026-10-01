@@ -17,6 +17,15 @@ from turncall.storage.database import close_database, init_database
 from turncall.storage.redis import close_redis, init_redis
 
 
+async def _ensure_credentials_readable(settings: Settings) -> None:
+    """Fail closed: stored credentials with no usable key stop startup (ADR-0020)."""
+    from turncall.storage.database import create_session_factory, get_engine
+    from turncall.storage.repositories import credential_repo
+
+    async with create_session_factory(get_engine())() as session:
+        await credential_repo.ensure_readable(session, settings)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: startup and shutdown."""
@@ -46,6 +55,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize infrastructure
     await init_database(settings.database)
     await init_redis(settings.redis)
+    await _ensure_credentials_readable(settings)
 
     # Log all agent configs on startup
     try:
@@ -224,6 +234,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from turncall.api.v1.ambience import router as ambience_router
 
     app.include_router(ambience_router, prefix="/v1")
+
+    from turncall.api.v1.credentials import providers_router
+    from turncall.api.v1.credentials import router as credentials_router
+
+    app.include_router(credentials_router, prefix="/v1")
+    app.include_router(providers_router, prefix="/v1")
 
     from turncall.api.v1.evals import router as eval_scenarios_router
     from turncall.api.v1.evals import runs_router as eval_runs_router

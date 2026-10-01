@@ -15,6 +15,7 @@ had `_tts_model_voice()` for this since it was written; STT never did.
 
 import pytest
 
+from tests.conftest import creds
 from turncall.domain.models import AgentConfig, STTConfig
 from turncall.orchestrator.pipeline_factory import _stt_model
 
@@ -92,7 +93,7 @@ class TestTheServiceGetsTheResolvedModel:
 
         config = AgentConfig(stt=STTConfig(provider=provider))
         try:
-            service = _create_stt_service(config, openai_api_key="test-key")
+            service = _create_stt_service(config, credentials=creds("test-key"))
             assert service._settings.model == expected
         finally:
             from turncall.adapters.aiohttp_client import close_aiohttp_session
@@ -110,6 +111,6 @@ class TestTheServiceGetsTheResolvedModel:
         monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
 
         config = AgentConfig(stt=STTConfig(provider="deepgram", keyterms=["Acme"]))
-        service = _create_stt_service(config, openai_api_key="test-key")
+        service = _create_stt_service(config, credentials=creds("test-key"))
 
         assert service._settings.keyterm == ["Acme"]

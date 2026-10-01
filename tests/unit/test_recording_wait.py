@@ -4,6 +4,8 @@ It must return as soon as the status is terminal (completed/failed) and must
 NOT block forever if the recording is stuck.
 """
 
+import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -27,8 +29,12 @@ def _factory() -> _FakeSession:
     return _FakeSession()
 
 
-def _call(status: str, url: str | None) -> SimpleNamespace:
-    return SimpleNamespace(recording_status=status, recording_url=url)
+def _call(status: str, url: str | None, started: bool = True) -> SimpleNamespace:
+    return SimpleNamespace(
+        recording_status=status,
+        recording_url=url,
+        started_at=datetime.now(UTC) if started else None,
+    )
 
 
 @pytest.mark.asyncio
@@ -68,9 +74,22 @@ async def test_times_out_without_blocking_forever() -> None:
     assert status == "in_progress" and url is None
 
 
-if __name__ == "__main__":
-    import asyncio
+@pytest.mark.asyncio
+async def test_a_call_that_never_started_has_nothing_to_wait_for() -> None:
+    """A pipeline that failed to build records nothing; call.ended should not
+    sit out the whole timeout for it."""
+    never = _call("none", None, started=False)
+    with (
+        patch.object(trig, "RECORDING_WAIT_TIMEOUT_S", 60),
+        patch.object(call_repo, "get_call_by_id", AsyncMock(return_value=never)),
+    ):
+        url, status = await asyncio.wait_for(
+            trig._wait_for_recording(_factory, CALL_ID), 1
+        )
+    assert (url, status) == (None, "none")
 
+
+if __name__ == "__main__":
     asyncio.run(test_returns_immediately_when_completed())
     asyncio.run(test_polls_until_terminal())
     asyncio.run(test_times_out_without_blocking_forever())

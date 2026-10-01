@@ -128,7 +128,9 @@ make dev
 
 # Configure
 cp env.example .env
-# Edit .env with your TWILIO, OPENAI, DEEPGRAM keys
+# Edit .env with your TWILIO, OPENAI, DEEPGRAM keys — or leave provider keys out
+# and give each project its own (PUT /v1/credentials/{provider}; needs
+# CREDENTIAL_ENCRYPTION_KEY). The environment is the fallback.
 
 # Start
 make docker-up    # Postgres + Redis + TurnCall API (:8090) + LocalStack
@@ -245,7 +247,8 @@ not a vendor — the same Claude model is reachable through either `anthropic` o
 
 Credentials are resolved by the server — an assumed `aws.role_arn`, the ambient
 chain (env vars, SSO profile, EC2 instance profile, ECS task role, EKS IRSA), or
-per-agent static keys behind `AWS_AGENT_CREDENTIALS_ENABLED`. Model availability
+per-agent static keys behind `AWS_AGENT_CREDENTIALS_ENABLED`, or an `aws` project
+credential (`PUT /v1/credentials/aws`, encrypted). Model availability
 is region-specific and access is opt-in per model in the Bedrock console.
 
 Amazon **Nova Sonic 2** runs as the `aws` S2S provider and shares the same `aws`

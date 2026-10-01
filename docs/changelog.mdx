@@ -7,6 +7,21 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**Project credentials — each project can run on its own provider accounts.**
+`PUT /v1/credentials/{provider}` stores one key per provider account (one
+Deepgram key for transcription and voice, one OpenAI key for every role),
+encrypted and never returned. Every call, chat turn, post-call analysis,
+knowledge-base upload and eval run uses the agent's own key, then the project's,
+then the environment's — so the environment becomes a fallback rather than a
+requirement. `GET /v1/providers` lists providers per role and whether each has a
+platform key and a project key. New setting: `CREDENTIAL_ENCRYPTION_KEY`. See
+[API keys](/guides/providers#api-keys).
+
+**A phone number can bring its own Twilio account.** Bind it with
+`twilio_account_sid` + `twilio_auth_token` and TurnCall looks the number up on
+that account, stores the token encrypted, and uses that account for everything
+the number does. See [Phone Numbers](/guides/phone-numbers#bring-your-own-twilio-account).
+
 **Ambience: a room the agent sounds like it is in.** Upload a sound once
 (`POST /v1/ambience-sounds`) and any agent in the project names it:
 `"ambience": {"sound": "<id>", "volume": 0.3}`. It plays quietly under
@@ -14,7 +29,16 @@ everything the agent says, on Twilio, WebRTC and WhatsApp voice, S2S included.
 Uploads are normalized for every transport, and a sound too low to survive a
 phone line is flagged at upload. See [Ambience](/guides/ambience).
 
+## Changed
+
+**`AWS_AGENT_CREDENTIALS_ENABLED` governs agent config only.** Static AWS keys
+are still refused inside an agent's `aws` block when it is off, but an `aws`
+project credential is accepted — it is encrypted and outside agent config.
+
 ## Fixed
+
+**An OpenAI agent's `llm.api_key` was ignored.** It now wins over the platform
+key, as it already did for Anthropic, OpenRouter and custom endpoints.
 
 **Deleting a document or a knowledge base now deletes its files.** Before, the
 rows went and the uploaded files stayed in storage forever. Re-uploading a

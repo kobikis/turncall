@@ -428,12 +428,21 @@ config, so this flag neither gates nor describes one (ADR-0020). Read as "no sta
 keys here" it is a security flag misread in the unsafe direction.
 _Avoid_: conflating with [[Platform credential]], which gates bootstrap endpoints and is unrelated.
 
+**Number's Twilio account**:
+The Twilio account a [[phone number]] runs on when it was bound with its own Account SID and
+Auth Token, instead of the platform's `TWILIO_*`. Kept per *number*, not per project, because
+Twilio's unit is the number: every webhook names its account by `AccountSid`, and one project
+can hold numbers from two accounts. The SID is stored in the clear (webhooks are matched by
+it), the token sealed like a [[Project credential]]. See `services/twilio_accounts.py`.
+_Avoid_: "the project's Twilio", "Twilio credential" unqualified.
+
 **Project credential**:
 A provider account's key held per project in its own encrypted table, rather than in agent
 config — one row per provider *account*, never per role, since Deepgram is one key serving
-STT and TTS and OpenAI one key serving four. Resolved at pipeline build below an agent's
-own inline key and above the platform environment ("narrowest wins", the ordering the eval
-[[judge]] already uses). Exists because the alternative — an `api_key` on every config
+STT and TTS and OpenAI one key serving four. Resolved below an agent's own inline key and
+above the platform environment ("narrowest wins", the ordering the eval [[judge]] already
+uses) — at pipeline build for a call, and the same way for a text turn, a post-call analysis,
+a knowledge-base embedding and an eval run. Exists because the alternative — an `api_key` on every config
 block — writes third-party secrets into `config_blob`, the unencrypted JSONB that
 [[Agent AWS credentials]] is switched off by default to stay out of. See ADR-0020.
 _Avoid_: "integration" (the Builder's word for the console-side record it is projected

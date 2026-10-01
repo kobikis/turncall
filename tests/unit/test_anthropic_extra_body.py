@@ -14,6 +14,7 @@ own signature so this survives the next release rather than pinning a list.
 
 import pytest
 
+from tests.conftest import creds
 from turncall.domain.models import AgentConfig, LLMConfig
 from turncall.orchestrator.pipeline_factory import _anthropic_extra_body
 
@@ -73,8 +74,7 @@ class TestTheServiceGetsIt:
                     extra={"temperature": 0.25},
                 )
             ),
-            "",
-            anthropic_api_key="k",
+            creds("", anthropic="k"),
         )
 
         assert service._settings.extra == {"extra_body": {"temperature": 0.25}}
@@ -85,8 +85,7 @@ class TestTheServiceGetsIt:
 
         service = _create_llm_service(
             AgentConfig(llm=LLMConfig(provider="anthropic", model="claude-sonnet-5")),
-            "",
-            anthropic_api_key="k",
+            creds("", anthropic="k"),
         )
 
         given = service._settings.given_fields()

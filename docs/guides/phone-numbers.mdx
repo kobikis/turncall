@@ -40,6 +40,44 @@ curl -X POST http://localhost:8090/v1/phone-numbers \
 
 See [Call Init](/guides/call-init) for details on how dynamic routing works.
 
+### Bring your own Twilio account
+
+A number can run on its own Twilio account instead of the platform's
+`TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN`. Send the pair — both or neither —
+and `external_number_sid` becomes optional: TurnCall looks the number up on that
+account, which is also what proves the account owns it.
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "e164_number": "+15551234567",
+    "twilio_account_sid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "twilio_auth_token": "your-auth-token",
+    "routing_target_type": "agent",
+    "routing_target_id": "AGENT_UUID"
+  }'
+```
+
+- Credentials that Twilio rejects, or that do not own the number, are a `422` —
+  nothing is bound.
+- The token is stored encrypted under `CREDENTIAL_ENCRYPTION_KEY` and never
+  returned. Reads carry `twilio_account_sid` and `twilio_credentials`
+  (`number` or `platform`).
+- Every Twilio operation for that number uses its account: webhook
+  configuration, outbound calls, hang-up, transfer, DTMF, recording download,
+  and the signature check on its inbound webhooks (matched by the webhook's
+  `AccountSid`).
+- `PUT /v1/phone-numbers/{id}` with a new pair replaces it — rotating a token.
+  Omitting the pair keeps the stored one.
+
+<Note>
+  With no platform Twilio account configured, an inbound webhook TurnCall cannot
+  verify passes only while no number carries its own account (a development
+  setup). Once any does, an unverifiable webhook is refused.
+</Note>
+
 Binding with a `server_url` returns a `server_url_secret` — TurnCall signs each call-init request with it so your endpoint can verify the source.
 
 ## Update a Binding
@@ -61,7 +99,8 @@ A secret is minted only when `server_url` appears on a number that never had one
 
 ## Configure Twilio
 
-After binding a number in TurnCall, set the Twilio webhook URLs:
+TurnCall sets these on bind when `PUBLIC_BASE_URL` is configured (the response
+says so in `twilio_webhooks_configured`). To set them by hand:
 
 - **Voice URL**: `https://your-host/webhooks/twilio/voice/inbound` (POST)
 - **Status URL**: `https://your-host/webhooks/twilio/status` (POST)

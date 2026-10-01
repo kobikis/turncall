@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from turncall.domain.models import LLMConfig
+from turncall.services.credentials import Credentials
 from turncall.services.llm_text import (
     CompletionResult,
     _resolve_api_key,
@@ -35,21 +36,42 @@ class TestResolveBaseUrl:
 
 @pytest.mark.unit
 class TestResolveApiKey:
+    """Agent inline, then the project's credential, then the platform's — the
+    order a voice call on the same project resolves in (ADR-0020)."""
+
     def test_config_api_key_takes_precedence(self) -> None:
         config = LLMConfig(api_key="my-custom-key")
-        assert _resolve_api_key(config) == "my-custom-key"
+        creds = Credentials(
+            platform={"openai": "env"}, project={"openai": {"api_key": "p"}}
+        )
+        assert _resolve_api_key(config, creds) == "my-custom-key"
 
-    def test_falls_back_to_settings(self) -> None:
+    def test_project_credential_before_platform(self) -> None:
+        config = LLMConfig(provider="anthropic", model="m")
+        creds = Credentials(
+            platform={"anthropic": "env"}, project={"anthropic": {"api_key": "proj"}}
+        )
+        assert _resolve_api_key(config, creds) == "proj"
+
+    def test_falls_back_to_platform(self) -> None:
         config = LLMConfig(provider="openai", api_key=None)
-        with patch("turncall.services.llm_text.get_settings") as mock_settings:
-            mock_settings.return_value.openai.api_key = "env-key"
-            assert _resolve_api_key(config) == "env-key"
+        assert (
+            _resolve_api_key(config, Credentials(platform={"openai": "env-key"}))
+            == "env-key"
+        )
 
     def test_ollama_returns_empty(self) -> None:
         config = LLMConfig(provider="ollama", api_key=None)
-        with patch("turncall.services.llm_text.get_settings") as mock_settings:
-            mock_settings.return_value.openai.api_key = ""
-            assert _resolve_api_key(config) == ""
+        assert _resolve_api_key(config, Credentials(platform={"openai": "x"})) == ""
+
+    def test_custom_endpoint_never_gets_the_projects_openai_key(self) -> None:
+        config = LLMConfig(
+            provider="custom_openai", base_url="https://x.test", model="m"
+        )
+        creds = Credentials(
+            platform={"openai": "env"}, project={"openai": {"api_key": "proj"}}
+        )
+        assert _resolve_api_key(config, creds) == "env"
 
 
 @pytest.mark.unit

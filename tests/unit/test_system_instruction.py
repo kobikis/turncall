@@ -9,6 +9,7 @@ time as the two build-time ones.
 
 import pytest
 
+from tests.conftest import creds
 from turncall.domain.models import AgentConfig, LLMConfig
 from turncall.orchestrator.pipeline_factory import (
     _build_system_instruction,
@@ -60,7 +61,9 @@ class TestBuildSystemInstruction:
 class TestItReachesTheService:
     def test_openai_receives_it(self) -> None:
         cfg = AgentConfig(system_prompt="hi", llm=LLMConfig(provider="openai"))
-        svc = _create_llm_service(cfg, "sk-test", system_instruction="You are Ada.")
+        svc = _create_llm_service(
+            cfg, creds("sk-test"), system_instruction="You are Ada."
+        )
         assert svc._settings.system_instruction == "You are Ada."
 
     def test_anthropic_receives_it(self) -> None:
@@ -69,12 +72,12 @@ class TestItReachesTheService:
             llm=LLMConfig(provider="anthropic", model="claude-3-5-haiku-20241022"),
         )
         svc = _create_llm_service(
-            cfg, "", anthropic_api_key="sk-ant", system_instruction="Ada"
+            cfg, creds("", anthropic="sk-ant"), system_instruction="Ada"
         )
         assert svc._settings.system_instruction == "Ada"
 
     def test_empty_leaves_the_provider_default(self) -> None:
         """Empty means unset, not an empty system prompt."""
         cfg = AgentConfig(system_prompt="hi", llm=LLMConfig(provider="openai"))
-        svc = _create_llm_service(cfg, "sk-test")
+        svc = _create_llm_service(cfg, creds("sk-test"))
         assert not svc._settings.system_instruction

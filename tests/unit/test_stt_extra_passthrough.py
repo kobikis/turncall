@@ -13,6 +13,7 @@ it by default.
 
 import pytest
 
+from tests.conftest import creds
 from turncall.domain.models import AgentConfig, STTConfig
 from turncall.orchestrator.pipeline_factory import _create_stt_service
 
@@ -25,21 +26,23 @@ def _config(**stt_kwargs: object) -> AgentConfig:
 class TestDeepgramExtra:
     def test_declared_field_is_promoted(self) -> None:
         """A key matching a declared setting lands on the field itself."""
-        svc = _create_stt_service(_config(extra={"profanity_filter": True}), "sk-test")
+        svc = _create_stt_service(
+            _config(extra={"profanity_filter": True}), creds("sk-test")
+        )
         assert svc._settings.profanity_filter is True
 
     def test_unknown_key_passes_through(self) -> None:
         """A key Pipecat does not declare still reaches the provider."""
-        svc = _create_stt_service(_config(extra={"made_up_key": "z"}), "sk-test")
+        svc = _create_stt_service(_config(extra={"made_up_key": "z"}), creds("sk-test"))
         assert svc._settings.extra == {"made_up_key": "z"}
 
     def test_extra_does_not_override_explicit_settings(self) -> None:
         """We set punctuate/smart_format explicitly; extra must not win."""
-        svc = _create_stt_service(_config(extra={"punctuate": False}), "sk-test")
+        svc = _create_stt_service(_config(extra={"punctuate": False}), creds("sk-test"))
         assert svc._settings.punctuate is True
 
     def test_absent_extra_changes_nothing(self) -> None:
-        svc = _create_stt_service(_config(), "sk-test")
+        svc = _create_stt_service(_config(), creds("sk-test"))
         assert svc._settings.extra == {}
         assert svc._settings.model == "nova-3-general"
 
@@ -51,7 +54,7 @@ class TestOtherProvidersExtra:
             _config(
                 provider="openai", model="gpt-transcribe", extra={"made_up_key": "z"}
             ),
-            "sk-test",
+            creds("sk-test"),
         )
         assert svc._settings.given_fields()["made_up_key"] == "z"
 
@@ -63,7 +66,7 @@ class TestOtherProvidersExtra:
             _config(
                 provider="cartesia", model="ink-whisper", extra={"made_up_key": "z"}
             ),
-            "sk-test",
+            creds("sk-test"),
         )
         assert svc._settings.given_fields()["made_up_key"] == "z"
 
@@ -82,7 +85,7 @@ class TestExtraCannotOverrideManagedSettings:
             _config(
                 provider="openai", model="gpt-transcribe", extra={"model": "HIJACKED"}
             ),
-            "sk-test",
+            creds("sk-test"),
         )
         assert svc._settings.given_fields()["model"] == "gpt-transcribe"
 
@@ -94,11 +97,13 @@ class TestExtraCannotOverrideManagedSettings:
             _config(
                 provider="cartesia", model="ink-whisper", extra={"model": "HIJACKED"}
             ),
-            "sk-test",
+            creds("sk-test"),
         )
         assert svc._settings.given_fields()["model"] == "ink-whisper"
 
     def test_profanity_filter_still_survives_the_filter(self) -> None:
         """The key this PR exists for is not one we manage, so it passes."""
-        svc = _create_stt_service(_config(extra={"profanity_filter": True}), "sk-test")
+        svc = _create_stt_service(
+            _config(extra={"profanity_filter": True}), creds("sk-test")
+        )
         assert svc._settings.profanity_filter is True

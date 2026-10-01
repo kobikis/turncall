@@ -18,12 +18,57 @@ from typing import Any
 
 from turncall.config.settings import Settings
 from turncall.domain.models import AgentConfig
-from turncall.orchestrator.call_session import CallSession
+from turncall.orchestrator.call_session import CallSession, fail_unstarted_call
 from turncall.orchestrator.pipeline_factory import CallContext, create_pipeline
 from turncall.orchestrator.tool_bridge import register_tools
+from turncall.services.credentials import Credentials, MissingProviderKeyError
+
+
+async def load_call_credentials(
+    session_factory: Any, project_id: Any, settings: Settings
+) -> Credentials:
+    """Every key this call can resolve, read fresh per call (ADR-0020).
+
+    Read at build rather than cached, so a credential written or deleted
+    between two calls is what the next one runs on, with no restart.
+    """
+    from turncall.storage.repositories import credential_repo
+
+    async with session_factory() as session:
+        project = await credential_repo.load_documents(session, project_id, settings)
+    return Credentials.from_settings(settings, project)
 
 
 async def build_call_pipeline(
+    *,
+    config: AgentConfig,
+    transport: Any,
+    call_context: CallContext,
+    settings: Settings,
+    session_factory: Any,
+    **options: Any,
+) -> CallSession:
+    """Assemble the pipeline and return an unstarted CallSession.
+
+    A build that raises — a provider SDK refusing an empty key, say — fails the
+    call here, for every transport, with the reason and `call.ended`; the error
+    still propagates to the caller.
+    """
+    try:
+        return await _assemble(
+            config=config,
+            transport=transport,
+            call_context=call_context,
+            settings=settings,
+            session_factory=session_factory,
+            **options,
+        )
+    except Exception as exc:
+        await fail_unstarted_call(call_context, exc)
+        raise
+
+
+async def _assemble(
     *,
     config: AgentConfig,
     transport: Any,
@@ -34,9 +79,9 @@ async def build_call_pipeline(
     mcp_tools: list[Any] | None = None,
     avatar_enabled: bool = False,
 ) -> CallSession:
-    """Assemble the pipeline (KB retrieval + tools wired in) and return an
-    unstarted CallSession. audio_sample_rate defaults to 8000 (Twilio mulaw);
-    WebRTC/WhatsApp pass 16000. mcp_tools/avatar are transport-specific."""
+    """Assemble the pipeline (KB retrieval + tools wired in). audio_sample_rate
+    defaults to 8000 (Twilio mulaw); WebRTC/WhatsApp pass 16000. mcp_tools/avatar
+    are transport-specific."""
     from turncall.orchestrator.knowledge_processor import load_agent_kb_attachments
     from turncall.services.retrieval import build_knowledge_preamble
 
@@ -49,17 +94,25 @@ async def build_call_pipeline(
         session_factory, kb_attachments or []
     )
 
+    credentials = await load_call_credentials(
+        session_factory, call_context.project_id, settings
+    )
+    # Checked before anything is built, so a call that cannot work says which
+    # key it lacks rather than "Missing credentials" from one SDK or a 401
+    # mid-call from another. Not in an eval: text mode never opens the speech
+    # providers, and a run there must not need their keys.
+    missing = credentials.missing_keys(config)
+    if missing and not call_context.is_eval:
+        raise MissingProviderKeyError(missing)
+
     pipeline = create_pipeline(
         config=config,
         transport=transport,
         call_context=call_context,
-        openai_api_key=settings.openai.api_key,
+        credentials=credentials,
         pipecat_settings=settings.pipecat,
         audio_sample_rate=audio_sample_rate,
         byom_settings=settings.byom,
-        google_api_key=settings.google.api_key,
-        anthropic_api_key=settings.anthropic.api_key,
-        openrouter_api_key=settings.openrouter.api_key,
         knowledge_base_attachments=kb_attachments or None,
         knowledge_preamble=knowledge_preamble,
         mcp_tools=mcp_tools or None,

@@ -17,6 +17,13 @@ from pydantic import (
 
 from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
+from turncall.domain.providers import (
+    AVATAR_PROVIDERS,
+    LLM_PROVIDERS,
+    S2S_PROVIDERS,
+    STT_PROVIDERS,
+    TTS_PROVIDERS,
+)
 
 
 class STTConfigSchema(BaseModel):
@@ -31,7 +38,7 @@ class STTConfigSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider(self) -> "STTConfigSchema":
-        supported = {"openai", "deepgram", "elevenlabs", "cartesia"}
+        supported = set(STT_PROVIDERS)
         if self.provider not in supported:
             msg = f"Unsupported STT provider: {self.provider}. Supported: {supported}"
             raise ValueError(msg)
@@ -77,14 +84,7 @@ class LLMConfigSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider(self) -> "LLMConfigSchema":
-        supported = {
-            "openai",
-            "ollama",
-            "custom_openai",
-            "anthropic",
-            "openrouter",
-            "bedrock",
-        }
+        supported = set(LLM_PROVIDERS)
         if self.provider not in supported:
             msg = f"Unsupported LLM provider: {self.provider}. Supported: {supported}"
             raise ValueError(msg)
@@ -157,7 +157,7 @@ class TTSConfigSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider(self) -> "TTSConfigSchema":
-        supported = {"openai", "deepgram", "elevenlabs", "cartesia"}
+        supported = set(TTS_PROVIDERS)
         if self.provider not in supported:
             msg = f"Unsupported TTS provider: {self.provider}. Supported: {supported}"
             raise ValueError(msg)
@@ -328,7 +328,7 @@ class S2SConfigSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider(self) -> "S2SConfigSchema":
-        supported = {"openai", "openai_live", "google", "aws"}
+        supported = set(S2S_PROVIDERS)
         if self.provider not in supported:
             msg = f"Unsupported S2S provider: {self.provider}. Supported: {supported}"
             raise ValueError(msg)
@@ -456,7 +456,9 @@ class AvatarConfigSchema(BaseModel):
     """Video avatar config (WebRTC + cascade only). HeyGen or Tavus."""
 
     enabled: bool = False
-    provider: str = Field(default="heygen", pattern=r"^(heygen|tavus)$")
+    provider: str = Field(
+        default="heygen", pattern=rf"^({'|'.join(AVATAR_PROVIDERS)})$"
+    )
     # HeyGen (LiveAvatar)
     avatar_id: str | None = Field(default=None, max_length=256)
     is_sandbox: bool = True
@@ -486,11 +488,12 @@ class AmbienceConfigSchema(BaseModel):
         return str(sound)
 
 
-class AWSConfigSchema(BaseModel):
-    """AWS credentials/region shared by the bedrock LLM and aws S2S providers.
+class AWSCredentialSetSchema(BaseModel):
+    """The shape of an AWS credential set — one schema for both places it lives.
 
-    One block per agent so both providers authenticate as the same principal.
-    See adr/0016.
+    An agent's `aws` block (below) and an `aws` project credential (ADR-0020)
+    validate the same fields the same way; only the agent block is gated by
+    AWS_AGENT_CREDENTIALS_ENABLED.
     """
 
     region: str | None = Field(default=None, max_length=64)
@@ -502,25 +505,39 @@ class AWSConfigSchema(BaseModel):
     profile: str | None = Field(default=None, max_length=128)
 
     @model_validator(mode="after")
-    def validate_credentials(self) -> "AWSConfigSchema":
+    def validate_key_pair(self) -> "AWSCredentialSetSchema":
         if bool(self.access_key_id) != bool(self.secret_access_key):
             msg = (
                 "aws.access_key_id and aws.secret_access_key must be set "
                 "together, or neither"
             )
             raise ValueError(msg)
+        return self
 
+
+class AWSConfigSchema(AWSCredentialSetSchema):
+    """AWS credentials/region shared by the bedrock LLM and aws S2S providers.
+
+    One block per agent so both providers authenticate as the same principal.
+    See adr/0016.
+    """
+
+    @model_validator(mode="after")
+    def validate_credentials(self) -> "AWSConfigSchema":
         if self.access_key_id:
             # Rejected here, at create, rather than at call time — an agent that
             # looks healthy in the API and fails with a customer on the line is
-            # the worse failure. See adr/0016.
+            # the worse failure. See adr/0016. Agent config only: a project
+            # credential is encrypted and outside this surface (ADR-0020).
             from turncall.config.settings import get_settings
 
             if not get_settings().aws.agent_credentials_enabled:
                 msg = (
                     "Per-agent static AWS keys are disabled. Set "
-                    "AWS_AGENT_CREDENTIALS_ENABLED=true to allow them, or use "
-                    "aws.role_arn, which stores no durable secret."
+                    "AWS_AGENT_CREDENTIALS_ENABLED=true to allow them, use "
+                    "aws.role_arn, which stores no durable secret, or store "
+                    "the keys as the project's aws credential "
+                    "(PUT /v1/credentials/aws), which is encrypted."
                 )
                 raise ValueError(msg)
         return self

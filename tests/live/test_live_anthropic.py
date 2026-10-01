@@ -8,6 +8,7 @@ service, which is what a call actually uses.
 """
 
 import pytest
+from tests.conftest import creds
 
 from turncall.domain.models import AgentConfig, LLMConfig
 
@@ -21,8 +22,7 @@ def _service(anthropic_key: str, model: str = _MODEL):
 
     return _create_llm_service(
         AgentConfig(llm=LLMConfig(provider="anthropic", model=model, max_tokens=32)),
-        "",
-        anthropic_api_key=anthropic_key,
+        creds("", anthropic=anthropic_key),
         system_instruction="Answer in one word.",
     )
 

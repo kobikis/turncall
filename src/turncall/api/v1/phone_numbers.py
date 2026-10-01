@@ -1,24 +1,28 @@
 """Phone number management endpoints."""
 
 import secrets as secrets_mod
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter
 from loguru import logger
 
 from turncall.api.deps import DbSession
-from turncall.api.errors import ConflictError, NotFoundError
+from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.api.responses import ok, paginated
 from turncall.api.v1.schemas.phone_numbers import (
     BindPhoneNumberRequest,
     PhoneNumberResponse,
     RoutingResponse,
     SetRoutingWeightsRequest,
+    TwilioAccountFields,
     UpdatePhoneNumberRequest,
 )
 from turncall.auth import Auth, WriteAuth
-from turncall.config.settings import get_settings
-from turncall.storage.repositories import phone_number_repo
+from turncall.config.settings import Settings, get_settings
+from turncall.services import twilio_accounts
+from turncall.services.twilio_accounts import TwilioAccount
+from turncall.storage.repositories import credential_repo, phone_number_repo
 
 router = APIRouter(prefix="/phone-numbers", tags=["phone-numbers"])
 
@@ -38,11 +42,18 @@ async def bind_phone_number(
         )
 
     server_url_secret = secrets_mod.token_urlsafe(32) if body.server_url else None
+    settings = get_settings()
+    number_sid = body.external_number_sid
+    own: tuple[str, str] | None = None
+    if body.has_own_twilio:
+        number_sid, own = await _own_twilio(
+            body, body.e164_number, body.external_number_sid, settings
+        )
 
     row = await phone_number_repo.bind_phone_number(
         session,
         project_id=auth.project_id,
-        external_number_sid=body.external_number_sid,
+        external_number_sid=number_sid,
         e164_number=body.e164_number,
         routing_target_type=body.routing_target_type,
         routing_target_id=body.routing_target_id,
@@ -50,11 +61,11 @@ async def bind_phone_number(
         server_url_secret=server_url_secret,
         sms_enabled=body.sms_enabled,
         metadata_json=body.metadata,
+        twilio_account_sid=own[0] if own else None,
+        twilio_auth_token_ciphertext=own[1] if own else None,
     )
 
-    configured = await _configure_twilio_webhooks(
-        body.external_number_sid, body.sms_enabled
-    )
+    configured = await _configure_twilio_webhooks(row, body.sms_enabled)
 
     data = PhoneNumberResponse.from_row(row).model_dump()
     # False = TurnCall did NOT point the Twilio number at itself (missing
@@ -64,17 +75,60 @@ async def bind_phone_number(
     return ok(data)
 
 
-async def _configure_twilio_webhooks(
-    external_number_sid: str, sms_enabled: bool
-) -> bool:
+def _unprocessable(message: str) -> ApiError:
+    return ApiError(status_code=422, code=ErrorCode.VALIDATION_ERROR, message=message)
+
+
+async def _own_twilio(
+    body: TwilioAccountFields, e164: str, given_sid: str | None, settings: Settings
+) -> tuple[str, tuple[str, str]]:
+    """Prove the supplied Twilio account owns the number, and seal its token.
+
+    Returns (the number's PN SID, (account_sid, token ciphertext)). Checked
+    here, at write time, rather than when the first call fails to arrive.
+    """
+    from twilio.base.exceptions import TwilioRestException
+
+    account = TwilioAccount(body.twilio_account_sid or "", body.twilio_auth_token or "")
+    try:
+        found = await account.adapter().find_number_sid(e164)
+    except TwilioRestException as exc:
+        if exc.status in (401, 403):
+            raise _unprocessable(
+                "Twilio rejected this Account SID / Auth Token pair"
+            ) from exc
+        raise ApiError(
+            status_code=502, code=ErrorCode.TWILIO_ERROR, message=f"Twilio: {exc.msg}"
+        ) from exc
+    if found is None:
+        raise _unprocessable(
+            f"{e164} is not a phone number on Twilio account {account.account_sid}"
+        )
+    if given_sid and given_sid != found:
+        raise _unprocessable(
+            f"{e164} on that Twilio account is {found}, not {given_sid}"
+        )
+    try:
+        ciphertext = twilio_accounts.encrypt_token(account.auth_token, settings)
+    except credential_repo.CredentialKeyError as exc:
+        raise ApiError(
+            status_code=503, code=ErrorCode.INTERNAL_ERROR, message=str(exc)
+        ) from exc
+    return found, (account.account_sid, ciphertext)
+
+
+async def _configure_twilio_webhooks(row: Any, sms_enabled: bool) -> bool:
     """Point the Twilio number's voice + status (and SMS, if enabled) webhooks at
     TurnCall, so inbound calls reach us and finalize on hangup. Needs PUBLIC_BASE_URL
     (Twilio must reach us) + Twilio credentials. Best-effort: a Twilio failure logs
     a warning but does not fail the bind — the routing row is already recorded.
-    Returns True iff Twilio was actually configured."""
+    Returns True iff Twilio was actually configured. Uses the number's own
+    Twilio account when it has one, else the platform's."""
     settings = get_settings()
+    external_number_sid = row.external_number_sid
     base = (settings.server.public_base_url or "").rstrip("/")
-    if not (base and settings.twilio.account_sid and settings.twilio.auth_token):
+    account = twilio_accounts.account_for_number(row, settings)
+    if not (base and account):
         logger.warning(
             "twilio_webhook_not_configured: set PUBLIC_BASE_URL + Twilio creds "
             "(number {sid} left unconfigured — set its Voice webhook manually)",
@@ -82,9 +136,7 @@ async def _configure_twilio_webhooks(
         )
         return False
 
-    from turncall.adapters.telephony.twilio_adapter import TwilioAdapter
-
-    adapter = TwilioAdapter(settings.twilio.account_sid, settings.twilio.auth_token)
+    adapter = account.adapter()
     try:
         await adapter.configure_number_webhook(
             external_number_sid,
@@ -163,6 +215,14 @@ async def update_phone_number(
     if body.server_url and not secret:
         secret = secrets_mod.token_urlsafe(32)
 
+    # A new account pair replaces the stored one (rotating a token); omitted
+    # keeps it. Verified against the number exactly as on bind.
+    own: tuple[str, str] | None = None
+    if body.has_own_twilio:
+        _, own = await _own_twilio(
+            body, row.e164_number, row.external_number_sid, get_settings()
+        )
+
     updated = await phone_number_repo.update_phone_number(
         session,
         phone_number_id,
@@ -172,13 +232,12 @@ async def update_phone_number(
         server_url_secret=secret,
         sms_enabled=body.sms_enabled,
         metadata_json=body.metadata,
+        twilio_account=own,
     )
     # Re-run the full Twilio config on every update: it's idempotent, and it's
     # the recovery path after PUBLIC_BASE_URL changes (ngrok rotation) or a
     # bind that happened before PUBLIC_BASE_URL was set.
-    configured = await _configure_twilio_webhooks(
-        row.external_number_sid, body.sms_enabled
-    )
+    configured = await _configure_twilio_webhooks(updated, body.sms_enabled)
     data = PhoneNumberResponse.from_row(updated).model_dump()
     data["twilio_webhooks_configured"] = configured
     return ok(data)
@@ -197,13 +256,12 @@ async def unbind_phone_number(
     )
     if row is None:
         raise NotFoundError("PhoneNumber", str(phone_number_id))
+    # Resolved before the delete: the number's own account goes with its row.
+    account = twilio_accounts.account_for_number(row, get_settings())
     await phone_number_repo.delete_phone_number(session, phone_number_id)
 
-    settings = get_settings()
-    if settings.twilio.account_sid and settings.twilio.auth_token:
-        from turncall.adapters.telephony.twilio_adapter import TwilioAdapter
-
-        adapter = TwilioAdapter(settings.twilio.account_sid, settings.twilio.auth_token)
+    if account:
+        adapter = account.adapter()
         try:
             await adapter.configure_number_webhook(
                 row.external_number_sid, voice_url="", status_callback_url=""

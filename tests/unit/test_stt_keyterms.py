@@ -10,6 +10,7 @@ not degrade the call, it ends it.
 
 import pytest
 
+from tests.conftest import creds
 from turncall.domain.models import AgentConfig, STTConfig
 from turncall.orchestrator.pipeline_factory import _keyterm_kwargs
 
@@ -79,7 +80,7 @@ class TestTheSettingsReachTheService:
             stt=STTConfig(provider=provider, model=model, keyterms=TERMS)
         )
         try:
-            service = _create_stt_service(config, openai_api_key="test-key")
+            service = _create_stt_service(config, credentials=creds("test-key"))
             assert getattr(service._settings, expected_key) == TERMS
         finally:
             # ElevenLabs takes the shared aiohttp session; without this the
@@ -106,7 +107,7 @@ class TestTheSettingsReachTheService:
                 extra={"keyterm": ["stale"], "profanity_filter": True},
             )
         )
-        service = _create_stt_service(config, openai_api_key="test-key")
+        service = _create_stt_service(config, credentials=creds("test-key"))
 
         assert service._settings.keyterm == TERMS
         assert "keyterm" not in service._settings.extra

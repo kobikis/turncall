@@ -13,6 +13,7 @@ Overflow means "keys we don't manage", so those are dropped.
 
 import pytest
 
+from tests.conftest import creds
 from turncall.domain.models import AgentConfig, TTSConfig
 from turncall.orchestrator.pipeline_factory import _create_tts_service
 
@@ -24,7 +25,7 @@ def _config(**tts_kwargs: object) -> AgentConfig:
 @pytest.mark.unit
 class TestSpeed:
     def test_deepgram_receives_speed(self) -> None:
-        svc = _create_tts_service(_config(speed=1.3), "sk-test")
+        svc = _create_tts_service(_config(speed=1.3), creds("sk-test"))
         assert svc._settings.speed == 1.3
 
     def test_default_speed_is_not_sent(self) -> None:
@@ -34,30 +35,33 @@ class TestSpeed:
         only lives on the delta), so `None` here means "we sent nothing" —
         identical to the behaviour before `speed` was plumbed at all.
         """
-        svc = _create_tts_service(_config(), "sk-test")
+        svc = _create_tts_service(_config(), creds("sk-test"))
         assert svc._settings.speed is None
 
     def test_openai_receives_speed(self) -> None:
         svc = _create_tts_service(
-            _config(provider="openai", voice="alloy", speed=0.8), "sk-test"
+            _config(provider="openai", voice="alloy", speed=0.8), creds("sk-test")
         )
         assert svc._settings.speed == 0.8
 
     def test_elevenlabs_receives_speed(self) -> None:
-        svc = _create_tts_service(_config(provider="elevenlabs", speed=1.1), "sk-test")
+        svc = _create_tts_service(
+            _config(provider="elevenlabs", speed=1.1), creds("sk-test")
+        )
         assert svc._settings.speed == 1.1
 
 
 @pytest.mark.unit
 class TestExtra:
     def test_deepgram_extra_reaches_settings(self) -> None:
-        svc = _create_tts_service(_config(extra={"made_up_key": "z"}), "sk-test")
+        svc = _create_tts_service(_config(extra={"made_up_key": "z"}), creds("sk-test"))
         assert svc._settings.given_fields()["made_up_key"] == "z"
 
     def test_extra_cannot_override_a_managed_field(self) -> None:
         """Pipecat merges extra last, so an unfiltered dict would hijack the voice."""
         svc = _create_tts_service(
-            _config(voice="aura-2-helena-en", extra={"voice": "HIJACKED"}), "sk-test"
+            _config(voice="aura-2-helena-en", extra={"voice": "HIJACKED"}),
+            creds("sk-test"),
         )
         assert svc._settings.given_fields()["voice"] == "aura-2-helena-en"
 
@@ -71,7 +75,7 @@ class TestExtra:
                 voice="v-123",
                 extra={"emotion": "happy", "made_up_key": "z"},
             ),
-            "sk-test",
+            creds("sk-test"),
         )
         assert svc._settings.extra == {"made_up_key": "z"}
 
@@ -83,7 +87,7 @@ class TestCartesiaDefaultModel:
     ) -> None:
         monkeypatch.setenv("CARTESIA_API_KEY", "sk-cartesia-test")
         svc = _create_tts_service(
-            _config(provider="cartesia", voice="v-123", model=""), "sk-test"
+            _config(provider="cartesia", voice="v-123", model=""), creds("sk-test")
         )
         assert svc._settings.model == "sonic-3.6"
 
@@ -97,20 +101,20 @@ class TestCartesiaDefaultModel:
         """
         monkeypatch.setenv("CARTESIA_API_KEY", "sk-cartesia-test")
         svc = _create_tts_service(
-            _config(provider="cartesia", voice="v-123"), "sk-test"
+            _config(provider="cartesia", voice="v-123"), creds("sk-test")
         )
         assert svc._settings.model == "sonic-3.6"
 
     def test_openai_falls_back_to_its_own_model_and_voice(self) -> None:
-        svc = _create_tts_service(_config(provider="openai"), "sk-test")
+        svc = _create_tts_service(_config(provider="openai"), creds("sk-test"))
         assert svc._settings.model == "tts-1"
         assert svc._settings.voice == "alloy"
 
     def test_elevenlabs_falls_back_to_its_own_model_and_voice(self) -> None:
-        svc = _create_tts_service(_config(provider="elevenlabs"), "sk-test")
+        svc = _create_tts_service(_config(provider="elevenlabs"), creds("sk-test"))
         assert svc._settings.model == "eleven_flash_v2_5"
         assert svc._settings.voice == "Rachel"
 
     def test_deepgram_keeps_its_own_default(self) -> None:
-        svc = _create_tts_service(_config(), "sk-test")
+        svc = _create_tts_service(_config(), creds("sk-test"))
         assert svc._settings.voice == "aura-2-helena-en"

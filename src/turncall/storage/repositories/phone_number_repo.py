@@ -20,6 +20,8 @@ async def bind_phone_number(
     server_url_secret: str | None = None,
     sms_enabled: bool = False,
     metadata_json: dict | None = None,
+    twilio_account_sid: str | None = None,
+    twilio_auth_token_ciphertext: str | None = None,
 ) -> PhoneNumberRow:
     """Bind a Twilio phone number to a routing target."""
     row = PhoneNumberRow(
@@ -32,6 +34,8 @@ async def bind_phone_number(
         server_url_secret=server_url_secret,
         sms_enabled=sms_enabled,
         metadata_json=metadata_json or {},
+        twilio_account_sid=twilio_account_sid,
+        twilio_auth_token_ciphertext=twilio_auth_token_ciphertext,
     )
     session.add(row)
     await session.flush()
@@ -114,8 +118,10 @@ async def update_phone_number(
     server_url_secret: str | None,
     sms_enabled: bool,
     metadata_json: dict | None = None,
+    twilio_account: tuple[str, str] | None = None,
 ) -> PhoneNumberRow | None:
-    """Update a binding in place — same row id, secret only as supplied."""
+    """Update a binding in place — same row id, secret only as supplied.
+    `twilio_account` is (account_sid, token ciphertext); None keeps the stored."""
     values: dict = {
         "routing_target_type": routing_target_type,
         "routing_target_id": routing_target_id,
@@ -125,6 +131,10 @@ async def update_phone_number(
     }
     if metadata_json is not None:
         values["metadata_json"] = metadata_json
+    if twilio_account is not None:
+        values["twilio_account_sid"], values["twilio_auth_token_ciphertext"] = (
+            twilio_account
+        )
     result = await session.execute(
         update(PhoneNumberRow)
         .where(PhoneNumberRow.id == phone_number_id)

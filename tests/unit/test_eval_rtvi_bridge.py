@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 import turncall
+from tests.conftest import creds
 
 _CALL_SESSION = Path(turncall.__file__).parent / "orchestrator" / "call_session.py"
 
@@ -53,8 +54,8 @@ def _captured_processors(mocker, *, is_eval: bool, pipeline_mode: str) -> list:
             config=AgentConfig(pipeline_mode=pipeline_mode),
             transport=mocker.MagicMock(),
             call_context=call_context,
-            openai_api_key="test-key",
             pipecat_settings=mocker.MagicMock(),
+            credentials=creds("test-key"),
         )
     return captured
 

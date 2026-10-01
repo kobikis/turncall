@@ -17,6 +17,7 @@ import contextlib
 
 import pytest
 
+from tests.conftest import creds
 from turncall.orchestrator.call_recorder import CallRecorder
 
 
@@ -39,8 +40,8 @@ def _processors(mocker, pipeline_mode: str) -> tuple[list, object]:
             config=AgentConfig(pipeline_mode=pipeline_mode),
             transport=transport,
             call_context=call_context,
-            openai_api_key="test-key",
             pipecat_settings=mocker.MagicMock(),
+            credentials=creds("test-key"),
         )
     return captured, transport.output.return_value
 

@@ -139,6 +139,14 @@ class TwilioAdapter(TelephonyAdapter):
             "status_callback": number.status_callback,
         }
 
+    async def find_number_sid(self, e164_number: str) -> str | None:
+        """The PN SID of this E.164 number on this account, or None if the
+        account does not own it. Raises TwilioRestException on bad credentials."""
+        numbers = self._client.incoming_phone_numbers.list(
+            phone_number=e164_number, limit=1
+        )
+        return numbers[0].sid if numbers else None
+
     def generate_media_stream_twiml(
         self,
         websocket_url: str,

@@ -27,17 +27,14 @@ class ControlResult:
     details: dict[str, Any] | None = None
 
 
-def _get_twilio_adapter() -> Any | None:
-    """Create a TwilioAdapter from env var credentials. Returns None if not configured."""
+async def _get_twilio_adapter(session: AsyncSession, call: Any) -> Any | None:
+    """A TwilioAdapter on the account of this call's number — its own Twilio
+    account if bound with one, else the platform's. None if neither exists."""
     from turncall.config import get_settings
+    from turncall.services.twilio_accounts import account_for_call
 
-    settings = get_settings()
-    if not settings.twilio.account_sid or not settings.twilio.auth_token:
-        return None
-
-    from turncall.adapters.telephony.twilio_adapter import TwilioAdapter
-
-    return TwilioAdapter(settings.twilio.account_sid, settings.twilio.auth_token)
+    account = await account_for_call(session, call, get_settings())
+    return account.adapter() if account else None
 
 
 async def end_call(
@@ -69,7 +66,7 @@ async def end_call(
     # Hang up via Twilio
     sid = call.provider_call_sid
     if sid and sid != "webrtc":
-        adapter = _get_twilio_adapter()
+        adapter = await _get_twilio_adapter(session, call)
         if adapter:
             try:
                 await adapter.end_call(sid)
@@ -193,7 +190,7 @@ async def transfer_call(
     sid = call.provider_call_sid
     transfer_success = False
     if sid and sid != "webrtc":
-        adapter = _get_twilio_adapter()
+        adapter = await _get_twilio_adapter(session, call)
         if adapter:
             try:
                 await adapter.transfer_call(
@@ -346,7 +343,7 @@ async def send_dtmf(
 
     sid = call.provider_call_sid
     if sid and sid != "webrtc":
-        adapter = _get_twilio_adapter()
+        adapter = await _get_twilio_adapter(session, call)
         if adapter:
             try:
                 await adapter.send_dtmf(sid, digits)

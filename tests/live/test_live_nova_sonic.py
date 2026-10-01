@@ -16,6 +16,7 @@ import os
 
 import pytest
 from loguru import logger
+from tests.conftest import creds
 
 pytestmark = [pytest.mark.live, pytest.mark.asyncio]
 
@@ -50,7 +51,7 @@ def _service():
         pipeline_mode="s2s",
         s2s=S2SConfig(provider="aws"),
     )
-    return create_s2s_service(config, openai_api_key="")
+    return create_s2s_service(config, credentials=creds(""))
 
 
 async def test_the_bedrock_runtime_sdk_is_in_pipecats_window() -> None:
@@ -101,7 +102,7 @@ async def _first_output(model: str, *, timeout: float):
         pipeline_mode="s2s",
         s2s=S2SConfig(provider="aws", model=model),
     )
-    service = create_s2s_service(config, openai_api_key="")
+    service = create_s2s_service(config, credentials=creds(""))
     stream = await service.open_stream(service.create_client())
     try:
         return await asyncio.wait_for(stream.await_output(), timeout=timeout)

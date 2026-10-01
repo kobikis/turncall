@@ -40,6 +40,7 @@ from turncall.domain.enums import (
     EvalToolPolicy,
 )
 from turncall.evals import scenario as scenario_mod
+from turncall.evals.build import worker_build
 from turncall.evals.result_mapping import (
     IterationOutcome,
     derive_status,
@@ -55,6 +56,8 @@ from turncall.evals.run_warnings import (
 )
 from turncall.evals.snapshots import harness_config
 from turncall.evals.targets import ResolvedTarget, resolve_target
+from turncall.services.credentials import Credentials, for_project
+from turncall.services.credentials import scope as credentials_scope
 from turncall.services.tool_mocks import ToolMocks
 
 ExecuteIteration = Callable[..., Awaitable[Any]]
@@ -109,6 +112,23 @@ def run_budget_seconds(settings: Any, iterations: int) -> float:
     )
 
 
+def describe_failure(exc: BaseException, *, prefix_type: bool = True) -> str:
+    """An error as the run records it.
+
+    An ImportError in a worker older than its source is not a bug in the code
+    it names: the process holds the old version of one module and has just
+    loaded the new version of another. Said plainly, because the bare message
+    sends whoever reads it looking for a missing name that is right there.
+    """
+    text = f"{type(exc).__name__}: {exc}" if prefix_type else str(exc)
+    if isinstance(exc, ImportError) and worker_build()["worker_stale"]:
+        text += (
+            " — the eval worker started before its code last changed, so it is "
+            "mixing old and new modules. Restart the eval worker and run again."
+        )
+    return text
+
+
 @dataclass(frozen=True)
 class IterationPlan:
     """Everything one iteration needs, resolved once before the first runs.
@@ -128,6 +148,7 @@ class IterationPlan:
     tool_mocks: dict[str, Any]
     live_tools: bool
     timeout_s: float
+    credentials: Credentials
 
     def fresh_mocks(self) -> ToolMocks:
         """A recorder for one iteration.
@@ -213,9 +234,7 @@ async def run_iterations(
         except Exception as exc:
             logger.exception("eval_iteration_error", run_id=str(plan.run_id))
             outcomes.append(
-                errored_entry(
-                    iteration, f"{type(exc).__name__}: {exc}", tool_calls=mocks.calls
-                )
+                errored_entry(iteration, describe_failure(exc), tool_calls=mocks.calls)
             )
             continue
         if mocks.refused:
@@ -342,7 +361,7 @@ async def _record_unrunnable(session: Any, run: Any, exc: Exception) -> None:
         passed_count=0,
         failed_count=0,
         results=[],
-        error=str(exc),
+        error=describe_failure(exc, prefix_type=False),
     )
     await session.commit()
     logger.warning("eval_run_unrunnable", run_id=str(run.id), error=str(exc))
@@ -439,6 +458,9 @@ async def _plan_run(
         target = await resolve_target(
             session, project_id=run.project_id, target=run.target
         )
+        # Fails closed (ADR-0020): unreadable project keys error the run rather
+        # than grading it on the platform's account, which nothing would show.
+        credentials = await for_project(session, run.project_id)
     except Exception as exc:
         await _record_unrunnable(session, run, exc)
         return None
@@ -525,6 +547,7 @@ async def _plan_run(
         tool_mocks=tool_mocks,
         live_tools=live_tools,
         timeout_s=iteration_budget_seconds(settings, run.iterations),
+        credentials=credentials,
     )
 
 
@@ -676,5 +699,8 @@ async def execute_run(
         if plan is None:
             return
 
-    outcomes = await run_iterations(plan, iterations=iterations, execute=execute)
+    # The judge and persona are built by pipecat from a factory path, so the
+    # project's keys reach them through the context rather than an argument.
+    with credentials_scope(plan.credentials):
+        outcomes = await run_iterations(plan, iterations=iterations, execute=execute)
     await _finish_run(session_factory, plan, outcomes)

@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from loguru import logger
+from pipecat.frames.frames import ErrorFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import (
     PipelineParams,
     PipelineWorker,
     ProcessorUnusablePolicy,
 )
+from pipecat.utils.errors import ErrorCategory
 from pipecat.workers.runner import WorkerRunner
 
 from turncall.config import get_settings
@@ -24,6 +28,7 @@ from turncall.orchestrator.telemetry import (
     build_span_attributes,
     is_tracing_active,
 )
+from turncall.services.credentials import MissingProviderKeyError
 
 
 class CallSession:
@@ -63,6 +68,10 @@ class CallSession:
         # how a refused provider shows up: pipecat ends that pipeline
         # gracefully, and an eval is supposed to score it `failed`.
         self._failure: BaseException | None = None
+        # Why the call failed, when something did. A provider pipecat stops
+        # using (bad key, unknown model) ends the pipeline gracefully, so
+        # without this a 401 on the first turn read as the caller hanging up.
+        self._error: str | None = None
 
     @property
     def call_id(self) -> UUID:
@@ -168,6 +177,10 @@ class CallSession:
             if self._task is not None:
                 await self._task.cancel()
 
+        @self._task.event_handler("on_pipeline_error")
+        async def _record_provider_error(_worker: object, frame: ErrorFrame) -> None:
+            await self._on_pipeline_error(frame)
+
         self._duration_guard = self._start_duration_guard()
         self._arm_idle_guard()
 
@@ -219,7 +232,7 @@ class CallSession:
         except Exception as exc:
             logger.exception("call_session_error", call_id=str(self.call_id))
             self._failure = exc
-            await self._update_call_status(CallStatus.FAILED)
+            await self._record_error("pipeline", exc)
         finally:
             self._running = False
             # Before finalizing: a call that ended on its own must not have the
@@ -243,6 +256,23 @@ class CallSession:
             # on_client_disconnected guarantees we reach here promptly instead of
             # hanging in the runner.
             logger.info("call_session_ended", call_id=str(self.call_id))
+
+    async def _on_pipeline_error(self, frame: ErrorFrame) -> None:
+        """Record an error that ends the pipeline, so the call is finalized as
+        failed with the reason on its event log (ADR-0008)."""
+        processor = frame.processor
+        if not (frame.fatal or (processor is not None and not processor.is_usable)):
+            return
+        error = readable_error(frame.error)
+        provider = provider_of(processor)
+        if provider and frame.category in _KEY_REFUSED:
+            # A key that is there but wrong (a missing one never gets this far).
+            error = f"The {provider} API key was rejected: {error}"
+            await self._record_error(
+                str(processor), error, provider=provider, key_rejected=True
+            )
+            return
+        await self._record_error(str(processor), error)
 
     def _arm_idle_guard(self) -> None:
         """React when the caller goes quiet after the agent has spoken.
@@ -391,52 +421,19 @@ class CallSession:
 
         Transport-agnostic: this is the only place that reliably runs for a
         caller-initiated hangup (inbound Twilio never gets a /status callback;
-        WebRTC/WhatsApp have none at all). Sets COMPLETED + ended_at + pipeline-
-        authoritative duration, then dispatches call.ended + post-call analysis.
-        The `status not in (completed, failed)` guard keeps this idempotent vs the
-        /status callback and the end_call tool — whichever finalizes first wins.
+        WebRTC/WhatsApp have none at all). Failed when an error ended the
+        pipeline, completed otherwise.
 
         An eval has no call to finalize, and must not dispatch `call.ended` to
         subscribers for a conversation that was never a call.
         """
         if self._call_context.is_eval:
             return
-
-        async with self._call_context.session_factory() as session:
-            from turncall.storage.repositories import call_repo
-
-            call = await call_repo.get_call_by_id(session, self._call_context.call_id)
-            if not call or call.status in ("completed", "failed"):
-                return
-
-            ended_at = datetime.now(UTC)
-            duration_ms = None
-            if call.started_at is not None:
-                duration_ms = int((ended_at - call.started_at).total_seconds() * 1000)
-            await call_repo.update_call_status(
-                session,
-                self._call_context.call_id,
-                status=CallStatus.COMPLETED.value,
-                ended_at=ended_at,
-                duration_ms=duration_ms,
-            )
-            await session.commit()
-
-            from turncall.services.call_analysis_trigger import (
-                config_for_call,
-                trigger_post_call_analysis,
-            )
-
-            # Not gated on active_agent_id: a call running an inline agent has
-            # none, and this is what dispatches call.ended.
-            config = await config_for_call(session, call)
-            if config is not None:
-                trigger_post_call_analysis(
-                    self._call_context.session_factory,
-                    call.id,
-                    call.project_id,
-                    config,
-                )
+        await finalize_call(
+            self._call_context.session_factory,
+            self._call_context.call_id,
+            failed=self._error is not None,
+        )
 
     async def stop(self) -> None:
         """Gracefully stop the pipeline."""
@@ -475,20 +472,125 @@ class CallSession:
 
     async def _log_event(self, event_type: CallEventType, payload: dict) -> None:
         """Log a call event to the database and dispatch webhook."""
-        try:
-            async with self._call_context.session_factory() as session:
-                from turncall.events.emit import emit_call_event
+        await log_call_event(self._call_context, event_type, payload)
 
-                await emit_call_event(
-                    session,
-                    call_id=self._call_context.call_id,
-                    project_id=self._call_context.project_id,
-                    event_type=event_type,
-                    payload=payload,
-                )
-                await session.commit()
-        except Exception:
-            logger.exception(
-                "call_event_log_error",
-                call_id=str(self.call_id),
+    async def _record_error(self, stage: str, error: object, **detail: Any) -> None:
+        """Keep the first error that ends the call, on its event log too."""
+        if self._error is not None or self._call_context.is_eval:
+            return
+        self._error = readable_error(error)
+        await self._log_event(
+            CallEventType.ERROR_RAISED,
+            {"stage": stage, "error": self._error, **detail},
+        )
+
+
+# Provider SDKs put the whole request in their message (Deepgram: every header,
+# the token redacted), which buries the one sentence a person needs.
+_REQUEST_HEADERS = re.compile(r"headers: \{.*?\}, ")
+
+
+_KEY_REFUSED = (ErrorCategory.AUTHENTICATION, ErrorCategory.AUTHORIZATION)
+
+
+def provider_of(processor: object) -> str | None:
+    """The vendor a pipecat service belongs to, read off its module
+    (`pipecat.services.deepgram.stt` -> `deepgram`); None for anything else."""
+    parts = type(processor).__module__.split(".")
+    return parts[2] if parts[:2] == ["pipecat", "services"] and len(parts) > 2 else None
+
+
+def readable_error(error: object) -> str:
+    """An error as the call's event log keeps it: the reason, not the request."""
+    return _REQUEST_HEADERS.sub("", str(error))[:500]
+
+
+async def log_call_event(
+    call_context: CallContext, event_type: CallEventType, payload: dict
+) -> None:
+    """Log a call event to the database and dispatch webhook. Never raises."""
+    try:
+        async with call_context.session_factory() as session:
+            from turncall.events.emit import emit_call_event
+
+            await emit_call_event(
+                session,
+                call_id=call_context.call_id,
+                project_id=call_context.project_id,
+                event_type=event_type,
+                payload=payload,
             )
+            await session.commit()
+    except Exception:
+        logger.exception("call_event_log_error", call_id=str(call_context.call_id))
+
+
+async def finalize_call(session_factory: Any, call_id: UUID, *, failed: bool) -> None:
+    """Set the terminal status, ended_at and duration, then dispatch
+    `call.ended` + post-call analysis.
+
+    The `status not in (completed, failed)` guard keeps this idempotent vs the
+    /status callback and the end_call tool — whichever finalizes first wins.
+    """
+    from turncall.services.call_analysis_trigger import (
+        config_for_call,
+        trigger_post_call_analysis,
+    )
+    from turncall.storage.repositories import call_repo
+
+    async with session_factory() as session:
+        call = await call_repo.get_call_by_id(session, call_id)
+        if not call or call.status in ("completed", "failed"):
+            return
+
+        ended_at = datetime.now(UTC)
+        duration_ms = None
+        if call.started_at is not None:
+            duration_ms = int((ended_at - call.started_at).total_seconds() * 1000)
+        status = CallStatus.FAILED if failed else CallStatus.COMPLETED
+        await call_repo.update_call_status(
+            session,
+            call_id,
+            status=status.value,
+            ended_at=ended_at,
+            duration_ms=duration_ms,
+        )
+        await session.commit()
+
+        # Not gated on active_agent_id: a call running an inline agent has
+        # none, and this is what dispatches call.ended.
+        config = await config_for_call(session, call)
+        if config is not None:
+            trigger_post_call_analysis(
+                session_factory, call.id, call.project_id, config
+            )
+
+
+async def fail_unstarted_call(call_context: CallContext, error: BaseException) -> None:
+    """A call whose pipeline never ran: failed, with why, and `call.ended`.
+
+    No CallSession exists to finalize it, so without this the row sat at its
+    initial status and subscribers heard nothing. Never raises — the caller is
+    already handling the original error.
+    """
+    if call_context.is_eval:
+        return
+    try:
+        await log_call_event(
+            call_context,
+            CallEventType.ERROR_RAISED,
+            {
+                "stage": "pipeline_build",
+                "error": readable_error(error),
+                **(
+                    {"missing_keys": error.accounts}
+                    if isinstance(error, MissingProviderKeyError)
+                    else {}
+                ),
+            },
+        )
+        await finalize_call(
+            call_context.session_factory, call_context.call_id, failed=True
+        )
+    except Exception:
+        logger.exception("call_fail_record_error", call_id=str(call_context.call_id))

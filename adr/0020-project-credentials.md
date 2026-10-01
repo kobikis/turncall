@@ -90,4 +90,19 @@ mapping rather than as this design's shape.
 
 ## Status
 
-Accepted; not yet implemented.
+Accepted; implemented (#161-#164). The API is `PUT/GET/DELETE /v1/credentials`
+and `GET /v1/providers`; the resolver is `services/credentials.py`
+(`Credentials`), built per call in `pipeline_builder.load_call_credentials`.
+The account namespace lives in `domain/providers.py`: `openai_live` bills to
+`openai`, `bedrock` and the `aws` S2S provider share `aws`, and `ollama` /
+`custom_openai` have no account — their key, if any, belongs to the endpoint
+their own `base_url` names. Work outside a call — text turns, post-call
+analysis, takeaways, the transfer briefing, KB embeddings, the eval judge —
+resolves in the same order through `credentials.for_project`, so the platform
+environment is a fallback everywhere and a requirement nowhere.
+
+Telephony, listed below as staying platform-level, was later given a narrower
+answer: a **phone number** may carry its own Twilio account
+(`services/twilio_accounts.py`), sealed with the same key. Per number rather
+than per project because Twilio's own unit is the number — webhooks name their
+account by `AccountSid`, and one project can hold numbers from two accounts. Tracked as #186.

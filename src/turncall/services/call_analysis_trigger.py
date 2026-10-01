@@ -84,6 +84,9 @@ async def _wait_for_recording(
                 url = call.recording_url
         if status in _TERMINAL_RECORDING:
             return url, status
+        if call and call.started_at is None:
+            # Its pipeline never ran (a build failure), so nothing is recording.
+            return url, status
         if waited >= RECORDING_WAIT_TIMEOUT_S:
             logger.warning(
                 "post_call_recording_wait_timeout",
@@ -93,6 +96,22 @@ async def _wait_for_recording(
             return url, status
         await asyncio.sleep(RECORDING_POLL_INTERVAL_S)
         waited += RECORDING_POLL_INTERVAL_S
+
+
+async def _project_credentials(
+    session_factory: async_sessionmaker[AsyncSession], project_id: UUID
+) -> Any:
+    """The project's keys for the analysis LLM — the account its calls ran on.
+    Unreadable falls back to the platform's (None) with a log: analysis is
+    best-effort, and call.ended must still go out."""
+    from turncall.services.credentials import for_project
+
+    try:
+        async with session_factory() as session:
+            return await for_project(session, project_id)
+    except Exception:
+        logger.exception("post_call_credentials_unreadable", project_id=str(project_id))
+        return None
 
 
 async def _run_post_call(
@@ -122,6 +141,8 @@ async def _run_post_call(
         if analysis_config.enabled:
             from turncall.services.call_analysis import analyze_call
 
+            credentials = await _project_credentials(session_factory, project_id)
+
             transcript_payloads = [
                 {
                     "text": e["text"],
@@ -136,6 +157,7 @@ async def _run_post_call(
                 llm_config,
                 system_prompt=system_prompt,
                 aws=aws_config,
+                credentials=credentials,
             )
             analysis_dict = result.to_dict()
 
@@ -149,6 +171,7 @@ async def _run_post_call(
                 transcript_payloads,
                 system_prompt,
                 aws_config,
+                credentials,
             )
             if takeaways_dict:
                 analysis_dict["takeaways"] = takeaways_dict
@@ -263,6 +286,7 @@ async def _extract_takeaways(
     transcript_payloads: list[dict[str, Any]],
     system_prompt: str,
     aws_config: AWSConfig | None = None,
+    credentials: Any = None,
 ) -> dict[str, Any] | None:
     """Load the agent's attached takeaways and extract them concurrently.
     Best-effort: failures produce valid=False entries, never an exception."""
@@ -295,6 +319,7 @@ async def _extract_takeaways(
                     schema=r.schema,
                     llm_config=llm_config,
                     aws=aws_config,
+                    credentials=credentials,
                     description=r.description,
                     prompt=r.prompt,
                     model=r.model or analysis_config.model,

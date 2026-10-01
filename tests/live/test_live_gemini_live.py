@@ -13,6 +13,7 @@ The model is pinned here rather than read from `S2SConfig`, deliberately — see
 import asyncio
 
 import pytest
+from tests.conftest import creds
 
 pytestmark = [pytest.mark.live, pytest.mark.asyncio]
 
@@ -97,7 +98,7 @@ async def test_pipecat_builds_a_gemini_live_service(google_key: str) -> None:
         s2s=S2SConfig(provider="google", model=_LIVE_MODEL, voice="Puck"),
     )
 
-    service = create_s2s_service(config, openai_api_key="", google_api_key=google_key)
+    service = create_s2s_service(config, credentials=creds("", google=google_key))
 
     assert service is not None
     assert type(service).__name__ == "GeminiLiveLLMService"
@@ -125,8 +126,7 @@ async def test_the_model_a_default_google_agent_gets_is_one_google_serves(
             pipeline_mode="s2s",
             s2s=S2SConfig(provider="google"),
         ),
-        openai_api_key="",
-        google_api_key=google_key,
+        credentials=creds("", google=google_key),
     )
     model = str(service._settings.model)
     voice = str(service._settings.voice)

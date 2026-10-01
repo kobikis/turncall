@@ -9,6 +9,7 @@ rejects the project's keys once deleted, and a purge job hard-deletes later.
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -25,12 +26,17 @@ from turncall.storage.repositories import (
 )
 
 
-async def _clear_twilio_number(settings: Settings, sid: str) -> None:
-    """Point a Twilio number away from TurnCall. NOT best-effort — a failure
-    propagates so the delete aborts before anything is soft-deleted."""
-    from turncall.adapters.telephony.twilio_adapter import TwilioAdapter
+async def _clear_twilio_number(settings: Settings, number: Any) -> None:
+    """Point a Twilio number away from TurnCall, on its own Twilio account if it
+    has one. NOT best-effort — a failure propagates so the delete aborts before
+    anything is soft-deleted."""
+    from turncall.services.twilio_accounts import account_for_number
 
-    adapter = TwilioAdapter(settings.twilio.account_sid, settings.twilio.auth_token)
+    account = account_for_number(number, settings)
+    if account is None:
+        return
+    adapter = account.adapter()
+    sid = number.external_number_sid
     await adapter.configure_number_webhook(sid, voice_url="", status_callback_url="")
     await adapter.configure_sms_webhook(sid, sms_url="")
 
@@ -92,10 +98,8 @@ async def delete_project(
     soft-delete. Unbind runs FIRST and is not swallowed — if it raises, nothing
     is soft-deleted, so the caller retries rather than stranding a live number.
     Idempotent: re-clearing a webhook / re-deleting a blob is harmless."""
-    if settings.twilio.account_sid and settings.twilio.auth_token:
-        numbers = await phone_number_repo.list_for_project(session, project_id)
-        for number in numbers:
-            await _clear_twilio_number(settings, number.external_number_sid)
+    for number in await phone_number_repo.list_for_project(session, project_id):
+        await _clear_twilio_number(settings, number)
 
     await _sweep_storage(session, settings, project_id)
     await project_repo.soft_delete_project(session, project_id)

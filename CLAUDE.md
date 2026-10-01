@@ -64,8 +64,8 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `TWILIO_ACCOUNT_SID` | Yes | Twilio account SID |
-| `TWILIO_AUTH_TOKEN` | Yes | Twilio auth token |
+| `TWILIO_ACCOUNT_SID` | Yes* | Twilio account SID — the platform account. *A number bound with its own `twilio_account_sid` + `twilio_auth_token` uses those instead |
+| `TWILIO_AUTH_TOKEN` | Yes* | Twilio auth token (platform account; see above) |
 | `OPENAI_API_KEY` | Yes* | OpenAI API key (LLM + optional STT/TTS). *Not required if using Ollama/custom LLM |
 | `DEEPGRAM_API_KEY` | Yes | Deepgram API key (streaming STT/TTS) |
 | `ELEVENLABS_API_KEY` | No | ElevenLabs API key (optional STT/TTS) |
@@ -91,7 +91,8 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 | `AMBIENCE_CACHE_DIR` | No | Where a call's ambience renditions are fetched to before the mixer reads them (default `./storage/ambience-cache`). **Mount it** — a container recreate otherwise re-fetches every sound. No eviction: bounded by the number of distinct sounds. See `adr/0021` |
 | `S3_BUCKET_NAME` | No | S3 bucket for file storage (required if STORAGE_BACKEND=s3) |
 | `AWS_REGION` | No | Default AWS region for S3 **and** the `bedrock`/`aws` providers (default: `us-east-1`). Per-agent `config.aws.region` overrides it — Bedrock model availability is region-specific and rarely matches your bucket. See `adr/0016` |
-| `AWS_AGENT_CREDENTIALS_ENABLED` | No | Allow per-agent **static** AWS keys in the agent config (default `false`). They persist in `config_blob`, which is unencrypted JSONB, so agents supplying them are rejected at create unless this is on. The unrestricted path is `config.aws.role_arn`, which stores no durable secret. See `adr/0016` |
+| `AWS_AGENT_CREDENTIALS_ENABLED` | No | Allow per-agent **static** AWS keys in the agent config (default `false`). They persist in `config_blob`, which is unencrypted JSONB, so agents supplying them are rejected at create unless this is on. The unrestricted path is `config.aws.role_arn`, which stores no durable secret. **Agent config only**: an `aws` project credential is encrypted and not gated by it, so `false` means "no static AWS keys *in agent config*", not "none on this deployment". See `adr/0016`, `adr/0020` |
+| `CREDENTIAL_ENCRYPTION_KEY` | With credentials | Fernet key for project credentials (ADR-0020). Storing one without it is an error, and startup **fails** (API and eval worker) when credentials exist and it is unset or wrong. **Set once, never rotate** — rotating orphans every stored credential |
 | `PUBLIC_BASE_URL` | No | Public https base URL (e.g. `https://abc.ngrok.io`) for Twilio callbacks issued without an inbound request — warm-transfer briefing + no-answer fallback. Cold transfer works without it. See `adr/0009` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OTLP collector endpoint for OpenTelemetry traces (e.g. `http://localhost:4318`). Required for tracing in production (it self-disables without one). `OTEL_EXPORTER_OTLP_PROTOCOL` (`http/protobuf`\|`grpc`), `OTEL_EXPORTER_OTLP_HEADERS` also honored. See `adr/0010` |
 | `PIPECAT_VAD_CONFIDENCE_THRESHOLD` | No | Silero VAD confidence (default `0.6`). Pairs with the agent's `silence_timeout_ms`, which sets the VAD stop window when Smart Turn is off (with it on, the model decides the turn and VAD uses Pipecat's 0.2s — the two waits are serial, so charging both cost 1.8s a turn) |
@@ -101,7 +102,7 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 | `EVAL_MAX_CONCURRENT_RUNS` | No | Scenario-iterations the eval worker runs at once (default `4`). The worker runs the bot pipeline **and** the harness — which itself runs a persona LLM, a TTS, an STT and the judge — so in audio mode one run is roughly double a real call's service load in one event loop. A starting point, not a measurement. `EVAL_MAX_RUN_DURATION_SECONDS` (default `900`) is the janitor's cutoff for reclaiming a run a crashed worker left claimed, as `errored`; `EVAL_MAX_QUEUED_SECONDS` (`3600`) is the same cutoff for a run **nothing ever claimed** — the API committed the row then died before the queue push — and is longer, because waiting behind a backlog is normal where running for 15 minutes is not. `EVAL_JANITOR_INTERVAL_SECONDS` (`60`) bounds the sweep. One request's paid LLM work has **two** axes and needs both: `EVAL_MAX_ITERATIONS` (`50`) per run, and `EVAL_MAX_SCENARIOS_PER_REQUEST` (`50`) on a `tag`'s fan-out — a tag matching more than that is refused naming the count, never truncated, because a batch that ran 50 of 200 scenarios reports a verdict for a suite that never ran. See `adr/0018` |
 | `EVAL_JUDGE_PROVIDER` | No | What decides every verdict, set once for the platform (#119) — one of `ollama` (pipecat's own, the default when nothing is set), `openai`, `anthropic`, `jev` (#141: TypeSafe's classifier — a few hundred ms per verdict with a *calibrated* probability, judge-only, needs `TYPESAFE_API_KEY` + the `evals-jev` extra, and supplies no prose so the **explainer** comes from this same setting). With `EVAL_JUDGE_MODEL` (that provider's own default when empty) and `EVAL_JUDGE_TEMPERATURE` (unset by default — a verdict that varies run to run is not a verdict; dropped entirely for Anthropic and the OpenAI reasoning families, as on the call path). `EVAL_SIMULATOR_PROVIDER` / `_MODEL` / `_TEMPERATURE` are the same three for the LLM that plays the caller in a simulation. A **scenario's** own `judge:`/`simulator:` block wins, taken whole; a `judge` on a **run** request is a 422, since a run is what it was queued as |
 | `PROJECT_PURGE_RETENTION_DAYS` | No | Days a soft-deleted project (ADR-0011) is kept before the hourly purge job hard-deletes it (cascade). Default `30`; `0` disables |
-| `TYPESAFE_API_KEY` | No | Jev, for a `jev` eval judge (#141). Evals only — no live call contacts this vendor, which is why the dependency is the optional `evals-jev` extra rather than a base one. Neither the key nor the extra is checked at scenario create: both are properties of a *deployment* and a stored scenario outlives the one it was written against, so the **run** fails, naming which of the two is missing |
+| `TYPESAFE_API_KEY` | No | Jev, for a `jev` eval judge (#141). A fallback: a project's `typesafe` credential wins (ADR-0020). Evals only — no live call contacts this vendor, which is why the dependency is the optional `evals-jev` extra rather than a base one. Neither the key nor the extra is checked at scenario create: both are properties of a *deployment* and a stored scenario outlives the one it was written against, so the **run** fails, naming which of the two is missing |
 | `PLATFORM_API_KEY` | Prod | Privileged credential gating the unauthenticated bootstrap endpoints — project creation + first-API-key creation. Only the builder holds it; presented as the `X-Platform-Key` header. Empty default fails **closed** (rejects all bootstrap calls), so set it wherever those endpoints must work. TurnCall stays identity-free — this is a caller check, not a user |
 
 ## Providers (per-agent config)
@@ -112,6 +113,32 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 | LLM | `llm.model` empty = the provider's house model (`gpt-4o-mini` for openai, `claude-sonnet-5` for anthropic). `ollama`, `custom_openai`, `bedrock` and `openrouter` have none — the model *is* the deployment there — so an unnamed one is a 422 at create rather than a dead call. It used to default to `gpt-4o-mini` for **every** provider (Anthropic: `404 not_found_error`), and `model_dump()` persisted that into existing agents, so the value is read as unset off OpenAI. `openai` (default), `anthropic` (Claude), `ollama` (local), `custom_openai` (any OpenAI-compatible endpoint), `openrouter` (multi-model + `fallback_models` routing, voice only), `bedrock` (AWS-hosted Anthropic/Meta/Mistral/Amazon models — a *gateway*, not a vendor; credentials come from the agent's `aws` block, and `llm.extra` passes through to `additionalModelRequestFields` for e.g. Anthropic extended thinking. See `adr/0016`). Sampling: `llm.temperature` (0–2, default 0.7) + `llm.max_tokens` (default 1024) apply on voice and chat/SMS; the voicemail classifier stays pinned at 0.1. **Claude is sent no temperature at all, on either route** — `anthropic` direct and `anthropic.*` models via `bedrock`. Current Claude models reject it (`400 "temperature is deprecated for this model"`), which made the service unusable and ended the call. The deprecation belongs to the model, so it travels with the model rather than the endpoint; the other vendors `bedrock` fronts (Meta, Mistral, Amazon) still get one. `llm.extra` is the way to set one on an older model that still accepts it — e.g. `"extra": {"temperature": 0.3}`. The Anthropic SDK dropped `temperature`/`top_k`/`top_p` from `messages.create()`, so TurnCall routes any key it won't take by name into `extra_body` (checked against the SDK's own signature). Passing one directly used to raise `TypeError` on the first LLM turn. `llm.reasoning_effort` (`minimal`\|`low`\|`medium`\|`high`, unset by default) sent via `extra_body` on voice + chat/SMS — OpenAI-family only (openai/openrouter/custom_openai), for reasoning models (o-series/gpt-5); classifier forces it off. See `adr/0014` |
 | TTS | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3.6, streaming, 60+ emotions). `tts.pronunciations` is one flat word→IPA map (`{"Metformin": "mɛtˈfɔɹmɪn"}`) — the outbound mirror of `stt.keyterms`: one spelling, each provider's own markup generated from it (Cartesia inline phonemes, ElevenLabs SSML `<phoneme>`, Deepgram inline object; OpenAI has none). Validation is **TurnCall's own**, at the API boundary: pipecat's IPA utilities normalize and tokenize but never reject, so `met-FOR-min` would be accepted, inserted into the markup and do nothing — it is a 422 naming the word. `/…/` and `[…]` are stripped and the value stored canonically, so two spellings are one config; blanks are dropped and an empty map equals absence. Whether the built voice can *read* the markup is decided at pipeline build, not at create — on ElevenLabs it takes a phoneme-capable model **and** `enable_ssml_parsing` — and is a **warning** naming the provider, never a refusal, since an agent's voice changes after its pronunciations are written. That flag is a constructor kwarg no `tts.extra` could reach, so the pipeline factory passes it, for exactly the agents that have pronunciations *and* a model pipecat lists in `ELEVENLABS_PHONEME_MODELS` — never for everyone, since SSML parsing changes how **all** of that agent's text is read (#147). The model stays the author's: a phoneme-incapable one is warned about, never downgraded — and the markup is **withheld** from it, because a `<phoneme>` tag reaching a service that is not parsing SSML is *spoken aloud* (measured on the WebSocket: 3.5-4.3x the audio), which is worse than the mispronunciation. One unusable word is spoken as written; it never silences the reply. Two things that cannot be refusals ride back as **`warnings` on the agent read** instead (#148, derived every read, never stored, the shape #95 set for eval scenarios): a "pronunciation" equal to its own spelling (`{"Metformin": "metformin"}` — legal IPA *notation*, so the 422 cannot see it, and it reaches the voice as real markup), and a voice that will not read the markup, which #147 knew at build and said only to a log. The transform is registered **last** (a later transform would eat the markup — markdown stripping and an SSML tag). Cascade only: an S2S agent has no TTS stage and is warned at build. |
 | S2S | `openai` (Realtime API), `openai_live` (GPT-Live-1, full duplex), `google` (Gemini Live, `gemini-3.8-live`; `voice` defaults to `Charon`), `aws` (Amazon Nova Sonic 2, `amazon.nova-2-sonic-v1:0`; `voice` defaults to `matthew`, `s2s.extra.endpointing_sensitivity` = `LOW`\|`MEDIUM`\|`HIGH`. Sessions roll over every ~6 min and credentials are re-resolved each time. See `adr/0016`) — set `pipeline_mode: "s2s"`. Sampling: `s2s.max_tokens` (both), `s2s.temperature` (google only — Realtime GA rejects it with 422). `openai` accepts an optional `s2s.base_url` (`wss://`) to target an OpenAI-Realtime-compatible gateway (Vercel AI Gateway, LiteLLM) or xAI direct — routes models like `xai/grok-voice-think-fast-1.0` over the same protocol. SSRF-gated by `BYOM_ALLOWED_URL_PATTERNS`. `s2s.model`/`s2s.voice` default to OpenAI's (`gpt-realtime-2.1`/`alloy`) whatever the provider, so each non-OpenAI path swaps those sentinels for its own — and passes an explicitly chosen value through untouched, so a wrong one is reported by the provider rather than silently replaced |
+
+## Project credentials
+
+A project's own provider keys (ADR-0020), one per provider **account** — the
+namespace is `domain/providers.py` (`openai_live`→`openai`, `bedrock` and S2S
+`aws`→`aws`; `ollama`/`custom_openai` have none).
+
+```
+PUT    /v1/credentials/{provider}   # {"api_key": "..."}, or the AWS block's shape for `aws`
+GET    /v1/credentials              # presence + timestamps, never a value
+DELETE /v1/credentials/{provider}   # idempotent; the project falls back to the platform key
+GET    /v1/providers                # roles -> providers; per account platform_key + project_credential
+```
+
+Every provider key resolves through `services/credentials.Credentials`: agent
+inline (`llm.api_key`, `config.aws`) → project credential → platform env. One
+order everywhere a project's work runs: the voice pipeline
+(`pipeline_builder.load_call_credentials`), chat/SMS/WhatsApp text turns,
+post-call analysis and takeaways, the transfer briefing, KB upload/search
+embeddings (`credentials.for_project`), and the eval judge (via
+`credentials.scope`, since pipecat builds it from a factory path). Read fresh
+each time, so writes apply to the next call or message. So a deployment can run
+with every provider key in `.env` and no project credentials, or with none in
+`.env` and every key per project — or any mix. `custom_openai` never receives a
+project's OpenAI key (its endpoint is the agent's own). No code reads
+`os.environ` for a key.
 
 ## Pipeline
 
@@ -162,6 +189,16 @@ Context threading: use `session_id` (group messages) or `previous_chat_id` (line
 ### Phone Number Config
 - `sms_enabled: true` on bind → auto-configures Twilio SMS webhook
 - Same number handles both voice calls and SMS
+- **Own Twilio account per number**: `twilio_account_sid` + `twilio_auth_token` on
+  `POST/PUT /v1/phone-numbers` (both or neither). TurnCall looks the number up on
+  that account (which proves it owns it, and makes `external_number_sid`
+  optional), stores the token encrypted under `CREDENTIAL_ENCRYPTION_KEY`, and
+  returns only `twilio_account_sid` + `twilio_credentials: number|platform`.
+  Every Twilio REST call for that number — webhook config, outbound, hangup,
+  transfer, DTMF, recording download, project deletion — and every inbound
+  signature check (matched by the webhook's `AccountSid`) uses that account.
+  `services/twilio_accounts.py` is the one place that decides; nothing else
+  constructs a `TwilioAdapter`.
 
 ## WhatsApp
 
@@ -974,6 +1011,23 @@ are null for an inline agent and for a deleted agent row.
 `ended_reason` (derived, not stored): `customer_ended_call`, `assistant_ended_call`,
 `customer_did_not_answer`, `customer_busy`, `customer_silent`, `voicemail`, `transferred`,
 `max_duration_reached`, `pipeline_error`, `telephony_failed`, `unknown`.
+
+`pipeline_error` is a call that **failed**, and the call's event log says why
+in an `error.raised` event (`{stage, error}`). There are two ways in. A build
+that raises: no `CallSession` exists, so `build_call_pipeline` fails the call
+itself for every transport, and WebRTC answers `500 pipeline_start_failed`
+instead of an SDP answer. (pipecat's handler logs a callback error and answers
+anyway, which used to connect the browser to a peer with no pipeline behind
+it.) Or a provider pipecat stops using mid-call, like a 401 or an unknown model:
+pipecat then ends the pipeline *gracefully*, so without the event the call read
+as `customer_ended_call`. Either way `call.ended` still goes out.
+
+A provider with **no key at any level** is caught before the build
+(`Credentials.missing_keys`, never in an eval since text mode opens no speech
+provider). The event and the WebRTC 500 both carry `missing_keys: [account]`.
+A key that is present but refused mid-call (pipecat's `AUTHENTICATION` /
+`AUTHORIZATION`) carries `provider` and `key_rejected: true`, so a console can
+name the key without parsing the vendor's sentence.
 
 Since pipecat 1.12 a user turn that VAD opened and closed with **no
 transcript** — a cough, a door, an unrecognized word — is handled rather than
