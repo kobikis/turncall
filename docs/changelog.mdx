@@ -31,11 +31,30 @@ phone line is flagged at upload. See [Ambience](/guides/ambience).
 
 ## Changed
 
+**A call that fails says so, and why.** A provider that stops working mid-call
+(a refused key, an unknown model) used to leave the call reading as
+`customer_ended_call`. It now ends `failed` with an `ended_reason` of
+`pipeline_error`, and an `error.raised` event says what broke. See
+[When a call fails](/guides/post-call-analysis#when-a-call-fails).
+
+**A missing provider key is caught before the call starts.** If no level holds
+a key for a provider the agent uses, the call is refused up front, naming it
+(`missing_keys`), instead of failing partway into the greeting. WebRTC answers
+`500 pipeline_start_failed`. See [API keys](/guides/providers#when-a-key-is-missing-or-refused).
+
 **`AWS_AGENT_CREDENTIALS_ENABLED` governs agent config only.** Static AWS keys
 are still refused inside an agent's `aws` block when it is off, but an `aws`
 project credential is accepted — it is encrypted and outside agent config.
 
 ## Fixed
+
+**A call that could not start went silent.** WebRTC answered the offer anyway
+and connected the browser to nothing, and no `call.ended` was sent. It now
+returns an error and sends `call.ended` without waiting for a recording that
+cannot exist.
+
+**An eval run whose project keys could not be read used the platform's keys.**
+It is now `errored`, naming why.
 
 **An OpenAI agent's `llm.api_key` was ignored.** It now wins over the platform
 key, as it already did for Anthropic, OpenRouter and custom endpoints.

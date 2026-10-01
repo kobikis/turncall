@@ -399,6 +399,22 @@ separate signals: `platform_key` (the environment has one) and
 `project_credential` (this project has one). Together they say whether removing
 a credential falls back or ends in failed calls.
 
+### When a key is missing or refused
+
+Before a call is built, TurnCall checks every provider the agent uses (STT, LLM
+and TTS, or the S2S provider, plus the avatar) against all three levels. If one
+has no key anywhere, the call is refused before it rings through: it ends
+`failed` / `pipeline_error` with an `error.raised` event carrying
+`missing_keys`, and `POST /v1/webrtc/connect` answers
+`500 pipeline_start_failed` with `details.missing_keys`. AWS is not checked,
+since its ambient credential chain is not a key TurnCall can see. Neither are
+`ollama` and `custom_openai`, which have no account.
+
+A key that exists but is wrong is only found out when the provider refuses it,
+partway into the call. That call ends the same way, with `provider` and
+`key_rejected: true` on the event. See
+[When a call fails](/guides/post-call-analysis#when-a-call-fails).
+
 <Warning>
   `CREDENTIAL_ENCRYPTION_KEY` is set once. Rotating it orphans every stored
   credential, and the service refuses to start when credentials exist and the
