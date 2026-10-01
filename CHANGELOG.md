@@ -92,6 +92,12 @@ and is not part of this repository's history.
   `call.ended` waited out its 15-second recording timeout. It now ends
   `failed`, the same as an empty flush, and `call.ended` goes out at once.
 
+- **A greeting the caller never heard was saved to the transcript** (#188).
+  The assistant transcript is recorded before the TTS, so when the TTS refused
+  its key the agent's first message still appeared as spoken, in the call's
+  events, the `call.ended` transcript, and scenarios built from the call. Text
+  handed to a TTS that can no longer work is no longer recorded.
+
 - **An eval that failed because a provider refused the agent said only "no
   response".** A provider error that leaves the pipeline running (Bedrock's
   model-access check, say) made the agent silent, and the iteration failed on

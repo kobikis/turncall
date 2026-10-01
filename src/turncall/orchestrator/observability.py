@@ -131,10 +131,15 @@ class AssistantTranscriptTapProcessor(FrameProcessor):
         self,
         call_context: CallContext,
         llm_service: object | None = None,
+        tts_service: object | None = None,
         **kwargs: object,
     ) -> None:
         super().__init__(**kwargs)
         self._call_context = call_context
+        # The tap sits before the TTS, so it sees what the agent *meant* to say.
+        # When the TTS can no longer work (a refused key), none of it is heard,
+        # and a transcript entry would claim a greeting nobody heard (#188).
+        self._tts_service = tts_service
         # llm_service exposes get_full_model_name() (OpenAI-derived services) — used to
         # record which model actually answered, since OpenRouter fallback can switch it.
         self._llm_service = llm_service
@@ -175,6 +180,13 @@ class AssistantTranscriptTapProcessor(FrameProcessor):
             return None
 
     async def _log_transcript(self, text: str) -> None:
+        if self._tts_service is not None and not getattr(
+            self._tts_service, "is_usable", True
+        ):
+            logger.info(
+                "assistant_transcript_unspoken", call_id=str(self._call_context.call_id)
+            )
+            return
         payload = {
             "text": text,
             "role": "assistant",
