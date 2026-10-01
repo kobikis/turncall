@@ -9,7 +9,8 @@ from typing import Any
 
 from loguru import logger
 
-from turncall.domain.models import AgentConfig
+from turncall.domain.models import AgentConfig, AWSConfig
+from turncall.services.credentials import Credentials
 
 # S2SConfig's defaults are OpenAI Realtime's. Nova Sonic needs its own, applied
 # only when the agent left the field untouched — an explicitly wrong model is
@@ -34,21 +35,17 @@ def _build_s2s_system_prompt(config: AgentConfig) -> str:
     return prompt
 
 
-def create_s2s_service(
-    config: AgentConfig,
-    openai_api_key: str,
-    google_api_key: str = "",
-) -> Any:
+def create_s2s_service(config: AgentConfig, credentials: Credentials) -> Any:
     """Create the appropriate S2S service based on provider."""
     provider = config.s2s.provider
     if provider == "openai":
-        return _create_openai_realtime(config, openai_api_key)
+        return _create_openai_realtime(config, credentials.api_key("openai"))
     if provider == "google":
-        return _create_gemini_live(config, google_api_key)
+        return _create_gemini_live(config, credentials.api_key("google"))
     if provider == "openai_live":
-        return _create_openai_live(config, openai_api_key)
+        return _create_openai_live(config, credentials.api_key("openai"))
     if provider == "aws":
-        return _create_nova_sonic(config)
+        return _create_nova_sonic(config, credentials.aws(config.aws))
     raise ValueError(f"Unsupported S2S provider: {provider}")
 
 
@@ -176,7 +173,7 @@ def _create_gemini_live(config: AgentConfig, api_key: str) -> Any:
     return service
 
 
-def _create_nova_sonic(config: AgentConfig) -> Any:
+def _create_nova_sonic(config: AgentConfig, aws: AWSConfig) -> Any:
     """Create a Nova Sonic 2 S2S service from S2SConfig + the agent's aws block."""
     from pipecat.services.aws.nova_sonic.llm import AWSNovaSonicLLMService
 
@@ -208,7 +205,7 @@ def _create_nova_sonic(config: AgentConfig) -> Any:
             return super().create_client()
 
     s2s = config.s2s
-    credentials = aws_credentials.resolve_aws_credentials(config.aws)
+    credentials = aws_credentials.resolve_aws_credentials(aws)
 
     model = _NOVA_SONIC_MODEL if s2s.model == _OPENAI_DEFAULT_MODEL else s2s.model
     voice = _NOVA_SONIC_VOICE if s2s.voice == _OPENAI_DEFAULT_VOICE else s2s.voice
@@ -228,7 +225,7 @@ def _create_nova_sonic(config: AgentConfig) -> Any:
         settings_kwargs["endpointing_sensitivity"] = sensitivity
 
     service = _RefreshingNovaSonic(
-        aws_config=config.aws,
+        aws_config=aws,
         settings=AWSNovaSonicLLMService.Settings(**settings_kwargs),
         **credentials.nova_sonic_kwargs(),
     )

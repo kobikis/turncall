@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests.conftest import creds
 from turncall.domain.call_state import infer_ended_reason
 from turncall.domain.enums import CallStatus, EndedReason
 
@@ -181,8 +182,8 @@ class TestTheTimerIsActuallyWired:
                 config=AgentConfig(**overrides),
                 transport=mocker.MagicMock(),
                 call_context=mocker.MagicMock(),
-                openai_api_key="test-key",
                 pipecat_settings=mocker.MagicMock(),
+                credentials=creds("test-key"),
             )
         except Exception as exc:
             logger.debug("pipeline build stopped after assembly: {}", exc)

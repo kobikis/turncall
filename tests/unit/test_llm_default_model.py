@@ -14,6 +14,7 @@ would have been sent the parameter the rule exists to withhold.
 
 import pytest
 
+from tests.conftest import creds
 from turncall.services.llm_models import model_is_required, resolve_llm_model
 
 
@@ -109,6 +110,6 @@ class TestTheResolvedModelReachesTheService:
         from turncall.orchestrator.pipeline_factory import _create_llm_service
 
         config = AgentConfig(llm=LLMConfig(provider="anthropic"))
-        service = _create_llm_service(config, "", anthropic_api_key="test-key")
+        service = _create_llm_service(config, creds("", anthropic="test-key"))
 
         assert "claude" in str(service._settings.model)

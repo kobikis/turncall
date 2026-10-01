@@ -25,13 +25,18 @@ def _settings():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_forwards_kb_and_transport_options():
-    ctx = SimpleNamespace(agent_id="a1")
+    ctx = SimpleNamespace(agent_id="a1", project_id="p1")
     pipeline = MagicMock()
     pipeline.processors_with_metrics.return_value = []  # no LLM proc -> skip tools
 
     with (
         patch.object(pipeline_builder, "create_pipeline", return_value=pipeline) as cp,
         patch.object(pipeline_builder, "CallSession", return_value="SESSION") as cs,
+        patch.object(
+            pipeline_builder,
+            "load_call_credentials",
+            new=AsyncMock(return_value="CREDS"),
+        ),
         patch(
             "turncall.orchestrator.knowledge_processor.load_agent_kb_attachments",
             new=AsyncMock(return_value=[{"kb": 1}]),
@@ -53,6 +58,7 @@ async def test_forwards_kb_and_transport_options():
     assert kw["audio_sample_rate"] == 16000
     assert kw["mcp_tools"] == ["m1"]
     assert kw["avatar_enabled"] is True
+    assert kw["credentials"] == "CREDS"  # resolved per call, ADR-0020
     assert out == "SESSION"
     assert cs.call_args.kwargs["transport"] == "T"
 
@@ -60,7 +66,7 @@ async def test_forwards_kb_and_transport_options():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_registers_static_plus_mcp_tools():
-    ctx = SimpleNamespace(agent_id="a1")
+    ctx = SimpleNamespace(agent_id="a1", project_id="p1")
 
     class FakeLLM:
         pass
@@ -82,6 +88,9 @@ async def test_registers_static_plus_mcp_tools():
     with (
         patch.object(pipeline_builder, "create_pipeline", return_value=pipeline),
         patch.object(pipeline_builder, "CallSession", return_value="S"),
+        patch.object(
+            pipeline_builder, "load_call_credentials", new=AsyncMock(return_value=None)
+        ),
         patch.object(pipeline_builder, "register_tools") as reg,
         patch("pipecat.services.llm_service.LLMService", FakeLLM),
         patch(

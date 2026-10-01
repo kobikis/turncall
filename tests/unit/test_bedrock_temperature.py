@@ -19,6 +19,7 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.conftest import creds
 from turncall.domain.models import AgentConfig, AWSConfig, LLMConfig
 from turncall.services.bedrock_models import is_anthropic_model
 
@@ -61,7 +62,9 @@ class TestVoicePath:
     def test_claude_on_bedrock_is_sent_no_temperature(self) -> None:
         from turncall.orchestrator.pipeline_factory import _create_llm_service
 
-        service = _create_llm_service(_config("us.anthropic.claude-sonnet-5"), "k")
+        service = _create_llm_service(
+            _config("us.anthropic.claude-sonnet-5"), creds("k")
+        )
 
         assert service._settings.temperature is None
         # The rest of the config still arrives — this withholds one field.
@@ -70,7 +73,9 @@ class TestVoicePath:
     def test_another_vendor_on_bedrock_still_gets_one(self) -> None:
         from turncall.orchestrator.pipeline_factory import _create_llm_service
 
-        service = _create_llm_service(_config("meta.llama3-3-70b-instruct-v1:0"), "k")
+        service = _create_llm_service(
+            _config("meta.llama3-3-70b-instruct-v1:0"), creds("k")
+        )
 
         assert service._settings.temperature == 0.25
 
@@ -81,7 +86,7 @@ class TestVoicePath:
         from turncall.orchestrator.pipeline_factory import _create_llm_service
 
         service = _create_llm_service(
-            _config("anthropic.claude-opus-5"), "k", temperature=0.1
+            _config("anthropic.claude-opus-5"), creds("k"), temperature=0.1
         )
 
         assert service._settings.temperature is None

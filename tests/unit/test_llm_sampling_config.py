@@ -3,6 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
+from tests.conftest import creds
 from turncall.api.v1.schemas.agents import S2SConfigSchema
 from turncall.domain.models import AgentConfig, LLMConfig, S2SConfig
 from turncall.orchestrator.pipeline_factory import _create_llm_service
@@ -17,12 +18,12 @@ def _agent_config(**llm_kwargs: object) -> AgentConfig:
 class TestCascadeSamplingSettings:
     def test_openai_receives_temperature_and_max_tokens(self) -> None:
         config = _agent_config(provider="openai", temperature=1.3, max_tokens=256)
-        svc = _create_llm_service(config, "sk-test")
+        svc = _create_llm_service(config, creds("sk-test"))
         assert svc._settings.temperature == 1.3
         assert svc._settings.max_tokens == 256
 
     def test_defaults_applied_as_stored(self) -> None:
-        svc = _create_llm_service(_agent_config(provider="openai"), "sk-test")
+        svc = _create_llm_service(_agent_config(provider="openai"), creds("sk-test"))
         assert svc._settings.temperature == 0.7
         assert svc._settings.max_tokens == 1024
 
@@ -35,14 +36,14 @@ class TestCascadeSamplingSettings:
             temperature=0.2,
             max_tokens=333,
         )
-        svc = _create_llm_service(config, "", anthropic_api_key="sk-ant-test")
+        svc = _create_llm_service(config, creds("", anthropic="sk-ant-test"))
         assert svc._settings.max_tokens == 333
 
     def test_ollama_receives_settings(self) -> None:
         config = _agent_config(
             provider="ollama", model="gemma3:12b", temperature=0.1, max_tokens=64
         )
-        svc = _create_llm_service(config, "")
+        svc = _create_llm_service(config, creds(""))
         assert svc._settings.temperature == 0.1
         assert svc._settings.max_tokens == 64
 
@@ -56,7 +57,7 @@ class TestCascadeSamplingSettings:
             temperature=1.9,
             max_tokens=42,
         )
-        svc = _create_llm_service(config, "")
+        svc = _create_llm_service(config, creds(""))
         assert svc._settings.temperature == 1.9
         assert svc._settings.max_tokens == 42
 
@@ -64,7 +65,7 @@ class TestCascadeSamplingSettings:
         config = _agent_config(
             provider="openrouter", model="openai/gpt-4o", temperature=0.5, max_tokens=99
         )
-        svc = _create_llm_service(config, "", openrouter_api_key="sk-or-test")
+        svc = _create_llm_service(config, creds("", openrouter="sk-or-test"))
         assert svc._settings.temperature == 0.5
         assert svc._settings.max_tokens == 99
 
@@ -75,12 +76,12 @@ class TestClassifierOverride:
         # Voicemail classification pins a deterministic temperature regardless
         # of the agent's conversational setting.
         config = _agent_config(provider="openai", temperature=1.8)
-        svc = _create_llm_service(config, "sk-test", temperature=0.1)
+        svc = _create_llm_service(config, creds("sk-test"), temperature=0.1)
         assert svc._settings.temperature == 0.1
 
     def test_max_tokens_override_wins(self) -> None:
         config = _agent_config(provider="openai", max_tokens=4096)
-        svc = _create_llm_service(config, "sk-test", max_tokens=16)
+        svc = _create_llm_service(config, creds("sk-test"), max_tokens=16)
         assert svc._settings.max_tokens == 16
 
 
@@ -90,11 +91,11 @@ class TestReasoningEffort:
         config = _agent_config(
             provider="openai", model="o4-mini", reasoning_effort="high"
         )
-        svc = _create_llm_service(config, "sk-test")
+        svc = _create_llm_service(config, creds("sk-test"))
         assert svc._settings.extra == {"extra_body": {"reasoning_effort": "high"}}
 
     def test_openai_omits_when_unset(self) -> None:
-        svc = _create_llm_service(_agent_config(provider="openai"), "sk-test")
+        svc = _create_llm_service(_agent_config(provider="openai"), creds("sk-test"))
         assert svc._settings.extra == {}
 
     def test_custom_openai_folds_effort(self) -> None:
@@ -104,7 +105,7 @@ class TestReasoningEffort:
             base_url="http://localhost:9999/v1",
             reasoning_effort="low",
         )
-        svc = _create_llm_service(config, "")
+        svc = _create_llm_service(config, creds(""))
         assert svc._settings.extra == {"extra_body": {"reasoning_effort": "low"}}
 
     def test_openrouter_keeps_models_alongside_effort(self) -> None:
@@ -114,7 +115,7 @@ class TestReasoningEffort:
             fallback_models=["openai/gpt-4o"],
             reasoning_effort="medium",
         )
-        svc = _create_llm_service(config, "", openrouter_api_key="sk-or-test")
+        svc = _create_llm_service(config, creds("", openrouter="sk-or-test"))
         assert svc._settings.extra == {
             "extra_body": {
                 "models": ["openai/o4-mini", "openai/gpt-4o"],
@@ -127,7 +128,7 @@ class TestReasoningEffort:
         # agent's setting, even when the agent has one.
         config = _agent_config(provider="openai", reasoning_effort="high")
         svc = _create_llm_service(
-            config, "sk-test", temperature=0.1, reasoning_effort=None
+            config, creds("sk-test"), temperature=0.1, reasoning_effort=None
         )
         assert svc._settings.extra == {}
 
@@ -177,13 +178,13 @@ def _s2s_agent(**s2s_kwargs: object) -> AgentConfig:
 class TestS2SServiceWiring:
     def test_openai_max_tokens_maps_to_max_output_tokens(self) -> None:
         config = _s2s_agent(provider="openai", max_tokens=750)
-        svc = create_s2s_service(config, "sk-test")
+        svc = create_s2s_service(config, creds("sk-test"))
         props = svc._settings.session_properties
         assert props.max_output_tokens == 750
 
     def test_openai_unset_leaves_provider_default(self) -> None:
         config = _s2s_agent(provider="openai")
-        svc = create_s2s_service(config, "sk-test")
+        svc = create_s2s_service(config, creds("sk-test"))
         assert svc._settings.session_properties.max_output_tokens is None
 
     def test_gemini_receives_both(self) -> None:
@@ -193,7 +194,7 @@ class TestS2SServiceWiring:
             temperature=0.4,
             max_tokens=1234,
         )
-        svc = create_s2s_service(config, "", google_api_key="g-test")
+        svc = create_s2s_service(config, creds("", google="g-test"))
         assert svc._settings.temperature == 0.4
         assert svc._settings.max_tokens == 1234
 
@@ -222,7 +223,7 @@ class TestAnthropicTemperature:
             temperature=0.7,
             max_tokens=512,
         )
-        svc = _create_llm_service(config, "", anthropic_api_key="sk-ant-test")
+        svc = _create_llm_service(config, creds("", anthropic="sk-ant-test"))
 
         # A number is what the API rejects; absent or the SDK's NOT_GIVEN
         # sentinel both keep it out of the request body.
@@ -233,7 +234,7 @@ class TestAnthropicTemperature:
         """The classifier pins temperature=0.1, which would 400 the same way."""
         config = _agent_config(provider="anthropic", model="claude-sonnet-5")
         svc = _create_llm_service(
-            config, "", anthropic_api_key="sk-ant-test", temperature=0.1
+            config, creds("", anthropic="sk-ant-test"), temperature=0.1
         )
 
         assert not _sends_temperature(svc)
@@ -253,13 +254,13 @@ class TestAnthropicTemperature:
                 "llm": config.llm.model_copy(update={"extra": {"temperature": 0.2}})
             }
         )
-        svc = _create_llm_service(config, "", anthropic_api_key="sk-ant-test")
+        svc = _create_llm_service(config, creds("", anthropic="sk-ant-test"))
 
         assert svc._settings.given_fields()["extra_body"] == {"temperature": 0.2}
 
     def test_other_providers_still_get_a_temperature(self) -> None:
         """The fix is Anthropic-specific — nothing else changes."""
         config = _agent_config(provider="openai", model="gpt-4o-mini", temperature=0.3)
-        svc = _create_llm_service(config, "sk-test")
+        svc = _create_llm_service(config, creds("sk-test"))
 
         assert svc._settings.temperature == 0.3

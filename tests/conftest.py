@@ -59,3 +59,20 @@ def mcp_settings(*, allowed_url_patterns: list[str] | None = None, **mcp_over):
         mcp=SimpleNamespace(**{**declared, **mcp_over}),
         byom=SimpleNamespace(allowed_url_patterns=allowed_url_patterns or []),
     )
+
+
+def creds(openai: str = "", **platform: str):
+    """A `Credentials` for building services directly in a test (ADR-0020).
+
+    The platform level is read from the environment as the app would — so a
+    test's `monkeypatch.setenv("CARTESIA_API_KEY", ...)` still reaches the
+    service — with explicit keyword overrides on top: `creds("sk-test")` for
+    an OpenAI key, `creds(anthropic="sk-ant")` for another account.
+    """
+    from turncall.config.settings import Settings
+    from turncall.services.credentials import Credentials, platform_keys
+
+    keys = {**platform_keys(Settings()), **platform}
+    if openai:
+        keys["openai"] = openai
+    return Credentials(platform=keys)

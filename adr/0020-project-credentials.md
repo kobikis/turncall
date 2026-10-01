@@ -90,4 +90,11 @@ mapping rather than as this design's shape.
 
 ## Status
 
-Accepted; not yet implemented.
+Accepted; implemented (#161-#164). The API is `PUT/GET/DELETE /v1/credentials`
+and `GET /v1/providers`; the resolver is `services/credentials.py`
+(`Credentials`), built per call in `pipeline_builder.load_call_credentials`.
+The account namespace lives in `domain/providers.py`: `openai_live` bills to
+`openai`, `bedrock` and the `aws` S2S provider share `aws`, and `ollama` /
+`custom_openai` have no account — their key, if any, belongs to the endpoint
+their own `base_url` names. The text path (chat/SMS) still reads `llm.api_key`
+then the platform key; it does not consult project credentials yet.

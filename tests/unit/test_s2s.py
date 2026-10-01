@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import ValidationError
 
+from tests.conftest import creds
 from turncall.api.v1.schemas.agents import (
     AgentConfigSchema,
     S2SConfigSchema,
@@ -216,7 +217,7 @@ class TestS2SServiceFactory:
             system_prompt="You are helpful.",
             s2s=S2SConfig(voice="alloy"),
         )
-        service = create_s2s_service(config, "test-api-key")
+        service = create_s2s_service(config, creds("test-api-key"))
 
         from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 
@@ -238,7 +239,7 @@ class TestS2SServiceFactory:
                 voice="thunder",
             ),
         )
-        service = create_s2s_service(config, "gateway-key")
+        service = create_s2s_service(config, creds("gateway-key"))
 
         assert service.base_url.startswith("wss://gateway.example/v1/realtime")
         assert "xai/grok-voice-think-fast-1.0" in service.base_url
@@ -250,7 +251,7 @@ class TestS2SServiceFactory:
             pipeline_mode="s2s",
             s2s=S2SConfig(voice="shimmer", turn_detection="pipecat_vad"),
         )
-        service = create_s2s_service(config, "test-api-key")
+        service = create_s2s_service(config, creds("test-api-key"))
         assert service is not None
 
     def test_create_gemini_live_service(self) -> None:
@@ -265,7 +266,7 @@ class TestS2SServiceFactory:
                 voice="Charon",
             ),
         )
-        service = create_s2s_service(config, "unused", google_api_key="test-google-key")
+        service = create_s2s_service(config, creds("unused", google="test-google-key"))
 
         from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
 
@@ -282,7 +283,7 @@ class TestS2SServiceFactory:
                 turn_detection="pipecat_vad",
             ),
         )
-        service = create_s2s_service(config, "unused", google_api_key="test-key")
+        service = create_s2s_service(config, creds("unused", google="test-key"))
         assert service is not None
 
     def test_unsupported_provider_raises(self) -> None:
@@ -293,7 +294,7 @@ class TestS2SServiceFactory:
             s2s=S2SConfig(provider="unsupported", voice="any"),
         )
         with pytest.raises(ValueError, match="Unsupported S2S provider"):
-            create_s2s_service(config, "unused")
+            create_s2s_service(config, creds("unused"))
 
 
 @pytest.mark.unit
@@ -316,8 +317,8 @@ class TestS2SPipelineConstruction:
                 config=config,
                 transport=mock_transport,
                 call_context=mock_context,
-                openai_api_key="test-key",
                 pipecat_settings=MagicMock(),
+                credentials=creds("test-key"),
             )
             mock_s2s.assert_called_once()
 
@@ -344,7 +345,7 @@ class TestS2SPipelineConstruction:
                 config,
                 MagicMock(),
                 MagicMock(),
-                "key",
+                creds("key"),
                 MagicMock(),
                 byom_settings=byom,
             )
@@ -367,8 +368,8 @@ class TestS2SPipelineConstruction:
                     config=config,
                     transport=mock_transport,
                     call_context=mock_context,
-                    openai_api_key="test-key",
                     pipecat_settings=MagicMock(),
+                    credentials=creds("test-key"),
                 )
             except Exception:  # noqa: S110
                 pass  # Cascade may fail without real transport
@@ -395,7 +396,7 @@ class TestGeminiSentinelSwap:
             pipeline_mode="s2s",
             s2s=S2SConfig(provider="google", **s2s_overrides),
         )
-        return create_s2s_service(config, openai_api_key="", google_api_key="k")
+        return create_s2s_service(config, credentials=creds("", google="k"))
 
     def test_the_default_model_becomes_a_gemini_model(self) -> None:
         assert "gemini" in str(self._service()._settings.model)

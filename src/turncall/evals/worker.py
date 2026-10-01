@@ -156,6 +156,13 @@ async def run_worker() -> None:
     await init_redis(settings.redis)
     session_factory = get_session_factory()
 
+    # The worker builds pipelines too, so it fails closed the same way the API
+    # does when stored credentials cannot be decrypted (ADR-0020).
+    from turncall.storage.repositories import credential_repo
+
+    async with session_factory() as session:
+        await credential_repo.ensure_readable(session, settings)
+
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

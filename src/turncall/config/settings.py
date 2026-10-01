@@ -77,6 +77,43 @@ class CartesiaSettings(BaseSettings):
     api_key: str = Field(default="", alias="CARTESIA_API_KEY")
 
 
+class DeepgramSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="DEEPGRAM_")
+
+    api_key: str = Field(default="", alias="DEEPGRAM_API_KEY")
+
+
+class ElevenLabsSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="ELEVENLABS_")
+
+    api_key: str = Field(default="", alias="ELEVENLABS_API_KEY")
+
+
+class HeyGenSettings(BaseSettings):
+    """A LiveAvatar key, not a HeyGen one — pipecat targets api.liveavatar.com."""
+
+    model_config = SettingsConfigDict(env_prefix="HEYGEN_")
+
+    api_key: str = Field(default="", alias="HEYGEN_LIVE_AVATAR_API_KEY")
+
+
+class TavusSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="TAVUS_")
+
+    api_key: str = Field(default="", alias="TAVUS_API_KEY")
+
+
+class CredentialSettings(BaseSettings):
+    """Project credentials at rest (ADR-0020)."""
+
+    model_config = SettingsConfigDict(env_prefix="")
+
+    # Fernet key. Set once and never rotate: rotating orphans every stored
+    # credential. Unset while credentials exist is a startup error, never a
+    # silent fall back to plaintext.
+    encryption_key: str = Field(default="", alias="CREDENTIAL_ENCRYPTION_KEY")
+
+
 class OpenRouterSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OPENROUTER_")
 
@@ -129,6 +166,9 @@ class AWSSettings(BaseSettings):
     # Per-agent *static* AWS keys are persisted in config_blob (unencrypted
     # JSONB) and are long-lived by construction, so operators opt in
     # deliberately. Agents supplying them are rejected at create when off.
+    # Governs AGENT CONFIG ONLY: a project credential (ADR-0020) is encrypted
+    # and outside that surface, so false does not mean "no static AWS keys on
+    # this deployment" — it means "none inside agent config".
     agent_credentials_enabled: bool = Field(
         default=False, alias="AWS_AGENT_CREDENTIALS_ENABLED"
     )
@@ -334,6 +374,11 @@ class Settings(BaseSettings):
     google: GoogleSettings = Field(default_factory=GoogleSettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     cartesia: CartesiaSettings = Field(default_factory=CartesiaSettings)
+    deepgram: DeepgramSettings = Field(default_factory=DeepgramSettings)
+    elevenlabs: ElevenLabsSettings = Field(default_factory=ElevenLabsSettings)
+    heygen: HeyGenSettings = Field(default_factory=HeyGenSettings)
+    tavus: TavusSettings = Field(default_factory=TavusSettings)
+    credentials: CredentialSettings = Field(default_factory=CredentialSettings)
     openrouter: OpenRouterSettings = Field(default_factory=OpenRouterSettings)
     typesafe: TypeSafeSettings = Field(default_factory=TypeSafeSettings)
     whatsapp: WhatsAppSettings = Field(default_factory=WhatsAppSettings)

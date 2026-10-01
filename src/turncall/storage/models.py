@@ -542,6 +542,38 @@ class AmbienceSoundRow(Base):
     __table_args__ = (Index("ix_ambience_sounds_project_id", "project_id"),)
 
 
+class ProjectCredentialRow(Base):
+    """A project's own key for one provider account (ADR-0020).
+
+    One row per (project, account) — never per role. `ciphertext` is a Fernet
+    token over a JSON document: {"api_key": ...}, or for `aws` the AWSConfig
+    shape. Never returned by any read.
+    """
+
+    __tablename__ = "project_credentials"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "provider", name="uq_project_credentials_project_provider"
+        ),
+    )
+
+
 class TakeawayRow(Base):
     """A reusable post-call structured-output definition (Takeaway, ADR-0013).
 

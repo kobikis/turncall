@@ -11,7 +11,28 @@ and is not part of this repository's history.
 
 ## [Unreleased]
 
+### Changed
+
+- **`AWS_AGENT_CREDENTIALS_ENABLED` governs agent config only** (#164). With it
+  false, static AWS keys are still refused inside an agent's `aws` block, but an
+  `aws` project credential is accepted — it is encrypted and outside agent
+  config. False no longer means "no static AWS keys on this deployment".
+
 ### Added
+
+- **Project credentials — a project runs on its own provider accounts** (#159,
+  ADR-0020). `PUT /v1/credentials/{provider}` stores one key per provider
+  *account* (Deepgram once for STT and TTS, OpenAI once for four roles; `aws`
+  takes the agent AWS block's credential set), Fernet-encrypted at rest;
+  `GET /v1/credentials` and `DELETE /v1/credentials/{provider}` list and revoke.
+  No read returns a value. Every call resolves each provider's key as agent
+  inline → project credential → platform environment, read fresh per call, so a
+  write or a revocation takes effect on the next call with no restart.
+  `GET /v1/providers` lists the valid providers per role and, per account, two
+  booleans: `platform_key` and `project_credential`. New setting:
+  `CREDENTIAL_ENCRYPTION_KEY` (set once; startup fails if credentials exist and
+  it is unset). Deepgram, ElevenLabs, HeyGen and Tavus keys are now read
+  through settings like every other provider's.
 
 - **Ambience — a room the agent sounds like it is in** (#166). Upload a sound
   once (`POST /v1/ambience-sounds`) and any agent in the project names it:
@@ -28,6 +49,10 @@ and is not part of this repository's history.
   spurious interruptions and no empty turns at the default volume (#171).
 
 ### Fixed
+
+- **`llm.api_key` was silently discarded on the `openai` provider** (#161). It
+  now wins over the platform key, as it already did for `anthropic`,
+  `openrouter` and `custom_openai`.
 
 - **Deleted documents and knowledge bases left their files in object storage
   forever** (#168). Both deletes now remove the stored files after the commit,

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import ValidationError
 
+from tests.conftest import creds
 from turncall.api.v1.schemas.agents import (
     AgentResponse,
     LLMConfigSchema,
@@ -163,7 +164,7 @@ class TestPipelineFactoryBYOM:
         from turncall.orchestrator.pipeline_factory import _create_llm_service
 
         config = AgentConfig(llm=LLMConfig(provider="openai", model="gpt-4o-mini"))
-        service = _create_llm_service(config, "test-key")
+        service = _create_llm_service(config, creds("test-key"))
         from pipecat.services.openai.llm import OpenAILLMService
 
         assert isinstance(service, OpenAILLMService)
@@ -172,7 +173,7 @@ class TestPipelineFactoryBYOM:
         from turncall.orchestrator.pipeline_factory import _create_llm_service
 
         config = AgentConfig(llm=LLMConfig(provider="ollama", model="gemma4:12b"))
-        service = _create_llm_service(config, "unused")
+        service = _create_llm_service(config, creds("unused"))
         from pipecat.services.ollama.llm import OLLamaLLMService
 
         assert isinstance(service, OLLamaLLMService)
@@ -188,7 +189,7 @@ class TestPipelineFactoryBYOM:
                 api_key="tok_123",
             )
         )
-        service = _create_llm_service(config, "unused")
+        service = _create_llm_service(config, creds("unused"))
         from pipecat.services.openai.llm import OpenAILLMService
 
         assert isinstance(service, OpenAILLMService)
@@ -198,7 +199,7 @@ class TestPipelineFactoryBYOM:
 
         config = AgentConfig(llm=LLMConfig(provider="cohere", model="command-r"))
         with pytest.raises(ValueError, match="Unsupported LLM provider"):
-            _create_llm_service(config, "unused")
+            _create_llm_service(config, creds("unused"))
 
     def test_create_llm_service_anthropic(self) -> None:
         from pipecat.services.anthropic.llm import AnthropicLLMService
@@ -208,7 +209,7 @@ class TestPipelineFactoryBYOM:
         config = AgentConfig(
             llm=LLMConfig(provider="anthropic", model="claude-sonnet-4-20250514")
         )
-        service = _create_llm_service(config, "unused", anthropic_api_key="test-key")
+        service = _create_llm_service(config, creds("unused", anthropic="test-key"))
         assert isinstance(service, AnthropicLLMService)
 
     def test_custom_openai_requires_base_url(self) -> None:
@@ -216,7 +217,7 @@ class TestPipelineFactoryBYOM:
 
         config = AgentConfig(llm=LLMConfig(provider="custom_openai", model="test"))
         with pytest.raises(ValueError, match="base_url is required"):
-            _create_llm_service(config, "unused")
+            _create_llm_service(config, creds("unused"))
 
     def test_byom_url_allowlist_blocks_disallowed(self) -> None:
         from turncall.orchestrator.pipeline_factory import _create_llm_service
@@ -230,7 +231,7 @@ class TestPipelineFactoryBYOM:
             )
         )
         with pytest.raises(ValueError, match="not in allowed patterns"):
-            _create_llm_service(config, "unused", byom_settings=byom)
+            _create_llm_service(config, creds("unused"), byom_settings=byom)
 
     def test_byom_url_allowlist_allows_matching(self) -> None:
         from turncall.orchestrator.pipeline_factory import _create_llm_service
@@ -245,7 +246,7 @@ class TestPipelineFactoryBYOM:
                 base_url="http://localhost:11434/v1",
             )
         )
-        service = _create_llm_service(config, "unused", byom_settings=byom)
+        service = _create_llm_service(config, creds("unused"), byom_settings=byom)
         assert service is not None
 
     def test_byom_disabled_rejects_all(self) -> None:
@@ -254,7 +255,7 @@ class TestPipelineFactoryBYOM:
         byom = BYOMSettings(enabled=False)
         config = AgentConfig(llm=LLMConfig(provider="ollama", model="gemma4:12b"))
         with pytest.raises(ValueError, match="disabled"):
-            _create_llm_service(config, "unused", byom_settings=byom)
+            _create_llm_service(config, creds("unused"), byom_settings=byom)
 
     def test_empty_allowlist_allows_all(self) -> None:
         from turncall.orchestrator.pipeline_factory import _create_llm_service
@@ -268,7 +269,7 @@ class TestPipelineFactoryBYOM:
                 api_key="key",
             )
         )
-        service = _create_llm_service(config, "unused", byom_settings=byom)
+        service = _create_llm_service(config, creds("unused"), byom_settings=byom)
         assert service is not None
 
 

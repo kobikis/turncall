@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.conftest import mcp_settings, mcp_tool
+from tests.conftest import creds, mcp_settings, mcp_tool
 from turncall.domain.models import AgentConfig, ToolDefinition
 from turncall.orchestrator.pipeline_factory import _build_tools_schema, create_pipeline
 
@@ -35,9 +35,9 @@ def test_s2s_advertises_mcp_tools():
             config=config,
             transport=MagicMock(),
             call_context=MagicMock(),
-            openai_api_key="k",
             pipecat_settings=SimpleNamespace(),
             mcp_tools=[_tool("crm_lookup")],
+            credentials=creds("k"),
         )
 
     assert s2s.call_args.kwargs["mcp_tools"] == [_tool("crm_lookup")]

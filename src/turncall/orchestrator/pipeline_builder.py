@@ -21,6 +21,22 @@ from turncall.domain.models import AgentConfig
 from turncall.orchestrator.call_session import CallSession
 from turncall.orchestrator.pipeline_factory import CallContext, create_pipeline
 from turncall.orchestrator.tool_bridge import register_tools
+from turncall.services.credentials import Credentials
+
+
+async def load_call_credentials(
+    session_factory: Any, project_id: Any, settings: Settings
+) -> Credentials:
+    """Every key this call can resolve, read fresh per call (ADR-0020).
+
+    Read at build rather than cached, so a credential written or deleted
+    between two calls is what the next one runs on, with no restart.
+    """
+    from turncall.storage.repositories import credential_repo
+
+    async with session_factory() as session:
+        project = await credential_repo.load_documents(session, project_id, settings)
+    return Credentials.from_settings(settings, project)
 
 
 async def build_call_pipeline(
@@ -49,17 +65,18 @@ async def build_call_pipeline(
         session_factory, kb_attachments or []
     )
 
+    credentials = await load_call_credentials(
+        session_factory, call_context.project_id, settings
+    )
+
     pipeline = create_pipeline(
         config=config,
         transport=transport,
         call_context=call_context,
-        openai_api_key=settings.openai.api_key,
+        credentials=credentials,
         pipecat_settings=settings.pipecat,
         audio_sample_rate=audio_sample_rate,
         byom_settings=settings.byom,
-        google_api_key=settings.google.api_key,
-        anthropic_api_key=settings.anthropic.api_key,
-        openrouter_api_key=settings.openrouter.api_key,
         knowledge_base_attachments=kb_attachments or None,
         knowledge_preamble=knowledge_preamble,
         mcp_tools=mcp_tools or None,

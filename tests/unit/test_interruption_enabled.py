@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.conftest import creds
 from turncall.domain.models import AgentConfig, S2SConfig
 
 
@@ -91,8 +92,8 @@ class TestS2S:
                 ),
                 transport=MagicMock(),
                 call_context=MagicMock(),
-                openai_api_key="",
                 pipecat_settings=MagicMock(),
+                credentials=creds(""),
             )
         finally:
             logger.remove(sink)

@@ -12,6 +12,7 @@ both the wiring AND the tuple shape — a bare callable would raise
 import pytest
 from pipecat.utils.text.base_text_aggregator import AggregationType
 
+from tests.conftest import creds
 from turncall.domain.models import AgentConfig, TTSConfig
 from turncall.orchestrator.pipeline_factory import _create_tts_service
 
@@ -23,7 +24,7 @@ async def test_tts_service_strips_markdown(provider, monkeypatch):
     monkeypatch.setenv("CARTESIA_API_KEY", "x")
     config = AgentConfig(tts=TTSConfig(provider=provider))
 
-    service = _create_tts_service(config, openai_api_key="x")
+    service = _create_tts_service(config, credentials=creds("x"))
 
     # Mirror pipecat's runtime unpacking exactly — a bad shape fails here.
     applied = None

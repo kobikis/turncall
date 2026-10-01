@@ -5,7 +5,6 @@ Pipecat pipeline with the appropriate STT, LLM, TTS services,
 context aggregation, and observability.
 """
 
-import os
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -22,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from turncall.config.settings import BYOMSettings, PipecatSettings
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.observability import ObservabilityProcessor
+from turncall.services.credentials import Credentials
 from turncall.services.llm_models import resolve_llm_model
 from turncall.services.tool_mocks import ToolMocks
 
@@ -141,7 +141,7 @@ def _stt_model(provider: str, configured: str) -> str:
 
 
 def _create_stt_service(
-    config: AgentConfig, openai_api_key: str, *, sample_rate: int = 8000
+    config: AgentConfig, credentials: Credentials, *, sample_rate: int = 8000
 ) -> Any:
     """Create STT service. Supports deepgram, openai, elevenlabs, and cartesia.
 
@@ -164,7 +164,7 @@ def _create_stt_service(
         from pipecat.services.deepgram.stt import DeepgramSTTService
 
         stt = DeepgramSTTService(
-            api_key=os.environ.get("DEEPGRAM_API_KEY", ""),
+            api_key=credentials.api_key("deepgram"),
             sample_rate=sample_rate,
             encoding="linear16",
             settings=DeepgramSTTService.Settings(
@@ -194,7 +194,7 @@ def _create_stt_service(
         from turncall.adapters.aiohttp_client import get_aiohttp_session
 
         stt = ElevenLabsSTTService(
-            api_key=os.environ.get("ELEVENLABS_API_KEY", ""),
+            api_key=credentials.api_key("elevenlabs"),
             aiohttp_session=get_aiohttp_session(),
             sample_rate=sample_rate,
             settings=ElevenLabsSTTService.Settings(
@@ -211,7 +211,7 @@ def _create_stt_service(
         from pipecat.services.openai.stt import OpenAISTTService
 
         return OpenAISTTService(
-            api_key=openai_api_key,
+            api_key=credentials.api_key("openai"),
             settings=OpenAISTTService.Settings(
                 model=model,
                 **keyterm_kwargs,
@@ -222,10 +222,11 @@ def _create_stt_service(
     if provider == "cartesia":
         from pipecat.services.cartesia.stt import CartesiaSTTService
 
-        api_key = os.environ.get("CARTESIA_API_KEY", "")
+        api_key = credentials.api_key("cartesia")
         if not api_key:
             raise ValueError(
-                "CARTESIA_API_KEY environment variable is required for Cartesia STT"
+                "No Cartesia key: connect a project credential or set "
+                "CARTESIA_API_KEY (required for Cartesia STT)"
             )
         stt = CartesiaSTTService(
             api_key=api_key,
@@ -274,10 +275,8 @@ def _openai_extra_body(
 
 def _create_llm_service(
     config: AgentConfig,
-    openai_api_key: str,
+    credentials: Credentials,
     *,
-    anthropic_api_key: str = "",
-    openrouter_api_key: str = "",
     byom_settings: BYOMSettings | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
@@ -324,7 +323,7 @@ def _create_llm_service(
             else None
         )
         return OpenAILLMService(
-            api_key=config.llm.api_key or openrouter_api_key,
+            api_key=credentials.api_key("openrouter", config.llm.api_key),
             base_url="https://openrouter.ai/api/v1",
             settings=OpenAILLMService.Settings(
                 model=model,
@@ -337,7 +336,7 @@ def _create_llm_service(
 
     if provider == "openai":
         return OpenAILLMService(
-            api_key=openai_api_key,
+            api_key=credentials.api_key("openai", config.llm.api_key),
             settings=OpenAILLMService.Settings(
                 model=model,
                 **si,
@@ -350,7 +349,7 @@ def _create_llm_service(
     if provider == "anthropic":
         from pipecat.services.anthropic.llm import AnthropicLLMService
 
-        resolved_key = config.llm.api_key or anthropic_api_key
+        resolved_key = credentials.api_key("anthropic", config.llm.api_key)
         # No temperature. Anthropic rejects it on current models — a
         # claude-sonnet-5 request carrying one answers 400 "`temperature` is
         # deprecated for this model.", which makes the service unusable and
@@ -412,7 +411,7 @@ def _create_llm_service(
         from turncall.services.aws_credentials import resolve_aws_credentials
         from turncall.services.bedrock_models import is_anthropic_model
 
-        credentials = resolve_aws_credentials(config.aws)
+        aws = resolve_aws_credentials(credentials.aws(config.aws))
         settings_kwargs: dict[str, Any] = {
             "model": model,
             **si,
@@ -434,7 +433,7 @@ def _create_llm_service(
             settings_kwargs["additional_model_request_fields"] = config.llm.extra
         return AWSBedrockLLMService(
             settings=AWSBedrockLLMService.Settings(**settings_kwargs),
-            **credentials.bedrock_kwargs(),
+            **aws.bedrock_kwargs(),
         )
 
     raise ValueError(f"Unsupported LLM provider: {provider}")
@@ -548,7 +547,7 @@ def _warn_unusable_pronunciations(config: AgentConfig, tts: Any) -> None:
     )
 
 
-def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
+def _create_tts_service(config: AgentConfig, credentials: Credentials) -> Any:
     """Create TTS service. Supports deepgram, openai, elevenlabs, and cartesia."""
     provider = config.tts.provider
 
@@ -559,7 +558,7 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
         from pipecat.services.deepgram.tts import DeepgramTTSService
 
         return DeepgramTTSService(
-            api_key=os.environ.get("DEEPGRAM_API_KEY", ""),
+            api_key=credentials.api_key("deepgram"),
             settings=DeepgramTTSService.Settings(
                 voice=voice,
                 **speed,
@@ -601,7 +600,7 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
         # ElevenLabs uses voice IDs (e.g. "21m00Tcm4TlvDq8ikWAM" for Rachel)
         # or voice names via Settings. Pass as voice in Settings.
         return ElevenLabsTTSService(
-            api_key=os.environ.get("ELEVENLABS_API_KEY", ""),
+            api_key=credentials.api_key("elevenlabs"),
             enable_ssml_parsing=enable_ssml_parsing,
             settings=ElevenLabsTTSService.Settings(
                 voice=voice,
@@ -618,7 +617,7 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
         from pipecat.services.openai.tts import OpenAITTSService
 
         return OpenAITTSService(
-            api_key=openai_api_key,
+            api_key=credentials.api_key("openai"),
             settings=OpenAITTSService.Settings(
                 model=model,
                 voice=voice,
@@ -631,10 +630,11 @@ def _create_tts_service(config: AgentConfig, openai_api_key: str) -> Any:
     if provider == "cartesia":
         from pipecat.services.cartesia.tts import CartesiaTTSService
 
-        api_key = os.environ.get("CARTESIA_API_KEY", "")
+        api_key = credentials.api_key("cartesia")
         if not api_key:
             raise ValueError(
-                "CARTESIA_API_KEY environment variable is required for Cartesia TTS"
+                "No Cartesia key: connect a project credential or set "
+                "CARTESIA_API_KEY (required for Cartesia TTS)"
             )
         if not voice:
             # Cartesia will reject the request; say why here rather than leave
@@ -938,7 +938,7 @@ def _build_tools_schema(
     return ToolsSchema(standard_tools=functions)
 
 
-def _create_avatar_service(avatar: Any) -> Any:
+def _create_avatar_service(avatar: Any, credentials: Credentials) -> Any:
     """Create the video avatar service (HeyGen or Tavus).
 
     Both are Pipecat AIServices that consume TTS audio and emit avatar video
@@ -957,7 +957,7 @@ def _create_avatar_service(avatar: Any) -> Any:
         from pipecat.services.heygen.client import ServiceType
         from pipecat.services.heygen.video import HeyGenVideoService
 
-        key = os.environ.get("HEYGEN_LIVE_AVATAR_API_KEY", "")
+        key = credentials.api_key("heygen")
         if not key:
             logger.warning(
                 "Avatar enabled but HEYGEN_LIVE_AVATAR_API_KEY unset; skipping"
@@ -977,7 +977,7 @@ def _create_avatar_service(avatar: Any) -> Any:
     if provider == "tavus":
         from pipecat.services.tavus.video import TavusVideoService
 
-        key = os.environ.get("TAVUS_API_KEY", "")
+        key = credentials.api_key("tavus")
         if not key:
             logger.warning("Avatar enabled but TAVUS_API_KEY unset; skipping")
             return None
@@ -1060,14 +1060,11 @@ def create_pipeline(
     config: AgentConfig,
     transport: Any,
     call_context: CallContext,
-    openai_api_key: str,
+    credentials: Credentials,
     pipecat_settings: PipecatSettings,
     *,
     audio_sample_rate: int = 8000,
     byom_settings: BYOMSettings | None = None,
-    google_api_key: str = "",
-    anthropic_api_key: str = "",
-    openrouter_api_key: str = "",
     knowledge_base_attachments: list[dict[str, Any]] | None = None,
     knowledge_preamble: str = "",
     mcp_tools: list[Any] | None = None,
@@ -1082,17 +1079,16 @@ def create_pipeline(
             config,
             transport,
             call_context,
-            openai_api_key,
+            credentials,
             pipecat_settings,
             audio_sample_rate=audio_sample_rate,
-            google_api_key=google_api_key,
             byom_settings=byom_settings,
             mcp_tools=mcp_tools,
         )
 
     # --- Cascade pipeline (STT → LLM → TTS) ---
     # Create AI services
-    stt = _create_stt_service(config, openai_api_key, sample_rate=audio_sample_rate)
+    stt = _create_stt_service(config, credentials, sample_rate=audio_sample_rate)
 
     # BYOM providers describe their tools in the prompt rather than advertising
     # them through the API: many local models (Gemma and friends) only do
@@ -1112,13 +1108,11 @@ def create_pipeline(
 
     llm = _create_llm_service(
         config,
-        openai_api_key,
-        anthropic_api_key=anthropic_api_key,
-        openrouter_api_key=openrouter_api_key,
+        credentials,
         byom_settings=byom_settings,
         system_instruction=system_instruction,
     )
-    tts = _create_tts_service(config, openai_api_key)
+    tts = _create_tts_service(config, credentials)
     _warn_unusable_pronunciations(config, tts)
 
     # The context starts empty — the system prompt is on the LLM service as
@@ -1189,8 +1183,7 @@ def create_pipeline(
         # and this stays named for what it is.
         voicemail_llm = _create_llm_service(
             config,
-            openai_api_key,
-            anthropic_api_key=anthropic_api_key,
+            credentials,
             temperature=0.1,
             reasoning_effort=None,
         )
@@ -1313,7 +1306,7 @@ def create_pipeline(
             kb_processor = KnowledgeRetrievalProcessor(
                 knowledge_base_ids=auto_kb_ids,
                 session_factory=call_context.session_factory,
-                openai_api_key=openai_api_key,
+                openai_api_key=credentials.api_key("openai"),
                 top_k=first_auto.get("top_k", 5),
                 similarity_threshold=first_auto.get("similarity_threshold", 0.3),
             )
@@ -1337,7 +1330,7 @@ def create_pipeline(
             handler = create_knowledge_tool_handler(
                 knowledge_base_ids=tool_kb_ids,
                 session_factory=call_context.session_factory,
-                openai_api_key=openai_api_key,
+                openai_api_key=credentials.api_key("openai"),
                 top_k=first_tool.get("top_k", 5),
                 similarity_threshold=first_tool.get("similarity_threshold", 0.3),
             )
@@ -1374,7 +1367,7 @@ def create_pipeline(
     # flag from the caller.
     avatar = None
     if avatar_enabled and config.avatar.enabled:
-        avatar = _create_avatar_service(config.avatar)
+        avatar = _create_avatar_service(config.avatar, credentials)
 
     # App-side recording: captures merged user+bot audio just BEFORE
     # transport.output() (which consumes audio frames and doesn't push them
@@ -1452,11 +1445,10 @@ def _create_s2s_pipeline(
     config: AgentConfig,
     transport: Any,
     call_context: CallContext,
-    openai_api_key: str,
+    credentials: Credentials,
     pipecat_settings: PipecatSettings,
     *,
     audio_sample_rate: int = 8000,
-    google_api_key: str = "",
     byom_settings: BYOMSettings | None = None,
     mcp_tools: list[Any] | None = None,
 ) -> Pipeline:
@@ -1498,7 +1490,7 @@ def _create_s2s_pipeline(
     if config.s2s.base_url and byom_settings:
         _validate_byom_url(config.s2s.base_url, byom_settings)
 
-    s2s_llm = create_s2s_service(config, openai_api_key, google_api_key=google_api_key)
+    s2s_llm = create_s2s_service(config, credentials)
 
     # Build context — system prompt + first_message are handled by the S2S
     # service directly (SessionProperties.instructions for OpenAI,

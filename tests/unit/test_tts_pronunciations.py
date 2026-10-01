@@ -20,6 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 from loguru import logger
 
+from tests.conftest import creds
 from turncall.domain.models import AgentConfig, S2SConfig, TTSConfig
 
 METFORMIN = {"Metformin": "mɛtˈfɔɹmɪn"}
@@ -196,7 +197,7 @@ class TestTheWarnings:
         config = AgentConfig(
             tts=TTSConfig(provider="openai", voice="alloy", pronunciations=METFORMIN)
         )
-        tts = _create_tts_service(config, openai_api_key="x")
+        tts = _create_tts_service(config, credentials=creds("x"))
 
         said = _warnings(lambda: _warn_unusable_pronunciations(config, tts))
 
@@ -223,7 +224,7 @@ class TestTheWarnings:
                 pronunciations=METFORMIN,
             )
         )
-        tts = _create_tts_service(config, openai_api_key="x")
+        tts = _create_tts_service(config, credentials=creds("x"))
 
         assert tts.format_pronunciation("Metformin", "mɛtˈfɔɹmɪn") is not None
         said = _warnings(lambda: _warn_unusable_pronunciations(config, tts))
@@ -245,7 +246,7 @@ class TestTheWarnings:
             tts=TTSConfig(provider="elevenlabs", voice="v", pronunciations=METFORMIN)
         )
         assert config.tts.model == "aura-2-helena-en", "the sentinel moved"
-        tts = _create_tts_service(config, openai_api_key="x")
+        tts = _create_tts_service(config, credentials=creds("x"))
 
         said = _warnings(lambda: _warn_unusable_pronunciations(config, tts))
 
@@ -263,7 +264,7 @@ class TestTheWarnings:
         config = AgentConfig(
             tts=TTSConfig(provider="deepgram", pronunciations=METFORMIN)
         )
-        tts = _create_tts_service(config, openai_api_key="x")
+        tts = _create_tts_service(config, credentials=creds("x"))
 
         said = _warnings(lambda: _warn_unusable_pronunciations(config, tts))
 
@@ -284,8 +285,8 @@ class TestTheWarnings:
                 ),
                 transport=MagicMock(),
                 call_context=MagicMock(),
-                openai_api_key="",
                 pipecat_settings=MagicMock(),
+                credentials=creds(""),
             )
         )
 
@@ -318,7 +319,7 @@ class TestElevenLabsSsmlParsing:
         config = AgentConfig(
             tts=TTSConfig(provider="elevenlabs", voice="21m00Tcm4TlvDq8ikWAM", **tts)
         )
-        return config, _create_tts_service(config, openai_api_key="x")
+        return config, _create_tts_service(config, credentials=creds("x"))
 
     def test_a_phoneme_model_with_pronunciations_reads_the_markup(self) -> None:
         """The whole point: asked of the *constructed* service, which is where

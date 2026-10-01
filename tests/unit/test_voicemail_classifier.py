@@ -15,6 +15,8 @@ line and a call that never detects voicemail at all.
 
 import pytest
 
+from tests.conftest import creds
+
 
 def _detector(mocker, *, custom_system_prompt: str | None):
     from turncall.domain.models import AgentConfig
@@ -40,8 +42,8 @@ def _detector(mocker, *, custom_system_prompt: str | None):
         config=config,
         transport=mocker.MagicMock(),
         call_context=call_context,
-        openai_api_key="test-key",
         pipecat_settings=mocker.MagicMock(),
+        credentials=creds("test-key"),
     )
 
     from pipecat.extensions.voicemail.voicemail_detector import VoicemailDetector

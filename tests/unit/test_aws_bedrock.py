@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import ValidationError
 
+from tests.conftest import creds
 from turncall.api.v1.schemas.agents import (
     AgentConfigSchema,
     AWSConfigSchema,
@@ -137,7 +138,7 @@ class TestCredentialsReachTheServices:
                 region="ap-southeast-2",
             ),
         )
-        service = _create_llm_service(config, "unused-openai-key")
+        service = _create_llm_service(config, creds("unused-openai-key"))
 
         params = service._aws_params
         assert params["aws_access_key_id"] == "AKIABEDROCK"
@@ -167,7 +168,7 @@ class TestCredentialsReachTheServices:
             ),
             system_prompt="Be brief.",
         )
-        service = create_s2s_service(config, "unused")
+        service = create_s2s_service(config, creds("unused"))
 
         assert service._access_key_id == "AKIANOVA"
         assert service._secret_access_key == "nova-secret"
@@ -187,7 +188,7 @@ class TestCredentialsReachTheServices:
             ),
             aws=_STATIC,
         )
-        service = create_s2s_service(config, "unused")
+        service = create_s2s_service(config, creds("unused"))
         assert service._settings.model == "amazon.nova-sonic-v1:0"
         assert service._settings.voice == "tiffany"
 
@@ -201,7 +202,7 @@ class TestCredentialsReachTheServices:
             s2s=S2SConfig(provider="aws", extra={"endpointing_sensitivity": "HIGH"}),
             aws=_STATIC,
         )
-        service = create_s2s_service(config, "unused")
+        service = create_s2s_service(config, creds("unused"))
         assert service._settings.endpointing_sensitivity == "HIGH"
 
     def test_create_client_re_resolves_credentials(
@@ -217,7 +218,7 @@ class TestCredentialsReachTheServices:
         config = AgentConfig(
             pipeline_mode="s2s", s2s=S2SConfig(provider="aws"), aws=_STATIC
         )
-        service = s2s_config.create_s2s_service(config, "unused")
+        service = s2s_config.create_s2s_service(config, creds("unused"))
         assert service._access_key_id == "AKIATEST"
 
         # Don't build a real client; we only care that credentials refreshed.
