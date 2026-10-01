@@ -55,6 +55,7 @@ from turncall.evals.run_warnings import (
 )
 from turncall.evals.snapshots import harness_config
 from turncall.evals.targets import ResolvedTarget, resolve_target
+from turncall.services.credentials import Credentials, for_project
 from turncall.services.credentials import scope as credentials_scope
 from turncall.services.tool_mocks import ToolMocks
 
@@ -129,6 +130,7 @@ class IterationPlan:
     tool_mocks: dict[str, Any]
     live_tools: bool
     timeout_s: float
+    credentials: Credentials
 
     def fresh_mocks(self) -> ToolMocks:
         """A recorder for one iteration.
@@ -440,6 +442,9 @@ async def _plan_run(
         target = await resolve_target(
             session, project_id=run.project_id, target=run.target
         )
+        # Fails closed (ADR-0020): unreadable project keys error the run rather
+        # than grading it on the platform's account, which nothing would show.
+        credentials = await for_project(session, run.project_id)
     except Exception as exc:
         await _record_unrunnable(session, run, exc)
         return None
@@ -526,6 +531,7 @@ async def _plan_run(
         tool_mocks=tool_mocks,
         live_tools=live_tools,
         timeout_s=iteration_budget_seconds(settings, run.iterations),
+        credentials=credentials,
     )
 
 
@@ -637,19 +643,6 @@ def batch_outcome(batch_id: UUID, runs: list[Any]) -> dict[str, Any]:
     }
 
 
-async def _run_credentials(session: Any, project_id: Any) -> Any:
-    """The project's keys for the judge, else the platform's (logged)."""
-    from turncall.services.credentials import Credentials, for_project
-
-    try:
-        return await for_project(session, project_id)
-    except Exception:
-        logger.exception("eval_credentials_unreadable", project_id=str(project_id))
-        from turncall.config.settings import get_settings
-
-        return Credentials.from_settings(get_settings())
-
-
 async def execute_run(
     run_id: UUID,
     *,
@@ -689,10 +682,9 @@ async def execute_run(
         )
         if plan is None:
             return
-        credentials = await _run_credentials(session, run.project_id)
 
     # The judge and persona are built by pipecat from a factory path, so the
     # project's keys reach them through the context rather than an argument.
-    with credentials_scope(credentials):
+    with credentials_scope(plan.credentials):
         outcomes = await run_iterations(plan, iterations=iterations, execute=execute)
     await _finish_run(session_factory, plan, outcomes)

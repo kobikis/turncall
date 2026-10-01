@@ -252,6 +252,11 @@ class TestTheRunStillCompletes:
             patch("turncall.storage.repositories.eval_repo.start_run", AsyncMock()),
             patch("turncall.storage.repositories.eval_repo.finish_run", finish),
             patch.object(runner_mod, "resolve_target", AsyncMock(return_value=target)),
+            patch.object(
+                runner_mod,
+                "for_project",
+                AsyncMock(return_value=runner_mod.Credentials()),
+            ),
         ):
             await runner_mod.execute_run(
                 run.id,

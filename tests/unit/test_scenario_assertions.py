@@ -201,6 +201,11 @@ class TestItReachesBothSurfaces:
         with (
             patch("turncall.storage.repositories.eval_repo.start_run", start),
             patch.object(runner_mod, "resolve_target", AsyncMock(return_value=target)),
+            patch.object(
+                runner_mod,
+                "for_project",
+                AsyncMock(return_value=runner_mod.Credentials()),
+            ),
             patch.object(runner_mod, "_dispatch_run_event", AsyncMock()),
         ):
             await runner_mod._plan_run(
