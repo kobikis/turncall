@@ -6,8 +6,8 @@ and the suppression list hook in, so none of them can be bypassed by a second
 dial path; `tests/unit/test_outbound_dial.py` fails if one appears.
 
 A transfer is not an outbound call: it adds a leg to a call that already
-exists, to a target the agent's own config names, and has no call row of its
-own.
+exists and has no call row of its own, so the suppression list does not
+apply to its target (#227).
 """
 
 from __future__ import annotations
@@ -21,7 +21,12 @@ from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundErro
 from turncall.config import get_settings
 from turncall.domain.enums import CallDirection, CallEventType
 from turncall.services.twilio_accounts import account_for_number
-from turncall.storage.repositories import agent_repo, call_repo, phone_number_repo
+from turncall.storage.repositories import (
+    agent_repo,
+    call_repo,
+    phone_number_repo,
+    suppression_repo,
+)
 from turncall.storage.repositories.credential_repo import CredentialKeyError
 
 if TYPE_CHECKING:
@@ -46,6 +51,17 @@ async def place_outbound_call(
     Returns the call row, `initiated` and carrying the carrier's call SID.
     """
     settings = get_settings()
+
+    # Before anything is written: a refused dial leaves no call row behind.
+    if await suppression_repo.is_suppressed(
+        session, project_id=project_id, number=to_number
+    ):
+        raise ApiError(
+            status_code=409,
+            code=ErrorCode.NUMBER_SUPPRESSED,
+            message=f"{to_number} is on this project's suppression list",
+            details={"to_number": to_number},
+        )
 
     agent = await agent_repo.get_agent_by_id(session, agent_id, project_id=project_id)
     if agent is None:

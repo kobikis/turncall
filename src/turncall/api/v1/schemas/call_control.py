@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from turncall.api.v1.schemas import E164_PATTERN
+
 
 class EndCallRequest(BaseModel):
     reason: str = "api_request"
@@ -17,7 +19,7 @@ class BriefingSummary(BaseModel):
 
 
 class TransferCallRequest(BaseModel):
-    target_number: str = Field(..., pattern=r"^\+[1-9]\d{1,14}$")
+    target_number: str = Field(..., pattern=E164_PATTERN)
     transfer_mode: str = Field(default="cold", pattern=r"^(warm|cold)$")
     # Spoken to the CALLER before the dial (both modes). Renames the old
     # non-functional pre_transfer_message. See ADR-0009.

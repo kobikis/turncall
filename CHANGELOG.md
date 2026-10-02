@@ -44,6 +44,12 @@ and is not part of this repository's history.
 
 ### Added
 
+- **A suppression list, enforced on every outbound dial** (#227).
+  `POST/GET /v1/suppression-list` and `DELETE /v1/suppression-list/{id}`
+  manage a project's numbers that must never be dialled; an outbound call to
+  one is refused `409 number_suppressed` before any call row or carrier dial.
+  Adding a listed number again returns the existing entry. No consent records.
+
 - **A phone number can bring its own Twilio account.** `POST /v1/phone-numbers`
   and `PUT /v1/phone-numbers/{id}` take `twilio_account_sid` +
   `twilio_auth_token`. The number is looked up on that account — so

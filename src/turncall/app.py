@@ -217,6 +217,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(call_control_router, prefix="/v1")
     app.include_router(phone_numbers_router, prefix="/v1")
 
+    from turncall.api.v1.suppression import router as suppression_router
+
+    app.include_router(suppression_router, prefix="/v1")
+
     from turncall.api.v1.chat import router as chat_router
 
     app.include_router(chat_router, prefix="/v1")
