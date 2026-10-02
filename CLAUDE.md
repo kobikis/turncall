@@ -984,6 +984,7 @@ All Pipecat imports isolated in `orchestrator/`. No other module imports Pipecat
 - `tool_bridge.py` — Registers tools + writes ToolInvocation records
 - `observability.py` — Logs transcripts/events to DB + dispatches webhooks
 - `turn_metrics.py` — one `metrics.turn` call event per turn (STT/LLM/TTS TTFB + user-to-bot latency), from pipecat's latency observer; stored, never dispatched, none in an eval (#176). Read them with `GET /v1/calls/{id}/events?event_type=metrics.turn`
+- `delegation_events.py` — one `delegation.completed` call event per gpt-live-1 delegation (#247), `{mode, duration_ms, outcome}`, outcome `answered`\|`timed_out`\|`failed`\|`declined`. Stored, never dispatched, none in an eval — like `metrics.turn`. A request gpt-live-1 acknowledged with no event beside it is the one it never delegated. `timed_out` is client mode only (responses mode has no delegation timeout; #243 bounds each function call and the delegate answers past it); a client delegate that returned no text is `failed`. `declined` (no delegate configured, e.g. no tools) is recorded with `mode: client`, the target gpt-live-1 asked for. Reads pipecat's private delegation run, pinned by `test_delegation_completed.py`
 - `telemetry.py` — OpenTelemetry tracing setup + Pipecat observers (latency/turn/LLM/transcription/startup). See ADR-0010
 - `session_manager.py` — Active session registry
 
@@ -1017,6 +1018,10 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 nearest-rank `p50_ms`/`p95_ms` plus `count`. Null with no measured turns (zeros
 would read as "instant"); a stage no turn reported is absent. Never stored, and
 the per-turn records never ride in the webhook.
+
+Stored-only call events — on the call's event log (`GET /v1/calls/{id}/events`),
+never sent to webhook subscribers, none in an eval: `metrics.turn` (#176) and
+`delegation.completed` (#247).
 
 The call read (`GET /v1/calls[/{id}]`) carries the same derived fields —
 `ended_reason`, `agent_name`, `agent_version`, `latency_summary`, `failovers` — from the same function,

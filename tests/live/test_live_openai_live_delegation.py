@@ -36,11 +36,27 @@ from turncall.domain.models import AgentConfig
 from turncall.evals import scenario as scenario_mod
 from turncall.evals.harness import run_iteration
 from turncall.evals.runner import ResolvedTarget
+from turncall.orchestrator import delegation_events
 from turncall.services.tool_mocks import ToolMocks
 
 pytestmark = [pytest.mark.live, pytest.mark.asyncio]
 
 _EMPTY = {"type": "object", "properties": {}}
+
+
+@pytest.fixture
+def outcomes(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Every `delegation.completed` payload (#247). An eval stores none, so
+    they are caught where they are made."""
+    seen: list[dict[str, Any]] = []
+    make = delegation_events.delegation_payload
+
+    def _capture(*args: Any) -> dict[str, Any]:
+        seen.append(make(*args))
+        return seen[-1]
+
+    monkeypatch.setattr(delegation_events, "delegation_payload", _capture)
+    return seen
 
 
 @pytest.fixture
@@ -51,7 +67,7 @@ def session_factory() -> Any:
 
 
 async def test_a_mocked_tool_and_end_call_are_delegated(
-    session_factory: Any,
+    session_factory: Any, outcomes: list[dict[str, Any]]
 ) -> None:
     if not os.environ.get("OPENAI_API_KEY"):
         pytest.skip("needs OPENAI_API_KEY")
@@ -107,6 +123,12 @@ async def test_a_mocked_tool_and_end_call_are_delegated(
                     },
                 ],
             },
+            # Time for the delegation to finish: it ends with the response
+            # after the function call, past the expectation above (#247).
+            {
+                "user": "Great, thank you.",
+                "expect": [{"event": "response", "within_ms": 60000}],
+            },
         ]
     }
     mocks = ToolMocks(
@@ -138,10 +160,14 @@ async def test_a_mocked_tool_and_end_call_are_delegated(
     assert "check_hours" in called, (called, agent_errors)
     assert not mocks.refused
     assert result.passed, ([str(f) for f in result.failures], agent_errors)
+    assert outcomes, "no delegation.completed: gpt-live-1 never delegated"
+    assert {"mode": "responses", "outcome": "answered"}.items() <= outcomes[
+        0
+    ].items(), outcomes
 
 
 async def test_client_mode_delegates_a_mocked_tool_to_the_agents_llm(
-    session_factory: Any,
+    session_factory: Any, outcomes: list[dict[str, Any]]
 ) -> None:
     """No delegation block: tools make it client mode, the agent's own llm.
 
@@ -212,3 +238,7 @@ async def test_client_mode_delegates_a_mocked_tool_to_the_agents_llm(
     called = [c["tool_name"] for c in mocks.calls]
     assert called and set(called) == {"check_hours"}, (called, agent_errors)
     assert not mocks.refused
+    assert outcomes, "no delegation.completed: gpt-live-1 never delegated"
+    assert {"mode": "client", "outcome": "answered"}.items() <= outcomes[0].items(), (
+        outcomes
+    )

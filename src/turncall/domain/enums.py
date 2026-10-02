@@ -95,6 +95,8 @@ class CallEventType(StrEnum):
 
     # Per-turn timings (#176). Stored, never dispatched as a webhook.
     METRICS_TURN = "metrics.turn"
+    # One per gpt-live-1 delegation (#247). Stored, never dispatched.
+    DELEGATION_COMPLETED = "delegation.completed"
 
     # Tools
     TOOL_CALLED = "tool.called"

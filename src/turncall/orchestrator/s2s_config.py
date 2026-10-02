@@ -331,6 +331,8 @@ def _create_openai_live(
         OpenAILiveLLMService,
     )
 
+    from turncall.orchestrator.delegation_events import DelegationTrackingLiveService
+
     s2s = config.s2s
     delegation = resolve_delegation(s2s, has_tools=bool(tools))
 
@@ -371,7 +373,7 @@ def _create_openai_live(
         # call is cancelled and the live model is told it did not complete.
         service_kwargs["function_call_timeout_secs"] = delegation.timeout_seconds
 
-    service = OpenAILiveLLMService(**service_kwargs)
+    service = DelegationTrackingLiveService(**service_kwargs)
 
     logger.info(
         "S2S service created: provider=openai_live model={model} voice={voice} "
