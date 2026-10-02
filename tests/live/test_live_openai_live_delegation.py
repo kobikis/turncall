@@ -1,4 +1,7 @@
-"""gpt-live-1 delegates to a Responses model, over the eval loopback (#243).
+"""gpt-live-1 delegates, over the eval loopback (#243, #244).
+
+Responses mode first, then client mode — the agent's own llm as the delegate,
+the default for an `openai_live` agent with tools.
 
 The live model calls no tools of its own; in responses mode the OpenAI-hosted
 delegate makes the function calls and the live service runs them with
@@ -135,3 +138,77 @@ async def test_a_mocked_tool_and_end_call_are_delegated(
     assert "check_hours" in called, (called, agent_errors)
     assert not mocks.refused
     assert result.passed, ([str(f) for f in result.failures], agent_errors)
+
+
+async def test_client_mode_delegates_a_mocked_tool_to_the_agents_llm(
+    session_factory: Any,
+) -> None:
+    """No delegation block: tools make it client mode, the agent's own llm.
+
+    Asserted on the mocks rather than a `function_call` expectation: the
+    delegate runs in its own worker, outside the pipeline the harness
+    observes. The answer is what gpt-live-1 relays back from the delegate.
+    """
+    if not os.environ.get("OPENAI_API_KEY"):
+        pytest.skip("needs OPENAI_API_KEY")
+    blob = {
+        "pipeline_mode": "s2s",
+        "system_prompt": "You are the receptionist at Luigi's restaurant.",
+        "first_message": "Thanks for calling Luigi's, how can I help?",
+        "s2s": {"provider": "openai_live"},
+        "tools": [
+            {
+                "name": "check_hours",
+                "description": "Look up the restaurant's opening hours.",
+                "parameters_schema": _EMPTY,
+                "webhook_url": "https://example.invalid/hours",
+            }
+        ],
+    }
+    target = ResolvedTarget(
+        project_id=uuid4(),
+        config=AgentConfig.model_validate(blob),
+        config_blob=blob,
+        agent_id=None,
+    )
+    definition = {
+        "turns": [
+            {
+                "user": "Hello?",
+                "expect": [
+                    {
+                        "event": "response",
+                        "text_contains": "calling",
+                        "within_ms": 30000,
+                    }
+                ],
+            },
+            {
+                "user": "Hi, what time do you open today?",
+                # Waits for the relayed answer; its wording ("noon", "12 PM")
+                # is gpt-live-1's, so the assertion is on the mocks below.
+                "expect": [{"event": "response", "within_ms": 60000}],
+            },
+        ]
+    }
+    mocks = ToolMocks(responses={"check_hours": {"today": "12:00-22:00"}})
+    parsed = scenario_mod.parse(
+        scenario_mod.with_modality(definition, EvalModality.AUDIO),
+        name="live-openai-live-client-delegation",
+    )
+    agent_errors: list[str] = []
+    await run_iteration(
+        parsed=parsed,
+        kind=EvalKind.SCRIPTED,
+        target=target,
+        modality=EvalModality.AUDIO,
+        settings=Settings(),
+        session_factory=session_factory,
+        run_id=uuid4(),
+        tool_mocks=mocks,
+        agent_errors=agent_errors,
+    )
+
+    called = [c["tool_name"] for c in mocks.calls]
+    assert called and set(called) == {"check_hours"}, (called, agent_errors)
+    assert not mocks.refused

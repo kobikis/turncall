@@ -7652,7 +7652,7 @@
         "properties": {
           "mode": {
             "type": "string",
-            "pattern": "^responses$",
+            "pattern": "^(client|responses)$",
             "title": "Mode",
             "default": "responses"
           },
@@ -7717,7 +7717,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "DelegationConfigSchema",
-        "description": "gpt-live-1's delegate (#243): the model it hands tool and reasoning\nwork to. Only `responses` (an OpenAI-hosted delegate) for now."
+        "description": "gpt-live-1's delegate: the model it hands tool and reasoning work to \u2014\nthe agent's own `llm` (`client`, #244) or an OpenAI-hosted one\n(`responses`, #243)."
       },
       "EndCallRequest": {
         "properties": {

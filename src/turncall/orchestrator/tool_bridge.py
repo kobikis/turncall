@@ -194,6 +194,7 @@ async def _run_ending_tool(
     args: dict[str, Any],
     call_context: CallContext,
     params: Any,
+    hangup_gate: Any = None,
 ) -> str:
     """Record the end and arm the hangup, then let the model say goodbye.
 
@@ -201,12 +202,19 @@ async def _run_ending_tool(
     the goodbye, and `HangupAfterReply` ends the call once it has played. The
     arm frame goes first: the result can be dropped by a cancellation, and
     the record is already written.
+
+    `hangup_gate` is the call's gate itself, for an LLM outside the call's
+    pipeline — an `openai_live` client delegate in its own worker (#245),
+    where pushing from `params.llm` would arm nothing.
     """
     from turncall.orchestrator.hangup import HangupArmFrame
 
     result = await _execute_builtin(function_name, args, call_context)
     if _ends_the_call(result):
-        await params.llm.push_frame(HangupArmFrame())
+        if hangup_gate is not None:
+            await hangup_gate.queue_frame(HangupArmFrame())
+        else:
+            await params.llm.push_frame(HangupArmFrame())
     await params.result_callback(result)
     return result
 
@@ -403,6 +411,7 @@ def register_tools(
     llm: LLMService,
     tools: list[ToolDefinition],
     call_context: CallContext,
+    hangup_gate: Any = None,
 ) -> None:
     """Register tool definitions as LLM function handlers.
 
@@ -419,7 +428,7 @@ def register_tools(
             continue
         seen.add(tool_def.name)
         try:
-            _register_single_tool(llm, tool_def, call_context)
+            _register_single_tool(llm, tool_def, call_context, hangup_gate)
             registered += 1
         except Exception:
             logger.exception("Failed to register tool: {name}", name=tool_def.name)
@@ -430,6 +439,7 @@ def _register_single_tool(
     llm: LLMService,
     tool_def: ToolDefinition,
     call_context: CallContext,
+    hangup_gate: Any = None,
 ) -> None:
     """Register a single tool on the LLM service."""
     from pipecat.services.llm_service import FunctionCallParams
@@ -466,7 +476,9 @@ def _register_single_tool(
             # reason, so this only makes the tool agree with it. (An eval has
             # no call to end, and the harness owns its length.)
             result = await asyncio.shield(
-                _run_ending_tool(function_name, dict(args), call_context, params)
+                _run_ending_tool(
+                    function_name, dict(args), call_context, params, hangup_gate
+                )
             )
             delivered = True
         elif function_name in BUILTIN_TOOL_NAMES:

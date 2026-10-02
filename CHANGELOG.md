@@ -13,6 +13,13 @@ and is not part of this repository's history.
 
 ### Changed
 
+- **An `openai_live` agent with tools now delegates to its own `llm`** (#244).
+  With no `s2s.delegation` block its tools were never offered; it now gets
+  client delegation, so the `llm` provider needs a key (`missing_keys`
+  otherwise). `end_call`, `do_not_call` and `transfer_call` work from the
+  client delegate (#245): the call ends after gpt-live-1's goodbye, as on
+  cascade.
+
 - **`handoff_to_agent` on an `openai_live` S2S agent is now refused** (422)
   (#243). The handoff swapped the delegate's tools but not gpt-live-1's
   session, so the caller kept the previous agent's voice and prompt.
@@ -58,6 +65,13 @@ and is not part of this repository's history.
   config. False no longer means "no static AWS keys on this deployment".
 
 ### Added
+
+- **Client delegation for `openai_live`** (#244): `s2s.delegation`
+  `{"mode": "client"}` makes the agent's own `llm` gpt-live-1's delegate, run
+  with the agent's static and MCP tools and TurnCall's handlers — mocked in
+  evals, recorded in `tool_invocations`. `instructions` and `timeout_seconds`
+  (one delegation's budget, default 30) apply; `model`, `reasoning_effort` and
+  `service_tier` are responses-only and a 422 here.
 
 - **`s2s.delegation` on `openai_live` agents** (#243). gpt-live-1 calls no
   tools itself; it hands them to a *delegate*. The new block configures a

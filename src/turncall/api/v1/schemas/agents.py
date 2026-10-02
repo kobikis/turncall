@@ -314,12 +314,13 @@ class VoicemailDetectionSchema(BaseModel):
 
 
 class DelegationConfigSchema(BaseModel):
-    """gpt-live-1's delegate (#243): the model it hands tool and reasoning
-    work to. Only `responses` (an OpenAI-hosted delegate) for now."""
+    """gpt-live-1's delegate: the model it hands tool and reasoning work to —
+    the agent's own `llm` (`client`, #244) or an OpenAI-hosted one
+    (`responses`, #243)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    mode: str = Field(default="responses", pattern=r"^responses$")
+    mode: str = Field(default="responses", pattern=r"^(client|responses)$")
     model: str | None = Field(default=None, min_length=1, max_length=256)
     reasoning_effort: str | None = Field(
         default=None, pattern=r"^(none|minimal|low|medium|high|xhigh|max)$"
@@ -336,6 +337,17 @@ class DelegationConfigSchema(BaseModel):
             msg = (
                 "s2s.delegation in responses mode needs a model: it names the "
                 "OpenAI-hosted model gpt-live-1 delegates to"
+            )
+            raise ValueError(msg)
+        hosted_only = [
+            f
+            for f in ("model", "reasoning_effort", "service_tier")
+            if getattr(self, f) is not None
+        ]
+        if self.mode == "client" and hosted_only:
+            msg = (
+                f"s2s.delegation in client mode takes no {', '.join(hosted_only)}: "
+                "the delegate is the agent's own llm, configured there"
             )
             raise ValueError(msg)
         return self

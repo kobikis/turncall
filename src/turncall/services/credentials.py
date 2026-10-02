@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from turncall.domain.models import resolve_delegation
 from turncall.domain.providers import AWS_ACCOUNT, account_for
 
 if TYPE_CHECKING:
@@ -119,6 +120,14 @@ class Credentials:
         needed: list[tuple[str, str | None]]
         if config.pipeline_mode == "s2s":
             needed = [(config.s2s.provider, None)]
+            # A client delegate is the agent's own llm (#244). MCP servers
+            # count as tools before discovery, so a keyless delegate is caught
+            # whether or not they answer.
+            delegation = resolve_delegation(
+                config.s2s, has_tools=bool(config.tools or config.mcp_servers)
+            )
+            if delegation is not None and delegation.mode == "client":
+                needed.append((config.llm.provider, config.llm.api_key))
         else:
             needed = [
                 (config.stt.provider, None),

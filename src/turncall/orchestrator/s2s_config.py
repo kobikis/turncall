@@ -15,6 +15,7 @@ from turncall.domain.models import (
     AWSConfig,
     DelegationConfig,
     ToolDefinition,
+    resolve_delegation,
 )
 from turncall.services.credentials import Credentials
 
@@ -45,12 +46,14 @@ def create_s2s_service(
     config: AgentConfig,
     credentials: Credentials,
     tools: Sequence[ToolDefinition] = (),
+    delegate: Any = None,
 ) -> Any:
     """Create the appropriate S2S service based on provider.
 
     `tools` is what the call advertises (static + MCP, deduplicated). Only
     `openai_live` reads it here, to tell gpt-live-1 what it can delegate; every
-    provider gets the tools themselves through the pipeline's context.
+    other provider gets the tools themselves through the pipeline's context.
+    `delegate` is the worker running the agent's own llm, for client mode.
     """
     provider = config.s2s.provider
     if provider == "openai":
@@ -58,7 +61,9 @@ def create_s2s_service(
     if provider == "google":
         return _create_gemini_live(config, credentials.api_key("google"))
     if provider == "openai_live":
-        return _create_openai_live(config, credentials.api_key("openai"), tools)
+        return _create_openai_live(
+            config, credentials.api_key("openai"), tools, delegate
+        )
     if provider == "aws":
         return _create_nova_sonic(config, credentials.aws(config.aws))
     raise ValueError(f"Unsupported S2S provider: {provider}")
@@ -256,23 +261,6 @@ def _create_nova_sonic(config: AgentConfig, aws: AWSConfig) -> Any:
     return service
 
 
-def resolve_delegation(config: AgentConfig) -> DelegationConfig | None:
-    """The agent's delegation, with `s2s.extra.backend_model` read as a block.
-
-    The extra key predates the block (#243) and keeps working unchanged: it is
-    responses mode with that model, and its `service_tier` beside it.
-    """
-    s2s = config.s2s
-    if s2s.delegation is not None:
-        return s2s.delegation
-    backend_model = s2s.extra.get("backend_model")
-    if not backend_model:
-        return None
-    return DelegationConfig(
-        model=backend_model, service_tier=s2s.extra.get("service_tier")
-    )
-
-
 def _delegation_paragraph(tools: Sequence[ToolDefinition]) -> str:
     """Tell gpt-live-1 when to delegate, from the agent's own tool list.
 
@@ -315,7 +303,10 @@ def _responses_delegation(config: AgentConfig, delegation: DelegationConfig) -> 
 
 
 def _create_openai_live(
-    config: AgentConfig, api_key: str, tools: Sequence[ToolDefinition] = ()
+    config: AgentConfig,
+    api_key: str,
+    tools: Sequence[ToolDefinition] = (),
+    delegate: Any = None,
 ) -> Any:
     """Create an OpenAILiveLLMService (gpt-live-1) from S2SConfig.
 
@@ -327,16 +318,21 @@ def _create_openai_live(
 
     It calls no tools itself: it *delegates* tool and reasoning work to a
     delegate while the conversation keeps going (CONTEXT.md, "Delegation").
-    In responses mode OpenAI hosts the delegate, and this service runs the
+    In client mode (#244) the delegate is the agent's own llm, running in
+    pipecat's backend worker (`delegate`) with TurnCall's handlers on it. In
+    responses mode OpenAI hosts the delegate, and this service runs the
     function calls it makes with TurnCall's handlers, in the call's own
     pipeline — so `end_call`'s hangup gate works as on every provider.
     Without a delegation pipecat declines every delegation, and the live
     model answers on its own.
     """
-    from pipecat.services.openai.live.llm import OpenAILiveLLMService
+    from pipecat.services.openai.live.llm import (
+        ClientDelegation,
+        OpenAILiveLLMService,
+    )
 
     s2s = config.s2s
-    delegation = resolve_delegation(config)
+    delegation = resolve_delegation(s2s, has_tools=bool(tools))
 
     # S2SConfig's default model is OpenAI Realtime's. Swap only when the agent
     # left it untouched, so an explicitly wrong model is reported by OpenAI
@@ -361,7 +357,13 @@ def _create_openai_live(
     if s2s.base_url:
         service_kwargs["base_url"] = s2s.base_url
 
-    if delegation is not None:
+    if delegation is not None and delegation.mode == "client":
+        if delegate is None:
+            raise ValueError("client delegation needs its delegate worker")
+        service_kwargs["delegation"] = ClientDelegation(
+            backend=delegate, timeout_secs=delegation.timeout_seconds
+        )
+    elif delegation is not None:
         service_kwargs["delegation"] = _responses_delegation(config, delegation)
         # pipecat's ResponsesDelegation carries no timeout of its own — the
         # Responses run is OpenAI's. What runs here is each function call the
@@ -377,7 +379,7 @@ def _create_openai_live(
         model=model,
         voice=s2s.voice,
         delegation=(
-            f"{delegation.mode}:{delegation.model}"
+            f"{delegation.mode}:{delegation.model or config.llm.provider}"
             if delegation
             else "none (live model answers directly)"
         ),

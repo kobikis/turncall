@@ -107,11 +107,13 @@ async def test_other_builtins_still_let_the_model_reply():
     assert events[0][1][1] is None
 
 
-async def test_a_barge_in_cannot_split_the_record_from_the_end():
+@pytest.mark.parametrize("via_gate", [False, True])
+async def test_a_barge_in_cannot_split_the_record_from_the_end(via_gate):
     """Built-ins are cancelled on interruption, and pipecat cancels the task
     even after the result is in. Once the end is recorded the hangup has to be
     armed too: a cancel between the two left the row saying the agent hung up
-    on a call that kept running."""
+    on a call that kept running. `via_gate`: an openai_live client delegate,
+    which arms the call's gate directly (#245)."""
     import asyncio
 
     entered = asyncio.Event()
@@ -124,6 +126,10 @@ async def test_a_barge_in_cannot_split_the_record_from_the_end():
             captured["handler"] = fn
 
         async def push_frame(self, frame, *_direction):
+            pushed.append(frame)
+
+    class _Gate:
+        async def queue_frame(self, frame, *_direction):
             pushed.append(frame)
 
     async def result_callback(result, *, properties=None):
@@ -143,7 +149,9 @@ async def test_a_barge_in_cannot_split_the_record_from_the_end():
         patch.object(tool_bridge, "_execute_builtin", new=AsyncMock(return_value=OK)),
         patch.object(tool_bridge, "_spawn"),
     ):
-        tool_bridge.register_tools(llm, [_tool("end_call")], call_context)
+        tool_bridge.register_tools(
+            llm, [_tool("end_call")], call_context, _Gate() if via_gate else None
+        )
         task = asyncio.create_task(
             captured["handler"](
                 SimpleNamespace(
