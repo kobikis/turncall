@@ -213,6 +213,21 @@ async def _end_after_goodbye(result: str, params: Any) -> None:
     await params.llm.push_frame(EndWorkerFrame(reason="assistant_ended"))
 
 
+async def _run_ending_tool(
+    function_name: str,
+    args: dict[str, Any],
+    call_context: CallContext,
+    params: Any,
+) -> str:
+    """Record the end, then end after the goodbye — or, refused, just answer."""
+    result = await _execute_builtin(function_name, args, call_context)
+    if _ends_the_call(result):
+        await _end_after_goodbye(result, params)
+    else:
+        await params.result_callback(result)
+    return result
+
+
 def _mark_uninterruptible(frame: Any) -> Any:
     """Mark a frame as one an interruption must not drop.
 
@@ -458,7 +473,20 @@ def _register_single_tool(
 
         started = time.perf_counter()
         prepared_handoff: PreparedHandoff | None = None
-        if function_name in BUILTIN_TOOL_NAMES:
+        delivered = False
+        if function_name in ENDING_TOOL_NAMES and not call_context.is_eval:
+            # Shielded as one unit: a built-in is cancelled when the caller
+            # talks over the goodbye, and pipecat cancels it even after its
+            # result is in. A cancel between recording the end and ending the
+            # pipeline left the row saying the agent hung up on a call that
+            # kept running. The end frame is uninterruptible for the same
+            # reason, so this only makes the tool agree with it. (An eval has
+            # no call to end, and the harness owns its length.)
+            result = await asyncio.shield(
+                _run_ending_tool(function_name, dict(args), call_context, params)
+            )
+            delivered = True
+        elif function_name in BUILTIN_TOOL_NAMES:
             # Prepare the handoff *first*: `_execute_builtin` commits
             # `status=HANDED_OFF` + `active_agent_id`, and anything that waits
             # or raises after that commit is a window where the record says
@@ -492,14 +520,7 @@ def _register_single_tool(
         # dispatch (which can retry ~90s against a dead subscriber) run off the
         # critical path so they never sit between the caller and the response.
         latency_ms = int((time.perf_counter() - started) * 1000)
-        if (
-            function_name in ENDING_TOOL_NAMES
-            # An eval has no call to end, and the harness owns its length.
-            and not call_context.is_eval
-            and _ends_the_call(result)
-        ):
-            await _end_after_goodbye(result, params)
-        else:
+        if not delivered:
             await params.result_callback(result)
         if call_context.tool_mocks is not None:
             # A `live` eval: the tool really ran, and the run's record says so.

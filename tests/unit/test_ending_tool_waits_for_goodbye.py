@@ -107,3 +107,61 @@ async def test_other_builtins_still_let_the_model_reply():
 
     assert [kind for kind, _ in events] == ["result"]
     assert events[0][1][1] is None
+
+
+async def test_a_barge_in_cannot_split_the_record_from_the_end():
+    """Built-ins are cancelled on interruption, and pipecat cancels the task
+    even after the result is in. Once the end is recorded the pipeline has to
+    end too: a cancel between the two left the row saying the agent hung up
+    on a call that kept running."""
+    import asyncio
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    pushed: list[object] = []
+    captured = {}
+
+    class _LLM:
+        def register_function(self, fn_name, fn, **_options):
+            captured["handler"] = fn
+
+        async def push_frame(self, frame, *_direction):
+            pushed.append(frame)
+
+    async def result_callback(result, *, properties=None):
+        entered.set()
+        await release.wait()  # the interruption lands here
+
+    llm = _LLM()
+    call_context = SimpleNamespace(
+        call_id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
+        mcp_manager=None,
+        session_factory=AsyncMock(),
+        tool_mocks=None,
+        is_eval=False,
+    )
+    with (
+        patch.object(tool_bridge, "_execute_builtin", new=AsyncMock(return_value=OK)),
+        patch.object(tool_bridge, "_spawn"),
+    ):
+        tool_bridge.register_tools(llm, [_tool("end_call")], call_context)
+        task = asyncio.create_task(
+            captured["handler"](
+                SimpleNamespace(
+                    function_name="end_call",
+                    arguments={},
+                    result_callback=result_callback,
+                    llm=llm,
+                )
+            )
+        )
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release.set()
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+    assert [type(f) for f in pushed] == [EndWorkerFrame]
