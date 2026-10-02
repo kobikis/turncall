@@ -43,6 +43,29 @@ def s2s_greeting_frame() -> LLMRunFrame:
     return LLMRunFrame()
 
 
+async def run_until_pipeline_done(runner: WorkerRunner, worker: PipelineWorker) -> None:
+    """Run `worker` under `runner` and return once its pipeline is done.
+
+    A child worker does not end with its pipeline: an `openai_live` client
+    delegate (#244) is one, and when the pipeline ends (the hangup gate's
+    `EndWorkerFrame`) or is cancelled directly (a hangup, the duration or idle
+    guard), pipecat 1.12's runner waited on it forever — the call was never
+    finalized, `call.ended` never sent. Cancelling the runner once the
+    pipeline is done ends the children too, and is a no-op otherwise.
+    """
+    await runner.add_workers(worker)
+    run = asyncio.create_task(runner.run())
+    finished = asyncio.create_task(worker.wait())
+    try:
+        await asyncio.wait({run, finished}, return_when=asyncio.FIRST_COMPLETED)
+        await runner.cancel(reason="pipeline finished")
+        await run  # re-raises what the runner raised
+    finally:
+        for task in (run, finished):
+            task.cancel()
+        await asyncio.gather(run, finished, return_exceptions=True)
+
+
 class CallSession:
     """Manages the lifecycle of a single voice call's Pipecat pipeline.
 
@@ -238,7 +261,7 @@ class CallSession:
                         )
                     )
 
-            await self._runner.run(self._task)
+            await run_until_pipeline_done(self._runner, self._task)
         except asyncio.CancelledError:
             logger.info("call_session_cancelled", call_id=str(self.call_id))
         except Exception as exc:
