@@ -1603,6 +1603,9 @@ def _create_s2s_pipeline(
     s2s_llm = create_s2s_service(
         config, credentials, tools=advertised, delegate=delegate
     )
+    from turncall.orchestrator.delegation_events import record_delegations
+
+    record_delegations(s2s_llm, call_context)
 
     # Build context — system prompt + first_message are handled by the S2S
     # service directly (SessionProperties.instructions for OpenAI,

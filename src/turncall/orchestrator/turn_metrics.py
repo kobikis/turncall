@@ -94,22 +94,31 @@ class TurnMetricsRecorder:
         _spawn(self._write(turn_payload(self._turn, latency, breakdown)))
 
     async def _write_event(self, payload: dict[str, Any]) -> None:
-        ctx = self._call_context
-        try:
-            from turncall.storage.repositories import call_repo
+        await store_call_event(self._call_context, CallEventType.METRICS_TURN, payload)
 
-            async with ctx.session_factory() as session:
-                seq = await call_repo.get_next_sequence_number(session, ctx.call_id)
-                await call_repo.create_call_event(
-                    session,
-                    call_id=ctx.call_id,
-                    event_type=CallEventType.METRICS_TURN,
-                    payload=payload,
-                    sequence_number=seq,
-                )
-                await session.commit()
-        except Exception:
-            logger.exception("turn_metrics_write_error", call_id=str(ctx.call_id))
+
+async def store_call_event(
+    ctx: CallContext, event_type: CallEventType, payload: dict[str, Any]
+) -> None:
+    """Store one call event and dispatch nothing: for the records only the
+    call's event log carries. Best-effort — a lost record is logged."""
+    try:
+        from turncall.storage.repositories import call_repo
+
+        async with ctx.session_factory() as session:
+            seq = await call_repo.get_next_sequence_number(session, ctx.call_id)
+            await call_repo.create_call_event(
+                session,
+                call_id=ctx.call_id,
+                event_type=event_type,
+                payload=payload,
+                sequence_number=seq,
+            )
+            await session.commit()
+    except Exception:
+        logger.exception(
+            "call_event_write_error", call_id=str(ctx.call_id), event_type=event_type
+        )
 
 
 def turn_metrics_observers(call_context: CallContext) -> list[UserBotLatencyObserver]:
