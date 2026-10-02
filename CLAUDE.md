@@ -905,7 +905,7 @@ POST /v1/calls/{id}/analysis/rerun   # Re-run analysis
 ### Built-in Tools
 | Name | Description | Parameters |
 |------|-------------|------------|
-| `end_call` | Terminate the call — after the agent's goodbye: records `call.ended` `source: control` and arms `orchestrator/hangup.py`, the model replies to the result (the goodbye), and the gate ends the pipeline gracefully after that reply; the transport closing is the hangup. Keyed on the reply, not the tool call, because models rarely say goodbye and call a tool in one response. `POST /v1/calls/{id}/end` still hangs up at once | `reason` (optional) |
+| `end_call` | Terminate the call — after the agent's goodbye: records `call.ended` `source: control` and arms `orchestrator/hangup.py`, the model replies to the result (the goodbye), and the gate ends the pipeline gracefully after that reply; the transport closing is the hangup. Keyed on the reply, not the tool call, because models rarely say goodbye and call a tool in one response. The goodbye is final: input stops when it is written, so the caller is not heard (or transcribed, or recorded) while it plays. `POST /v1/calls/{id}/end` still hangs up at once | `reason` (optional) |
 | `transfer_call` | Transfer to phone number (cold/warm) | `target_number` (required), `transfer_mode`, `transfer_message`, `briefing`, `fallback_message`, `reason` |
 | `handoff_to_agent` | Switch to another agent | `agent_id` (required), `reason`, `context` |
 | `send_dtmf` | Send keypad tones | `digits` (required) |

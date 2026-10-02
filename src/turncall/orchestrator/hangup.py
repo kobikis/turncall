@@ -11,6 +11,13 @@ with an `EndFrame` from the source: the TTS drains its pending audio on that
 frame and the output transport plays out its queue before closing. Closing is
 the hangup — a Twilio stream with no TwiML after `<Connect>` ends the call, a
 WebRTC peer is disconnected — and `finalize_call` completes the row.
+
+The goodbye is final, on purpose. The `EndFrame` reaches `transport.input()`
+first, which stops reading audio while the goodbye is still playing: the
+caller cannot interrupt it, and what they say over it is neither transcribed
+nor recorded. Listening on until it had played would raise the question of
+what talking over it means, and a goodbye that can be taken back would need
+the end recorded at the hangup rather than at the tool.
 """
 
 from __future__ import annotations

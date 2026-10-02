@@ -34,6 +34,10 @@ the tool's result as it would any other — that answer is its goodbye — and t
 call ends once that reply has played in full. A model that already said goodbye
 alongside the tool call is told it may reply with nothing.
 
+The goodbye is final. From the moment it is written the call stops listening:
+the caller cannot interrupt it, and anything they say while it plays is not
+transcribed or recorded.
+
 So the tool belongs at the moment the conversation is over, and the goodbye
 after it. Many models will not say goodbye *and* call a tool in one reply; if
 the instructions ask for the goodbye first, they say it, wait for the caller,

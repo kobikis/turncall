@@ -19,6 +19,8 @@ and is not part of this repository's history.
   the tool's result; the call ends once that reply — the goodbye — has played
   out. Instructions that ask the model to say goodbye *before* calling the tool
   now work against it: many models then say goodbye and wait for the caller.
+  The goodbye is final: the caller cannot interrupt it, and what they say
+  while it plays is not transcribed or recorded.
   On WebRTC, where `end_call` used to mark the call ended and leave it
   running, it now ends it. `POST /v1/calls/{id}/end` still hangs up at once.
 
