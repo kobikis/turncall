@@ -227,7 +227,9 @@ def _build_handoff_frames(config: AgentConfig) -> tuple[Any, Any]:
     # instructions would survive the handoff.
     prompt_frame = _mark_uninterruptible(
         LLMUpdateSettingsFrame(
-            delta=LLMSettings(system_instruction=_build_system_instruction(config))
+            delta=LLMSettings(system_instruction=_build_system_instruction(config)),
+            # A failover backup (#222) must take over as the new agent too.
+            reach_inactive_services=True,
         )
     )
     # Tools live in two places: the handler registry and the advertised
@@ -311,7 +313,12 @@ async def _apply_handoff_context(
     """
     params.context.set_messages([])
     if prepared.config.tools:
-        register_tools(params.llm, list(prepared.config.tools), call_context)
+        from turncall.orchestrator.llm_failover import FailoverLLM
+
+        # Every member of a failover group (#222), not only the one answering.
+        register_tools(
+            FailoverLLM.group_of(params.llm), list(prepared.config.tools), call_context
+        )
     for frame in prepared.frames:
         await params.pipeline_worker.queue_frame(frame)
 

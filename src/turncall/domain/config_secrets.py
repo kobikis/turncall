@@ -16,7 +16,7 @@ def sanitize_config(config: dict[str, Any]) -> dict[str, Any]:
 
     A read-only key must not be able to exfiltrate credentials for external
     systems, so this covers all secret-bearing fields, not just llm.api_key:
-    - llm.api_key (BYOM provider key)
+    - llm.api_key (BYOM provider key), and each llm.failover[].api_key (#222)
     - aws.secret_access_key / aws.session_token (adr/0016)
     - server_url.secret (server-events signing secret)
     - tools[].webhook_secret (custom-tool signing secret)
@@ -29,8 +29,8 @@ def sanitize_config(config: dict[str, Any]) -> dict[str, Any]:
     out = {**config}
 
     llm = out.get("llm")
-    if isinstance(llm, dict) and llm.get("api_key") is not None:
-        out["llm"] = {**llm, "api_key": MASK}
+    if isinstance(llm, dict):
+        out["llm"] = _mask_llm(llm)
 
     aws = out.get("aws")
     if isinstance(aws, dict):
@@ -72,6 +72,17 @@ def sanitize_target(target: Any) -> Any:
     if not isinstance(target, dict) or not isinstance(target.get("agent"), dict):
         return target
     return {**target, "agent": sanitize_config(target["agent"])}
+
+
+def _mask_llm(llm: dict[str, Any]) -> dict[str, Any]:
+    out = {**llm}
+    if out.get("api_key") is not None:
+        out["api_key"] = MASK
+    if isinstance(out.get("failover"), list):
+        out["failover"] = [
+            _mask_llm(e) if isinstance(e, dict) else e for e in out["failover"]
+        ]
+    return out
 
 
 def _mask_mcp_server(server: Any) -> Any:

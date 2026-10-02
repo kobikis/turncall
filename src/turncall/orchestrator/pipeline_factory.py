@@ -19,7 +19,7 @@ from pipecat.services.openai.llm import OpenAILLMService
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.config.settings import BYOMSettings, PipecatSettings
-from turncall.domain.models import AgentConfig
+from turncall.domain.models import AgentConfig, LLMConfig
 from turncall.orchestrator.observability import ObservabilityProcessor
 from turncall.services.credentials import Credentials
 from turncall.services.llm_models import resolve_llm_model
@@ -440,6 +440,28 @@ def _create_llm_service(
         )
 
     raise ValueError(f"Unsupported LLM provider: {provider}")
+
+
+def _llm_label(llm: LLMConfig) -> str:
+    return f"{llm.provider}/{resolve_llm_model(llm.provider, llm.model)}"
+
+
+def _create_llm_stage(
+    config: AgentConfig, credentials: Credentials, **kwargs: Any
+) -> Any:
+    """The call's LLM: the service itself, or it and its backups (#222)."""
+    llm = _create_llm_service(config, credentials, **kwargs)
+    if not config.llm.failover:
+        return llm
+    from turncall.orchestrator.llm_failover import FailoverLLM
+
+    members = [(_llm_label(config.llm), llm)]
+    for entry in config.llm.failover:
+        backup = config.model_copy(update={"llm": entry})
+        members.append(
+            (_llm_label(entry), _create_llm_service(backup, credentials, **kwargs))
+        )
+    return FailoverLLM(members)
 
 
 # `TTSConfig.model` and `.voice` both default to a Deepgram Aura voice whatever
@@ -1113,7 +1135,7 @@ def create_pipeline(
             model=config.llm.model,
         )
 
-    llm = _create_llm_service(
+    llm = _create_llm_stage(
         config,
         credentials,
         byom_settings=byom_settings,

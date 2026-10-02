@@ -107,6 +107,8 @@ class CallEventType(StrEnum):
 
     # Errors
     ERROR_RAISED = "error.raised"
+    # A provider stopped being usable and the call moved to its backup (#222).
+    PROVIDER_FAILOVER = "provider.failover"
 
     # SMS / Chat
     SESSION_CREATED = "session.created"

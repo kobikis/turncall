@@ -230,15 +230,15 @@ async def list_control_ended_calls(
     return set(result.scalars().all())
 
 
-async def list_turn_metrics_by_call(
-    session: AsyncSession, call_ids: list[UUID]
+async def list_payloads_by_call(
+    session: AsyncSession, call_ids: list[UUID], event_type: CallEventType
 ) -> dict[UUID, list[dict[str, Any]]]:
-    """`metrics.turn` payloads for a page of calls, in turn order, one query."""
+    """One event type's payloads for a page of calls, in order, one query."""
     result = await session.execute(
         select(CallEventRow.call_id, CallEventRow.payload)
         .where(
             CallEventRow.call_id.in_(call_ids),
-            CallEventRow.event_type == CallEventType.METRICS_TURN,
+            CallEventRow.event_type == event_type,
         )
         .order_by(CallEventRow.call_id, CallEventRow.sequence_number)
     )

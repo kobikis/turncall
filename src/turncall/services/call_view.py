@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from turncall.domain.call_state import infer_ended_reason, is_active_state
-from turncall.domain.enums import CallStatus
+from turncall.domain.enums import CallEventType, CallStatus
 from turncall.storage.repositories import agent_repo, call_repo
 
 if TYPE_CHECKING:
@@ -33,6 +33,8 @@ class CallFacts:
     agent_version: int | None = None
     # `metrics.turn` payloads in turn order (#176).
     turn_metrics: tuple[dict[str, Any], ...] = ()
+    # `provider.failover` payloads in the order they happened (#222).
+    failovers: tuple[dict[str, Any], ...] = ()
 
 
 _STAGES = ("stt", "llm", "tts")
@@ -98,6 +100,7 @@ def derived_fields(call: Any, facts: CallFacts) -> dict[str, Any]:
         "agent_name": facts.agent_name,
         "agent_version": facts.agent_version,
         "latency_summary": latency_summary(facts.turn_metrics),
+        "failovers": list(facts.failovers),
     }
 
 
@@ -110,7 +113,12 @@ async def load_call_facts(
     call_ids = [c.id for c in calls]
     event_types = await call_repo.list_event_types_by_call(session, call_ids)
     control_ended = await call_repo.list_control_ended_calls(session, call_ids)
-    turn_metrics = await call_repo.list_turn_metrics_by_call(session, call_ids)
+    turn_metrics = await call_repo.list_payloads_by_call(
+        session, call_ids, CallEventType.METRICS_TURN
+    )
+    failovers = await call_repo.list_payloads_by_call(
+        session, call_ids, CallEventType.PROVIDER_FAILOVER
+    )
     agent_ids = list({c.active_agent_id for c in calls if c.active_agent_id})
     agents = (
         await agent_repo.get_names_and_versions(session, agent_ids) if agent_ids else {}
@@ -124,6 +132,7 @@ async def load_call_facts(
             agent_name=agent[0] if agent else None,
             agent_version=agent[1] if agent else None,
             turn_metrics=tuple(turn_metrics.get(call.id, ())),
+            failovers=tuple(failovers.get(call.id, ())),
         )
     return facts
 

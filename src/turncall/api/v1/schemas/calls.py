@@ -40,6 +40,8 @@ class CallResponse(BaseModel):
     agent_name: str | None = None
     agent_version: int | None = None
     latency_summary: dict[str, Any] | None = None
+    # `{role, from, to, error}` per provider failover, in order (#222).
+    failovers: list[dict[str, Any]] = []
 
     @classmethod
     def from_row(

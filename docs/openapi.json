@@ -7840,6 +7840,14 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Extra"
+          },
+          "failover": {
+            "items": {
+              "$ref": "#/components/schemas/LLMConfigSchema"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Failover"
           }
         },
         "type": "object",

@@ -96,6 +96,9 @@ class LLMConfig(DomainModel):
     # OpenAI-family only (openai/openrouter/custom_openai); sent only when set.
     reasoning_effort: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
+    # Backup LLMs, in order, a call moves to when this one stops being usable
+    # (#222). Voice cascade only; each entry's key resolves like any other.
+    failover: list["LLMConfig"] = Field(default_factory=list)
 
 
 class TTSConfig(DomainModel):
