@@ -106,8 +106,12 @@ async def place_outbound_call(
     updated = await call_repo.update_call_status(
         session, call.id, status="initiated", provider_call_sid=provider_call_sid
     )
-    # The row was created in this session a moment ago; it cannot be gone.
-    assert updated is not None
+    if updated is None:
+        # Created in this session a moment ago; gone means something deleted it
+        # mid-dial, and the carrier call is already placed.
+        raise RuntimeError(
+            f"outbound call {call.id} vanished after dialling {provider_call_sid}"
+        )
     call = updated
     seq = await call_repo.get_next_sequence_number(session, call.id)
     await call_repo.create_call_event(
@@ -119,7 +123,7 @@ async def place_outbound_call(
             "from_number": phone_number.e164_number,
             "to_number": to_number,
             "agent_id": str(agent.id),
-            "direction": "outbound",
+            "direction": CallDirection.OUTBOUND.value,
         },
         sequence_number=seq,
     )

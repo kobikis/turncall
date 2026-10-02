@@ -8,6 +8,7 @@ before the move; the guard fails on a new path.
 
 import ast
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -180,6 +181,19 @@ class TestRoute:
         assert r.json()["code"] == "no_twilio_account"
         dial.carrier.assert_not_awaited()
 
+    def test_a_sealed_token_without_the_key_is_503(self, dial) -> None:
+        from turncall.storage.repositories.credential_repo import CredentialKeyError
+
+        with patch(
+            "turncall.services.outbound_dial.account_for_number",
+            side_effect=CredentialKeyError("CREDENTIAL_ENCRYPTION_KEY is not set"),
+        ):
+            r = dial.post()
+        assert r.status_code == 503
+        assert r.json()["code"] == "credential_key_unavailable"
+        dial.create.assert_not_awaited()
+        dial.carrier.assert_not_awaited()
+
     def test_no_public_base_url_is_409(self, dial) -> None:
         dial.settings = _settings(base_url="")
         r = dial.post()
@@ -187,41 +201,42 @@ class TestRoute:
         dial.carrier.assert_not_awaited()
 
 
-def _calls_to(attr: str) -> list[str]:
-    """Every module under src/ that calls `<something>.<attr>(...)`."""
+def _modules_calling(match: Callable[[ast.Attribute], bool]) -> list[str]:
+    """Every module under src/ with a call `x.<attr>(...)` that `match` accepts."""
     found = []
     for path in SRC.rglob("*.py"):
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
+        for node in ast.walk(ast.parse(path.read_text())):
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
-                and node.func.attr == attr
+                and match(node.func)
             ):
                 found.append(path.relative_to(SRC).as_posix())
                 break
     return sorted(found)
 
 
+# A carrier SDK's own dial: `client.calls.create` on Twilio, `calls.dial` on
+# Telnyx. Add the next carrier's here.
+_SDK_DIALS = {("calls", "create"), ("calls", "dial")}
+
+
+def _is_sdk_dial(func: ast.Attribute) -> bool:
+    return (
+        isinstance(func.value, ast.Attribute)
+        and (func.value.attr, func.attr) in _SDK_DIALS
+    )
+
+
 class TestOneDialPath:
     def test_only_the_dial_service_asks_a_carrier_to_dial(self) -> None:
-        assert _calls_to("initiate_outbound_call") == [DIAL_SERVICE]
+        found = _modules_calling(lambda f: f.attr == "initiate_outbound_call")
+        assert found == [DIAL_SERVICE]
 
     def test_carrier_dial_primitives_stay_inside_the_adapters(self) -> None:
-        """A carrier SDK's own dial (`client.calls.create` on Twilio,
-        `calls.dial` on Telnyx) belongs to an adapter's
+        """A carrier SDK's dial belongs to an adapter's
         `initiate_outbound_call`, which only the service calls. Anywhere else
         it is a dial path the service never sees."""
-        primitives = {("calls", "create"), ("calls", "dial")}
-        found = []
-        for path in SRC.rglob("*.py"):
-            for node in ast.walk(ast.parse(path.read_text())):
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and isinstance(node.func.value, ast.Attribute)
-                    and (node.func.value.attr, node.func.attr) in primitives
-                ):
-                    found.append(path.relative_to(SRC).as_posix())
+        found = _modules_calling(_is_sdk_dial)
         assert found, "the guard no longer sees the Twilio dial at all"
         assert all(p.startswith(CARRIER_ADAPTERS) for p in found), found
