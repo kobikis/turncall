@@ -28,7 +28,16 @@ is the polished, opinionated alternative for the OpenRouter case.
 An ordered list of models OpenRouter tries after the primary `model`, failing over when
 the primary rate-limits or errors mid-call. Sent as OpenRouter's request-body `models`
 array, primary first. Only meaningful on the `openrouter` provider. Voice pipeline only.
-_Avoid_: "backup model", "retry model", "model routing".
+_Avoid_: "backup model", "retry model", "model routing"; [[failover]] is the
+platform-level mechanism, this is OpenRouter's own.
+
+**Failover**:
+Switching one role (STT, LLM or TTS) of a live call to the next [[provider]] in its
+ordered list when the active one can no longer do its job, so the call carries on
+instead of ending as `pipeline_error`. A recoverable error never triggers it. Not
+offered for S2S: the conversation lives inside the realtime session, so there is
+nothing to hand over.
+_Avoid_: "fallback" (taken by [[fallback models]]), "backup provider", "retry".
 
 **S2S gateway mode**:
 Running the `openai` S2S [[provider]] with an `s2s.base_url` that routes the
@@ -231,6 +240,35 @@ downstream of it, inside the transport, so the caller hears the room and the
 stored WAV does not. This keeps transcripts and post-call analysis identical to
 an agent without ambience.
 
+## Telephony
+
+**Carrier**:
+The telephony company a [[phone number]] belongs to, which connects its calls to the
+phone network — Twilio, Telnyx. Recorded as the number's `provider`.
+_Avoid_: "provider" for this (a [[provider]] is an STT/LLM/TTS backend), "telephony
+provider", "transport" (the media path a call's audio takes — a carrier's media
+stream, WebRTC, WhatsApp).
+
+**Campaign**:
+A set of outbound calls one agent places to a list of targets, paced and retried by
+the platform; the unit an operator starts, pauses and cancels.
+_Avoid_: "batch", "broadcast", "dialer list".
+
+**Concurrency limit** (vs **rate limit**):
+A concurrency limit caps how many of something are in progress *at once* (live calls
+in a project); a rate limit caps how many *start* per unit of time (outbound calls per
+second from a number, messages per minute in a session). Both refuse with
+`rate_limited`.
+_Avoid_: "quota" (implies a billing allowance), "throttle" unqualified.
+
+**Suppression list**:
+A project's numbers that must never be dialled, checked before every outbound call —
+a [[campaign]]'s and a single API call's alike. Filled by the operator, or by the
+caller asking mid-call (`call.opted_out`). Holds no consent records: consent is the
+operator's legal record, not the platform's.
+_Avoid_: "DNC list" unqualified (that is the national registry), "blocklist" (reads as
+inbound blocking).
+
 ## Voicemail
 
 **Voicemail detector**:
@@ -333,40 +371,43 @@ _Avoid_: treating it as an unresolved agent, or filling the null with a sentinel
 ## Call transfer
 
 **Cold transfer** (= **blind transfer**):
-Hand the caller straight to the target number with no operator context —
-`<Dial>target</Dial>`; the AI leg drops immediately. The caller may first hear a
-[[transfer message]]. The default `transfer_mode`. See ADR-0009.
+Hand the caller straight to the target number with no operator context; the AI leg
+drops immediately. The caller may first hear a [[transfer message]]. The default
+`transfer_mode`. See ADR-0009.
 
 **Warm transfer**:
-Dial the operator first and play them a [[briefing]] (via Twilio [[whisper]])
-before bridging the caller, who hears only ringing. `transfer_mode: "warm"`.
-Distinct from [[cold transfer]] (no operator context) and from [[handoff]]
-(internal agent switch, same call leg, no PSTN dial). See ADR-0009.
+Dial the operator first and play them a [[briefing]] as a [[whisper]] before bridging
+the caller, who hears only ringing. `transfer_mode: "warm"`. Behaves the same on every
+[[carrier]]: one transfer config never means two things. Distinct from [[cold transfer]]
+(no operator context) and from [[handoff]] (internal agent switch, same call leg, no
+PSTN dial). See ADR-0009.
 
 **Transfer message**:
-A line spoken to the *caller* just before the dial ("Connecting you to
-support…"), both modes. The functional successor to the old non-functional
-`pre_transfer_message`. Rendered with Twilio `<Say>` in v1. _Avoid_: confusing
-with [[briefing]] (that's operator-facing).
+A line spoken to the *caller* just before the dial ("Connecting you to support…"),
+both modes, in the [[carrier]]'s own voice rather than the agent's. The functional
+successor to the old non-functional `pre_transfer_message`.
+_Avoid_: confusing with [[briefing]] (that's operator-facing).
 
 **Briefing**:
 What the *operator* hears on a [[warm transfer]] before the caller is bridged —
 either a literal string or `{from_summary: true}`, which generates a summary from
-the transcript via the agent's LLM when the [[whisper]] endpoint is fetched.
+the transcript via the agent's LLM when the [[whisper]] is played.
 _Avoid_: "transfer message" (caller-facing).
 
 **Whisper**:
-Twilio's `<Number url="…">` mechanism — after the operator answers, Twilio fetches
-the URL and plays its TwiML (the [[briefing]]) to the operator only, then bridges
-the caller. The execution substrate for [[warm transfer]]; no conference needed.
+Audio played to the operator alone, after they answer and before the caller is
+bridged — the delivery of a [[briefing]]. The idea, not a mechanism: each [[carrier]]
+provides it its own way (Twilio's `<Number url>`, a separate operator leg on Telnyx).
+No conference needed.
+_Avoid_: using it to name one carrier's mechanism.
 
 **Transfer AMD** (`transfer.answered`):
-Answering-machine detection on the operator leg (`machineDetection="Enable"` +
-`amdStatusCallback`). It **notifies, it does not block** — the bridge isn't gated
-on it, so on voicemail the caller is still connected and can leave a message; the
-`transfer.answered` event carries `{target_number, answered_by}` so the backend
-knows human vs machine. Preventing voicemail entirely needs the deferred conference
-model. See ADR-0009. _Avoid_: assuming AMD aborts the transfer.
+Answering-machine detection on the operator leg. It **notifies, it does not block** —
+the bridge isn't gated on it, so on voicemail the caller is still connected and can
+leave a message; the `transfer.answered` event carries `{target_number, answered_by}`
+so the backend knows human vs machine. The same on every [[carrier]], including those
+that could block: preventing voicemail is the deferred conference model's job, for all
+carriers at once. See ADR-0009. _Avoid_: assuming AMD aborts the transfer.
 
 ## Observability
 
