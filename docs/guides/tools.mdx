@@ -25,8 +25,10 @@ not to be called again, the tool suppresses their number for the whole project
 — the dialling number on an inbound call, the dialled one outbound — so every
 later outbound dial to it is refused `409 number_suppressed`. It then records
 `call.opted_out` (`{number}`, also sent to webhook subscribers) and ends the
-call. The model's goodbye is up to your `description`, e.g. "Use when the
-caller asks not to be called again. Confirm and say goodbye first." A call
+call. The hangup is immediate, as with `end_call`: anything the model says
+after the tool returns is not heard, so have it confirm and say goodbye
+*before* calling it — e.g. a `description` of "Use when the caller asks not to
+be called again. Confirm the opt-out and say goodbye, then call this." A call
 with no phone number (WebRTC) is refused and keeps running.
 
 ### Call transfer (cold / warm)

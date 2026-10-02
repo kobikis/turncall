@@ -147,8 +147,9 @@ async def do_not_call(session: AsyncSession, call_id: UUID) -> ControlResult:
             success=False, message="This call has no phone number to opt out"
         )
 
-    # The opt-out first and on its own: it must hold even if ending the call
-    # does not (already ended, carrier hangup failed).
+    # The opt-out first, and committed on its own: it must hold even if ending
+    # the call does not (already ended, carrier hangup failed, or a raise that
+    # would otherwise roll it back with the rest of the session).
     await suppression_repo.add(session, project_id=call.project_id, number=number)
     await emit_call_event(
         session,
@@ -157,6 +158,7 @@ async def do_not_call(session: AsyncSession, call_id: UUID) -> ControlResult:
         event_type=CallEventType.CALL_OPTED_OUT,
         payload={"number": number},
     )
+    await session.commit()
     ended = await end_call(session, call_id, reason="opted_out")
     return ControlResult(
         success=True,
