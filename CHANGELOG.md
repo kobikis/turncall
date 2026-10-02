@@ -13,6 +13,14 @@ and is not part of this repository's history.
 
 ### Changed
 
+- **`end_call` and `do_not_call` let the agent finish its goodbye.** The tool
+  used to hang up over the carrier's API the moment it ran, cutting off what
+  the agent was still saying. It now records the end and stops the call once
+  the agent's speech has played out. The model is not asked for another reply
+  after either tool succeeds, so have it say goodbye *before* calling one.
+  On WebRTC, where `end_call` used to mark the call ended and leave it
+  running, it now ends it. `POST /v1/calls/{id}/end` still hangs up at once.
+
 - **Two credential failures have their own error codes** (#191). A 503 from
   storing a credential or binding a number's own Twilio account while
   `CREDENTIAL_ENCRYPTION_KEY` is unset or wrong is now

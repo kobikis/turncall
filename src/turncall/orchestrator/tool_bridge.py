@@ -113,7 +113,7 @@ async def _execute_builtin(
     """Execute a built-in tool using shared call_control primitives."""
     async with call_context.session_factory() as session:
         if function_name == "end_call":
-            result = await call_control.end_call(
+            result = await call_control.begin_assistant_end(
                 session,
                 call_context.call_id,
                 reason=args.get("reason", "assistant_ended"),
@@ -168,6 +168,49 @@ async def _execute_builtin(
                 "details": result.details,
             }
         )
+
+
+# Built-ins that end the call they run on. They record the end and leave the
+# hangup to the pipeline, so the goodbye is heard: see `_end_after_goodbye`.
+ENDING_TOOL_NAMES = frozenset({"end_call", "do_not_call"})
+
+
+def _ends_the_call(result: str) -> bool:
+    """Whether an ending built-in's result says the call may now be ended.
+
+    `do_not_call` succeeds on the opt-out alone, and says separately whether
+    the end was recorded; a refused end leaves the call running.
+    """
+    try:
+        payload = json.loads(result)
+    except ValueError:
+        return False
+    details = payload.get("details") or {}
+    return bool(payload.get("success")) and details.get("call_ended", True) is True
+
+
+async def _end_after_goodbye(result: str, params: Any) -> None:
+    """Hand the result back, then end the pipeline once it has spoken.
+
+    `run_llm=False`: a reply the model began now would be cut off by the end,
+    so the goodbye belongs before the tool call — the tool's description says
+    when. The `EndWorkerFrame` goes downstream from the LLM, behind the
+    goodbye text already pushed, and pipecat answers it with an `EndFrame`
+    from the source: the TTS drains its pending audio on that frame and the
+    output transport plays out its queue before it closes. Closing is the
+    hangup — a Twilio stream with no TwiML after `<Connect>` ends the call, a
+    WebRTC peer is disconnected — and `finalize_call` then completes the row.
+
+    The REST hangup this replaces was immediate, and cut the goodbye off.
+    """
+    from pipecat.frames.frames import EndWorkerFrame, FunctionCallResultProperties
+
+    await params.result_callback(
+        result, properties=FunctionCallResultProperties(run_llm=False)
+    )
+    # ponytail: no timeout of its own; a drain that never finishes is bounded
+    # by max_call_duration_seconds, add one if that proves too long.
+    await params.llm.push_frame(EndWorkerFrame(reason="assistant_ended"))
 
 
 def _mark_uninterruptible(frame: Any) -> Any:
@@ -449,7 +492,15 @@ def _register_single_tool(
         # dispatch (which can retry ~90s against a dead subscriber) run off the
         # critical path so they never sit between the caller and the response.
         latency_ms = int((time.perf_counter() - started) * 1000)
-        await params.result_callback(result)
+        if (
+            function_name in ENDING_TOOL_NAMES
+            # An eval has no call to end, and the harness owns its length.
+            and not call_context.is_eval
+            and _ends_the_call(result)
+        ):
+            await _end_after_goodbye(result, params)
+        else:
+            await params.result_callback(result)
         if call_context.tool_mocks is not None:
             # A `live` eval: the tool really ran, and the run's record says so.
             call_context.tool_mocks.record(

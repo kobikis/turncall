@@ -905,11 +905,11 @@ POST /v1/calls/{id}/analysis/rerun   # Re-run analysis
 ### Built-in Tools
 | Name | Description | Parameters |
 |------|-------------|------------|
-| `end_call` | Terminate the call | `reason` (optional) |
+| `end_call` | Terminate the call — after the agent's goodbye has played (records `call.ended` `source: control`, then ends the pipeline gracefully; the transport closing is the hangup). `POST /v1/calls/{id}/end` still hangs up at once | `reason` (optional) |
 | `transfer_call` | Transfer to phone number (cold/warm) | `target_number` (required), `transfer_mode`, `transfer_message`, `briefing`, `fallback_message`, `reason` |
 | `handoff_to_agent` | Switch to another agent | `agent_id` (required), `reason`, `context` |
 | `send_dtmf` | Send keypad tones | `digits` (required) |
-| `do_not_call` | Suppress the caller's number (project-wide), record `call.opted_out`, end the call (#228). Opt-in like every built-in: listed in `tools` or absent. A call with no E.164 caller (WebRTC) is refused and keeps running | none |
+| `do_not_call` | Suppress the caller's number (project-wide), record `call.opted_out`, end the call after the goodbye, like `end_call` (#228). Opt-in like every built-in: listed in `tools` or absent. A call with no E.164 caller (WebRTC) is refused and keeps running | none |
 
 ### Custom Webhook Tools
 Require `webhook_url`. TurnCall POSTs:

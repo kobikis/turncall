@@ -2,7 +2,9 @@
 
 Driven through the tool bridge's built-in dispatch, so this is the path a model
 calling the tool takes: the caller's number lands on the project's suppression
-list, `call.opted_out` is recorded, and the call ends.
+list, `call.opted_out` is recorded, and the call is marked as ended by the
+agent. The hangup itself is the pipeline's, once the goodbye has played
+(`test_ending_tool_waits_for_goodbye.py`), so the row is still live here.
 """
 
 import json
@@ -81,7 +83,7 @@ async def _events(factory, call_id) -> list[CallEventRow]:
     ("direction", "from_number", "to_number"),
     [("inbound", CALLER, OURS), ("outbound", OURS, CALLER)],
 )
-async def test_suppresses_the_caller_records_and_ends(
+async def test_suppresses_the_caller_and_records_the_end(
     factory, direction, from_number, to_number
 ):
     ctx = await _live_call(
@@ -99,11 +101,31 @@ async def test_suppresses_the_caller_records_and_ends(
             session, project_id=ctx.project_id, number=OURS
         )
         call = await call_repo.get_call_by_id(session, ctx.call_id)
-    assert call.status == "completed"
+    assert call.status == "in_progress"
     events = await _events(factory, ctx.call_id)
     opted = [e for e in events if e.event_type == CallEventType.CALL_OPTED_OUT]
     assert [e.payload for e in opted] == [{"number": CALLER}]
-    assert any(e.event_type == CallEventType.CALL_ENDED for e in events)
+    ended = [e for e in events if e.event_type == CallEventType.CALL_ENDED]
+    assert [e.payload for e in ended] == [{"reason": "opted_out", "source": "control"}]
+
+
+async def test_end_call_records_the_end_and_leaves_the_hangup_to_the_pipeline(
+    factory,
+):
+    ctx = await _live_call(
+        factory, direction="inbound", from_number=CALLER, to_number=OURS
+    )
+
+    result = json.loads(await _execute_builtin("end_call", {"reason": "done"}, ctx))
+
+    assert result["success"] is True
+    async with factory() as session:
+        call = await call_repo.get_call_by_id(session, ctx.call_id)
+    assert call.status == "in_progress"
+    events = await _events(factory, ctx.call_id)
+    assert [(e.event_type, e.payload) for e in events] == [
+        (CallEventType.CALL_ENDED, {"reason": "done", "source": "control"})
+    ]
 
 
 async def test_a_call_with_no_phone_number_is_refused_and_left_running(factory):
