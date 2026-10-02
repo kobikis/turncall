@@ -25,11 +25,28 @@ not to be called again, the tool suppresses their number for the whole project
 — the dialling number on an inbound call, the dialled one outbound — so every
 later outbound dial to it is refused `409 number_suppressed`. It then records
 `call.opted_out` (`{number}`, also sent to webhook subscribers) and ends the
-call. The hangup is immediate, as with `end_call`: anything the model says
-after the tool returns is not heard, so have it confirm and say goodbye
-*before* calling it — e.g. a `description` of "Use when the caller asks not to
-be called again. Confirm the opt-out and say goodbye, then call this." A call
-with no phone number (WebRTC) is refused and keeps running.
+call. A call with no phone number (WebRTC) is refused and keeps running.
+
+### Ending a call politely
+
+`end_call` and `do_not_call` don't hang up when they run. The model answers
+the tool's result as it would any other — that answer is its goodbye — and the
+call ends once that reply has played in full. A model that already said goodbye
+alongside the tool call is told it may reply with nothing.
+
+The goodbye is final. From the moment it is written the call stops listening:
+the caller cannot interrupt it, and anything they say while it plays is not
+transcribed or recorded.
+
+So the tool belongs at the moment the conversation is over, and the goodbye
+after it. Many models will not say goodbye *and* call a tool in one reply; if
+the instructions ask for the goodbye first, they say it, wait for the caller,
+and only call the tool on the caller's next turn. A `description` that works:
+"Call this when the caller is done or says goodbye. You will then say a short
+goodbye, and the call ends after it."
+
+`POST /v1/calls/{call_id}/end` is unchanged: an operator ending a call from
+outside hangs up at once.
 
 ### Call transfer (cold / warm)
 

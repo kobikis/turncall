@@ -37,13 +37,8 @@ async def _get_twilio_adapter(session: AsyncSession, call: Any) -> Any | None:
     return account.adapter() if account else None
 
 
-async def end_call(
-    session: AsyncSession,
-    call_id: UUID,
-    *,
-    reason: str = "normal",
-) -> ControlResult:
-    """End an active call via Twilio and update internal state."""
+async def _endable_call(session: AsyncSession, call_id: UUID) -> Any:
+    """The call row if it can be ended now, else a ControlResult saying why not."""
     from turncall.storage.repositories import call_repo
 
     call = await call_repo.get_call_by_id(session, call_id)
@@ -62,6 +57,67 @@ async def end_call(
             success=False,
             message=f"Cannot end call from {current.value}",
         )
+    return call
+
+
+async def _record_control_end(
+    session: AsyncSession, call_id: UUID, reason: str
+) -> None:
+    """The `call.ended` event `infer_ended_reason` reads as the agent's hangup."""
+    from turncall.storage.repositories import call_repo
+
+    seq = await call_repo.get_next_sequence_number(session, call_id)
+    await call_repo.create_call_event(
+        session,
+        call_id=call_id,
+        event_type=CallEventType.CALL_ENDED,
+        payload={"reason": reason, "source": "control"},
+        sequence_number=seq,
+    )
+
+
+async def begin_assistant_end(
+    session: AsyncSession, call_id: UUID, *, reason: str
+) -> ControlResult:
+    """Record that the agent is ending the call, without hanging up.
+
+    The tool path: the caller has to hear the goodbye, which the model gives
+    in reply to this result. So only the record is written here — before
+    anything closes, so a carrier status callback racing the hangup cannot
+    make the call read as the caller's — and the pipeline ends itself after
+    that reply has played (`orchestrator/hangup.py`), which hangs up.
+    Status, `ended_at` and post-call processing come from `finalize_call` then.
+    """
+    call = await _endable_call(session, call_id)
+    if isinstance(call, ControlResult):
+        return call
+    await _record_control_end(session, call_id, reason)
+    # Read by the model, which replies next: that reply is the goodbye.
+    return ControlResult(
+        success=True,
+        message=(
+            "The call ends after your next reply. Say a short goodbye now, "
+            "or reply with nothing if you already said goodbye."
+        ),
+    )
+
+
+async def end_call(
+    session: AsyncSession,
+    call_id: UUID,
+    *,
+    reason: str = "normal",
+) -> ControlResult:
+    """End an active call now: hang up via Twilio and update internal state.
+
+    The live call control API. A tool ending its own call goes through
+    `begin_assistant_end` instead, so its goodbye is heard.
+    """
+    from turncall.storage.repositories import call_repo
+
+    call = await _endable_call(session, call_id)
+    if isinstance(call, ControlResult):
+        return call
 
     # Hang up via Twilio
     sid = call.provider_call_sid
@@ -89,15 +145,7 @@ async def end_call(
         duration_ms=duration_ms,
     )
 
-    event_payload = {"reason": reason, "source": "control"}
-    seq = await call_repo.get_next_sequence_number(session, call_id)
-    await call_repo.create_call_event(
-        session,
-        call_id=call_id,
-        event_type=CallEventType.CALL_ENDED,
-        payload=event_payload,
-        sequence_number=seq,
-    )
+    await _record_control_end(session, call_id, reason)
 
     # Trigger post-call processing (transcript, recording, analysis, webhook)
     # The comprehensive call.ended webhook is dispatched after analysis completes.
@@ -124,7 +172,7 @@ async def end_call(
 
 
 async def do_not_call(session: AsyncSession, call_id: UUID) -> ControlResult:
-    """Suppress the caller's number, record `call.opted_out`, end the call (#228).
+    """Suppress the caller's number, record `call.opted_out`, start ending (#228).
 
     The caller is whoever is not us: the dialling party inbound, the dialled
     one outbound. A call with no E.164 number on that side (WebRTC, a WhatsApp
@@ -159,11 +207,13 @@ async def do_not_call(session: AsyncSession, call_id: UUID) -> ControlResult:
         payload={"number": number},
     )
     await session.commit()
-    ended = await end_call(session, call_id, reason="opted_out")
+    ending = await begin_assistant_end(session, call_id, reason="opted_out")
     return ControlResult(
+        # Success is the opt-out, which holds either way; `call_ended` says
+        # whether the tool may go on to end the call.
         success=True,
-        message=f"Number opted out; {ended.message}",
-        details={"number": number, "call_ended": ended.success},
+        message=f"Number opted out; {ending.message}",
+        details={"number": number, "call_ended": ending.success},
     )
 
 

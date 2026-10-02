@@ -113,7 +113,7 @@ async def _execute_builtin(
     """Execute a built-in tool using shared call_control primitives."""
     async with call_context.session_factory() as session:
         if function_name == "end_call":
-            result = await call_control.end_call(
+            result = await call_control.begin_assistant_end(
                 session,
                 call_context.call_id,
                 reason=args.get("reason", "assistant_ended"),
@@ -168,6 +168,47 @@ async def _execute_builtin(
                 "details": result.details,
             }
         )
+
+
+# Built-ins that end the call they run on. They record the end and leave the
+# hangup to the pipeline, so the goodbye is heard: see `orchestrator/hangup.py`.
+ENDING_TOOL_NAMES = frozenset({"end_call", "do_not_call"})
+
+
+def _ends_the_call(result: str) -> bool:
+    """Whether an ending built-in's result says the call may now be ended.
+
+    `do_not_call` succeeds on the opt-out alone, and says separately whether
+    the end was recorded; a refused end leaves the call running.
+    """
+    try:
+        payload = json.loads(result)
+    except ValueError:
+        return False
+    details = payload.get("details") or {}
+    return bool(payload.get("success")) and details.get("call_ended", True) is True
+
+
+async def _run_ending_tool(
+    function_name: str,
+    args: dict[str, Any],
+    call_context: CallContext,
+    params: Any,
+) -> str:
+    """Record the end and arm the hangup, then let the model say goodbye.
+
+    The result goes back as usual, so the model answers it — that answer is
+    the goodbye, and `HangupAfterReply` ends the call once it has played. The
+    arm frame goes first: the result can be dropped by a cancellation, and
+    the record is already written.
+    """
+    from turncall.orchestrator.hangup import HangupArmFrame
+
+    result = await _execute_builtin(function_name, args, call_context)
+    if _ends_the_call(result):
+        await params.llm.push_frame(HangupArmFrame())
+    await params.result_callback(result)
+    return result
 
 
 def _mark_uninterruptible(frame: Any) -> Any:
@@ -415,7 +456,20 @@ def _register_single_tool(
 
         started = time.perf_counter()
         prepared_handoff: PreparedHandoff | None = None
-        if function_name in BUILTIN_TOOL_NAMES:
+        delivered = False
+        if function_name in ENDING_TOOL_NAMES and not call_context.is_eval:
+            # Shielded as one unit: a built-in is cancelled when the caller
+            # talks over the goodbye, and pipecat cancels it even after its
+            # result is in. A cancel between recording the end and ending the
+            # pipeline left the row saying the agent hung up on a call that
+            # kept running. The arm frame is uninterruptible for the same
+            # reason, so this only makes the tool agree with it. (An eval has
+            # no call to end, and the harness owns its length.)
+            result = await asyncio.shield(
+                _run_ending_tool(function_name, dict(args), call_context, params)
+            )
+            delivered = True
+        elif function_name in BUILTIN_TOOL_NAMES:
             # Prepare the handoff *first*: `_execute_builtin` commits
             # `status=HANDED_OFF` + `active_agent_id`, and anything that waits
             # or raises after that commit is a window where the record says
@@ -449,7 +503,8 @@ def _register_single_tool(
         # dispatch (which can retry ~90s against a dead subscriber) run off the
         # critical path so they never sit between the caller and the response.
         latency_ms = int((time.perf_counter() - started) * 1000)
-        await params.result_callback(result)
+        if not delivered:
+            await params.result_callback(result)
         if call_context.tool_mocks is not None:
             # A `live` eval: the tool really ran, and the run's record says so.
             call_context.tool_mocks.record(
