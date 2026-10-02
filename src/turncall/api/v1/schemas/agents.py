@@ -17,11 +17,7 @@ from pydantic import (
 
 from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
-from turncall.domain.models import (
-    BUILTIN_TOOL_NAMES,
-    CALL_CONTROL_TOOL_NAMES,
-    resolve_delegation,
-)
+from turncall.domain.models import BUILTIN_TOOL_NAMES
 from turncall.domain.providers import (
     AVATAR_PROVIDERS,
     LLM_PROVIDERS,
@@ -689,28 +685,7 @@ class AgentConfigSchema(BaseModel):
                 "leaving the previous agent's voice and prompt in place"
             )
             raise ValueError(msg)
-        self._refuse_call_control_in_client_mode()
         return self
-
-    def _refuse_call_control_in_client_mode(self) -> None:
-        """Temporary, until #245: a client delegate runs tools in its own
-        worker, where `end_call` could record the end but never hang up."""
-        if self.pipeline_mode != "s2s":
-            return
-        delegation = resolve_delegation(
-            self.s2s, has_tools=bool(self.tools or self.mcp_servers)
-        )
-        if delegation is None or delegation.mode != "client":
-            return
-        refused = sorted({t.name for t in self.tools} & CALL_CONTROL_TOOL_NAMES)
-        if refused:
-            msg = (
-                f"{', '.join(refused)} cannot run in openai_live client "
-                "delegation yet: the agent's llm runs tools outside the call, "
-                "so it could not end or transfer it. Use s2s.delegation "
-                '{"mode": "responses", "model": ...} for call control'
-            )
-            raise ValueError(msg)
 
 
 # --- Request/Response ---

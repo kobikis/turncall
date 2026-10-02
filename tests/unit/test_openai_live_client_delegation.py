@@ -62,24 +62,10 @@ class TestBoundary:
             _schema({"delegation": {"mode": "client", field[0]: field[1]}})
 
     @pytest.mark.parametrize("name", ["end_call", "do_not_call", "transfer_call"])
-    def test_call_control_is_refused_in_default_client_mode(self, name: str) -> None:
-        with pytest.raises(ValidationError, match=f"{name} cannot run in openai_live"):
-            _schema({}, tools=[_BOOK, _builtin(name)])
-
-    def test_call_control_is_refused_in_explicit_client_mode(self) -> None:
-        with pytest.raises(ValidationError, match="responses"):
-            _schema({"delegation": {"mode": "client"}}, tools=[_builtin("end_call")])
-
-    def test_call_control_is_fine_in_responses_mode(self) -> None:
-        _schema(
-            {"delegation": {"mode": "responses", "model": "m"}},
-            tools=[_builtin("end_call")],
-        )
-        _schema({"extra": {"backend_model": "m"}}, tools=[_builtin("end_call")])
-
-    def test_send_dtmf_is_not_call_control(self) -> None:
-        """It goes through the carrier's API, not the call's pipeline."""
-        _schema({}, tools=[_builtin("send_dtmf")])
+    def test_call_control_is_accepted_in_client_mode(self, name: str) -> None:
+        """The #244 refusal is gone: the delegate arms the call's gate (#245)."""
+        _schema({}, tools=[_BOOK, _builtin(name)])
+        _schema({"delegation": {"mode": "client"}}, tools=[_builtin(name)])
 
 
 # --- Seam 2: the pipeline build ----------------------------------------------
@@ -187,16 +173,6 @@ class TestBuild:
         assert delegate_llm._settings.system_instruction == "Weekdays only."
         assert live._settings.system_instruction.startswith("You are a receptionist.")
 
-    def test_a_stored_agents_call_control_is_withheld_from_the_delegate(self) -> None:
-        """The API refuses it; an agent stored before then still builds."""
-        live, _ = _build(_config(tools=[_BOOK, _builtin("end_call")]))
-        assert set(live._delegation.backend.llm._functions) == {"book_table"}
-        assert "end_call" not in live._settings.system_instruction
-
-    def test_a_stored_agent_with_only_call_control_gets_no_delegation(self) -> None:
-        live, _ = _build(_config(tools=[_builtin("end_call")]))
-        assert live._delegation is None
-
 
 def _call_context(**overrides: Any) -> CallContext:
     return CallContext(
@@ -273,11 +249,6 @@ class TestMissingKeys:
         config = _config(llm={"provider": "anthropic"})
         assert Credentials(platform={"openai": "sk"}).missing_keys(config) == []
 
-    def test_a_stored_call_control_only_agent_needs_no_llm_key(self) -> None:
-        """Its call control is withheld, so no delegate is built."""
-        config = _config(tools=[_builtin("end_call")], llm={"provider": "anthropic"})
-        assert Credentials(platform={"openai": "sk"}).missing_keys(config) == []
-
     def test_a_responses_delegate_needs_no_llm_key(self) -> None:
         config = _config(
             {"delegation": {"mode": "responses", "model": "m"}},
@@ -285,3 +256,51 @@ class TestMissingKeys:
             llm={"provider": "anthropic"},
         )
         assert Credentials(platform={"openai": "sk"}).missing_keys(config) == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["end_call", "do_not_call"])
+async def test_the_delegates_ending_tool_arms_the_calls_hangup_gate(name: str) -> None:
+    """The delegate runs in its own worker, so pushing from its LLM would arm
+    nothing: the handler queues the arm frame on the call's gate itself, which
+    then ends the call after gpt-live-1's goodbye (#245)."""
+    from pipecat.services.openai.live.llm import OpenAILiveLLMService
+
+    from turncall.orchestrator import tool_bridge
+    from turncall.orchestrator.hangup import HangupAfterReply, HangupArmFrame
+
+    call_context = _call_context()
+    with patch("turncall.orchestrator.call_recorder.attach_recorder"):
+        pipeline = create_pipeline(
+            config=_config(tools=[_builtin(name)]),
+            transport=MagicMock(),
+            call_context=call_context,
+            pipecat_settings=SimpleNamespace(),
+            credentials=creds("sk-test"),
+        )
+    gate = next(p for p in pipeline.processors if isinstance(p, HangupAfterReply))
+    live = next(p for p in pipeline.processors if isinstance(p, OpenAILiveLLMService))
+    delegate_llm = live._delegation.backend.llm
+
+    queued: list[Any] = []
+
+    async def _queue(frame: Any, *_: Any, **__: Any) -> None:
+        queued.append(frame)
+
+    ok = json.dumps({"success": True, "message": "ok", "details": None})
+    execute = AsyncMock(return_value=ok)
+    params = _params(name)
+    params.llm = delegate_llm
+    with (
+        patch.object(tool_bridge, "_execute_builtin", new=execute),
+        patch.object(tool_bridge, "_spawn"),
+        patch.object(gate, "queue_frame", new=_queue),
+        patch.object(delegate_llm, "push_frame") as delegate_push,
+    ):
+        await delegate_llm._functions[name].handler(params)
+
+    assert execute.await_args.args[0] == name  # the end / opt-out is recorded
+    assert [type(f) for f in queued] == [HangupArmFrame]
+    delegate_push.assert_not_called()
+    params.result_callback.assert_awaited_once_with(ok)  # the goodbye follows

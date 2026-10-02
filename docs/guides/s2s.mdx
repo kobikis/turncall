@@ -142,11 +142,10 @@ gpt-live-1's instructions a paragraph telling it to delegate whenever the caller
 wants something done, listing each tool's name and description — so an existing
 prompt needs no rewrite.
 
-In `responses` mode `end_call` and `do_not_call` work as everywhere else: the
-call ends after gpt-live-1's goodbye. In `client` mode they — and
-`transfer_call` — are **refused with a 422 for now**: the delegate runs outside
-the call, so it could not end or transfer it. Use `responses` mode for an agent
-that needs call control.
+`end_call` and `do_not_call` work as everywhere else, in both modes: the call
+ends after gpt-live-1's goodbye. gpt-live-1 decides by itself whether to
+delegate, and it sometimes says goodbye without handing over `end_call` — the
+idle guard then ends the call after two silences.
 
 Refused with a 422: `delegation` on any other provider (they call tools
 themselves), `responses` without `model`, and `handoff_to_agent` among an

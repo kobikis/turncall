@@ -201,12 +201,6 @@ class S2SConfig(DomainModel):
     delegation: DelegationConfig | None = None  # openai_live only
 
 
-# Built-ins that act on the call itself. A client delegate runs its tools in its
-# own worker, outside the call's pipeline, so it cannot arm the hangup gate
-# yet — refused there until #245.
-CALL_CONTROL_TOOL_NAMES = frozenset({"end_call", "do_not_call", "transfer_call"})
-
-
 def resolve_delegation(s2s: Any, *, has_tools: bool) -> Any:
     """An `openai_live` agent's effective delegation, or None.
 

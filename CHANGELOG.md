@@ -16,10 +16,9 @@ and is not part of this repository's history.
 - **An `openai_live` agent with tools now delegates to its own `llm`** (#244).
   With no `s2s.delegation` block its tools were never offered; it now gets
   client delegation, so the `llm` provider needs a key (`missing_keys`
-  otherwise). Such an agent listing `end_call`, `do_not_call` or
-  `transfer_call` is now refused with a 422 until the client delegate can
-  control the call (#245) — set `s2s.delegation` to responses mode for that.
-  An agent stored before keeps building, those tools withheld with a warning.
+  otherwise). `end_call`, `do_not_call` and `transfer_call` work from the
+  client delegate (#245): the call ends after gpt-live-1's goodbye, as on
+  cascade.
 
 - **`handoff_to_agent` on an `openai_live` S2S agent is now refused** (422)
   (#243). The handoff swapped the delegate's tools but not gpt-live-1's

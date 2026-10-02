@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from turncall.domain.models import CALL_CONTROL_TOOL_NAMES, resolve_delegation
+from turncall.domain.models import resolve_delegation
 from turncall.domain.providers import AWS_ACCOUNT, account_for
 
 if TYPE_CHECKING:
@@ -122,13 +122,9 @@ class Credentials:
             needed = [(config.s2s.provider, None)]
             # A client delegate is the agent's own llm (#244). MCP servers
             # count as tools before discovery, so a keyless delegate is caught
-            # whether or not they answer. Call control is withheld from it
-            # (until #245), so it alone builds no delegate to need a key.
-            delegated = [
-                t for t in config.tools if t.name not in CALL_CONTROL_TOOL_NAMES
-            ]
+            # whether or not they answer.
             delegation = resolve_delegation(
-                config.s2s, has_tools=bool(delegated or config.mcp_servers)
+                config.s2s, has_tools=bool(config.tools or config.mcp_servers)
             )
             if delegation is not None and delegation.mode == "client":
                 needed.append((config.llm.provider, config.llm.api_key))
