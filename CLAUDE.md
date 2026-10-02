@@ -909,6 +909,7 @@ POST /v1/calls/{id}/analysis/rerun   # Re-run analysis
 | `transfer_call` | Transfer to phone number (cold/warm) | `target_number` (required), `transfer_mode`, `transfer_message`, `briefing`, `fallback_message`, `reason` |
 | `handoff_to_agent` | Switch to another agent | `agent_id` (required), `reason`, `context` |
 | `send_dtmf` | Send keypad tones | `digits` (required) |
+| `do_not_call` | Suppress the caller's number (project-wide), record `call.opted_out`, end the call (#228). Opt-in like every built-in: listed in `tools` or absent. A call with no E.164 caller (WebRTC) is refused and keeps running | none |
 
 ### Custom Webhook Tools
 Require `webhook_url`. TurnCall POSTs:

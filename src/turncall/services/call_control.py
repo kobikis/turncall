@@ -123,6 +123,48 @@ async def end_call(
     return ControlResult(success=True, message="Call ended")
 
 
+async def do_not_call(session: AsyncSession, call_id: UUID) -> ControlResult:
+    """Suppress the caller's number, record `call.opted_out`, end the call (#228).
+
+    The caller is whoever is not us: the dialling party inbound, the dialled
+    one outbound. A call with no E.164 number on that side (WebRTC, a WhatsApp
+    id) has nothing to suppress, so it is refused and left running — ending it
+    would tell the caller they were opted out when they were not.
+    """
+    import re
+
+    from turncall.api.v1.schemas import E164_PATTERN
+    from turncall.events.emit import emit_call_event
+    from turncall.storage.repositories import call_repo, suppression_repo
+
+    call = await call_repo.get_call_by_id(session, call_id)
+    if call is None:
+        return ControlResult(success=False, message="Call not found")
+
+    number = call.from_number if call.direction == "inbound" else call.to_number
+    if not number or not re.match(E164_PATTERN, number):
+        return ControlResult(
+            success=False, message="This call has no phone number to opt out"
+        )
+
+    # The opt-out first and on its own: it must hold even if ending the call
+    # does not (already ended, carrier hangup failed).
+    await suppression_repo.add(session, project_id=call.project_id, number=number)
+    await emit_call_event(
+        session,
+        call_id=call_id,
+        project_id=call.project_id,
+        event_type=CallEventType.CALL_OPTED_OUT,
+        payload={"number": number},
+    )
+    ended = await end_call(session, call_id, reason="opted_out")
+    return ControlResult(
+        success=True,
+        message=f"Number opted out; {ended.message}",
+        details={"number": number, "call_ended": ended.success},
+    )
+
+
 async def transfer_call(
     session: AsyncSession,
     call_id: UUID,

@@ -17,6 +17,7 @@ from pydantic import (
 
 from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
+from turncall.domain.models import BUILTIN_TOOL_NAMES
 from turncall.domain.providers import (
     AVATAR_PROVIDERS,
     LLM_PROVIDERS,
@@ -195,13 +196,7 @@ class ToolDefinitionSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_webhook_required_for_non_builtin(self) -> "ToolDefinitionSchema":
-        builtin_tools = {
-            "end_call",
-            "transfer_call",
-            "handoff_to_agent",
-            "send_dtmf",
-        }
-        if self.name not in builtin_tools and not self.webhook_url:
+        if self.name not in BUILTIN_TOOL_NAMES and not self.webhook_url:
             msg = f"Non-built-in tool '{self.name}' requires a webhook_url"
             raise ValueError(msg)
         return self

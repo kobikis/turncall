@@ -86,6 +86,8 @@ class CallEventType(StrEnum):
     CALL_AGENT_HANDOFF = "call.agent_handoff"
     CALL_MAX_DURATION_REACHED = "call.max_duration_reached"
     CALL_CUSTOMER_SILENT = "call.customer_silent"
+    # The caller asked not to be called again, via the do_not_call tool (#228).
+    CALL_OPTED_OUT = "call.opted_out"
 
     # Transcripts
     TRANSCRIPT_PARTIAL = "transcript.partial"

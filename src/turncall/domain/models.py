@@ -120,7 +120,7 @@ class TTSConfig(DomainModel):
 # Tools TurnCall implements itself. Every one resolves through call_control
 # against a live call_id, which is why the text channels can't offer them.
 BUILTIN_TOOL_NAMES = frozenset(
-    {"end_call", "transfer_call", "handoff_to_agent", "send_dtmf"}
+    {"end_call", "transfer_call", "handoff_to_agent", "send_dtmf", "do_not_call"}
 )
 
 
