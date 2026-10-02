@@ -1044,6 +1044,17 @@ def _create_avatar_service(avatar: Any, credentials: Credentials) -> Any:
 # symptom as dropping both; `tests/unit/test_eval_rtvi_bridge.py` asserts both.
 
 
+def _hangup_gate(call_context: CallContext) -> list[Any]:
+    """`HangupAfterReply`, directly after the LLM: ends the call after the
+    goodbye an ending tool asked for (#240). None in an eval, whose tools never
+    arm it and whose length the harness owns."""
+    if call_context.is_eval:
+        return []
+    from turncall.orchestrator.hangup import HangupAfterReply
+
+    return [HangupAfterReply()]
+
+
 def _eval_rtvi(call_context: CallContext) -> list[Any]:
     """The `RTVIProcessor`, for an eval pipeline's processor list.
 
@@ -1420,6 +1431,7 @@ def create_pipeline(
             context_aggregator.user(),
             *([kb_processor] if kb_processor else []),
             llm,
+            *_hangup_gate(call_context),
             assistant_tap,
             tts,
             voicemail_detector.gate(),
@@ -1440,6 +1452,7 @@ def create_pipeline(
             context_aggregator.user(),
             *([kb_processor] if kb_processor else []),
             llm,
+            *_hangup_gate(call_context),
             assistant_tap,
             tts,
             *([avatar] if avatar else []),
@@ -1615,6 +1628,7 @@ def _create_s2s_pipeline(
         *([input_resampler] if input_resampler else []),
         customer_tap,
         s2s_llm,
+        *_hangup_gate(call_context),
         assistant_tap,
         *([output_resampler] if output_resampler else []),
         transport.output(),

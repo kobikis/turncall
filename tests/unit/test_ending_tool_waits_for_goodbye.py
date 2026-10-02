@@ -1,10 +1,10 @@
-"""`end_call` and `do_not_call` end the call gracefully, after the goodbye.
+"""`end_call` and `do_not_call` arm the hangup and let the model say goodbye.
 
-A REST hangup from inside the tool cut off whatever the agent was still saying.
-The tool now hands back a result that asks for no further reply, then pushes an
-`EndWorkerFrame` downstream: pipecat queues the pipeline's `EndFrame` behind the
-goodbye already on its way to the TTS, and the TTS and the output transport
-drain before they stop. The transport closing is what hangs the carrier up.
+A REST hangup from inside the tool cut off whatever the agent was still saying,
+and a model that says goodbye and calls the tool in separate replies was never
+heard at all. The tool now arms `HangupAfterReply` and returns its result as
+usual; the model's reply to it is the goodbye, and the gate ends the call once
+that has played (`test_hangup_after_reply.py`).
 """
 
 import json
@@ -13,10 +13,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from pipecat.frames.frames import EndWorkerFrame
 
 from turncall.domain.models import ToolDefinition
 from turncall.orchestrator import tool_bridge
+from turncall.orchestrator.hangup import HangupArmFrame
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
@@ -75,15 +75,13 @@ async def _call(name: str, builtin_result: str, *, is_eval: bool = False):
 
 
 @pytest.mark.parametrize("name", ["end_call", "do_not_call"])
-async def test_ends_through_the_pipeline_after_the_result(name):
+async def test_arms_the_hangup_then_lets_the_model_reply(name):
     events = await _call(name, OK)
 
-    assert [kind for kind, _ in events] == ["result", "frame"]
-    _result, properties = events[0][1]
-    # Nothing more from the model: a reply started now would be cut off.
-    assert properties is not None and properties.run_llm is False
-    frame = events[1][1]
-    assert isinstance(frame, EndWorkerFrame)
+    assert [kind for kind, _ in events] == ["frame", "result"]
+    assert isinstance(events[0][1], HangupArmFrame)
+    # A plain result: the model replies to it, and that reply is the goodbye.
+    assert events[1][1][1] is None
 
 
 @pytest.mark.parametrize("name", ["end_call", "do_not_call"])
@@ -111,8 +109,8 @@ async def test_other_builtins_still_let_the_model_reply():
 
 async def test_a_barge_in_cannot_split_the_record_from_the_end():
     """Built-ins are cancelled on interruption, and pipecat cancels the task
-    even after the result is in. Once the end is recorded the pipeline has to
-    end too: a cancel between the two left the row saying the agent hung up
+    even after the result is in. Once the end is recorded the hangup has to be
+    armed too: a cancel between the two left the row saying the agent hung up
     on a call that kept running."""
     import asyncio
 
@@ -164,4 +162,4 @@ async def test_a_barge_in_cannot_split_the_record_from_the_end():
         for _ in range(5):
             await asyncio.sleep(0)
 
-    assert [type(f) for f in pushed] == [EndWorkerFrame]
+    assert [type(f) for f in pushed] == [HangupArmFrame]

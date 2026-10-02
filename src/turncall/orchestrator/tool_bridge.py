@@ -171,7 +171,7 @@ async def _execute_builtin(
 
 
 # Built-ins that end the call they run on. They record the end and leave the
-# hangup to the pipeline, so the goodbye is heard: see `_end_after_goodbye`.
+# hangup to the pipeline, so the goodbye is heard: see `orchestrator/hangup.py`.
 ENDING_TOOL_NAMES = frozenset({"end_call", "do_not_call"})
 
 
@@ -189,42 +189,25 @@ def _ends_the_call(result: str) -> bool:
     return bool(payload.get("success")) and details.get("call_ended", True) is True
 
 
-async def _end_after_goodbye(result: str, params: Any) -> None:
-    """Hand the result back, then end the pipeline once it has spoken.
-
-    `run_llm=False`: a reply the model began now would be cut off by the end,
-    so the goodbye belongs before the tool call — the tool's description says
-    when. The `EndWorkerFrame` goes downstream from the LLM, behind the
-    goodbye text already pushed, and pipecat answers it with an `EndFrame`
-    from the source: the TTS drains its pending audio on that frame and the
-    output transport plays out its queue before it closes. Closing is the
-    hangup — a Twilio stream with no TwiML after `<Connect>` ends the call, a
-    WebRTC peer is disconnected — and `finalize_call` then completes the row.
-
-    The REST hangup this replaces was immediate, and cut the goodbye off.
-    """
-    from pipecat.frames.frames import EndWorkerFrame, FunctionCallResultProperties
-
-    await params.result_callback(
-        result, properties=FunctionCallResultProperties(run_llm=False)
-    )
-    # ponytail: no timeout of its own; a drain that never finishes is bounded
-    # by max_call_duration_seconds, add one if that proves too long.
-    await params.llm.push_frame(EndWorkerFrame(reason="assistant_ended"))
-
-
 async def _run_ending_tool(
     function_name: str,
     args: dict[str, Any],
     call_context: CallContext,
     params: Any,
 ) -> str:
-    """Record the end, then end after the goodbye — or, refused, just answer."""
+    """Record the end and arm the hangup, then let the model say goodbye.
+
+    The result goes back as usual, so the model answers it — that answer is
+    the goodbye, and `HangupAfterReply` ends the call once it has played. The
+    arm frame goes first: the result can be dropped by a cancellation, and
+    the record is already written.
+    """
+    from turncall.orchestrator.hangup import HangupArmFrame
+
     result = await _execute_builtin(function_name, args, call_context)
     if _ends_the_call(result):
-        await _end_after_goodbye(result, params)
-    else:
-        await params.result_callback(result)
+        await params.llm.push_frame(HangupArmFrame())
+    await params.result_callback(result)
     return result
 
 
@@ -479,7 +462,7 @@ def _register_single_tool(
             # talks over the goodbye, and pipecat cancels it even after its
             # result is in. A cancel between recording the end and ending the
             # pipeline left the row saying the agent hung up on a call that
-            # kept running. The end frame is uninterruptible for the same
+            # kept running. The arm frame is uninterruptible for the same
             # reason, so this only makes the tool agree with it. (An eval has
             # no call to end, and the harness owns its length.)
             result = await asyncio.shield(

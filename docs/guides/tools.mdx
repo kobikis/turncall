@@ -29,12 +29,17 @@ call. A call with no phone number (WebRTC) is refused and keeps running.
 
 ### Ending a call politely
 
-`end_call` and `do_not_call` hang up only after the agent has finished
-speaking: what it said before calling the tool plays out in full, then the call
-ends. The model is not asked for another reply once either tool succeeds —
-one started then would be cut off — so its goodbye belongs *before* the tool
-call. Say so in the tool's `description`, e.g. "Use when the caller asks not to
-be called again. Confirm the opt-out and say goodbye, then call this."
+`end_call` and `do_not_call` don't hang up when they run. The model answers
+the tool's result as it would any other — that answer is its goodbye — and the
+call ends once that reply has played in full. A model that already said goodbye
+alongside the tool call is told it may reply with nothing.
+
+So the tool belongs at the moment the conversation is over, and the goodbye
+after it. Many models will not say goodbye *and* call a tool in one reply; if
+the instructions ask for the goodbye first, they say it, wait for the caller,
+and only call the tool on the caller's next turn. A `description` that works:
+"Call this when the caller is done or says goodbye. You will then say a short
+goodbye, and the call ends after it."
 
 `POST /v1/calls/{call_id}/end` is unchanged: an operator ending a call from
 outside hangs up at once.

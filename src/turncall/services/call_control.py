@@ -81,18 +81,25 @@ async def begin_assistant_end(
 ) -> ControlResult:
     """Record that the agent is ending the call, without hanging up.
 
-    The tool path: the caller has to hear the goodbye, which is still on its
-    way through the TTS when the tool runs. So only the record is written
-    here — before anything closes, so a carrier status callback racing the
-    hangup cannot make the call read as the caller's — and the pipeline ends
-    itself once its audio has drained, which closes the transport and hangs up.
+    The tool path: the caller has to hear the goodbye, which the model gives
+    in reply to this result. So only the record is written here — before
+    anything closes, so a carrier status callback racing the hangup cannot
+    make the call read as the caller's — and the pipeline ends itself after
+    that reply has played (`orchestrator/hangup.py`), which hangs up.
     Status, `ended_at` and post-call processing come from `finalize_call` then.
     """
     call = await _endable_call(session, call_id)
     if isinstance(call, ControlResult):
         return call
     await _record_control_end(session, call_id, reason)
-    return ControlResult(success=True, message="Ending the call")
+    # Read by the model, which replies next: that reply is the goodbye.
+    return ControlResult(
+        success=True,
+        message=(
+            "The call ends after your next reply. Say a short goodbye now, "
+            "or reply with nothing if you already said goodbye."
+        ),
+    )
 
 
 async def end_call(

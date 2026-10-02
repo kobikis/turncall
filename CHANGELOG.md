@@ -15,9 +15,10 @@ and is not part of this repository's history.
 
 - **`end_call` and `do_not_call` let the agent finish its goodbye.** The tool
   used to hang up over the carrier's API the moment it ran, cutting off what
-  the agent was still saying. It now records the end and stops the call once
-  the agent's speech has played out. The model is not asked for another reply
-  after either tool succeeds, so have it say goodbye *before* calling one.
+  the agent was still saying. It now records the end and lets the model answer
+  the tool's result; the call ends once that reply — the goodbye — has played
+  out. Instructions that ask the model to say goodbye *before* calling the tool
+  now work against it: many models then say goodbye and wait for the caller.
   On WebRTC, where `end_call` used to mark the call ended and leave it
   running, it now ends it. `POST /v1/calls/{id}/end` still hangs up at once.
 
