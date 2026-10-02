@@ -313,6 +313,34 @@ class VoicemailDetectionSchema(BaseModel):
     )
 
 
+class DelegationConfigSchema(BaseModel):
+    """gpt-live-1's delegate (#243): the model it hands tool and reasoning
+    work to. Only `responses` (an OpenAI-hosted delegate) for now."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: str = Field(default="responses", pattern=r"^responses$")
+    model: str | None = Field(default=None, min_length=1, max_length=256)
+    reasoning_effort: str | None = Field(
+        default=None, pattern=r"^(none|minimal|low|medium|high|xhigh|max)$"
+    )
+    service_tier: str | None = Field(
+        default=None, pattern=r"^(auto|default|flex|priority)$"
+    )
+    instructions: str | None = Field(default=None, min_length=1, max_length=128000)
+    timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
+
+    @model_validator(mode="after")
+    def validate_model_present(self) -> "DelegationConfigSchema":
+        if self.mode == "responses" and not self.model:
+            msg = (
+                "s2s.delegation in responses mode needs a model: it names the "
+                "OpenAI-hosted model gpt-live-1 delegates to"
+            )
+            raise ValueError(msg)
+        return self
+
+
 class S2SConfigSchema(BaseModel):
     """Speech-to-speech model configuration."""
 
@@ -329,6 +357,7 @@ class S2SConfigSchema(BaseModel):
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, ge=1, le=128000)
     extra: dict[str, Any] = Field(default_factory=dict)
+    delegation: DelegationConfigSchema | None = None
 
     @model_validator(mode="after")
     def validate_provider(self) -> "S2SConfigSchema":
@@ -341,6 +370,13 @@ class S2SConfigSchema(BaseModel):
                 "gpt-live-1 is full duplex and handles interruption itself, so "
                 "client-side turn detection would fight it; remove "
                 "s2s.turn_detection or leave it at 'server_vad'"
+            )
+            raise ValueError(msg)
+        if self.delegation is not None and self.provider != "openai_live":
+            msg = (
+                f"s2s.delegation is not supported for provider '{self.provider}': "
+                "only openai_live delegates — the other S2S providers call "
+                "tools themselves"
             )
             raise ValueError(msg)
         if self.provider == "aws" and self.base_url:
@@ -624,6 +660,17 @@ class AgentConfigSchema(BaseModel):
                 "llm.failover is not supported in S2S pipeline mode: the "
                 "conversation lives inside the realtime session, so no other "
                 "provider could carry it on"
+            )
+            raise ValueError(msg)
+        if (
+            self.pipeline_mode == "s2s"
+            and self.s2s.provider == "openai_live"
+            and any(t.name == "handoff_to_agent" for t in self.tools)
+        ):
+            msg = (
+                "handoff_to_agent is not supported on openai_live: a handoff "
+                "would swap the delegate's tools but not gpt-live-1's session, "
+                "leaving the previous agent's voice and prompt in place"
             )
             raise ValueError(msg)
         return self

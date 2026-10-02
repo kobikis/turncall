@@ -13,6 +13,10 @@ and is not part of this repository's history.
 
 ### Changed
 
+- **`handoff_to_agent` on an `openai_live` S2S agent is now refused** (422)
+  (#243). The handoff swapped the delegate's tools but not gpt-live-1's
+  session, so the caller kept the previous agent's voice and prompt.
+
 - **`end_call` and `do_not_call` let the agent finish its goodbye.** The tool
   used to hang up over the carrier's API the moment it ran, cutting off what
   the agent was still saying. It now records the end and lets the model answer
@@ -54,6 +58,20 @@ and is not part of this repository's history.
   config. False no longer means "no static AWS keys on this deployment".
 
 ### Added
+
+- **`s2s.delegation` on `openai_live` agents** (#243). gpt-live-1 calls no
+  tools itself; it hands them to a *delegate*. The new block configures a
+  Responses delegate (`mode: "responses"`, `model`, `reasoning_effort`,
+  `service_tier`, `instructions`, `timeout_seconds` default 30), and gpt-live-1
+  is now told to delegate, from the agent's own tool names and descriptions.
+  `s2s.extra.backend_model` keeps working, read as that block. Refused with a
+  422: `delegation` on any other S2S provider, responses mode without `model`.
+  An agent on `backend_model` now gets the same 30-second default: each
+  function call the delegate makes is cancelled past it (it was unbounded),
+  so a webhook tool whose own timeout × retries runs longer needs
+  `timeout_seconds` raised. `delegation.instructions` takes call-init
+  `{{variables}}` like `system_prompt`, but not `knowledge_context`, which is
+  prepended to `system_prompt` only.
 
 - **A `do_not_call` built-in tool** (#228). Listed in an agent's `tools`, it
   adds the caller's number to the project's suppression list, records

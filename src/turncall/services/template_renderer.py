@@ -39,6 +39,7 @@ def render_agent_config(
     - system_prompt
     - first_message
     - tool descriptions
+    - s2s.delegation.instructions (the delegate's prompt, when it replaces it)
     """
     if not variables:
         return config
@@ -57,13 +58,25 @@ def render_agent_config(
         for tool in config.tools
     ]
 
-    return config.model_copy(
-        update={
-            "system_prompt": rendered_system_prompt,
-            "first_message": rendered_first_message,
-            "tools": rendered_tools,
-        }
-    )
+    update: dict[str, object] = {
+        "system_prompt": rendered_system_prompt,
+        "first_message": rendered_first_message,
+        "tools": rendered_tools,
+    }
+    delegation = config.s2s.delegation
+    if delegation is not None and delegation.instructions:
+        update["s2s"] = config.s2s.model_copy(
+            update={
+                "delegation": delegation.model_copy(
+                    update={
+                        "instructions": render_template(
+                            delegation.instructions, variables
+                        )
+                    }
+                )
+            }
+        )
+    return config.model_copy(update=update)
 
 
 def prepend_knowledge_context(
