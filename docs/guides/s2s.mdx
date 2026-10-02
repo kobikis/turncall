@@ -97,9 +97,20 @@ anything that needs a tool or deeper reasoning to a second model — the
 **delegate** — while the conversation keeps going, then voices what came back.
 Without a delegation, an `openai_live` agent's tools are never used.
 
-Configure it with `s2s.delegation`. Today the one mode is `responses`: OpenAI
-hosts the delegate, and the function calls it makes run against your agent's own
-tools — webhook, MCP and built-in alike, recorded like on any provider.
+There are two modes, and an agent with tools gets one without asking:
+
+- **`client`** — the delegate is your agent's own `llm`: any provider TurnCall
+  supports, on its usual keys. It is the **default** for an `openai_live` agent
+  with tools (static or MCP) and no `delegation` block. An agent with no tools
+  gets no delegation at all.
+- **`responses`** — OpenAI hosts the delegate, the model you name.
+
+Either way the delegate runs your agent's own tools — webhook and MCP alike,
+mocked in evals and recorded like on any provider.
+
+```json
+"s2s": {"provider": "openai_live", "delegation": {"mode": "client", "timeout_seconds": 30}}
+```
 
 ```json
 "s2s": {
@@ -116,20 +127,26 @@ tools — webhook, MCP and built-in alike, recorded like on any provider.
 
 | Field | Required | Description |
 |---|---|---|
-| `mode` | No | `responses` (the default, and the only mode so far) |
-| `model` | Yes | The OpenAI-hosted delegate |
-| `reasoning_effort` | No | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max` — reasoning models only |
-| `service_tier` | No | `auto`, `default`, `flex` or `priority` |
+| `mode` | No | `client` or `responses`. A block without it is `responses` |
+| `model` | `responses` | The OpenAI-hosted delegate. Refused in `client` mode |
+| `reasoning_effort` | No | `responses` only: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max` — reasoning models only |
+| `service_tier` | No | `responses` only: `auto`, `default`, `flex` or `priority` |
 | `instructions` | No | Replaces what the delegate is told. Without it the delegate gets the agent's `system_prompt` |
-| `timeout_seconds` | No | Default `30`. Bounds each function call the delegate makes; past it the call is cancelled and gpt-live-1 is told it did not complete |
+| `timeout_seconds` | No | Default `30`. `client`: how long one delegation may take. `responses`: each function call the delegate makes. Past it gpt-live-1 is told the work did not complete |
+
+In `client` mode the delegate's provider needs a key like any other: one with no
+key at any level fails the call before it starts, naming it in `missing_keys`.
 
 The agent's `system_prompt` reaches both models. TurnCall also appends to
 gpt-live-1's instructions a paragraph telling it to delegate whenever the caller
 wants something done, listing each tool's name and description — so an existing
 prompt needs no rewrite.
 
-`end_call` and `do_not_call` work as everywhere else: the call ends after
-gpt-live-1's goodbye.
+In `responses` mode `end_call` and `do_not_call` work as everywhere else: the
+call ends after gpt-live-1's goodbye. In `client` mode they — and
+`transfer_call` — are **refused with a 422 for now**: the delegate runs outside
+the call, so it could not end or transfer it. Use `responses` mode for an agent
+that needs call control.
 
 Refused with a 422: `delegation` on any other provider (they call tools
 themselves), `responses` without `model`, and `handoff_to_agent` among an

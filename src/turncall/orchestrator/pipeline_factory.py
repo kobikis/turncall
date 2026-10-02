@@ -19,7 +19,12 @@ from pipecat.services.openai.llm import OpenAILLMService
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.config.settings import BYOMSettings, PipecatSettings
-from turncall.domain.models import AgentConfig, LLMConfig
+from turncall.domain.models import (
+    CALL_CONTROL_TOOL_NAMES,
+    AgentConfig,
+    LLMConfig,
+    resolve_delegation,
+)
 from turncall.orchestrator.observability import ObservabilityProcessor
 from turncall.services.credentials import Credentials
 from turncall.services.llm_models import resolve_llm_model
@@ -1486,6 +1491,66 @@ def create_pipeline(
     return Pipeline(processors)
 
 
+def _without_call_control(tools: list[Any]) -> list[Any]:
+    """Withhold call-control built-ins from a client delegate (until #245).
+
+    The API refuses them there; this catches an agent stored before it did.
+    Run in the delegate's worker, `end_call` would record the end and never
+    hang up — worse than not offering it, which is what the call had before.
+    """
+    withheld = [t.name for t in tools if t.name in CALL_CONTROL_TOOL_NAMES]
+    if withheld:
+        logger.warning(
+            "openai_live client delegation cannot run {tools} yet (#245): "
+            "withheld from the delegate. Use s2s.delegation responses mode "
+            "for call control.",
+            tools=withheld,
+        )
+    return [t for t in tools if t.name not in CALL_CONTROL_TOOL_NAMES]
+
+
+def _create_client_delegate(
+    config: AgentConfig,
+    credentials: Credentials,
+    delegation: Any,
+    tools: list[Any],
+    call_context: CallContext,
+    *,
+    byom_settings: BYOMSettings | None = None,
+) -> Any:
+    """The agent's own `llm` as gpt-live-1's delegate (#244).
+
+    Built as cascade builds its LLM — keys through Credentials, the BYOM
+    prompt-described tools — and run in pipecat's backend worker with its own
+    context carrying the tools and TurnCall's handlers registered on it, so
+    mocks, recording and precedence are those of every other provider.
+    `delegation.instructions` replaces the system prompt, as in responses mode.
+    """
+    from pipecat.workers.llm.backend_llm_worker import BackendLLMWorker
+
+    from turncall.orchestrator.tool_bridge import register_tools
+
+    update: dict[str, Any] = {"tools": tools}
+    if delegation.instructions:
+        update["system_prompt"] = delegation.instructions
+    delegate_config = config.model_copy(update=update)
+    byom_provider = config.llm.provider in ("ollama", "custom_openai")
+    llm = _create_llm_service(
+        delegate_config,
+        credentials,
+        byom_settings=byom_settings,
+        system_instruction=_build_system_instruction(
+            delegate_config, inject_tools_prompt=byom_provider
+        ),
+    )
+    register_tools(llm, tools, call_context)
+    tools_schema = None if byom_provider else _build_tools_schema(delegate_config)
+    context = LLMContext(
+        messages=[], **({"tools": tools_schema} if tools_schema else {})
+    )
+    return BackendLLMWorker(llm=llm, context=context)
+
+
 def _create_s2s_pipeline(
     config: AgentConfig,
     transport: Any,
@@ -1535,14 +1600,32 @@ def _create_s2s_pipeline(
     if config.s2s.base_url and byom_settings:
         _validate_byom_url(config.s2s.base_url, byom_settings)
 
+    advertised = _advertised_tools(config, mcp_tools)
+    delegation = resolve_delegation(config.s2s, has_tools=bool(advertised))
+    client_mode = delegation is not None and delegation.mode == "client"
+    delegate = None
+    if client_mode:
+        advertised = _without_call_control(advertised)
+        if advertised:
+            delegate = _create_client_delegate(
+                config,
+                credentials,
+                delegation,
+                advertised,
+                call_context,
+                byom_settings=byom_settings,
+            )
     s2s_llm = create_s2s_service(
-        config, credentials, tools=_advertised_tools(config, mcp_tools)
+        config, credentials, tools=advertised, delegate=delegate
     )
 
     # Build context — system prompt + first_message are handled by the S2S
     # service directly (SessionProperties.instructions for OpenAI,
-    # system_instruction for Gemini). Only pass tools via context.
-    tools_schema = _build_tools_schema(config, extra_tools=mcp_tools)
+    # system_instruction for Gemini). Only pass tools via context — except to
+    # a client delegation, whose tools live on the delegate (#244).
+    tools_schema = (
+        None if client_mode else _build_tools_schema(config, extra_tools=mcp_tools)
+    )
     context_kwargs: dict[str, Any] = {"messages": []}
     if tools_schema is not None:
         context_kwargs["tools"] = tools_schema

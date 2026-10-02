@@ -69,7 +69,7 @@ How the `openai_live` S2S [[provider]] (gpt-live-1) gets work done that needs to
 reasoning: the live model, which only listens and speaks, hands it to a [[delegate]] and
 voices the result in its own words. Two modes, named as OpenAI names them: *client* (the
 delegate is the agent's own `llm`) and *responses* (the delegate is an OpenAI-hosted
-model). No other S2S provider delegates — they call tools themselves. See #241.
+model). *client* is the default for an agent with tools. No other S2S provider delegates — they call tools themselves. See #241.
 _Avoid_: "backend delegation", "tool forwarding".
 
 **Delegate**:

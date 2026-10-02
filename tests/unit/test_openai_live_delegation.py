@@ -96,10 +96,6 @@ class TestBoundary:
         with pytest.raises(ValidationError, match="needs a model"):
             _schema(_live(delegation={"mode": "responses"}))
 
-    def test_client_mode_is_not_accepted_yet(self) -> None:
-        with pytest.raises(ValidationError):
-            _schema(_live(delegation={"mode": "client"}))
-
     def test_unknown_delegation_field_is_refused(self) -> None:
         with pytest.raises(ValidationError):
             _schema(_live(delegation={"mode": "responses", "model": "m", "x": 1}))
@@ -119,8 +115,9 @@ class TestBoundary:
         AgentConfigSchema.model_validate({"s2s": _live(), "tools": [handoff]})
 
     def test_a_builder_style_openai_live_agent_still_saves(self) -> None:
-        """No delegation block, the fields the console sends."""
-        _schema(_live(model="gpt-live-1", voice="alloy"), tools=[_END])
+        """No delegation block, the fields the console sends. With end_call it
+        would be client mode, which refuses call control until #245."""
+        _schema(_live(model="gpt-live-1", voice="alloy"), tools=[_BOOK])
 
 
 # --- Seam 2: the pipeline build ----------------------------------------------
@@ -194,7 +191,8 @@ class TestBuild:
         assert legacy._settings.system_instruction == block._settings.system_instruction
 
     def test_no_delegation_without_a_block_or_backend_model(self) -> None:
-        live = _build(_config(_live(), tools=[_BOOK]))
+        """Nor tools: with tools, client mode is the default (#244)."""
+        live = _build(_config(_live()))
         assert live._delegation is None
 
     def test_timeout_defaults_to_30_and_reaches_the_service(self) -> None:
@@ -261,7 +259,7 @@ class TestBuild:
     def test_no_delegation_paragraph_without_delegation(self) -> None:
         """Pipecat declines every delegation then; telling the model to
         delegate would only promise the caller work that never happens."""
-        live = _build(_config(_live(), tools=[_BOOK]))
+        live = _build(_config(_live()))
         assert live._settings.system_instruction == "You are a receptionist."
 
     def test_delegate_holds_the_agent_tools_with_turncall_handlers(self) -> None:

@@ -17,7 +17,11 @@ from pydantic import (
 
 from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
-from turncall.domain.models import BUILTIN_TOOL_NAMES
+from turncall.domain.models import (
+    BUILTIN_TOOL_NAMES,
+    CALL_CONTROL_TOOL_NAMES,
+    resolve_delegation,
+)
 from turncall.domain.providers import (
     AVATAR_PROVIDERS,
     LLM_PROVIDERS,
@@ -314,12 +318,13 @@ class VoicemailDetectionSchema(BaseModel):
 
 
 class DelegationConfigSchema(BaseModel):
-    """gpt-live-1's delegate (#243): the model it hands tool and reasoning
-    work to. Only `responses` (an OpenAI-hosted delegate) for now."""
+    """gpt-live-1's delegate: the model it hands tool and reasoning work to —
+    the agent's own `llm` (`client`, #244) or an OpenAI-hosted one
+    (`responses`, #243)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    mode: str = Field(default="responses", pattern=r"^responses$")
+    mode: str = Field(default="responses", pattern=r"^(client|responses)$")
     model: str | None = Field(default=None, min_length=1, max_length=256)
     reasoning_effort: str | None = Field(
         default=None, pattern=r"^(none|minimal|low|medium|high|xhigh|max)$"
@@ -336,6 +341,17 @@ class DelegationConfigSchema(BaseModel):
             msg = (
                 "s2s.delegation in responses mode needs a model: it names the "
                 "OpenAI-hosted model gpt-live-1 delegates to"
+            )
+            raise ValueError(msg)
+        hosted_only = [
+            f
+            for f in ("model", "reasoning_effort", "service_tier")
+            if getattr(self, f) is not None
+        ]
+        if self.mode == "client" and hosted_only:
+            msg = (
+                f"s2s.delegation in client mode takes no {', '.join(hosted_only)}: "
+                "the delegate is the agent's own llm, configured there"
             )
             raise ValueError(msg)
         return self
@@ -673,7 +689,28 @@ class AgentConfigSchema(BaseModel):
                 "leaving the previous agent's voice and prompt in place"
             )
             raise ValueError(msg)
+        self._refuse_call_control_in_client_mode()
         return self
+
+    def _refuse_call_control_in_client_mode(self) -> None:
+        """Temporary, until #245: a client delegate runs tools in its own
+        worker, where `end_call` could record the end but never hang up."""
+        if self.pipeline_mode != "s2s":
+            return
+        delegation = resolve_delegation(
+            self.s2s, has_tools=bool(self.tools or self.mcp_servers)
+        )
+        if delegation is None or delegation.mode != "client":
+            return
+        refused = sorted({t.name for t in self.tools} & CALL_CONTROL_TOOL_NAMES)
+        if refused:
+            msg = (
+                f"{', '.join(refused)} cannot run in openai_live client "
+                "delegation yet: the agent's llm runs tools outside the call, "
+                "so it could not end or transfer it. Use s2s.delegation "
+                '{"mode": "responses", "model": ...} for call control'
+            )
+            raise ValueError(msg)
 
 
 # --- Request/Response ---

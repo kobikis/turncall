@@ -167,10 +167,12 @@ class VoicemailConfig(DomainModel):
 
 
 class DelegationConfig(DomainModel):
-    """How an `openai_live` agent's delegate is set up (#243). See CONTEXT.md,
-    "Delegation". Only `responses` exists so far: an OpenAI-hosted delegate."""
+    """How an `openai_live` agent's delegate is set up. See CONTEXT.md,
+    "Delegation". `responses` is an OpenAI-hosted delegate (#243); `client` is
+    the agent's own `llm` (#244), and the default for an agent with tools."""
 
-    mode: str = "responses"
+    mode: str = "responses"  # "client" | "responses"
+    # responses mode only
     model: str | None = None
     reasoning_effort: str | None = None
     service_tier: str | None = None
@@ -197,6 +199,33 @@ class S2SConfig(DomainModel):
     max_tokens: int | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
     delegation: DelegationConfig | None = None  # openai_live only
+
+
+# Built-ins that act on the call itself. A client delegate runs its tools in its
+# own worker, outside the call's pipeline, so it cannot arm the hangup gate
+# yet — refused there until #245.
+CALL_CONTROL_TOOL_NAMES = frozenset({"end_call", "do_not_call", "transfer_call"})
+
+
+def resolve_delegation(s2s: Any, *, has_tools: bool) -> Any:
+    """An `openai_live` agent's effective delegation, or None.
+
+    The block when there is one; `s2s.extra.backend_model` read as responses
+    mode with that model (it predates the block, #243); client mode when the
+    agent has tools (#244); otherwise none — a purely conversational agent
+    pays for no delegate. Duck-typed over `s2s` so the API schema applies the
+    same rule as the pipeline; returns that side's own delegation object.
+    """
+    if s2s.provider != "openai_live":
+        return None
+    if s2s.delegation is not None:
+        return s2s.delegation
+    backend_model = s2s.extra.get("backend_model")
+    if backend_model:
+        return DelegationConfig(
+            model=backend_model, service_tier=s2s.extra.get("service_tier")
+        )
+    return DelegationConfig(mode="client") if has_tools else None
 
 
 class AvatarConfig(DomainModel):
