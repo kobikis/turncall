@@ -120,14 +120,17 @@ async def _assemble(
         avatar_enabled=avatar_enabled,
     )
 
-    # Register static + MCP tools on the LLM service.
+    # Register static + MCP tools on the LLM service — on every member of a
+    # failover group (#222), or a backup would take over with no handlers.
     all_tools = list(config.tools) + list(mcp_tools or [])
     if all_tools:
         from pipecat.services.llm_service import LLMService
 
+        from turncall.orchestrator.llm_failover import FailoverLLM
+
         for proc in pipeline.processors_with_metrics():
             if isinstance(proc, LLMService):
-                register_tools(proc, all_tools, call_context)
+                register_tools(FailoverLLM.group_of(proc), all_tools, call_context)
                 break
 
     return CallSession(

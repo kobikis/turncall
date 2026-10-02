@@ -116,6 +116,7 @@ class Credentials:
         — and either way the caller hears nothing. AWS is not checked: its
         ambient chain is not a key this can see.
         """
+        needed: list[tuple[str, str | None]]
         if config.pipeline_mode == "s2s":
             needed = [(config.s2s.provider, None)]
         else:
@@ -123,6 +124,8 @@ class Credentials:
                 (config.stt.provider, None),
                 (config.llm.provider, config.llm.api_key),
                 (config.tts.provider, None),
+                # A backup with no key would only be found out mid-outage.
+                *((e.provider, e.api_key) for e in config.llm.failover),
             ]
             if config.avatar.enabled:
                 needed.append((config.avatar.provider, None))

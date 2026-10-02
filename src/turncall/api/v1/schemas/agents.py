@@ -81,6 +81,15 @@ class LLMConfigSchema(BaseModel):
         default=None, pattern="^(minimal|low|medium|high)$"
     )
     extra: dict[str, Any] = Field(default_factory=dict)
+    # Backup LLMs for a voice call (#222), each a whole LLM config of its own.
+    failover: list["LLMConfigSchema"] = Field(default_factory=list, max_length=5)
+
+    @model_validator(mode="after")
+    def validate_failover_flat(self) -> "LLMConfigSchema":
+        if any(entry.failover for entry in self.failover):
+            msg = "a failover entry cannot nest its own failover list"
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def validate_provider(self) -> "LLMConfigSchema":
@@ -614,6 +623,13 @@ class AgentConfigSchema(BaseModel):
     def validate_s2s_constraints(self) -> "AgentConfigSchema":
         if self.pipeline_mode == "s2s" and self.voicemail_detection.enabled:
             msg = "Voicemail detection is not supported in S2S pipeline mode"
+            raise ValueError(msg)
+        if self.pipeline_mode == "s2s" and self.llm.failover:
+            msg = (
+                "llm.failover is not supported in S2S pipeline mode: the "
+                "conversation lives inside the realtime session, so no other "
+                "provider could carry it on"
+            )
             raise ValueError(msg)
         return self
 

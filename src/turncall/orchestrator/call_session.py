@@ -188,6 +188,7 @@ class CallSession:
 
         self._duration_guard = self._start_duration_guard()
         self._arm_idle_guard()
+        self._watch_failover()
 
         try:
             await self._update_call_status(CallStatus.IN_PROGRESS)
@@ -267,7 +268,10 @@ class CallSession:
         failed with the reason on its event log (ADR-0008)."""
         processor = frame.processor
         noted = f"{processor}: {readable_error(frame.error)}"
-        if noted not in self.pipeline_errors and len(self.pipeline_errors) < 5:
+        if (
+            noted not in self.pipeline_errors
+            and len(self.pipeline_errors) < _MAX_PIPELINE_ERRORS
+        ):
             self.pipeline_errors.append(noted)
         if not (frame.fatal or (processor is not None and not processor.is_usable)):
             return
@@ -281,6 +285,41 @@ class CallSession:
             )
             return
         await self._record_error(str(processor), error)
+
+    def _watch_failover(self) -> None:
+        """Record each LLM failover (#222): a `provider.failover` event on a
+        call, and among the iteration's agent errors on an eval, which has no
+        event log. The switch absorbs the error, so nothing else would."""
+        from turncall.orchestrator.llm_failover import FailoverLLM
+
+        group = next(
+            (p for p in self._pipeline.processors if isinstance(p, FailoverLLM)), None
+        )
+        if group is None:
+            return
+
+        @group.event_handler("on_failover")  # type: ignore[untyped-decorator]
+        async def _on_failover(
+            _group: object, src: str, dst: str, frame: ErrorFrame
+        ) -> None:
+            error = readable_error(frame.error)
+            logger.warning(
+                "provider_failover",
+                call_id=str(self.call_id),
+                role="llm",
+                src=src,
+                dst=dst,
+                error=error,
+            )
+            if len(self.pipeline_errors) < _MAX_PIPELINE_ERRORS:
+                self.pipeline_errors.append(
+                    f"llm failed over from {src} to {dst}: {error}"
+                )
+            if not self._call_context.is_eval:
+                await self._log_event(
+                    CallEventType.PROVIDER_FAILOVER,
+                    {"role": "llm", "from": src, "to": dst, "error": error},
+                )
 
     def _arm_idle_guard(self) -> None:
         """React when the caller goes quiet after the agent has spoken.
@@ -497,6 +536,10 @@ class CallSession:
 # the token redacted), which buries the one sentence a person needs.
 _REQUEST_HEADERS = re.compile(r"headers: \{.*?\}, ")
 
+
+# Enough to say why an iteration went wrong without a runaway provider
+# filling the eval's results entry.
+_MAX_PIPELINE_ERRORS = 5
 
 _KEY_REFUSED = (ErrorCategory.AUTHENTICATION, ErrorCategory.AUTHORIZATION)
 
