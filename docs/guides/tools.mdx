@@ -16,6 +16,20 @@ These work out of the box with no server needed:
 | `transfer_call` | Transfer to a phone number (cold or warm) | `target_number` (required), `transfer_mode`, `transfer_message`, `briefing`, `fallback_message`, `reason` |
 | `handoff_to_agent` | Switch to another AI agent | `agent_id` (required), `reason`, `context` |
 | `send_dtmf` | Send keypad tones | `digits` (required) |
+| `do_not_call` | Add the caller's number to the project's suppression list, record `call.opted_out`, end the call | none |
+
+### Opt-outs (`do_not_call`)
+
+Opt-in: an agent has it only if its `tools` list names it. When a caller asks
+not to be called again, the tool suppresses their number for the whole project
+— the dialling number on an inbound call, the dialled one outbound — so every
+later outbound dial to it is refused `409 number_suppressed`. It then records
+`call.opted_out` (`{number}`, also sent to webhook subscribers) and ends the
+call. The hangup is immediate, as with `end_call`: anything the model says
+after the tool returns is not heard, so have it confirm and say goodbye
+*before* calling it — e.g. a `description` of "Use when the caller asks not to
+be called again. Confirm the opt-out and say goodbye, then call this." A call
+with no phone number (WebRTC) is refused and keeps running.
 
 ### Call transfer (cold / warm)
 
@@ -122,8 +136,8 @@ your handler is stateless.
 The same webhook tools work in SMS, the Chat API and WhatsApp text. Two
 differences worth knowing:
 
-- **Built-in tools are voice-only.** `end_call`, `transfer_call`, `send_dtmf`
-  and `handoff_to_agent` all act on a live call, so they aren't offered in a
+- **Built-in tools are voice-only.** `end_call`, `transfer_call`, `send_dtmf`,
+  `do_not_call` and `handoff_to_agent` all act on a live call, so they aren't offered in a
   text session. Configure them if you like — they're simply not advertised to
   the model there.
 - **Tool exchanges aren't part of the stored history.** Chat history is

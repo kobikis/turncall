@@ -138,7 +138,7 @@ order. A discovered tool whose name is already taken is skipped and logged
 rather than shadowing the winner.
 
 A server may not claim a built-in name at all — `end_call`, `transfer_call`,
-`handoff_to_agent`, `send_dtmf`. Dispatch checks built-ins first, so an MCP
+`handoff_to_agent`, `send_dtmf`, `do_not_call`. Dispatch checks built-ins first, so an MCP
 tool called `end_call` would have been advertised to the model and then hung
 up the call instead of running.
 

@@ -155,6 +155,8 @@ async def _execute_builtin(
                 call_context.call_id,
                 digits=args.get("digits", ""),
             )
+        elif function_name == "do_not_call":
+            result = await call_control.do_not_call(session, call_context.call_id)
         else:
             return json.dumps({"error": f"Unknown built-in tool: {function_name}"})
 

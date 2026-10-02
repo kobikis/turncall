@@ -44,6 +44,12 @@ and is not part of this repository's history.
 
 ### Added
 
+- **A `do_not_call` built-in tool** (#228). Listed in an agent's `tools`, it
+  adds the caller's number to the project's suppression list, records
+  `call.opted_out` (`{number}`, dispatched to webhook subscribers) and ends the
+  call. Absent unless listed. A call with no phone number is refused and left
+  running.
+
 - **A suppression list, enforced on every outbound dial** (#227).
   `POST/GET /v1/suppression-list` and `DELETE /v1/suppression-list/{id}`
   manage a project's numbers that must never be dialled; an outbound call to
