@@ -4,12 +4,19 @@ The live model calls no tools of its own; in responses mode the OpenAI-hosted
 delegate makes the function calls and the live service runs them with
 TurnCall's handlers. This drives an `openai_live` agent with an
 `s2s.delegation` block and asserts the delegate's calls reached TurnCall's
-mocks — a mocked lookup, then `end_call` after the caller says goodbye.
+mocks — a mocked lookup the caller asks for.
 
-An eval builds no hangup gate (the harness owns an iteration's length, #240),
-so what ends the iteration here is the script, not the call; that `end_call`
-arms the gate in the call's pipeline is pinned hermetically in
+`end_call` on goodbye is deliberately not asserted. gpt-live-1 decides by
+itself whether to delegate, and measured against this script it said goodbye
+without delegating the hangup about half the time — a model limit recorded on
+#242, not wiring this test can pin. That a delegated `end_call` arms the
+hangup gate in the call's pipeline is pinned hermetically in
 `tests/unit/test_openai_live_delegation.py`.
+
+Audio modality, not text: gpt-live-1 answers what it *hears*. In text mode the
+caller's line reaches it only as prior session context, and it sat silent
+until the session expired. The caller is spoken by Kokoro (local, downloaded
+on first use).
 
 Live: needs OPENAI_API_KEY. Skipped without it.
 """
@@ -48,6 +55,7 @@ async def test_a_mocked_tool_and_end_call_are_delegated(
     blob = {
         "pipeline_mode": "s2s",
         "system_prompt": "You are the receptionist at Luigi's restaurant.",
+        "first_message": "Thanks for calling Luigi's, how can I help?",
         "s2s": {
             "provider": "openai_live",
             "delegation": {"mode": "responses", "model": "gpt-5-mini"},
@@ -74,6 +82,18 @@ async def test_a_mocked_tool_and_end_call_are_delegated(
     )
     definition = {
         "turns": [
+            # A caller waits for the greeting; the live session starts ~2s
+            # after connect, and audio heard before that is dropped.
+            {
+                "user": "Hello?",
+                "expect": [
+                    {
+                        "event": "response",
+                        "text_contains": "calling",
+                        "within_ms": 30000,
+                    }
+                ],
+            },
             {
                 "user": "Hi, what time do you open today?",
                 "expect": [
@@ -81,17 +101,7 @@ async def test_a_mocked_tool_and_end_call_are_delegated(
                         "event": "function_call",
                         "calls": [{"name": "check_hours"}],
                         "within_ms": 60000,
-                    }
-                ],
-            },
-            {
-                "user": "Great, that's all I needed. Goodbye!",
-                "expect": [
-                    {
-                        "event": "function_call",
-                        "calls": [{"name": "end_call"}],
-                        "within_ms": 60000,
-                    }
+                    },
                 ],
             },
         ]
@@ -99,11 +109,13 @@ async def test_a_mocked_tool_and_end_call_are_delegated(
     mocks = ToolMocks(
         responses={
             "check_hours": {"today": "12:00-22:00"},
+            # Still mocked: the agent lists it, and an unmocked call errors
+            # the iteration under mock_only.
             "end_call": {"success": True, "message": "ok", "details": None},
         }
     )
     parsed = scenario_mod.parse(
-        scenario_mod.with_modality(definition, EvalModality.TEXT),
+        scenario_mod.with_modality(definition, EvalModality.AUDIO),
         name="live-openai-live-delegation",
     )
     agent_errors: list[str] = []
@@ -111,7 +123,7 @@ async def test_a_mocked_tool_and_end_call_are_delegated(
         parsed=parsed,
         kind=EvalKind.SCRIPTED,
         target=target,
-        modality=EvalModality.TEXT,
+        modality=EvalModality.AUDIO,
         settings=Settings(),
         session_factory=session_factory,
         run_id=uuid4(),
@@ -121,6 +133,5 @@ async def test_a_mocked_tool_and_end_call_are_delegated(
 
     called = [c["tool_name"] for c in mocks.calls]
     assert "check_hours" in called, (called, agent_errors)
-    assert "end_call" in called, (called, agent_errors)
     assert not mocks.refused
     assert result.passed, ([str(f) for f in result.failures], agent_errors)

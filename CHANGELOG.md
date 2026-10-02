@@ -133,6 +133,12 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **Tools on `openai_live` agents never ran** (#243). An S2S call opened its
+  session with a fresh, empty context instead of the pipeline's own, and
+  gpt-live-1 configures its session — its delegate's tools included — from the
+  first context it sees. The delegate therefore had no tools for the whole call.
+  The session now opens on the pipeline's context.
+
 - **A call with no recorded audio kept `recording_status: in_progress`
   forever** (#189). pipecat skips its flush when nothing was buffered (a call
   whose providers refused before anyone spoke), so the status never moved and

@@ -362,3 +362,38 @@ def test_empty_delegate_instructions_are_refused() -> None:
         _schema(
             _live(delegation={"mode": "responses", "model": "m", "instructions": ""})
         )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_session_opens_on_a_context_that_carries_the_tools() -> None:
+    """gpt-live-1 configures its session — the delegate's tools included —
+    from the first context it receives, and never again. The S2S greeting
+    used to send a fresh, empty context, so the delegate had no tools for the
+    whole call: found by the live eval, nothing delegated ever ran (#243)."""
+    from pipecat.frames.frames import LLMContextFrame
+    from pipecat.processors.aggregators.llm_response_universal import (
+        LLMUserAggregator,
+    )
+    from pipecat.tests.utils import run_test
+
+    from turncall.orchestrator.call_session import s2s_greeting_frame
+
+    config = _config(
+        _live(delegation={"mode": "responses", "model": "m"}), tools=[_BOOK, _END]
+    )
+    pipeline = create_pipeline(
+        config=config,
+        transport=MagicMock(),
+        call_context=MagicMock(is_eval=True),
+        pipecat_settings=SimpleNamespace(),
+        credentials=creds("sk-test"),
+    )
+    user_aggregator = next(
+        p for p in pipeline.processors if isinstance(p, LLMUserAggregator)
+    )
+    down, _ = await run_test(user_aggregator, frames_to_send=[s2s_greeting_frame()])
+    contexts = [f for f in down if isinstance(f, LLMContextFrame)]
+    assert len(contexts) == 1, [type(f).__name__ for f in down]
+    tools = contexts[0].context.tools
+    assert {f.name for f in tools.standard_tools} == {"book_table", "end_call"}

@@ -282,11 +282,13 @@ def _delegation_paragraph(tools: Sequence[ToolDefinition]) -> str:
     """
     lines = "\n".join(f"- {tool.name}: {tool.description}" for tool in tools)
     return (
-        "\n\nYou cannot take actions yourself, but you can delegate. Whenever "
-        "the caller wants something done, or asks for something you would need "
-        "to look up, delegate it rather than answering from memory or saying "
-        "you will do it, then tell the caller what came back. Delegating is "
-        "how these get done:\n" + lines
+        "\n\nYou cannot take actions yourself, but you can delegate. Delegate "
+        "whenever one of the actions below fits the moment: the caller wants "
+        "something done, asks for something you would need to look up, or the "
+        "conversation reaches the point an action is for — ending the call "
+        "when the caller says goodbye, for one. Never just say you will do it, "
+        "and never answer from memory instead; delegate, then tell the caller "
+        "what came back. Delegating is how these get done:\n" + lines
     )
 
 
