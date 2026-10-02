@@ -54,7 +54,8 @@ async def list_for_project(
 
 async def remove(session: AsyncSession, *, project_id: UUID, entry_id: UUID) -> bool:
     result = await session.execute(
-        delete(SuppressedNumberRow).where(
+        delete(SuppressedNumberRow)
+        .where(
             SuppressedNumberRow.id == entry_id,
             SuppressedNumberRow.project_id == project_id,
         )
