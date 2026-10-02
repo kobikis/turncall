@@ -6,9 +6,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from turncall.api.v1.schemas import E164_PATTERN
+
 
 class CreateOutboundCallRequest(BaseModel):
-    to_number: str = Field(..., pattern=r"^\+[1-9]\d{1,14}$")
+    to_number: str = Field(..., pattern=E164_PATTERN)
     from_number_id: UUID
     agent_id: UUID
     metadata: dict[str, Any] = Field(default_factory=dict)

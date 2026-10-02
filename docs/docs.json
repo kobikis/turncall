@@ -161,6 +161,14 @@
             ]
           },
           {
+            "group": "Suppression List",
+            "pages": [
+              "POST /v1/suppression-list",
+              "GET /v1/suppression-list",
+              "DELETE /v1/suppression-list/{entry_id}"
+            ]
+          },
+          {
             "group": "Call Control",
             "pages": [
               "POST /v1/calls/{call_id}/end",

@@ -766,3 +766,31 @@ class EvalRunRow(Base):
         Index("ix_eval_runs_batch", "batch_id"),
         Index("ix_eval_runs_scenario", "scenario_id"),
     )
+
+
+class SuppressedNumberRow(Base):
+    """A number on a project's suppression list: never dialled (#227).
+
+    Checked by `services/outbound_dial`, the one path every outbound call takes.
+    Holds no consent record — consent is the operator's, not the platform's.
+    """
+
+    __tablename__ = "suppressed_numbers"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    e164_number: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+
+    __table_args__ = (
+        # Also the index the per-dial lookup uses.
+        UniqueConstraint(
+            "project_id", "e164_number", name="uq_suppressed_numbers_project_number"
+        ),
+    )

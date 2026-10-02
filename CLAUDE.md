@@ -468,6 +468,21 @@ DELETE /v1/phone-numbers/{id}/routing    # Clear test, revert to single agent
 - `webhooks/twilio_handlers.py` — Inbound routing checks `routing_weights`
 - `api/v1/phone_numbers.py` — Routing CRUD endpoints
 
+## Suppression List
+
+A project's numbers that must never be dialled (#227). Checked in
+`services/outbound_dial.place_outbound_call`, the one path every outbound call
+takes, **before** the call row is written — a suppressed `to_number` is `409
+number_suppressed` and the carrier is never asked. Numbers are E.164, the same
+pattern `to_number` is validated against, so they compare as strings. No
+consent records: consent is the operator's.
+
+```
+POST   /v1/suppression-list        # {"number": "+1..."}; re-adding returns the existing entry
+GET    /v1/suppression-list        # ?page= ?limit= ?number= (finds one entry's id)
+DELETE /v1/suppression-list/{id}
+```
+
 ## Takeaways (Structured Outputs)
 
 Reusable post-call extractions (ADR-0013). Define once (`name`, JSON `schema`, optional `prompt`/`model`), attach via `analysis.takeaway_ids`, results keyed by name in `call.ended` → `analysis.takeaways` (`{result, valid, model, duration_ms}`). One concurrent LLM call per takeaway, schema-validated with one retry.

@@ -29,6 +29,7 @@ ADAPTER = "turncall.adapters.telephony.twilio_adapter.TwilioAdapter"
 CALLS = "turncall.storage.repositories.call_repo"
 AGENTS = "turncall.storage.repositories.agent_repo"
 NUMBERS = "turncall.storage.repositories.phone_number_repo"
+SUPPRESSION = "turncall.storage.repositories.suppression_repo"
 SRC = Path(turncall.__file__).parent
 
 # The one module allowed to dial, and where carrier SDK dials may live.
@@ -79,7 +80,7 @@ def dial(app, monkeypatch):
     )
     app.app.dependency_overrides[resolve_auth_context] = lambda: ctx
     app.app.dependency_overrides[get_session] = lambda: AsyncMock()
-    state = SimpleNamespace(settings=_settings())
+    state = SimpleNamespace(settings=_settings(), project_id=ctx.project_id)
     monkeypatch.setattr(
         "turncall.services.outbound_dial.get_settings", lambda: state.settings
     )
@@ -92,6 +93,7 @@ def dial(app, monkeypatch):
     )
     created = _call(active_agent_id=agent.id)
     state.agent, state.number, state.created = agent, number, created
+    state.suppressed = False
     state.body = {
         "agent_id": str(agent.id),
         "from_number_id": str(number.id),
@@ -106,6 +108,10 @@ def dial(app, monkeypatch):
         patch(
             f"{NUMBERS}.get_by_id", AsyncMock(side_effect=lambda *a, **k: state.number)
         ),
+        patch(
+            f"{SUPPRESSION}.is_suppressed",
+            AsyncMock(side_effect=lambda *a, **k: state.suppressed),
+        ) as suppression,
         patch(f"{CALLS}.create_call", AsyncMock(return_value=created)) as create,
         patch(
             f"{CALLS}.update_call_status",
@@ -131,6 +137,7 @@ def dial(app, monkeypatch):
             event,
             carrier,
         )
+        state.suppression = suppression
         state.post = lambda: app.post("/v1/calls/outbound", headers=H, json=state.body)
         yield state
 
@@ -193,6 +200,22 @@ class TestRoute:
         assert r.json()["code"] == "credential_key_unavailable"
         dial.create.assert_not_awaited()
         dial.carrier.assert_not_awaited()
+
+    def test_a_suppressed_number_is_refused_and_never_dialled(self, dial) -> None:
+        dial.suppressed = True
+        r = dial.post()
+        assert r.status_code == 409
+        assert r.json()["code"] == "number_suppressed"
+        assert "+15550000002" in r.json()["error"]
+        dial.create.assert_not_awaited()
+        dial.carrier.assert_not_awaited()
+
+    def test_suppression_is_checked_in_the_api_keys_project(self, dial) -> None:
+        dial.post()
+        assert dial.suppression.await_args.kwargs == {
+            "project_id": dial.project_id,
+            "number": "+15550000002",
+        }
 
     def test_no_public_base_url_is_409(self, dial) -> None:
         dial.settings = _settings(base_url="")

@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from turncall.api.v1.schemas import E164_PATTERN
+
 
 class TwilioAccountFields(BaseModel):
     """A number's own Twilio account. Both or neither: neither means the
@@ -30,7 +32,7 @@ class BindPhoneNumberRequest(TwilioAccountFields):
     # Optional with the number's own account: TurnCall looks the SID up by
     # E.164 there, which is also what proves the credentials own the number.
     external_number_sid: str | None = Field(default=None, min_length=1, max_length=64)
-    e164_number: str = Field(..., pattern=r"^\+[1-9]\d{1,14}$")
+    e164_number: str = Field(..., pattern=E164_PATTERN)
     routing_target_type: str = Field(..., pattern=r"^(agent|workflow|webhook)$")
     routing_target_id: UUID | None = None
     server_url: str | None = Field(default=None, max_length=2048)
