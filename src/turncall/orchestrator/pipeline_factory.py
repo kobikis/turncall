@@ -914,6 +914,27 @@ def _build_system_instruction(
     return content
 
 
+def _advertised_tools(
+    config: AgentConfig, extra_tools: list[Any] | None = None
+) -> list[Any]:
+    """Static + discovered tools, deduplicated by name, first one wins.
+
+    Providers reject a tools array with two identical function names, and two
+    MCP servers exposing a common one ("search", "get") is ordinary rather
+    than exotic. Static tools come first, so a discovered tool can never take
+    over a name the agent config already uses.
+    """
+    seen: set[str] = set()
+    deduped = []
+    for tool in [*config.tools, *(extra_tools or [])]:
+        if tool.name in seen:
+            logger.warning("tool_name_collision_skipped", tool=tool.name)
+            continue
+        seen.add(tool.name)
+        deduped.append(tool)
+    return deduped
+
+
 def _build_tools_schema(
     config: AgentConfig,
     extra_tools: list[Any] | None = None,
@@ -924,25 +945,7 @@ def _build_tools_schema(
         config: Agent config with static tool definitions.
         extra_tools: Additional ToolDefinition objects (e.g. from MCP discovery).
     """
-    all_tools = list(config.tools)
-    if extra_tools:
-        all_tools.extend(extra_tools)
-
-    # Deduplicate by name, first registration wins. Providers reject a tools
-    # array with two identical function names, and two MCP servers exposing a
-    # common one ("search", "get") is ordinary rather than exotic. Static
-    # tools come first, so a discovered tool can never take over a name the
-    # agent config already uses.
-    seen: set[str] = set()
-    deduped = []
-    for tool in all_tools:
-        if tool.name in seen:
-            logger.warning("tool_name_collision_skipped", tool=tool.name)
-            continue
-        seen.add(tool.name)
-        deduped.append(tool)
-    all_tools = deduped
-
+    all_tools = _advertised_tools(config, extra_tools)
     if not all_tools:
         return None
 
@@ -1532,7 +1535,9 @@ def _create_s2s_pipeline(
     if config.s2s.base_url and byom_settings:
         _validate_byom_url(config.s2s.base_url, byom_settings)
 
-    s2s_llm = create_s2s_service(config, credentials)
+    s2s_llm = create_s2s_service(
+        config, credentials, tools=_advertised_tools(config, mcp_tools)
+    )
 
     # Build context — system prompt + first_message are handled by the S2S
     # service directly (SessionProperties.instructions for OpenAI,

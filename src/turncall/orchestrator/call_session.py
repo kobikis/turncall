@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID
 
 from loguru import logger
-from pipecat.frames.frames import ErrorFrame
+from pipecat.frames.frames import ErrorFrame, LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import (
     PipelineParams,
@@ -29,6 +29,18 @@ from turncall.orchestrator.telemetry import (
     is_tracing_active,
 )
 from turncall.services.credentials import MissingProviderKeyError
+
+
+def s2s_greeting_frame() -> LLMRunFrame:
+    """The frame that opens an S2S session: a run of the pipeline's own context.
+
+    The user aggregator answers an `LLMRunFrame` by pushing the context the
+    pipeline was built with — tools included. A fresh `LLMContext` here used to
+    start the session instead, and gpt-live-1 configures its session (its
+    delegate's tools among it) from the first context it sees and never again,
+    so an `openai_live` agent's delegate had no tools for the whole call (#243).
+    """
+    return LLMRunFrame()
 
 
 class CallSession:
@@ -198,17 +210,11 @@ class CallSession:
             # Trigger first agent response
             if self._pipeline_mode == "s2s":
                 # S2S: the Realtime WebSocket takes time to connect. Queue a
-                # delayed context frame to trigger the greeting after connection.
-                from pipecat.frames.frames import LLMContextFrame
-                from pipecat.processors.aggregators.llm_context import (
-                    LLMContext as PipecatLLMContext,
-                )
-
+                # delayed run to trigger the greeting after connection.
                 async def _trigger_s2s_greeting() -> None:
                     await asyncio.sleep(2)
                     logger.info("S2S: triggering initial greeting")
-                    ctx = PipecatLLMContext(messages=[])
-                    await self._task.queue_frame(LLMContextFrame(context=ctx))
+                    await self._task.queue_frame(s2s_greeting_frame())
 
                 self._greeting_task = asyncio.create_task(_trigger_s2s_greeting())
             else:

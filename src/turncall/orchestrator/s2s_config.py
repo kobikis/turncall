@@ -5,11 +5,17 @@ GeminiLiveLLMService or AWSNovaSonicLLMService with appropriate session
 properties, voice, and turn detection settings.
 """
 
+from collections.abc import Sequence
 from typing import Any
 
 from loguru import logger
 
-from turncall.domain.models import AgentConfig, AWSConfig
+from turncall.domain.models import (
+    AgentConfig,
+    AWSConfig,
+    DelegationConfig,
+    ToolDefinition,
+)
 from turncall.services.credentials import Credentials
 
 # S2SConfig's defaults are OpenAI Realtime's. Nova Sonic needs its own, applied
@@ -35,15 +41,24 @@ def _build_s2s_system_prompt(config: AgentConfig) -> str:
     return prompt
 
 
-def create_s2s_service(config: AgentConfig, credentials: Credentials) -> Any:
-    """Create the appropriate S2S service based on provider."""
+def create_s2s_service(
+    config: AgentConfig,
+    credentials: Credentials,
+    tools: Sequence[ToolDefinition] = (),
+) -> Any:
+    """Create the appropriate S2S service based on provider.
+
+    `tools` is what the call advertises (static + MCP, deduplicated). Only
+    `openai_live` reads it here, to tell gpt-live-1 what it can delegate; every
+    provider gets the tools themselves through the pipeline's context.
+    """
     provider = config.s2s.provider
     if provider == "openai":
         return _create_openai_realtime(config, credentials.api_key("openai"))
     if provider == "google":
         return _create_gemini_live(config, credentials.api_key("google"))
     if provider == "openai_live":
-        return _create_openai_live(config, credentials.api_key("openai"))
+        return _create_openai_live(config, credentials.api_key("openai"), tools)
     if provider == "aws":
         return _create_nova_sonic(config, credentials.aws(config.aws))
     raise ValueError(f"Unsupported S2S provider: {provider}")
@@ -241,7 +256,67 @@ def _create_nova_sonic(config: AgentConfig, aws: AWSConfig) -> Any:
     return service
 
 
-def _create_openai_live(config: AgentConfig, api_key: str) -> Any:
+def resolve_delegation(config: AgentConfig) -> DelegationConfig | None:
+    """The agent's delegation, with `s2s.extra.backend_model` read as a block.
+
+    The extra key predates the block (#243) and keeps working unchanged: it is
+    responses mode with that model, and its `service_tier` beside it.
+    """
+    s2s = config.s2s
+    if s2s.delegation is not None:
+        return s2s.delegation
+    backend_model = s2s.extra.get("backend_model")
+    if not backend_model:
+        return None
+    return DelegationConfig(
+        model=backend_model, service_tier=s2s.extra.get("service_tier")
+    )
+
+
+def _delegation_paragraph(tools: Sequence[ToolDefinition]) -> str:
+    """Tell gpt-live-1 when to delegate, from the agent's own tool list.
+
+    The live model decides by itself whether to delegate, and is known to
+    acknowledge a request and then never hand it over. Naming what the
+    delegate can do is what lets an existing prompt work without a rewrite.
+    """
+    lines = "\n".join(f"- {tool.name}: {tool.description}" for tool in tools)
+    return (
+        "\n\nYou cannot take actions yourself, but you can delegate. Delegate "
+        "whenever one of the actions below fits the moment: the caller wants "
+        "something done, asks for something you would need to look up, or the "
+        "conversation reaches the point an action is for — ending the call "
+        "when the caller says goodbye, for one. Never just say you will do it, "
+        "and never answer from memory instead; delegate, then tell the caller "
+        "what came back. Delegating is how these get done:\n" + lines
+    )
+
+
+def _responses_delegation(config: AgentConfig, delegation: DelegationConfig) -> Any:
+    from pipecat.services.openai.live.llm import ResponsesDelegation
+    from pipecat.services.openai.responses.llm import (
+        OpenAIResponsesLLMSettings,
+        OpenAIResponsesReasoningConfig,
+    )
+
+    settings_kwargs: dict[str, Any] = {"model": delegation.model}
+    # The agent's prompt reaches the delegate too, unless the block replaces it.
+    instructions = delegation.instructions or config.system_prompt
+    if instructions:
+        settings_kwargs["system_instruction"] = instructions
+    if delegation.reasoning_effort:
+        settings_kwargs["reasoning"] = OpenAIResponsesReasoningConfig(
+            effort=delegation.reasoning_effort
+        )
+    return ResponsesDelegation(
+        settings=OpenAIResponsesLLMSettings(**settings_kwargs),
+        service_tier=delegation.service_tier,
+    )
+
+
+def _create_openai_live(
+    config: AgentConfig, api_key: str, tools: Sequence[ToolDefinition] = ()
+) -> Any:
     """Create an OpenAILiveLLMService (gpt-live-1) from S2SConfig.
 
     Unlike Realtime, the live model is full duplex: it listens and speaks at
@@ -250,15 +325,18 @@ def _create_openai_live(config: AgentConfig, api_key: str) -> Any:
     schema rejects `pipecat_vad` for this provider — and the pipeline just
     streams audio in and out.
 
-    It can also *delegate* reasoning and tool calls to a backend text model
-    while the conversation keeps going. Set `s2s.extra.backend_model` to turn
-    that on; OpenAI hosts the backend, and the function calls it makes are run
-    by our own tool handlers. Left unset, the live model answers on its own.
+    It calls no tools itself: it *delegates* tool and reasoning work to a
+    delegate while the conversation keeps going (CONTEXT.md, "Delegation").
+    In responses mode OpenAI hosts the delegate, and this service runs the
+    function calls it makes with TurnCall's handlers, in the call's own
+    pipeline — so `end_call`'s hangup gate works as on every provider.
+    Without a delegation pipecat declines every delegation, and the live
+    model answers on its own.
     """
     from pipecat.services.openai.live.llm import OpenAILiveLLMService
-    from pipecat.services.openai.responses.llm import OpenAIResponsesLLMSettings
 
     s2s = config.s2s
+    delegation = resolve_delegation(config)
 
     # S2SConfig's default model is OpenAI Realtime's. Swap only when the agent
     # left it untouched, so an explicitly wrong model is reported by OpenAI
@@ -267,6 +345,8 @@ def _create_openai_live(config: AgentConfig, api_key: str) -> Any:
 
     settings_kwargs: dict[str, Any] = {"model": model, "voice": s2s.voice}
     system_prompt = _build_s2s_system_prompt(config)
+    if delegation is not None and tools:
+        system_prompt += _delegation_paragraph(tools)
     if system_prompt:
         settings_kwargs["system_instruction"] = system_prompt
     if s2s.temperature is not None:
@@ -281,21 +361,26 @@ def _create_openai_live(config: AgentConfig, api_key: str) -> Any:
     if s2s.base_url:
         service_kwargs["base_url"] = s2s.base_url
 
-    backend_model = s2s.extra.get("backend_model")
-    if backend_model:
-        service_kwargs["delegation"] = OpenAILiveLLMService.ResponsesDelegation(
-            settings=OpenAIResponsesLLMSettings(model=backend_model),
-            service_tier=s2s.extra.get("service_tier"),
-        )
+    if delegation is not None:
+        service_kwargs["delegation"] = _responses_delegation(config, delegation)
+        # pipecat's ResponsesDelegation carries no timeout of its own — the
+        # Responses run is OpenAI's. What runs here is each function call the
+        # delegate makes, so that is what the timeout bounds; on expiry the
+        # call is cancelled and the live model is told it did not complete.
+        service_kwargs["function_call_timeout_secs"] = delegation.timeout_seconds
 
     service = OpenAILiveLLMService(**service_kwargs)
 
     logger.info(
         "S2S service created: provider=openai_live model={model} voice={voice} "
-        "backend={backend} base_url={base_url}",
+        "delegation={delegation} base_url={base_url}",
         model=model,
         voice=s2s.voice,
-        backend=backend_model or "none (live model answers directly)",
+        delegation=(
+            f"{delegation.mode}:{delegation.model}"
+            if delegation
+            else "none (live model answers directly)"
+        ),
         base_url=s2s.base_url or "openai-default",
     )
     return service

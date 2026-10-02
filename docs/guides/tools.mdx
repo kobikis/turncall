@@ -14,7 +14,7 @@ These work out of the box with no server needed:
 |------|-------------|------------|
 | `end_call` | Terminate the call | `reason` (optional) |
 | `transfer_call` | Transfer to a phone number (cold or warm) | `target_number` (required), `transfer_mode`, `transfer_message`, `briefing`, `fallback_message`, `reason` |
-| `handoff_to_agent` | Switch to another AI agent | `agent_id` (required), `reason`, `context` |
+| `handoff_to_agent` | Switch to another AI agent (not on `openai_live` — refused with a 422) | `agent_id` (required), `reason`, `context` |
 | `send_dtmf` | Send keypad tones | `digits` (required) |
 | `do_not_call` | Add the caller's number to the project's suppression list, record `call.opted_out`, end the call | none |
 

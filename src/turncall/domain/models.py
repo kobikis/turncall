@@ -166,6 +166,19 @@ class VoicemailConfig(DomainModel):
     custom_system_prompt: str | None = None
 
 
+class DelegationConfig(DomainModel):
+    """How an `openai_live` agent's delegate is set up (#243). See CONTEXT.md,
+    "Delegation". Only `responses` exists so far: an OpenAI-hosted delegate."""
+
+    mode: str = "responses"
+    model: str | None = None
+    reasoning_effort: str | None = None
+    service_tier: str | None = None
+    # Replaces what the delegate is told; gpt-live-1 keeps the system_prompt.
+    instructions: str | None = None
+    timeout_seconds: float = 30.0
+
+
 class S2SConfig(DomainModel):
     """Speech-to-speech configuration for native audio-in/audio-out models."""
 
@@ -183,6 +196,7 @@ class S2SConfig(DomainModel):
     temperature: float | None = None
     max_tokens: int | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
+    delegation: DelegationConfig | None = None  # openai_live only
 
 
 class AvatarConfig(DomainModel):

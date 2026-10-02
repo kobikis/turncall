@@ -92,16 +92,52 @@ the value is sent as given.
 
 ### Delegation
 
-The live model can hand deeper reasoning and tool calls to a backend text model
-while the conversation keeps going. Name one and OpenAI hosts it; the function
-calls it makes are executed by your agent's own tools.
+gpt-live-1 calls **no tools of its own**: it listens and speaks, and hands
+anything that needs a tool or deeper reasoning to a second model — the
+**delegate** — while the conversation keeps going, then voices what came back.
+Without a delegation, an `openai_live` agent's tools are never used.
+
+Configure it with `s2s.delegation`. Today the one mode is `responses`: OpenAI
+hosts the delegate, and the function calls it makes run against your agent's own
+tools — webhook, MCP and built-in alike, recorded like on any provider.
 
 ```json
-"s2s": {"provider": "openai_live", "extra": {"backend_model": "gpt-6-astra"}}
+"s2s": {
+  "provider": "openai_live",
+  "delegation": {
+    "mode": "responses",
+    "model": "gpt-6-astra",
+    "reasoning_effort": "low",
+    "service_tier": "priority",
+    "timeout_seconds": 30
+  }
+}
 ```
 
-`s2s.extra.service_tier` is passed through when set. Leave `backend_model` unset
-and the live model answers on its own.
+| Field | Required | Description |
+|---|---|---|
+| `mode` | No | `responses` (the default, and the only mode so far) |
+| `model` | Yes | The OpenAI-hosted delegate |
+| `reasoning_effort` | No | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max` — reasoning models only |
+| `service_tier` | No | `auto`, `default`, `flex` or `priority` |
+| `instructions` | No | Replaces what the delegate is told. Without it the delegate gets the agent's `system_prompt` |
+| `timeout_seconds` | No | Default `30`. Bounds each function call the delegate makes; past it the call is cancelled and gpt-live-1 is told it did not complete |
+
+The agent's `system_prompt` reaches both models. TurnCall also appends to
+gpt-live-1's instructions a paragraph telling it to delegate whenever the caller
+wants something done, listing each tool's name and description — so an existing
+prompt needs no rewrite.
+
+`end_call` and `do_not_call` work as everywhere else: the call ends after
+gpt-live-1's goodbye.
+
+Refused with a 422: `delegation` on any other provider (they call tools
+themselves), `responses` without `model`, and `handoff_to_agent` among an
+`openai_live` agent's tools — a handoff would swap the tools but not the live
+session's voice and prompt.
+
+The older `s2s.extra.backend_model` (with `extra.service_tier`) keeps working,
+read as `{"mode": "responses", "model": <it>}`.
 
 ### Differences from `openai`
 
@@ -110,7 +146,8 @@ and the live model answers on its own.
 | Turn-taking | turn-based | full duplex |
 | `s2s.temperature` | rejected — the GA API has no such control | supported |
 | `s2s.turn_detection` | `server_vad` or `pipecat_vad` | `server_vad` only |
-| Backend delegation | — | `extra.backend_model` |
+| Tools | called by the model | through [delegation](#delegation) (`s2s.delegation`) |
+| `handoff_to_agent` | supported | refused |
 
 `pipecat_vad` is rejected for this provider: client-side turn detection would
 fight a model that is doing its own.

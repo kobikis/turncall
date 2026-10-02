@@ -7,6 +7,14 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**`openai_live` agents configure their delegate with `s2s.delegation`.**
+gpt-live-1 calls no tools itself — it hands them to a delegate. The new block
+names an OpenAI-hosted Responses model with its reasoning effort, service tier,
+own instructions and a timeout (default 30 seconds), and gpt-live-1 is told to
+delegate from your tools' own descriptions, so no prompt rewrite is needed.
+`s2s.extra.backend_model` keeps working. `handoff_to_agent` on `openai_live` is
+now refused. See [Delegation](/guides/s2s#delegation).
+
 **Project credentials — each project can run on its own provider accounts.**
 `PUT /v1/credentials/{provider}` stores one key per provider account (one
 Deepgram key for transcription and voice, one OpenAI key for every role),

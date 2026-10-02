@@ -64,6 +64,20 @@ than [[Bedrock]]'s converse endpoint, which is why it carries a separate provide
 rather than being a Bedrock model id. Its sessions expire at roughly six minutes and roll
 over transparently — ordinary phone calls exercise that path. See ADR-0016.
 
+**Delegation**:
+How the `openai_live` S2S [[provider]] (gpt-live-1) gets work done that needs tools or
+reasoning: the live model, which only listens and speaks, hands it to a [[delegate]] and
+voices the result in its own words. Two modes, named as OpenAI names them: *client* (the
+delegate is the agent's own `llm`) and *responses* (the delegate is an OpenAI-hosted
+model). No other S2S provider delegates — they call tools themselves. See #241.
+_Avoid_: "backend delegation", "tool forwarding".
+
+**Delegate**:
+The model gpt-live-1 hands work to under [[delegation]], which runs the agent's tools —
+the agent's own `llm` in *client* mode, an OpenAI Responses model in *responses* mode.
+_Avoid_: "backend" — taken by [[provider]] and by the builder's Agent Backends, so "the
+agent's backend" would mean three things.
+
 **Classifier**:
 A small object that answers *typed* questions about some state — yes/no, a
 choice among options, or a score — and returns a probability with each answer.

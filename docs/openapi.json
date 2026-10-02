@@ -7648,6 +7648,77 @@
         ],
         "title": "CreateWebhookRequest"
       },
+      "DelegationConfigSchema": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "pattern": "^responses$",
+            "title": "Mode",
+            "default": "responses"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(none|minimal|low|medium|high|xhigh|max)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Effort"
+          },
+          "service_tier": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(auto|default|flex|priority)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Tier"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
+          "timeout_seconds": {
+            "type": "number",
+            "maximum": 300.0,
+            "minimum": 1.0,
+            "title": "Timeout Seconds",
+            "default": 30.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DelegationConfigSchema",
+        "description": "gpt-live-1's delegate (#243): the model it hands tool and reasoning\nwork to. Only `responses` (an OpenAI-hosted delegate) for now."
+      },
       "EndCallRequest": {
         "properties": {
           "reason": {
@@ -8370,6 +8441,16 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Extra"
+          },
+          "delegation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DelegationConfigSchema"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
