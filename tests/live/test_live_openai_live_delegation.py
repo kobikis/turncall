@@ -101,10 +101,10 @@ async def test_a_mocked_tool_and_end_call_are_delegated(
     )
     definition = {
         "turns": [
-            # A caller waits for the greeting; the live session starts ~2s
-            # after connect, and audio heard before that is dropped.
+            # The agent speaks first (no `user:`). A "Hello?" here used to be
+            # dropped before the session started; since #256 it is heard, over
+            # the greeting, and the greeting no longer counts as its answer.
             {
-                "user": "Hello?",
                 "expect": [
                     {
                         "event": "response",
@@ -200,7 +200,6 @@ async def test_client_mode_delegates_a_mocked_tool_to_the_agents_llm(
     definition = {
         "turns": [
             {
-                "user": "Hello?",
                 "expect": [
                     {
                         "event": "response",
@@ -279,7 +278,6 @@ async def test_a_client_delegate_with_a_rejected_key_fails_over(
     definition = {
         "turns": [
             {
-                "user": "Hello?",
                 "expect": [
                     {
                         "event": "response",

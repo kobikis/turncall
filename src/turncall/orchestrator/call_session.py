@@ -81,6 +81,7 @@ class CallSession:
         *,
         first_message: str | None = None,
         pipeline_mode: str = "cascade",
+        s2s_provider: str | None = None,
         max_call_duration_seconds: int | None = None,
         idle_message: str = "",
     ) -> None:
@@ -89,6 +90,7 @@ class CallSession:
         self._pipeline = pipeline
         self._first_message = first_message
         self._pipeline_mode = pipeline_mode
+        self._s2s_provider = s2s_provider
         self._max_call_duration_seconds = max_call_duration_seconds
         self._idle_message = idle_message
         self._idle_strikes = 0
@@ -230,37 +232,7 @@ class CallSession:
             # Note: call.started event is fired by the inbound handler
             # (twilio_handlers / whatsapp_handlers) before the pipeline starts.
 
-            # Trigger first agent response
-            if self._pipeline_mode == "s2s":
-                # S2S: the Realtime WebSocket takes time to connect. Queue a
-                # delayed run to trigger the greeting after connection.
-                async def _trigger_s2s_greeting() -> None:
-                    await asyncio.sleep(2)
-                    logger.info("S2S: triggering initial greeting")
-                    await self._task.queue_frame(s2s_greeting_frame())
-
-                self._greeting_task = asyncio.create_task(_trigger_s2s_greeting())
-            else:
-                # Cascade: use TTSSpeakFrame for direct TTS playback
-                from pipecat.frames.frames import (
-                    LLMMessagesAppendFrame,
-                    TTSSpeakFrame,
-                )
-
-                if self._first_message:
-                    await self._task.queue_frame(
-                        TTSSpeakFrame(text=self._first_message, append_to_context=False)
-                    )
-                else:
-                    await self._task.queue_frame(
-                        LLMMessagesAppendFrame(
-                            messages=[
-                                {"role": "user", "content": "Start the conversation."}
-                            ],
-                            run_llm=True,
-                        )
-                    )
-
+            await self._trigger_first_response(self._task)
             await run_until_pipeline_done(self._runner, self._task)
         except asyncio.CancelledError:
             logger.info("call_session_cancelled", call_id=str(self.call_id))
@@ -291,6 +263,41 @@ class CallSession:
             # on_client_disconnected guarantees we reach here promptly instead of
             # hanging in the runner.
             logger.info("call_session_ended", call_id=str(self.call_id))
+
+    async def _trigger_first_response(self, task: PipelineWorker) -> None:
+        """Queue what makes the agent speak first."""
+        if self._pipeline_mode == "s2s":
+            if self._s2s_provider == "openai_live":
+                # gpt-live-1 connects in setup(), before any frame is processed,
+                # and drops the caller's audio until the session this frame
+                # starts — so a wait here is the caller's first words lost (#256).
+                await task.queue_frame(s2s_greeting_frame())
+                return
+
+            # Realtime, Gemini Live, Nova Sonic: a wait for the WebSocket to
+            # connect, never measured without it.
+            async def _trigger_s2s_greeting() -> None:
+                await asyncio.sleep(2)
+                logger.info("S2S: triggering initial greeting")
+                await task.queue_frame(s2s_greeting_frame())
+
+            self._greeting_task = asyncio.create_task(_trigger_s2s_greeting())
+            return
+
+        # Cascade: use TTSSpeakFrame for direct TTS playback
+        from pipecat.frames.frames import LLMMessagesAppendFrame, TTSSpeakFrame
+
+        if self._first_message:
+            await task.queue_frame(
+                TTSSpeakFrame(text=self._first_message, append_to_context=False)
+            )
+        else:
+            await task.queue_frame(
+                LLMMessagesAppendFrame(
+                    messages=[{"role": "user", "content": "Start the conversation."}],
+                    run_llm=True,
+                )
+            )
 
     async def _on_pipeline_error(self, frame: ErrorFrame) -> None:
         """Record an error that ends the pipeline, so the call is finalized as

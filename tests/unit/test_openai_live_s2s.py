@@ -6,6 +6,7 @@ to configure. It can delegate reasoning and tool calls to a backend text
 model while the conversation continues.
 """
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -16,7 +17,7 @@ from pydantic import ValidationError
 from tests.conftest import creds
 from turncall.api.v1.schemas.agents import S2SConfigSchema
 from turncall.domain.models import AgentConfig, S2SConfig
-from turncall.orchestrator.call_session import s2s_greeting_frame
+from turncall.orchestrator.call_session import CallSession, s2s_greeting_frame
 from turncall.orchestrator.pipeline_factory import create_pipeline
 from turncall.orchestrator.s2s_config import create_s2s_service
 
@@ -189,3 +190,42 @@ class TestSpeaksFirst:
         )
         context, _ = await _session_context(config)
         assert context.get_messages() == []
+
+
+def _s2s_call_session(provider: str) -> CallSession:
+    return CallSession(
+        call_context=MagicMock(),
+        transport=MagicMock(),
+        pipeline=MagicMock(),
+        pipeline_mode="s2s",
+        s2s_provider=provider,
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestTheSessionOpensAtOnce:
+    """gpt-live-1 drops the caller's audio until its session starts, and the
+    session starts on the greeting frame — so a wait before that frame was
+    the caller's first ~3s lost (#256). The service connects in `setup()`,
+    before the pipeline processes any frame, so there is nothing to wait for."""
+
+    async def test_the_greeting_frame_is_queued_without_a_wait(self) -> None:
+        from pipecat.frames.frames import LLMRunFrame
+
+        worker = MagicMock(queue_frame=AsyncMock())
+        await _s2s_call_session("openai_live")._trigger_first_response(worker)
+
+        (frame,) = worker.queue_frame.await_args.args
+        assert isinstance(frame, LLMRunFrame)
+
+    @pytest.mark.parametrize("provider", ["openai", "google", "aws"])
+    async def test_other_providers_keep_their_wait(self, provider: str) -> None:
+        """Unmeasured without it, so unchanged."""
+        session = _s2s_call_session(provider)
+        worker = MagicMock(queue_frame=AsyncMock())
+        await session._trigger_first_response(worker)
+        await asyncio.sleep(0)
+
+        worker.queue_frame.assert_not_awaited()
+        session._greeting_task.cancel()

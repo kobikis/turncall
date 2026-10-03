@@ -139,6 +139,7 @@ async def _assemble(
         pipeline=pipeline,
         first_message=config.first_message,
         pipeline_mode=config.pipeline_mode,
+        s2s_provider=config.s2s.provider,
         max_call_duration_seconds=config.max_call_duration_seconds,
         idle_message=config.idle_message,
     )
