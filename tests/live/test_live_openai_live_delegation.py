@@ -242,3 +242,82 @@ async def test_client_mode_delegates_a_mocked_tool_to_the_agents_llm(
     assert {"mode": "client", "outcome": "answered"}.items() <= outcomes[0].items(), (
         outcomes
     )
+
+
+async def test_a_client_delegate_with_a_rejected_key_fails_over(
+    session_factory: Any, outcomes: list[dict[str, Any]]
+) -> None:
+    """#246: the delegate's primary has a key OpenAI rejects (401, unusable),
+    so the delegation moves to the backup and is still answered."""
+    if not os.environ.get("OPENAI_API_KEY"):
+        pytest.skip("needs OPENAI_API_KEY")
+    blob = {
+        "pipeline_mode": "s2s",
+        "system_prompt": "You are the receptionist at Luigi's restaurant.",
+        "first_message": "Thanks for calling Luigi's, how can I help?",
+        "s2s": {"provider": "openai_live"},
+        "llm": {
+            "provider": "openai",
+            "api_key": "sk-turncall-rejected",
+            "failover": [{"provider": "openai", "model": "gpt-4.1-mini"}],
+        },
+        "tools": [
+            {
+                "name": "check_hours",
+                "description": "Look up the restaurant's opening hours.",
+                "parameters_schema": _EMPTY,
+                "webhook_url": "https://example.invalid/hours",
+            }
+        ],
+    }
+    target = ResolvedTarget(
+        project_id=uuid4(),
+        config=AgentConfig.model_validate(blob),
+        config_blob=blob,
+        agent_id=None,
+    )
+    definition = {
+        "turns": [
+            {
+                "user": "Hello?",
+                "expect": [
+                    {
+                        "event": "response",
+                        "text_contains": "calling",
+                        "within_ms": 30000,
+                    }
+                ],
+            },
+            {
+                "user": "Hi, what time do you open today?",
+                "expect": [{"event": "response", "within_ms": 60000}],
+            },
+        ]
+    }
+    mocks = ToolMocks(responses={"check_hours": {"today": "12:00-22:00"}})
+    parsed = scenario_mod.parse(
+        scenario_mod.with_modality(definition, EvalModality.AUDIO),
+        name="live-openai-live-delegate-failover",
+    )
+    agent_errors: list[str] = []
+    await run_iteration(
+        parsed=parsed,
+        kind=EvalKind.SCRIPTED,
+        target=target,
+        modality=EvalModality.AUDIO,
+        settings=Settings(),
+        session_factory=session_factory,
+        run_id=uuid4(),
+        tool_mocks=mocks,
+        agent_errors=agent_errors,
+    )
+
+    assert any(
+        "llm failed over from openai/gpt-4o-mini to openai/gpt-4.1-mini" in e
+        for e in agent_errors
+    ), agent_errors
+    assert [c["tool_name"] for c in mocks.calls] == ["check_hours"], agent_errors
+    assert outcomes, "no delegation.completed: gpt-live-1 never delegated"
+    assert {"mode": "client", "outcome": "answered"}.items() <= outcomes[0].items(), (
+        outcomes
+    )

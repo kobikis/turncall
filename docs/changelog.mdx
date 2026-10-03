@@ -13,6 +13,10 @@ with your keys, running your webhook and MCP tools — `end_call`, `do_not_call`
 and `transfer_call` included. See
 [Delegation](/guides/s2s#delegation).
 
+**`llm.failover` reaches an `openai_live` agent's own-`llm` delegate.** If the
+delegate's provider fails, delegations move to the next backup, recorded as
+`provider.failover` like on cascade. See [Delegation](/guides/s2s#delegation).
+
 **`openai_live` agents configure their delegate with `s2s.delegation`.**
 gpt-live-1 calls no tools itself — it hands them to a delegate. The new block
 names an OpenAI-hosted Responses model with its reasoning effort, service tier,

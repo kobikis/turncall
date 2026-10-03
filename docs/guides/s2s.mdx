@@ -137,6 +137,13 @@ mocked in evals and recorded like on any provider.
 In `client` mode the delegate's provider needs a key like any other: one with no
 key at any level fails the call before it starts, naming it in `missing_keys`.
 
+`client` mode also honours `llm.failover`: the delegate is an ordinary LLM, so
+when it fails in a way it cannot recover from (a rejected key, an unknown
+model) the delegation moves to the next backup, recorded as `provider.failover`
+and in `failovers` on `call.ended` — as on cascade. Backups need keys too.
+`llm.failover` is refused (422) on every other speech-to-speech agent,
+`responses` mode included.
+
 The agent's `system_prompt` reaches both models. TurnCall also appends to
 gpt-live-1's instructions a paragraph telling it to delegate whenever the caller
 wants something done, listing each tool's name and description — so an existing
