@@ -66,6 +66,12 @@ project credential is accepted — it is encrypted and outside agent config.
 
 ## Fixed
 
+**An `openai_live` agent opens the call.** gpt-live-1 waits for speech, so an
+agent with no `first_message` said nothing until the caller did, and one with a
+`first_message` could stay silent too. The session now starts with an explicit
+request to speak first: the `first_message`, or a greeting when there is none.
+gpt-live-1 delivers it in its own words, usually verbatim.
+
 **An eval that failed because a provider refused the agent now says so.** The
 iteration's failures lead with the provider's error (for example Bedrock's
 "Model use case details have not been submitted") instead of only "no response

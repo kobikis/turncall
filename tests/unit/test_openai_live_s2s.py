@@ -95,3 +95,96 @@ class TestTurnDetection:
 
     def test_server_vad_is_fine(self) -> None:
         assert S2SConfigSchema(provider="openai_live").turn_detection == "server_vad"
+
+
+async def _opening(config: AgentConfig) -> tuple[list[dict], list]:
+    """Start a session the way a call does, up to where the model is told to
+    speak: the greeting frame through the real user aggregator, its context
+    into the service, then the API's `session.started`. Returns the context's
+    messages and every event the service sent."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from pipecat.frames.frames import LLMContextFrame
+    from pipecat.processors.aggregators.llm_response_universal import (
+        LLMUserAggregator,
+    )
+    from pipecat.services.llm_service import LLMService
+    from pipecat.tests.utils import run_test
+
+    from turncall.orchestrator.call_session import s2s_greeting_frame
+    from turncall.orchestrator.pipeline_factory import create_pipeline
+
+    pipeline = create_pipeline(
+        config=config,
+        transport=MagicMock(),
+        call_context=MagicMock(is_eval=True),
+        pipecat_settings=SimpleNamespace(),
+        credentials=creds("sk-test", google="g-test"),
+    )
+    aggregator = next(
+        p for p in pipeline.processors if isinstance(p, LLMUserAggregator)
+    )
+    down, _ = await run_test(aggregator, frames_to_send=[s2s_greeting_frame()])
+    (context,) = [f.context for f in down if isinstance(f, LLMContextFrame)]
+    if config.s2s.provider != "openai_live":
+        return context.get_messages(), []
+
+    service = next(
+        p for p in pipeline.processors_with_metrics() if isinstance(p, LLMService)
+    )
+    service.send_client_event = AsyncMock()
+    await service._handle_context(context)
+    await service._handle_evt_session_started(
+        SimpleNamespace(session=SimpleNamespace(id="sess"))
+    )
+    sent = [c.args[0] for c in service.send_client_event.await_args_list]
+    return context.get_messages(), sent
+
+
+def _commentary(sent: list) -> list[str]:
+    return [
+        e.content for e in sent if type(e).__name__ == "SessionCommentaryAppendEvent"
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestSpeaksFirst:
+    """gpt-live-1 is full duplex and does not act on "start the conversation"
+    in its instructions until it hears speech, so a caller waiting for the
+    greeting heard silence (#248). A trailing developer message in the context
+    the session starts on is what pipecat delivers as commentary once the
+    session has started — the API's way of asking the model to speak first."""
+
+    async def test_first_message_is_spoken_once_the_session_starts(self) -> None:
+        config = AgentConfig(
+            system_prompt="You are a receptionist.",
+            first_message="Thanks for calling Bella's!",
+            pipeline_mode="s2s",
+            s2s=S2SConfig(provider="openai_live"),
+        )
+        _, sent = await _opening(config)
+        (start, *_) = sent
+        assert type(start).__name__ == "SessionStartEvent"
+        assert not start.session.input  # the opening is not prior conversation
+        (spoken,) = _commentary(sent)
+        assert "Thanks for calling Bella's!" in spoken
+
+    async def test_without_a_first_message_it_still_greets(self) -> None:
+        _, sent = await _opening(_config())
+        assert len(_commentary(sent)) == 1
+
+    @pytest.mark.parametrize("provider", ["openai", "google"])
+    async def test_realtime_and_gemini_start_on_an_empty_context(
+        self, provider: str
+    ) -> None:
+        """They greet from the empty run today, unmeasured with a developer
+        message — so they get none."""
+        config = AgentConfig(
+            first_message="Hi!",
+            pipeline_mode="s2s",
+            s2s=S2SConfig(provider=provider),  # type: ignore[arg-type]
+        )
+        messages, _ = await _opening(config)
+        assert messages == []

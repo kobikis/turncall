@@ -42,6 +42,25 @@ def _build_s2s_system_prompt(config: AgentConfig) -> str:
     return prompt
 
 
+def s2s_opening_messages(config: AgentConfig) -> list[dict[str, str]]:
+    """The messages an S2S session's context starts with (#248).
+
+    gpt-live-1 is full duplex and does not act on the instructions' "start the
+    conversation" until it hears speech, so a caller waiting for a greeting
+    heard silence. A trailing developer message is what pipecat delivers as
+    commentary once the session starts — the API's way of asking the model to
+    speak first. Realtime and Gemini Live greet from the empty run, and are
+    left alone.
+    """
+    if config.s2s.provider != "openai_live":
+        return []
+    if config.first_message:
+        text = f'Start the conversation by saying exactly: "{config.first_message}"'
+    else:
+        text = "Greet the caller and ask how you can help."
+    return [{"role": "developer", "content": text}]
+
+
 def create_s2s_service(
     config: AgentConfig,
     credentials: Credentials,

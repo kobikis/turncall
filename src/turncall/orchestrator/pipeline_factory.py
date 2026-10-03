@@ -1579,7 +1579,10 @@ def _create_s2s_pipeline(
             count=len(config.tts.pronunciations),
         )
 
-    from turncall.orchestrator.s2s_config import create_s2s_service
+    from turncall.orchestrator.s2s_config import (
+        create_s2s_service,
+        s2s_opening_messages,
+    )
 
     # A gateway base_url is an attacker-influenceable outbound target — gate it
     # through the same BYOM allowlist as custom text-LLM endpoints.
@@ -1610,12 +1613,13 @@ def _create_s2s_pipeline(
 
     # Build context — system prompt + first_message are handled by the S2S
     # service directly (SessionProperties.instructions for OpenAI,
-    # system_instruction for Gemini). Only pass tools via context — except to
-    # a client delegation, whose tools live on the delegate (#244).
+    # system_instruction for Gemini), plus gpt-live-1's opening (#248). Only
+    # pass tools via context — except to a client delegation, whose tools live
+    # on the delegate (#244).
     tools_schema = (
         None if client_mode else _build_tools_schema(config, extra_tools=mcp_tools)
     )
-    context_kwargs: dict[str, Any] = {"messages": []}
+    context_kwargs: dict[str, Any] = {"messages": s2s_opening_messages(config)}
     if tools_schema is not None:
         context_kwargs["tools"] = tools_schema
     context = LLMContext(**context_kwargs)
