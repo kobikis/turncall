@@ -408,6 +408,13 @@ class CallSession:
 
         @aggregator.event_handler("on_user_turn_idle")  # type: ignore[misc]
         async def _on_idle(*_args: object) -> None:
+            live = self._live_service()
+            if live is not None and live.delegating:
+                # gpt-live-1 went quiet to wait for its delegate, and the
+                # caller with it; pipecat holds the timer for a function call
+                # in this pipeline only. The relayed answer re-arms it (#257).
+                logger.info("user_idle_while_delegating", call_id=str(self.call_id))
+                return
             self._idle_strikes += 1
             logger.info(
                 "user_idle",
@@ -419,15 +426,38 @@ class CallSession:
                 return
             await self._end_for_silence()
 
+    def _live_service(self) -> Any:
+        """gpt-live-1's service on an `openai_live` call, else None."""
+        if self._pipeline_mode != "s2s" or self._s2s_provider != "openai_live":
+            return None
+        from turncall.orchestrator.delegation_events import (
+            DelegationTrackingLiveService,
+        )
+
+        return next(
+            (
+                p
+                for p in self._pipeline.processors
+                if isinstance(p, DelegationTrackingLiveService)
+            ),
+            None,
+        )
+
     async def _speak_idle_prompt(self) -> None:
         """Ask if the caller is still there.
 
         Cascade speaks the configured line through TTS. S2S has no TTS stage —
         none of the realtime services handle a TTSSpeakFrame — so the model is
         asked to check in and says it in its own words, the same split
-        `start()` already makes for the first message.
+        `start()` already makes for the first message — gpt-live-1 as spoken
+        commentary, since it reads no context after its first (#257).
         """
         if self._task is None:
+            return
+
+        live = self._live_service()
+        if live is not None:
+            await live.say(_S2S_CHECK_IN)
             return
 
         if self._pipeline_mode == "s2s":
@@ -435,15 +465,7 @@ class CallSession:
 
             await self._task.queue_frame(
                 LLMMessagesAppendFrame(
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": (
-                                "The caller has gone quiet. Briefly check "
-                                "whether they are still there."
-                            ),
-                        }
-                    ],
+                    messages=[{"role": "user", "content": _S2S_CHECK_IN}],
                     run_llm=True,
                 )
             )
@@ -583,6 +605,9 @@ _REQUEST_HEADERS = re.compile(r"headers: \{.*?\}, ")
 _MAX_PIPELINE_ERRORS = 5
 
 _KEY_REFUSED = (ErrorCategory.AUTHENTICATION, ErrorCategory.AUTHORIZATION)
+
+# What an S2S model is asked on the first idle strike; it words the check-in.
+_S2S_CHECK_IN = "The caller has gone quiet. Briefly check whether they are still there."
 
 
 def provider_of(processor: object) -> str | None:

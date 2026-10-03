@@ -87,6 +87,7 @@ class DelegationTrackingLiveService(OpenAILiveLLMService):
     """gpt-live-1, reporting each delegation's end as `on_delegation_completed`.
 
     `hangup_gate` is the call's, for a client delegation that ends it (#262).
+    The idle guard reads `delegating` and speaks through `say` (#257).
     """
 
     def __init__(
@@ -135,6 +136,20 @@ class DelegationTrackingLiveService(OpenAILiveLLMService):
             # Nothing for gpt-live-1 to voice: end after what it is saying.
             await gate.queue_frame(HangupArmFrame(current_reply=True))
         await self._completed("client", started, _client_outcome(attempt))
+
+    @property
+    def delegating(self) -> bool:
+        """A delegation is in flight, so the caller is waiting on it (#257)."""
+        return bool(self._delegation_tasks or self._responses_started)
+
+    async def say(self, instruction: str) -> None:
+        """Have gpt-live-1 speak now, in its own words (#257).
+
+        A message appended to the context never reaches it — pipecat sets the
+        session up from the first context and ignores every later one — so
+        this is the channel #248's opening uses: spoken commentary.
+        """
+        await self._send_context_append(None, instruction, spoken=True)
 
     def _ending_gate(self) -> HangupAfterReply | None:
         """The call's gate, once a client delegate's tool has ended the call."""

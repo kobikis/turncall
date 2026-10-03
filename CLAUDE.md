@@ -1013,7 +1013,7 @@ All Pipecat imports isolated in `orchestrator/`. No other module imports Pipecat
 - `tool_bridge.py` — Registers tools + writes ToolInvocation records
 - `observability.py` — Logs transcripts/events to DB + dispatches webhooks
 - `turn_metrics.py` — one `metrics.turn` call event per turn (STT/LLM/TTS TTFB + user-to-bot latency), from pipecat's latency observer; stored, never dispatched, none in an eval (#176). Read them with `GET /v1/calls/{id}/events?event_type=metrics.turn`
-- `delegation_events.py` — one `delegation.completed` call event per gpt-live-1 delegation (#247), `{mode, duration_ms, outcome}`, outcome `answered`\|`timed_out`\|`failed`\|`declined`. Stored, never dispatched, none in an eval — like `metrics.turn`. A request gpt-live-1 acknowledged with no event beside it is the one it never delegated. `timed_out` is client mode only (responses mode has no delegation timeout; #243 bounds each function call and the delegate answers past it); a client delegate that returned no text is `failed` — unless it had just ended the call, which is what it was asked, and reads `answered` (#262). `declined` (no delegate configured, e.g. no tools) is recorded with `mode: client`, the target gpt-live-1 asked for. Reads pipecat's private delegation run, pinned by `test_delegation_completed.py`. The same subclass arms the hangup gate for a client delegation that ended the call (#262, see the S2S row)
+- `delegation_events.py` — one `delegation.completed` call event per gpt-live-1 delegation (#247), `{mode, duration_ms, outcome}`, outcome `answered`\|`timed_out`\|`failed`\|`declined`. Stored, never dispatched, none in an eval — like `metrics.turn`. A request gpt-live-1 acknowledged with no event beside it is the one it never delegated. `timed_out` is client mode only (responses mode has no delegation timeout; #243 bounds each function call and the delegate answers past it); a client delegate that returned no text is `failed` — unless it had just ended the call, which is what it was asked, and reads `answered` (#262). `declined` (no delegate configured, e.g. no tools) is recorded with `mode: client`, the target gpt-live-1 asked for. Reads pipecat's private delegation run, pinned by `test_delegation_completed.py`. The same subclass arms the hangup gate for a client delegation that ended the call (#262, see the S2S row), and voices the idle check-in and reports a delegation in flight to the idle guard (#257)
 - `telemetry.py` — OpenTelemetry tracing setup + Pipecat observers (latency/turn/LLM/transcription/startup). See ADR-0010
 - `session_manager.py` — Active session registry
 
@@ -1093,8 +1093,13 @@ disables): after the agent stops speaking, a caller who stays quiet that long
 hears `idle_message` ("Are you still there?"), and a second consecutive silence
 ends the call. Speaking again resets the count. Cascade speaks the line through
 TTS; S2S has no TTS stage, so the model is asked to check in and words it
-itself. Like `max_duration_reached` it records a marker event
-(`call.customer_silent`) and is inferred **above** `assistant_ended` — ending
+itself — gpt-live-1 as spoken commentary, since it reads no context after its
+first (#257). The timer restarts only when the agent stops speaking, so a
+check-in the model never voices leaves the line silent with no second strike,
+until `max_call_duration_seconds`. A silence while gpt-live-1's delegate is
+still working is not a strike: the caller is waiting on an answer, and pipecat
+holds the timer only for a function call in the call's own pipeline. Like
+`max_duration_reached` it records a marker event (`call.customer_silent`) and is inferred **above** `assistant_ended` — ending
 the call is how the guard gives up, so without its own branch it would read as
 `assistant_ended_call`. Not to be confused with `silence_timeout_ms`, the VAD
 stop window inside a turn; see CONTEXT.md, "the three timeouts".

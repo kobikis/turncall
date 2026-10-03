@@ -276,6 +276,48 @@ async def test_a_call_pipecat_skips_does_not_hold_the_delegation_open(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_delegating_while_a_client_delegate_works(stored: AsyncMock) -> None:
+    """The idle guard holds off while it is true (#257): the caller is waiting
+    on the delegate, not gone."""
+    live = _live({}, _call_context(), tools=[_BOOK])
+    release = asyncio.Event()
+
+    async def _working(*_: Any, **__: Any) -> str:
+        await release.wait()
+        return ""
+
+    with (
+        patch(f"{_LLM_MODULE}._delegate_to_backend", new=_working),
+        patch.object(
+            live, "create_task", new=lambda coro, name=None: asyncio.ensure_future(coro)
+        ),
+    ):
+        await live._handle_server_event(
+            events.SessionDelegationCreatedEvent(
+                type="session.delegation.created",
+                delegation=events.DelegationMetadata(id="d1", target="client"),
+            )
+        )
+        assert live.delegating
+        release.set()
+        await live._delegation_tasks["d1"]
+    await asyncio.sleep(0)
+    assert not live.delegating
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_delegating_until_the_final_response(stored: AsyncMock) -> None:
+    live = _responses_live()
+    await _delegate(live, target="responses")
+    assert live.delegating
+    await live._handle_server_event(_response("response.created"))
+    await live._handle_server_event(_response("response.completed", response={}))
+    assert not live.delegating
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_none_in_an_eval(stored: AsyncMock) -> None:
     live = _live({}, _call_context(eval_run_id=uuid.uuid4()), tools=[_BOOK])
     with patch(f"{_LLM_MODULE}._delegate_to_backend", new=_answers("ok")):
