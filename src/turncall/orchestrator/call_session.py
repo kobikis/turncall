@@ -321,9 +321,14 @@ class CallSession:
         event log. The switch absorbs the error, so nothing else would."""
         from turncall.orchestrator.llm_failover import FailoverLLM
 
-        group = next(
-            (p for p in self._pipeline.processors if isinstance(p, FailoverLLM)), None
-        )
+        processors = self._pipeline.processors
+        # A client delegate's group (#246) sits outside the pipeline, behind
+        # the live service.
+        candidates = [
+            *processors,
+            *(getattr(p, "delegate_llm", None) for p in processors),
+        ]
+        group = next((p for p in candidates if isinstance(p, FailoverLLM)), None)
         if group is None:
             return
 

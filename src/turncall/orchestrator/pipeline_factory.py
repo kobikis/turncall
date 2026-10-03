@@ -1520,7 +1520,8 @@ def _create_client_delegate(
         update["system_prompt"] = delegation.instructions
     delegate_config = config.model_copy(update=update)
     byom_provider = config.llm.provider in ("ollama", "custom_openai")
-    llm = _create_llm_service(
+    # A failover group when the agent has backups (#246), as cascade builds it.
+    llm = _create_llm_stage(
         delegate_config,
         credentials,
         byom_settings=byom_settings,

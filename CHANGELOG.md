@@ -66,6 +66,12 @@ and is not part of this repository's history.
 
 ### Added
 
+- **`llm.failover` on an `openai_live` client delegate** (#246). The delegate
+  is an ordinary LLM, so it is built as a failover group like cascade's: an
+  unusable error moves the delegation to the next backup, recorded as
+  `provider.failover` and in `failovers`. Backups need keys (`missing_keys`).
+  Still a 422 on every other S2S agent, responses mode included.
+
 - **Client delegation for `openai_live`** (#244): `s2s.delegation`
   `{"mode": "client"}` makes the agent's own `llm` gpt-live-1's delegate, run
   with the agent's static and MCP tools and TurnCall's handlers — mocked in
