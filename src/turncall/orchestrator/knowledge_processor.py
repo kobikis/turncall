@@ -6,7 +6,7 @@ Supports three modes:
 - prompt: Full text injected at pipeline creation (handled externally)
 """
 
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import UUID
 
 from loguru import logger
@@ -18,6 +18,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from turncall.domain.models import ToolDefinition
 from turncall.services.retrieval import format_retrieved_context, retrieve
 
 
@@ -203,6 +204,42 @@ def create_knowledge_tool_handler(
             await params.result_callback({"error": str(exc)})
 
     return handler
+
+
+class KnowledgeTool(NamedTuple):
+    """`query_knowledge` for an agent's tool-mode KBs: what is advertised, and
+    the handler whoever calls tools registers under its name."""
+
+    definition: ToolDefinition
+    handler: Any
+
+
+def knowledge_tool(
+    attachments: list[dict[str, Any]] | None,
+    session_factory: async_sessionmaker[AsyncSession],
+    openai_api_key: str,
+) -> KnowledgeTool | None:
+    """One tool over every tool-mode KB, None without any. Settings come from
+    the first of them."""
+    tool_kbs = [a for a in attachments or [] if a.get("mode") == "tool"]
+    if not tool_kbs:
+        return None
+    first = tool_kbs[0]
+    definition = ToolDefinition(
+        name=KNOWLEDGE_TOOL_SCHEMA["name"],
+        description=first.get("tool_description")
+        or KNOWLEDGE_TOOL_SCHEMA["description"],
+        parameters_schema=KNOWLEDGE_TOOL_SCHEMA["parameters"],
+    )
+    handler = create_knowledge_tool_handler(
+        knowledge_base_ids=[a["knowledge_base_id"] for a in tool_kbs],
+        session_factory=session_factory,
+        openai_api_key=openai_api_key,
+        top_k=first.get("top_k", 5),
+        similarity_threshold=first.get("similarity_threshold", 0.3),
+    )
+    logger.info("KB tool mode enabled for {n} KBs", n=len(tool_kbs))
+    return KnowledgeTool(definition, handler)
 
 
 # Tool definition for registering query_knowledge on the LLM

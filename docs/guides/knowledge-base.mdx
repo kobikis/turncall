@@ -66,6 +66,12 @@ Give your agents access to documents for retrieval-augmented generation. TurnCal
   </Step>
 </Steps>
 
+<Note>
+  On a speech-to-speech agent (`pipeline_mode: "s2s"`) `prompt` and `tool` mode
+  work and `auto` does not: the agent read warns about it. See
+  [Speech-to-speech](/guides/s2s#knowledge-bases).
+</Note>
+
 ## Test Search
 
 Debug your knowledge base by running a test search:

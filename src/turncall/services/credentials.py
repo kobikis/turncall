@@ -110,21 +110,27 @@ class Credentials:
         merged = {**stored, "region": inline.region or stored.get("region")}
         return inline.model_validate(merged)
 
-    def missing_keys(self, config: AgentConfig) -> list[str]:
+    def missing_keys(
+        self, config: AgentConfig, *, has_knowledge_tool: bool = False
+    ) -> list[str]:
         """The accounts this agent needs and no level holds a key for.
 
         Without one the provider refuses mid-call — or the SDK refuses at build
         — and either way the caller hears nothing. AWS is not checked: its
-        ambient chain is not a key this can see.
+        ambient chain is not a key this can see. `has_knowledge_tool`: the agent
+        has a tool-mode KB, which lives outside the config (#254).
         """
         needed: list[tuple[str, str | None]]
         if config.pipeline_mode == "s2s":
             needed = [(config.s2s.provider, None)]
             # A client delegate is the agent's own llm (#244). MCP servers
             # count as tools before discovery, so a keyless delegate is caught
-            # whether or not they answer.
+            # whether or not they answer; so does `query_knowledge`.
             delegation = resolve_delegation(
-                config.s2s, has_tools=bool(config.tools or config.mcp_servers)
+                config.s2s,
+                has_tools=bool(
+                    config.tools or config.mcp_servers or has_knowledge_tool
+                ),
             )
             if delegation is not None and delegation.mode == "client":
                 needed.append((config.llm.provider, config.llm.api_key))

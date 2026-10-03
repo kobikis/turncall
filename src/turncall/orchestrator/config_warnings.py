@@ -23,6 +23,7 @@ response validator the way `EvalScenarioResponse` calls `assertion_warnings`
 (#95).
 """
 
+from collections.abc import Collection
 from typing import Any
 
 from loguru import logger
@@ -36,8 +37,13 @@ _PROBE_WORD = "Metformin"
 _PROBE_IPA = "mɛtˈfɔɹmɪn"
 
 
-def config_warnings(config: AgentConfig) -> list[dict[str, Any]]:
+def config_warnings(
+    config: AgentConfig, kb_modes: Collection[str] = ()
+) -> list[dict[str, Any]]:
     """Everything worth telling an author about this config, in `{code, message}`.
+
+    `kb_modes` are the modes of the agent's linked knowledge bases, which live
+    in their own table rather than the config.
 
     Never raises: the caller is a read of an agent, and losing the row to a
     failed advisory check would be a far worse bug than the one being reported.
@@ -48,6 +54,7 @@ def config_warnings(config: AgentConfig) -> list[dict[str, Any]]:
             for warning in (
                 _respelling_warning(config),
                 _readability_warning(config),
+                knowledge_mode_warning(config, kb_modes),
             )
             if warning is not None
         ]
@@ -56,6 +63,32 @@ def config_warnings(config: AgentConfig) -> list[dict[str, Any]]:
         # a check that stopped running goes unnoticed for a release.
         logger.warning("agent_config_warnings_failed: {error}", error=str(exc))
         return []
+
+
+def knowledge_mode_warning(
+    config: AgentConfig, kb_modes: Collection[str]
+) -> dict[str, Any] | None:
+    """KB modes this agent's pipeline drops (#254), named with the provider.
+
+    `auto` on any S2S agent: auto retrieval runs on each turn just before the
+    LLM, and a speech-to-speech model has no such point. `prompt` and `tool`
+    run everywhere. pipeline_builder drops what this names, so the build and
+    the agent read cannot disagree.
+    """
+    if config.pipeline_mode != "s2s" or "auto" not in kb_modes:
+        return None
+    provider = config.s2s.provider
+    return {
+        "code": "knowledge_mode_unsupported",
+        "message": (
+            "A knowledge base linked in 'auto' mode is ignored on this S2S agent "
+            f"({provider}): auto retrieval runs before each LLM turn, and a "
+            "speech-to-speech model has no such point. Link it in 'tool' or "
+            "'prompt' mode, or use pipeline_mode='cascade'."
+        ),
+        "modes": ["auto"],
+        "provider": provider,
+    }
 
 
 def _respelling_warning(config: AgentConfig) -> dict[str, Any] | None:

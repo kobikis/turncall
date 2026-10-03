@@ -24,6 +24,7 @@ from turncall.domain.models import (
     LLMConfig,
     resolve_delegation,
 )
+from turncall.orchestrator.knowledge_processor import KnowledgeTool, knowledge_tool
 from turncall.orchestrator.observability import ObservabilityProcessor
 from turncall.services.credentials import Credentials
 from turncall.services.llm_models import resolve_llm_model
@@ -939,6 +940,16 @@ def _advertised_tools(
     return deduped
 
 
+def _with_knowledge(
+    tools: list[Any] | None, knowledge: KnowledgeTool | None
+) -> list[Any] | None:
+    """Discovered tools plus `query_knowledge`, last — a name the agent's own
+    tools already use stays theirs."""
+    if knowledge is None:
+        return tools
+    return [*(tools or []), knowledge.definition]
+
+
 def _build_tools_schema(
     config: AgentConfig,
     extra_tools: list[Any] | None = None,
@@ -1130,6 +1141,8 @@ def create_pipeline(
             pipecat_settings,
             audio_sample_rate=audio_sample_rate,
             byom_settings=byom_settings,
+            knowledge_base_attachments=knowledge_base_attachments,
+            knowledge_preamble=knowledge_preamble,
             mcp_tools=mcp_tools,
         )
 
@@ -1162,12 +1175,25 @@ def create_pipeline(
     tts = _create_tts_service(config, credentials)
     _warn_unusable_pronunciations(config, tts)
 
+    # query_knowledge (tool mode) is registered here, before pipeline_builder
+    # registers static + MCP tools — so on a name clash the agent's tool wins,
+    # as it does in the advertised schema.
+    knowledge = knowledge_tool(
+        knowledge_base_attachments,
+        call_context.session_factory,
+        credentials.api_key("openai"),
+    )
+    if knowledge is not None:
+        llm.register_function(knowledge.definition.name, knowledge.handler)
+
     # The context starts empty — the system prompt is on the LLM service as
     # system_instruction. BYOM providers advertise no API-level tools, theirs
     # being described in the prompt instead.
     kwargs: dict[str, Any] = {"messages": []}
     if not byom_provider:
-        tools_schema = _build_tools_schema(config, extra_tools=mcp_tools)
+        tools_schema = _build_tools_schema(
+            config, extra_tools=_with_knowledge(mcp_tools, knowledge)
+        )
         if tools_schema is not None:
             kwargs["tools"] = tools_schema
 
@@ -1359,56 +1385,6 @@ def create_pipeline(
             )
             logger.info("KB auto-retrieval enabled for {n} KBs", n=len(auto_kb_ids))
 
-        # Register query_knowledge tool (tool mode)
-        tool_kb_ids = [
-            att["knowledge_base_id"]
-            for att in knowledge_base_attachments
-            if att.get("mode") == "tool"
-        ]
-        if tool_kb_ids:
-            from turncall.orchestrator.knowledge_processor import (
-                KNOWLEDGE_TOOL_SCHEMA,
-                create_knowledge_tool_handler,
-            )
-
-            first_tool = next(
-                a for a in knowledge_base_attachments if a.get("mode") == "tool"
-            )
-            handler = create_knowledge_tool_handler(
-                knowledge_base_ids=tool_kb_ids,
-                session_factory=call_context.session_factory,
-                openai_api_key=credentials.api_key("openai"),
-                top_k=first_tool.get("top_k", 5),
-                similarity_threshold=first_tool.get("similarity_threshold", 0.3),
-            )
-            llm.register_function("query_knowledge", handler)
-
-            # Add tool schema to context if not BYOM
-            if not byom_provider:
-                from pipecat.adapters.schemas.function_schema import FunctionSchema
-                from pipecat.adapters.schemas.tools_schema import ToolsSchema
-
-                kb_func = FunctionSchema(
-                    name=KNOWLEDGE_TOOL_SCHEMA["name"],
-                    description=first_tool.get("tool_description")
-                    or KNOWLEDGE_TOOL_SCHEMA["description"],
-                    properties=KNOWLEDGE_TOOL_SCHEMA["parameters"]["properties"],
-                    required=KNOWLEDGE_TOOL_SCHEMA["parameters"]["required"],
-                )
-                existing_tools = kwargs.get("tools")
-                if existing_tools:
-                    existing_tools.standard_tools.append(kb_func)
-                else:
-                    kwargs["tools"] = ToolsSchema(standard_tools=[kb_func])
-                # Rebuild context with updated tools
-                context = LLMContext(**kwargs)
-                context_aggregator = LLMContextAggregatorPair(
-                    context=context,
-                    user_params=LLMUserAggregatorParams(**user_params_kwargs),
-                )
-
-            logger.info("KB tool mode enabled for {n} KBs", n=len(tool_kb_ids))
-
     # Video avatar: consumes TTS audio, emits avatar video. Sits right before
     # transport.output(). WebRTC + cascade only — gated by the avatar_enabled
     # flag from the caller.
@@ -1497,6 +1473,7 @@ def _create_client_delegate(
     tools: list[Any],
     call_context: CallContext,
     *,
+    knowledge: KnowledgeTool | None = None,
     hangup_gate: Any = None,
     byom_settings: BYOMSettings | None = None,
 ) -> Any:
@@ -1507,6 +1484,8 @@ def _create_client_delegate(
     context carrying the tools and TurnCall's handlers registered on it, so
     mocks, recording and precedence are those of every other provider.
     `delegation.instructions` replaces the system prompt, as in responses mode.
+    `tools` includes `query_knowledge` when the agent has a tool-mode KB, whose
+    own handler replaces the bridge's one (#254).
 
     The worker is outside the call's pipeline, so an ending tool arms the
     call's `hangup_gate` directly rather than pushing from its LLM (#245).
@@ -1530,6 +1509,10 @@ def _create_client_delegate(
         ),
     )
     register_tools(llm, tools, call_context, hangup_gate=hangup_gate)
+    if knowledge is not None and knowledge.definition in tools:
+        # Over the bridge's handler for the name, which would POST it nowhere.
+        # Not in `tools` means an agent tool kept the name, and its handler.
+        llm.register_function(knowledge.definition.name, knowledge.handler)
     tools_schema = None if byom_provider else _build_tools_schema(delegate_config)
     context = LLMContext(
         messages=[], **({"tools": tools_schema} if tools_schema else {})
@@ -1546,6 +1529,8 @@ def _create_s2s_pipeline(
     *,
     audio_sample_rate: int = 8000,
     byom_settings: BYOMSettings | None = None,
+    knowledge_base_attachments: list[dict[str, Any]] | None = None,
+    knowledge_preamble: str = "",
     mcp_tools: list[Any] | None = None,
 ) -> Pipeline:
     """Build a speech-to-speech pipeline using OpenAI Realtime or Gemini Live.
@@ -1553,6 +1538,10 @@ def _create_s2s_pipeline(
     The S2S model handles STT + LLM + TTS in a single WebSocket connection.
     Pipeline is much simpler than cascade:
       transport.input → [VAD] → S2S_LLM → transport.output → context_agg → observability
+
+    Knowledge bases (#254): the preamble leads the instructions, and
+    `query_knowledge` is one more tool. `auto` mode has no per-turn point ahead
+    of a realtime model, so pipeline_builder drops it before this, and says so.
     """
     if not config.interruption_enabled:
         # Cascade only, deliberately. Supplying `user_turn_strategies` here
@@ -1589,7 +1578,24 @@ def _create_s2s_pipeline(
     if config.s2s.base_url and byom_settings:
         _validate_byom_url(config.s2s.base_url, byom_settings)
 
-    advertised = _advertised_tools(config, mcp_tools)
+    if knowledge_preamble:
+        # Ahead of the agent's own words, as cascade's _build_system_instruction
+        # puts it. Every provider and delegate builds from system_prompt.
+        config = config.model_copy(
+            update={
+                "system_prompt": "\n\n".join(
+                    p for p in (knowledge_preamble, config.system_prompt) if p
+                )
+            }
+        )
+
+    knowledge = knowledge_tool(
+        knowledge_base_attachments,
+        call_context.session_factory,
+        credentials.api_key("openai"),
+    )
+    extra_tools = _with_knowledge(mcp_tools, knowledge)
+    advertised = _advertised_tools(config, extra_tools)
     delegation = resolve_delegation(config.s2s, has_tools=bool(advertised))
     client_mode = delegation is not None and delegation.mode == "client"
     hangup_gate = _hangup_gate(call_context)
@@ -1601,12 +1607,17 @@ def _create_s2s_pipeline(
             delegation,
             advertised,
             call_context,
+            knowledge=knowledge,
             hangup_gate=hangup_gate[0] if hangup_gate else None,
             byom_settings=byom_settings,
         )
     s2s_llm = create_s2s_service(
         config, credentials, tools=advertised, delegate=delegate
     )
+    if knowledge is not None and not client_mode:
+        # Before pipeline_builder registers the agent's tools, so on a name
+        # clash theirs wins, as in the advertised schema.
+        s2s_llm.register_function(knowledge.definition.name, knowledge.handler)
     from turncall.orchestrator.delegation_events import record_delegations
 
     record_delegations(s2s_llm, call_context)
@@ -1617,7 +1628,7 @@ def _create_s2s_pipeline(
     # pass tools via context — except to a client delegation, whose tools live
     # on the delegate (#244).
     tools_schema = (
-        None if client_mode else _build_tools_schema(config, extra_tools=mcp_tools)
+        None if client_mode else _build_tools_schema(config, extra_tools=extra_tools)
     )
     context_kwargs: dict[str, Any] = {"messages": s2s_opening_messages(config)}
     if tools_schema is not None:
