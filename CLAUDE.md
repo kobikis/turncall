@@ -308,8 +308,9 @@ DELETE /v1/ambience-sounds/{id}       # 409 naming the agents while any names it
   `TTSStoppedFrame`. `test_pipecat_still_needs_it` fails once pipecat is fixed.
 - **It can never end a call.** Missing sound, missing rendition, failed fetch:
   a warning, and a silent room.
-- Absent from the call recording and still playing under the voicemail gate —
-  both on purpose, see the ADR.
+- In the call recording (the agent's channel carries the room, as the caller
+  heard it) and still playing under the voicemail gate — both on purpose, see
+  the ADR.
 
 Key files: `services/ambience_ingest.py`, `api/v1/ambience.py`,
 `orchestrator/ambience.py`, `storage/repositories/ambience_repo.py`.

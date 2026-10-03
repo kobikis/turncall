@@ -60,6 +60,6 @@ An [inline agent from call-init](/guides/call-init) can carry the same block. It
 ## Behaviour to know
 
 - **It never ends a call.** A missing sound, a missing rendition or a failed fetch logs a warning and leaves the room silent.
-- **It is not in the call recording**, and it keeps playing while the voicemail gate holds the agent's speech back.
+- **It is in the call recording**, on the agent's channel, as the caller heard it. It also keeps playing while the voicemail gate holds the agent's speech back.
 - **It does not run in evals.** An eval run on an agent with ambience carries an `ambience_skipped` warning instead.
 - **Deleting a sound** is refused with `409`, naming the agents, while any agent uses it. Once deleted, its stored files go too.

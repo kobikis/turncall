@@ -34,7 +34,11 @@ was measured before being believed:
 Negligible, and the frames' downstream traversal is an `isinstance` check in
 `observability`. Turn-taking also survives: the queue-empty branch still fires
 `_bot_stopped_speaking`, so `user_idle_timeout_ms` behaves as it does without a
-mixer. What is *not* answered by any benchmark is PSTN line echo — ambience
+mixer. **Amended (#265):** true of TTS audio only. A voice that streams its
+silence too — gpt-live-1, the video avatars — never empties the queue, and the
+transport judges that silence *after* the mix, so the bot never stopped speaking
+and the idle guard never armed. `SpeechBeforeAmbience` judges it before the mix.
+What is *not* answered by any benchmark is PSTN line echo — ambience
 coupling back on the caller's channel and opening a VAD turn. That needs a real
 call and is tracked separately (#171; see Consequences for the result).
 
@@ -128,6 +132,16 @@ immediately before the transport in the pipeline and the mixing happens inside
 the transport. Moving the recorder to match what the caller heard is an ADR-0005
 change for cosmetic gain, and the current arrangement keeps transcripts and
 post-call analysis identical to an agent without ambience.
+
+**Amended (#265):** the ambience *is* in the recording, and that is kept. This
+decision was stale when written: #178 had moved the recorder *after*
+`transport.output()` the same day (ADR-0005), and the frames the transport
+passes on are already mixed, so the agent's channel carries the room — measured
+on call 55f06d09, a steady −45 dB floor from the first second. Kept rather than
+stripped: the recording is now what the caller heard, and recovering the
+unmixed audio after the output would cost the real-time pacing #178 moved the
+recorder for. Transcripts and post-call analysis read text, so they are still
+identical to an agent without ambience.
 
 **9. Renditions are MP3.** Measured on a 30-second mono source: 70 KB at 8k and
 127 KB at 16k, against 331 KB / 622 KB as FLAC and 477 KB / 956 KB as WAV, for a

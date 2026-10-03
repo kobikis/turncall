@@ -64,7 +64,22 @@ a key for a provider the agent uses, the call is refused up front, naming it
 are still refused inside an agent's `aws` block when it is off, but an `aws`
 project credential is accepted — it is encrypted and outside agent config.
 
+**Ambience is in the call recording.** The agent's channel carries the room, as
+the caller heard it. The docs said it was left out, but it has always been in
+the recording. See [Ambience](/guides/ambience).
+
 ## Fixed
+
+**An `openai_live` agent checks in on a quiet caller.** The idle check-in never
+reached gpt-live-1, so a caller who went quiet heard silence until the call's
+maximum duration. gpt-live-1 now asks whether they are still there, and a second
+silence ends the call as `customer_silent`. A silence while the agent's delegate
+is still working does not count.
+
+**Ambience turned off the idle check-in on `openai_live`.** With ambience on, the
+call never registered the agent as done speaking, so a quiet caller was never
+asked whether they were still there. Video avatars under ambience had the same
+problem.
 
 **An `openai_live` agent opens the call.** gpt-live-1 waits for speech, so an
 agent with no `first_message` said nothing until the caller did, and one with a
