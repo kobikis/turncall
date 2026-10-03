@@ -167,9 +167,23 @@ the call itself, so post-call analysis, the transcript and the `call.ended`
 webhook are unaffected. Correlate such calls through `call_id`, or through
 `metadata` you returned in the call-init response — that is what it is for.
 
-Knowledge bases attached to a *stored* agent do not apply, since there is no
-agent to have attached them to. Use `dynamic_data.knowledge_context` for
-per-call context, which is the mechanism an inline agent should be using anyway.
+Knowledge bases linked to a *stored* agent do not apply, since the call does not
+run that agent. An inline agent names its own in `knowledge_bases`, with the
+same fields as a link (`knowledge_base_id`, `mode`, `priority`, `top_k`,
+`similarity_threshold`, `tool_description`):
+
+```json
+{
+  "agent": {
+    "system_prompt": "You are the receptionist at Luigi's.",
+    "knowledge_bases": [{"knowledge_base_id": "KB_ID", "mode": "prompt"}]
+  }
+}
+```
+
+Each id must be a knowledge base in the phone number's project. One that is
+not, or an entry TurnCall cannot read, is skipped with a warning and the call
+still connects. See [Knowledge Base](/guides/knowledge-base#inline-agents).
 
 <Tip>
   For persistent, searchable knowledge, use the [Knowledge Base API](/guides/knowledge-base) instead of `knowledge_context`. Use `knowledge_context` for per-call dynamic data like CRM records or open tickets.

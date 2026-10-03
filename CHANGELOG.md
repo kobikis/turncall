@@ -153,6 +153,15 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **Knowledge bases never reached an inline agent** (#260). Links live on an
+  agent row, and a call-init `agent` or an eval `inline` target has none, so
+  every mode was dropped without a word — on every builder agent with an
+  attached app, since those answer call-init inline. An inline config now
+  names its own in `knowledge_bases` (the link's fields), checked against the
+  call's project: one from elsewhere, or missing, is skipped with a warning
+  and the call still connects. A stored agent keeps its links as the one
+  source, so `knowledge_bases` on agent create or update is a 422.
+
 - **Knowledge bases did nothing on a speech-to-speech agent** (#254). Every S2S
   build skipped the agent's knowledge bases without a word. `prompt` mode's text
   now leads the instructions on every provider, and `tool` mode's

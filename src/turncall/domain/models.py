@@ -313,6 +313,24 @@ class AWSConfig(DomainModel):
     profile: str | None = None
 
 
+class KnowledgeBaseAttachment(DomainModel):
+    """A knowledge base attached to an agent, with its retrieval settings.
+
+    A stored agent's live on its link rows; this is the shape an inline
+    agent's `knowledge_bases` names them in (#260). A call-init webhook's
+    config passes through no API schema, so the retrieval bounds are checked
+    here; a tool-mode KB without a `tool_description` is not refused, since
+    `query_knowledge` has a default one.
+    """
+
+    knowledge_base_id: UUID
+    mode: KnowledgeRetrievalMode = KnowledgeRetrievalMode.AUTO
+    priority: int = 0
+    top_k: int = Field(default=5, ge=1, le=50)
+    similarity_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
+    tool_description: str | None = None  # LLM instruction (tool mode only)
+
+
 class AgentConfig(DomainModel):
     pipeline_mode: str = "cascade"  # "cascade" | "s2s"
     system_prompt: str = ""
@@ -362,20 +380,41 @@ class AgentConfig(DomainModel):
             )
             return None
 
+    # An inline agent's knowledge bases (#260): it has no row to link them
+    # to (ADR-0017). Read only for a call with no agent row, resolved against
+    # that call's project; a stored agent's come from its links alone.
+    knowledge_bases: list[KnowledgeBaseAttachment] = Field(default_factory=list)
+
+    @field_validator("knowledge_bases", mode="before")
+    @classmethod
+    def _unusable_knowledge_bases_are_skipped(
+        cls, value: Any
+    ) -> list[KnowledgeBaseAttachment]:
+        """An unusable entry drops that knowledge base, never the call — the
+        config arrives from a call-init webhook as ambience's does."""
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            logger.warning(
+                "knowledge_base_skipped: knowledge_bases is not a list, call "
+                "runs without them"
+            )
+            return []
+        usable = []
+        for entry in value:
+            try:
+                usable.append(KnowledgeBaseAttachment.model_validate(entry))
+            except ValidationError as exc:
+                logger.warning(
+                    "knowledge_base_skipped: unusable knowledge_bases entry, call "
+                    "runs without it: {err}",
+                    err=str(exc),
+                )
+        return usable
+
     transport: str = "twilio"  # "twilio" | "webrtc" | "both"
     server_url: ServerUrlConfig = Field(default_factory=ServerUrlConfig)
     metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class KnowledgeBaseAttachment(DomainModel):
-    """Links a knowledge base to an agent with retrieval settings."""
-
-    knowledge_base_id: str
-    mode: KnowledgeRetrievalMode = KnowledgeRetrievalMode.AUTO
-    priority: int = 0
-    top_k: int = 5
-    similarity_threshold: float = 0.3
-    tool_description: str | None = None  # LLM instruction (tool mode only)
 
 
 class Agent(DomainModel):

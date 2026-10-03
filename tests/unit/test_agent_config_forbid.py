@@ -34,9 +34,8 @@ def test_valid_config_still_accepted():
 @pytest.mark.unit
 def test_schema_covers_domain_settable_fields():
     """Every domain AgentConfig field must be declared on the schema (else
-    extra='forbid' would reject a valid round-tripped config). knowledge_bases
-    is deliberately excluded — it's attached via a separate endpoint."""
+    extra='forbid' would reject a valid round-tripped config)."""
     schema_fields = set(AgentConfigSchema.model_fields)
     domain_fields = set(AgentConfig.model_fields)
-    missing = domain_fields - schema_fields - {"knowledge_bases"}
+    missing = domain_fields - schema_fields
     assert not missing, f"schema is missing domain fields: {missing}"

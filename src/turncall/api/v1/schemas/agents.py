@@ -16,6 +16,7 @@ from pydantic import (
     model_validator,
 )
 
+from turncall.api.v1.schemas.knowledge import LinkKnowledgeBaseRequest
 from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
 from turncall.domain.models import BUILTIN_TOOL_NAMES, resolve_delegation
@@ -541,6 +542,14 @@ class AmbienceConfigSchema(BaseModel):
         return str(sound)
 
 
+class InlineKnowledgeBaseSchema(LinkKnowledgeBaseRequest):
+    """An inline agent's knowledge base (#260): the link endpoint's fields,
+    validated the same way, with unknown keys refused like the rest of the
+    config."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class AWSCredentialSetSchema(BaseModel):
     """The shape of an AWS credential set — one schema for both places it lives.
 
@@ -599,9 +608,7 @@ class AWSConfigSchema(AWSCredentialSetSchema):
 class AgentConfigSchema(BaseModel):
     # Reject unknown fields instead of silently dropping them — a typo'd or
     # schema-lagging config section (e.g. a mis-nested "avatar") used to vanish
-    # at ingest with no error. Every domain-settable field is declared below;
-    # knowledge_bases is intentionally attached via /agents/{id}/knowledge-bases,
-    # not the config, so it must not appear here.
+    # at ingest with no error. Every domain-settable field is declared below.
     model_config = ConfigDict(extra="forbid")
 
     pipeline_mode: str = Field(default="cascade", pattern=r"^(cascade|s2s)$")
@@ -651,6 +658,12 @@ class AgentConfigSchema(BaseModel):
     aws: AWSConfigSchema = Field(default_factory=AWSConfigSchema)
     avatar: AvatarConfigSchema = Field(default_factory=AvatarConfigSchema)
     ambience: AmbienceConfigSchema | None = None
+    # Inline agents only — an eval `inline` target here; call-init's `agent`
+    # reaches the domain model directly. A stored agent's KBs are its links, so
+    # the agent endpoints refuse this, and it is never dumped into a config_blob.
+    knowledge_bases: list[InlineKnowledgeBaseSchema] = Field(
+        default_factory=list, exclude=True
+    )
     transport: str = Field(default="twilio", pattern=r"^(twilio|webrtc|both)$")
     server_url: ServerUrlConfigSchema = Field(default_factory=ServerUrlConfigSchema)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -670,9 +683,12 @@ class AgentConfigSchema(BaseModel):
             raise ValueError(msg)
         if self.pipeline_mode == "s2s" and self.llm.failover:
             # A client delegate is an ordinary LLM, so it can fail over (#246).
-            delegation = resolve_delegation(
-                self.s2s, has_tools=bool(self.tools or self.mcp_servers)
+            # A tool-mode KB brings a delegate too (#254); only an inline one
+            # is visible here — a stored agent's are links (#260).
+            has_tools = bool(self.tools or self.mcp_servers) or any(
+                kb.mode == "tool" for kb in self.knowledge_bases
             )
+            delegation = resolve_delegation(self.s2s, has_tools=has_tools)
             if delegation is None or delegation.mode != "client":
                 msg = (
                     "llm.failover is not supported in S2S pipeline mode outside "
