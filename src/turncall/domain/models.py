@@ -317,8 +317,10 @@ class KnowledgeBaseAttachment(DomainModel):
     """A knowledge base attached to an agent, with its retrieval settings.
 
     A stored agent's live on its link rows; this is the shape an inline
-    agent's `knowledge_bases` names them in (#260), bounded like the link
-    endpoint, since a call-init webhook's config passes through no API schema.
+    agent's `knowledge_bases` names them in (#260). A call-init webhook's
+    config passes through no API schema, so the retrieval bounds are checked
+    here; a tool-mode KB without a `tool_description` is not refused, since
+    `query_knowledge` has a default one.
     """
 
     knowledge_base_id: UUID
@@ -390,6 +392,8 @@ class AgentConfig(DomainModel):
     ) -> list[KnowledgeBaseAttachment]:
         """An unusable entry drops that knowledge base, never the call — the
         config arrives from a call-init webhook as ambience's does."""
+        if value is None:
+            return []
         if not isinstance(value, list):
             logger.warning(
                 "knowledge_base_skipped: knowledge_bases is not a list, call "

@@ -83,6 +83,18 @@ class TestTheConfig:
         config = AgentConfig.model_validate({"knowledge_bases": {"oops": 1}})
         assert config.knowledge_bases == []
 
+    def test_null_is_none_and_says_nothing(self) -> None:
+        seen, sink = _warnings()
+        try:
+            config = AgentConfig.model_validate({"knowledge_bases": None})
+        finally:
+            from loguru import logger
+
+            logger.remove(sink)
+
+        assert config.knowledge_bases == []
+        assert seen == []
+
 
 # --- Seam 2: the assembly ----------------------------------------------------
 

@@ -76,6 +76,24 @@ async def build_call_pipeline(
         raise
 
 
+async def _kb_attachments(
+    config: AgentConfig, call_context: CallContext, session_factory: Any
+) -> list[dict[str, Any]]:
+    """The call's knowledge bases: its agent's links, or — with no agent row to
+    link one to (ADR-0017) — the inline config's own, checked against the
+    call's project (#260)."""
+    from turncall.orchestrator.knowledge_processor import (
+        load_agent_kb_attachments,
+        load_inline_kb_attachments,
+    )
+
+    if call_context.agent_id == DYNAMIC_AGENT_ID:
+        return await load_inline_kb_attachments(
+            session_factory, call_context.project_id, config.knowledge_bases
+        )
+    return await load_agent_kb_attachments(session_factory, call_context.agent_id)
+
+
 async def _assemble(
     *,
     config: AgentConfig,
@@ -90,22 +108,9 @@ async def _assemble(
     """Assemble the pipeline (KB retrieval + tools wired in). audio_sample_rate
     defaults to 8000 (Twilio mulaw); WebRTC/WhatsApp pass 16000. mcp_tools/avatar
     are transport-specific."""
-    from turncall.orchestrator.knowledge_processor import (
-        load_agent_kb_attachments,
-        load_inline_kb_attachments,
-    )
     from turncall.services.retrieval import build_knowledge_preamble
 
-    if call_context.agent_id == DYNAMIC_AGENT_ID:
-        # No agent row to link a KB to (ADR-0017): an inline config names its
-        # own, checked against the call's project (#260).
-        kb_attachments = await load_inline_kb_attachments(
-            session_factory, call_context.project_id, config.knowledge_bases
-        )
-    else:
-        kb_attachments = await load_agent_kb_attachments(
-            session_factory, call_context.agent_id
-        )
+    kb_attachments = await _kb_attachments(config, call_context, session_factory)
     unsupported = knowledge_mode_warning(
         config, {a.get("mode") for a in kb_attachments}
     )
