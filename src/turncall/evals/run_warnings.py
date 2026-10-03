@@ -101,6 +101,35 @@ def warn_ambience_skipped(target: ResolvedTarget) -> list[dict[str, Any]]:
     ]
 
 
+def warn_context_ignored(parsed: Any, target: ResolvedTarget) -> list[dict[str, Any]]:
+    """Say so when a scenario's `context:` cannot reach a gpt-live-1 agent.
+
+    gpt-live-1 configures its session from the first context it sees and
+    ignores every later one, and that session opens the moment the pipeline is
+    ready (#256) — before the harness has even connected, let alone sent the
+    scenario's context. It used to land inside the 2s greeting wait, by timing
+    rather than design. A simulation has no `context:`.
+    """
+    config = target.config
+    if (
+        not getattr(parsed, "context", None)
+        or config.pipeline_mode != "s2s"
+        or config.s2s.provider != "openai_live"
+    ):
+        return []
+    return [
+        {
+            "code": "context_ignored",
+            "message": (
+                "the scenario's `context:` did not reach the agent: an "
+                "openai_live session is configured from the agent's own "
+                "context when the call starts and never reads a later one. "
+                "Put what it sets up in an inline target's system_prompt."
+            ),
+        }
+    ]
+
+
 _JUDGE_KEYS = (
     "judge_provider",
     "judge_model",

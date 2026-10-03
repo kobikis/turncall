@@ -753,6 +753,9 @@ half: it says "this is the MCP limitation, not your typo". `live_tools_allowed`
 is the other one — a `live` policy really executes the agent's tools, once per
 iteration. **Text mode also cannot see the agent's `first_message`** — it goes out as a
 `TTSSpeakFrame`, so it never becomes LLM text, and `skip_tts` silences the TTS.
+**An `openai_live` agent never sees a scenario's `context:`** — its session opens
+on the agent's own context before the harness connects (#256) and reads no later
+one; the run carries a `context_ignored` warning.
 The judge is pipecat's `EvalJudge`, **Ollama by default** — but a scenario can
 name another (#118): `judge: {provider, model, temperature, endpoint}` and
 `simulator: {...}` are TurnCall columns beside `tool_mocks`, compiled into

@@ -14,7 +14,11 @@ from uuid import uuid4
 import pytest
 
 from turncall.domain.models import AgentConfig, MCPServerConfig, ToolDefinition
-from turncall.evals.run_warnings import warn_ambience_skipped, warn_unmatched_mocks
+from turncall.evals.run_warnings import (
+    warn_ambience_skipped,
+    warn_context_ignored,
+    warn_unmatched_mocks,
+)
 from turncall.evals.targets import ResolvedTarget
 
 pytestmark = pytest.mark.unit
@@ -95,6 +99,44 @@ class TestAmbienceIsSaidToBeSkipped:
 
     def test_an_agent_without_ambience_hears_nothing_about_it(self) -> None:
         assert warn_ambience_skipped(_target()) == []
+
+
+def _s2s_target(provider: str) -> ResolvedTarget:
+    blob = {"pipeline_mode": "s2s", "s2s": {"provider": provider}}
+    return ResolvedTarget(
+        project_id=uuid4(),
+        config=AgentConfig.model_validate(blob),
+        config_blob=blob,
+        agent_id=uuid4(),
+    )
+
+
+class TestContextGptLive1NeverSees:
+    """#256: gpt-live-1's session opens on the agent's own context the moment
+    the pipeline is ready, before the harness sends a scenario's `context:`,
+    and it ignores every later context — so that context changes nothing."""
+
+    _WITH_CONTEXT = SimpleNamespace(context=[{"role": "system", "content": "x"}])
+
+    def test_a_scenario_context_on_openai_live_is_told(self) -> None:
+        (warning,) = warn_context_ignored(
+            self._WITH_CONTEXT, _s2s_target("openai_live")
+        )
+        assert warning["code"] == "context_ignored"
+
+    def test_no_context_hears_nothing(self) -> None:
+        parsed = SimpleNamespace(context=[])
+        assert warn_context_ignored(parsed, _s2s_target("openai_live")) == []
+
+    def test_a_simulation_has_no_context_to_ignore(self) -> None:
+        assert warn_context_ignored(object(), _s2s_target("openai_live")) == []
+
+    @pytest.mark.parametrize("provider", ["openai", "google"])
+    def test_other_providers_hear_nothing(self, provider: str) -> None:
+        assert warn_context_ignored(self._WITH_CONTEXT, _s2s_target(provider)) == []
+
+    def test_a_cascade_agent_hears_nothing(self) -> None:
+        assert warn_context_ignored(self._WITH_CONTEXT, _target()) == []
 
 
 @pytest.mark.asyncio
