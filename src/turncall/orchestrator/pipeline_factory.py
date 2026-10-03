@@ -1487,8 +1487,9 @@ def _create_client_delegate(
     `tools` includes `query_knowledge` when the agent has a tool-mode KB, whose
     own handler replaces the bridge's one (#254).
 
-    The worker is outside the call's pipeline, so an ending tool arms the
-    call's `hangup_gate` directly rather than pushing from its LLM (#245).
+    The worker is outside the call's pipeline, so an ending tool reaches the
+    call's `hangup_gate` directly rather than pushing from its LLM (#245) —
+    to mark the call as ending; the live service arms it on relaying (#262).
     """
     from pipecat.workers.llm.backend_llm_worker import BackendLLMWorker
 
@@ -1599,6 +1600,7 @@ def _create_s2s_pipeline(
     delegation = resolve_delegation(config.s2s, has_tools=bool(advertised))
     client_mode = delegation is not None and delegation.mode == "client"
     hangup_gate = _hangup_gate(call_context)
+    gate = hangup_gate[0] if hangup_gate else None
     delegate = None
     if client_mode:
         delegate = _create_client_delegate(
@@ -1608,11 +1610,11 @@ def _create_s2s_pipeline(
             advertised,
             call_context,
             knowledge=knowledge,
-            hangup_gate=hangup_gate[0] if hangup_gate else None,
+            hangup_gate=gate,
             byom_settings=byom_settings,
         )
     s2s_llm = create_s2s_service(
-        config, credentials, tools=advertised, delegate=delegate
+        config, credentials, tools=advertised, delegate=delegate, hangup_gate=gate
     )
     if knowledge is not None and not client_mode:
         # Before pipeline_builder registers the agent's tools, so on a name

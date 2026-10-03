@@ -16,6 +16,15 @@ one open. It has no delegation timeout of its own — #243 bounds
 each function call instead, and the delegate answers past an expired one — so
 `timed_out` is client mode's only. `test_delegation_completed.py` pins the
 private surface.
+
+A client delegation that ends the call (#262): gpt-live-1 is told to leave
+the goodbye to it (`s2s_config`), and may still fill the wait ("One moment").
+So the delegate's tool only marks the call as ending, and the gate is armed
+here, as the delegate's answer is relayed — once gpt-live-1 is quiet, so the
+goodbye it voices is a reply of its own and the one the call ends after. With
+nothing of the delegate's to relay, the call ends after the reply playing:
+pipecat's stand-in sentences go as thinking, not as the call's last words.
+`test_client_delegate_one_goodbye.py`.
 """
 
 from __future__ import annotations
@@ -31,13 +40,16 @@ from pipecat.services.openai.live.llm import ClientDelegation, OpenAILiveLLMServ
 from pipecat.utils.errors import ErrorCategory
 
 from turncall.domain.enums import CallEventType
+from turncall.orchestrator.hangup import HangupAfterReply, HangupArmFrame
 from turncall.orchestrator.turn_metrics import store_call_event
 
 if TYPE_CHECKING:
     from turncall.orchestrator.pipeline_factory import CallContext
 
-# What pipecat appends for a client delegation that finished with no text.
+# What pipecat appends for a client delegation that finished with no text, and
+# for one that failed: its stand-ins, never a delegate's own words.
 NO_OUTPUT = "The delegated work finished without an answer."
+NOT_COMPLETED = "The delegated work could not be completed."
 # The reason pipecat's worker cancels a job that ran past its timeout with.
 _TIMEOUT_REASON = "timeout"
 _TERMINAL = ("response.completed", "response.failed", "response.incomplete")
@@ -47,6 +59,7 @@ _TERMINAL = ("response.completed", "response.failed", "response.incomplete")
 class _Attempt:
     error: Exception | None = None
     answered: bool = False
+    relayed: bool = False  # something for gpt-live-1 to say
 
 
 # Each client delegation runs in a task of its own, so this is per delegation.
@@ -71,10 +84,16 @@ def _client_outcome(attempt: _Attempt) -> str:
 
 
 class DelegationTrackingLiveService(OpenAILiveLLMService):
-    """gpt-live-1, reporting each delegation's end as `on_delegation_completed`."""
+    """gpt-live-1, reporting each delegation's end as `on_delegation_completed`.
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    `hangup_gate` is the call's, for a client delegation that ends it (#262).
+    """
+
+    def __init__(
+        self, *args: Any, hangup_gate: HangupAfterReply | None = None, **kwargs: Any
+    ) -> None:
         super().__init__(*args, **kwargs)
+        self._hangup_gate = hangup_gate
         self._register_event_handler("on_delegation_completed")
         # Responses delegations in flight, by id: when each started.
         self._responses_started: dict[str, float] = {}
@@ -111,13 +130,31 @@ class DelegationTrackingLiveService(OpenAILiveLLMService):
         # A cancellation (the call ending mid-delegation) propagates and
         # records nothing: the delegation did not end, the call did.
         await super()._run_client_delegation(delegation)
+        gate = self._ending_gate()
+        if gate is not None and not attempt.relayed:
+            # Nothing for gpt-live-1 to voice: end after what it is saying.
+            await gate.queue_frame(HangupArmFrame(current_reply=True))
         await self._completed("client", started, _client_outcome(attempt))
+
+    def _ending_gate(self) -> HangupAfterReply | None:
+        """The call's gate, once a client delegate's tool has ended the call."""
+        gate = self._hangup_gate
+        return gate if gate is not None and gate.ending else None
 
     async def _send_context_append(
         self, delegation_id: str | None, text: str, *, spoken: bool
     ) -> None:
         attempt = _attempt.get()
-        if attempt is not None and text != NO_OUTPUT:
+        gate = self._ending_gate()
+        if attempt is not None and gate is not None:
+            # The delegation ended the call, which is what it was asked; an
+            # error after it still reads `failed` (push_error comes later).
+            attempt.answered = True
+            spoken = spoken and text not in (NO_OUTPUT, NOT_COMPLETED)
+            if spoken:
+                await gate.arm_when_quiet()
+                attempt.relayed = True
+        elif attempt is not None and text != NO_OUTPUT:
             attempt.answered = True
         await super()._send_context_append(delegation_id, text, spoken=spoken)
 

@@ -113,7 +113,8 @@ async def test_a_barge_in_cannot_split_the_record_from_the_end(via_gate):
     even after the result is in. Once the end is recorded the hangup has to be
     armed too: a cancel between the two left the row saying the agent hung up
     on a call that kept running. `via_gate`: an openai_live client delegate,
-    which arms the call's gate directly (#245)."""
+    which marks the call's gate as ending directly (#245) — the live service
+    arms it on relaying the delegate's goodbye (#262)."""
     import asyncio
 
     entered = asyncio.Event()
@@ -129,8 +130,8 @@ async def test_a_barge_in_cannot_split_the_record_from_the_end(via_gate):
             pushed.append(frame)
 
     class _Gate:
-        async def queue_frame(self, frame, *_direction):
-            pushed.append(frame)
+        def begin_ending(self):
+            pushed.append("ending")
 
     async def result_callback(result, *, properties=None):
         entered.set()
@@ -170,4 +171,5 @@ async def test_a_barge_in_cannot_split_the_record_from_the_end(via_gate):
         for _ in range(5):
             await asyncio.sleep(0)
 
-    assert [type(f) for f in pushed] == [HangupArmFrame]
+    expected = ["ending"] if via_gate else [HangupArmFrame]
+    assert [f if isinstance(f, str) else type(f) for f in pushed] == expected

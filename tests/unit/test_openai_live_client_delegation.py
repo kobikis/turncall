@@ -261,14 +261,16 @@ class TestMissingKeys:
 @pytest.mark.unit
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name", ["end_call", "do_not_call"])
-async def test_the_delegates_ending_tool_arms_the_calls_hangup_gate(name: str) -> None:
+async def test_the_delegates_ending_tool_marks_the_call_as_ending(name: str) -> None:
     """The delegate runs in its own worker, so pushing from its LLM would arm
-    nothing: the handler queues the arm frame on the call's gate itself, which
-    then ends the call after gpt-live-1's goodbye (#245)."""
+    nothing: the handler marks the call's gate as ending itself (#245). It
+    does not arm it — the live service does, on relaying the delegate's
+    goodbye, so an acknowledgement gpt-live-1 gives meanwhile is not taken
+    for the goodbye (#262)."""
     from pipecat.services.openai.live.llm import OpenAILiveLLMService
 
     from turncall.orchestrator import tool_bridge
-    from turncall.orchestrator.hangup import HangupAfterReply, HangupArmFrame
+    from turncall.orchestrator.hangup import HangupAfterReply
 
     call_context = _call_context()
     with patch("turncall.orchestrator.call_recorder.attach_recorder"):
@@ -301,6 +303,7 @@ async def test_the_delegates_ending_tool_arms_the_calls_hangup_gate(name: str) -
         await delegate_llm._functions[name].handler(params)
 
     assert execute.await_args.args[0] == name  # the end / opt-out is recorded
-    assert [type(f) for f in queued] == [HangupArmFrame]
+    assert gate.ending
+    assert not queued
     delegate_push.assert_not_called()
     params.result_callback.assert_awaited_once_with(ok)  # the goodbye follows

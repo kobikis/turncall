@@ -262,6 +262,25 @@ class TestBuild:
         live = _build(_config(_live()))
         assert live._settings.system_instruction == "You are a receptionist."
 
+    @pytest.mark.parametrize(
+        ("delegation", "tools", "told"),
+        [
+            ({"mode": "client"}, [_BOOK, _END], True),
+            ({"mode": "client"}, [_BOOK], False),
+            ({"mode": "responses", "model": "m"}, [_BOOK, _END], False),
+        ],
+    )
+    def test_a_client_delegate_says_the_goodbye(
+        self, delegation: dict[str, Any], tools: list[dict[str, Any]], told: bool
+    ) -> None:
+        """#262: gpt-live-1 answered the caller's "bye" itself, then voiced
+        the client delegate's goodbye after it. Responses mode is unchanged."""
+        from turncall.orchestrator.s2s_config import GOODBYE_TO_THE_DELEGATE
+
+        live = _build(_config(_live(delegation=delegation), tools=tools))
+        instructions = live._settings.system_instruction
+        assert (GOODBYE_TO_THE_DELEGATE in instructions) is told
+
     def test_delegate_holds_the_agent_tools_with_turncall_handlers(self) -> None:
         """Responses mode: the live service runs the delegate's function
         calls, so TurnCall's handlers are registered on it."""
