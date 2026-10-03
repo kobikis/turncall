@@ -90,6 +90,10 @@ which is turn-based.
 Leave `s2s.model` unset and it resolves to `gpt-live-1`. Set it explicitly and
 the value is sent as given.
 
+The agent speaks first: the session opens by asking gpt-live-1 to say the
+agent's `first_message`, or to greet the caller when there is none. It
+delivers the line in its own words — usually verbatim, but not always.
+
 ### Delegation
 
 gpt-live-1 calls **no tools of its own**: it listens and speaks, and hands
