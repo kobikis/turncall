@@ -20,6 +20,16 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from loguru import logger
+from pipecat.audio.utils import is_silence
+from pipecat.frames.frames import (
+    Frame,
+    OutputAudioRawFrame,
+    SpeechOutputAudioRawFrame,
+    TTSAudioRawFrame,
+    TTSStoppedFrame,
+)
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.transports.base_output import BOT_VAD_STOP_SECS
 
 from turncall.adapters.storage import create_storage_adapter
 from turncall.domain.models import AgentConfig
@@ -121,3 +131,48 @@ def _write_atomically(path: Path, data: bytes) -> None:
     tmp = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
     tmp.write_bytes(data)
     os.replace(tmp, path)
+
+
+class SpeechBeforeAmbience(FrameProcessor):
+    """Tell the output transport where a streamed voice stops, under ambience (#265).
+
+    gpt-live-1 and the video avatars stream their audio continuously, silence
+    included, and pipecat's output transport finds the end of a reply by the
+    silence in it — after mixing the ambience in, so there never was any: no
+    BotStoppedSpeakingFrame after the first reply, so no idle guard. Judged
+    here instead, before the mix: speech goes on as TTS audio, and a pause past
+    pipecat's own threshold ends it with a TTSStoppedFrame, the transport's
+    other way to stop. Silence goes on as plain audio, played and mixed but
+    not read. `test_pipecat_still_needs_it` fails once pipecat judges silence
+    before mixing; this can go then.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._speaking = False
+        self._silence_secs = 0.0
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if not isinstance(frame, SpeechOutputAudioRawFrame):
+            await self.push_frame(frame, direction)
+            return
+        speech = not is_silence(frame.audio)
+        kind = TTSAudioRawFrame if speech else OutputAudioRawFrame
+        await self.push_frame(
+            kind(
+                audio=frame.audio,
+                sample_rate=frame.sample_rate,
+                num_channels=frame.num_channels,
+            ),
+            direction,
+        )
+        if speech:
+            self._speaking, self._silence_secs = True, 0.0
+            return
+        self._silence_secs += len(frame.audio) / (
+            2 * frame.sample_rate * frame.num_channels
+        )
+        if self._speaking and self._silence_secs > BOT_VAD_STOP_SECS:
+            self._speaking = False
+            await self.push_frame(TTSStoppedFrame(), direction)

@@ -1073,6 +1073,18 @@ def _hangup_gate(call_context: CallContext) -> list[Any]:
     return [HangupAfterReply()]
 
 
+def _speech_before_ambience(
+    config: AgentConfig, call_context: CallContext
+) -> list[Any]:
+    """`SpeechBeforeAmbience`, directly before the output, where ambience
+    plays (#265): never in an eval, which mixes no ambience."""
+    if config.ambience is None or call_context.is_eval:
+        return []
+    from turncall.orchestrator.ambience import SpeechBeforeAmbience
+
+    return [SpeechBeforeAmbience()]
+
+
 def _eval_rtvi(call_context: CallContext) -> list[Any]:
     """The `RTVIProcessor`, for an eval pipeline's processor list.
 
@@ -1419,6 +1431,7 @@ def create_pipeline(
             tts,
             voicemail_detector.gate(),
             *([avatar] if avatar else []),
+            *_speech_before_ambience(config, call_context),
             transport.output(),
             # After the output: audio arrives here as it is played (see
             # test_recorder_placement). Before it, TTS bursts stretched the timeline.
@@ -1439,6 +1452,7 @@ def create_pipeline(
             assistant_tap,
             tts,
             *([avatar] if avatar else []),
+            *_speech_before_ambience(config, call_context),
             transport.output(),
             # After the output: audio arrives here as it is played (see
             # test_recorder_placement). Before it, TTS bursts stretched the timeline.
@@ -1725,6 +1739,7 @@ def _create_s2s_pipeline(
         *hangup_gate,
         assistant_tap,
         *([output_resampler] if output_resampler else []),
+        *_speech_before_ambience(config, call_context),
         transport.output(),
         # After the output: audio arrives here as it is played (see
         # test_recorder_placement). Before it, TTS bursts stretched the timeline.
