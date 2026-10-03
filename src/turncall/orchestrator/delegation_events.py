@@ -79,6 +79,12 @@ class DelegationTrackingLiveService(OpenAILiveLLMService):
         # Responses delegations in flight, by id: when each started.
         self._responses_started: dict[str, float] = {}
 
+    @property
+    def delegate_llm(self) -> Any:
+        """The client delegate's LLM (a failover group, #246), or None."""
+        # Only a ClientDelegation has a backend; responses mode has none.
+        return getattr(getattr(self._delegation, "backend", None), "llm", None)
+
     async def _completed(self, mode: str, started: float, outcome: str) -> None:
         payload = delegation_payload(mode, time.monotonic() - started, outcome)
         await self._call_event_handler("on_delegation_completed", payload)

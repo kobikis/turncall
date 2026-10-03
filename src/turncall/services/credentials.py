@@ -128,6 +128,7 @@ class Credentials:
             )
             if delegation is not None and delegation.mode == "client":
                 needed.append((config.llm.provider, config.llm.api_key))
+                needed.extend((e.provider, e.api_key) for e in config.llm.failover)
         else:
             needed = [
                 (config.stt.provider, None),

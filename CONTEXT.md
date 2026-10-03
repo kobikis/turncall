@@ -36,7 +36,8 @@ Switching one role (STT, LLM or TTS) of a live call to the next [[provider]] in 
 ordered list when the active one can no longer do its job, so the call carries on
 instead of ending as `pipeline_error`. A recoverable error never triggers it. Not
 offered for S2S: the conversation lives inside the realtime session, so there is
-nothing to hand over.
+nothing to hand over — except an `openai_live` client delegate, which is an
+ordinary LLM and fails over like cascade's.
 _Avoid_: "fallback" (taken by [[fallback models]]), "backup provider", "retry".
 
 **S2S gateway mode**:

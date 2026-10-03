@@ -17,7 +17,7 @@ from pydantic import (
 
 from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
-from turncall.domain.models import BUILTIN_TOOL_NAMES
+from turncall.domain.models import BUILTIN_TOOL_NAMES, resolve_delegation
 from turncall.domain.providers import (
     AVATAR_PROVIDERS,
     LLM_PROVIDERS,
@@ -668,12 +668,18 @@ class AgentConfigSchema(BaseModel):
             msg = "Voicemail detection is not supported in S2S pipeline mode"
             raise ValueError(msg)
         if self.pipeline_mode == "s2s" and self.llm.failover:
-            msg = (
-                "llm.failover is not supported in S2S pipeline mode: the "
-                "conversation lives inside the realtime session, so no other "
-                "provider could carry it on"
+            # A client delegate is an ordinary LLM, so it can fail over (#246).
+            delegation = resolve_delegation(
+                self.s2s, has_tools=bool(self.tools or self.mcp_servers)
             )
-            raise ValueError(msg)
+            if delegation is None or delegation.mode != "client":
+                msg = (
+                    "llm.failover is not supported in S2S pipeline mode outside "
+                    "an openai_live client delegate: the conversation lives "
+                    "inside the realtime session, so no other provider could "
+                    "carry it on"
+                )
+                raise ValueError(msg)
         if (
             self.pipeline_mode == "s2s"
             and self.s2s.provider == "openai_live"
