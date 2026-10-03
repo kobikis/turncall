@@ -581,7 +581,10 @@ class CallSession:
             )
 
     async def _log_event(self, event_type: CallEventType, payload: dict) -> None:
-        """Log a call event to the database and dispatch webhook."""
+        """Log a call event to the database and dispatch webhook. None in an
+        eval, which has no call row to hang it off (ADR-0018)."""
+        if self._call_context.is_eval:
+            return
         await log_call_event(self._call_context, event_type, payload)
 
     async def _record_error(self, stage: str, error: object, **detail: Any) -> None:

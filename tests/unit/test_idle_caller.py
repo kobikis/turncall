@@ -6,7 +6,7 @@ up on the second, reset when they come back, and record why the call ended —
 is TurnCall's.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -19,7 +19,12 @@ _SILENT = "call.customer_silent"
 _MAX_DURATION = "call.max_duration_reached"
 
 
-def _session(*, pipeline_mode: str = "cascade", s2s_provider: str | None = None):
+def _session(
+    *,
+    pipeline_mode: str = "cascade",
+    s2s_provider: str | None = None,
+    is_eval: bool = False,
+):
     """A CallSession with the pipeline and worker stubbed out."""
     from turncall.orchestrator.call_session import CallSession
 
@@ -44,7 +49,7 @@ def _session(*, pipeline_mode: str = "cascade", s2s_provider: str | None = None)
     # these tests pass against a guard that disarmed itself on every call.
     pipeline.processors = [other, aggregator]
 
-    context = MagicMock()
+    context = MagicMock(is_eval=is_eval)
     context.call_id = uuid4()
 
     session = CallSession(
@@ -84,6 +89,21 @@ class TestTheStrikeCount:
         event_type, payload = session._log_event.await_args.args
         assert event_type.value == _SILENT
         assert payload == {"strikes": 2}
+
+    async def test_an_eval_ends_without_a_call_event(self) -> None:
+        """An eval has no call row to hang the event on (ADR-0018): writing
+        one failed and logged `call_event_log_error` on every quiet eval."""
+        session, handlers = _session(is_eval=True)
+        del session._log_event  # the real one
+
+        with patch(
+            "turncall.orchestrator.call_session.log_call_event", new=AsyncMock()
+        ) as log:
+            await handlers["on_user_turn_idle"]()
+            await handlers["on_user_turn_idle"]()
+
+        session._task.cancel.assert_awaited_once()
+        log.assert_not_awaited()
 
     async def test_speaking_again_resets_the_count(self) -> None:
         """A caller who pauses, answers, then pauses again must not be hung up
