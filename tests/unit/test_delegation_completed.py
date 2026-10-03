@@ -330,3 +330,4 @@ def test_pipecats_private_delegation_surface_is_still_there() -> None:
     assert "call_ids" in llm._PendingResponse.__dataclass_fields__
     source = inspect.getsource(llm.OpenAILiveLLMService._run_client_delegation)
     assert delegation_events.NO_OUTPUT in source
+    assert delegation_events.NOT_COMPLETED in source  # #262

@@ -68,13 +68,16 @@ def create_s2s_service(
     credentials: Credentials,
     tools: Sequence[ToolDefinition] = (),
     delegate: Any = None,
+    hangup_gate: Any = None,
 ) -> Any:
     """Create the appropriate S2S service based on provider.
 
     `tools` is what the call advertises (static + MCP, deduplicated). Only
     `openai_live` reads it here, to tell gpt-live-1 what it can delegate; every
     other provider gets the tools themselves through the pipeline's context.
-    `delegate` is the worker running the agent's own llm, for client mode.
+    `delegate` is the worker running the agent's own llm, for client mode, and
+    `hangup_gate` the call's gate, armed as a delegation's goodbye is relayed
+    (#262).
     """
     provider = config.s2s.provider
     if provider == "openai":
@@ -83,7 +86,7 @@ def create_s2s_service(
         return _create_gemini_live(config, credentials.api_key("google"))
     if provider == "openai_live":
         return _create_openai_live(
-            config, credentials.api_key("openai"), tools, delegate
+            config, credentials.api_key("openai"), tools, delegate, hangup_gate
         )
     if provider == "aws":
         return _create_nova_sonic(config, credentials.aws(config.aws))
@@ -282,7 +285,22 @@ def _create_nova_sonic(config: AgentConfig, aws: AWSConfig) -> Any:
     return service
 
 
-def _delegation_paragraph(tools: Sequence[ToolDefinition]) -> str:
+# Client mode with `end_call` (#262). gpt-live-1 answered the caller's "bye"
+# itself, then voiced the delegate's goodbye too: the delegate's transcript
+# ends where its delegation began, so it cannot know one was said. Measured on
+# the eval loopback: one goodbye in 8 of 8 calls with this line, two in about
+# half without it (and in 4 of 5 real calls). It may still fill the wait ("Sure
+# thing"); the gate is armed so that is not taken for the goodbye.
+GOODBYE_TO_THE_DELEGATE = (
+    "When the caller says goodbye, delegate ending the call and stay silent "
+    "until the result comes back: the result is your goodbye, so do not say "
+    "one before it."
+)
+
+
+def _delegation_paragraph(
+    tools: Sequence[ToolDefinition], *, client: bool = False
+) -> str:
     """Tell gpt-live-1 when to delegate, from the agent's own tool list.
 
     The live model decides by itself whether to delegate, and is known to
@@ -290,6 +308,11 @@ def _delegation_paragraph(tools: Sequence[ToolDefinition]) -> str:
     delegate can do is what lets an existing prompt work without a rewrite.
     """
     lines = "\n".join(f"- {tool.name}: {tool.description}" for tool in tools)
+    goodbye = (
+        f"\n\n{GOODBYE_TO_THE_DELEGATE}"
+        if client and any(tool.name == "end_call" for tool in tools)
+        else ""
+    )
     return (
         "\n\nYou cannot take actions yourself, but you can delegate. Delegate "
         "whenever one of the actions below fits the moment: the caller wants "
@@ -297,7 +320,7 @@ def _delegation_paragraph(tools: Sequence[ToolDefinition]) -> str:
         "conversation reaches the point an action is for — ending the call "
         "when the caller says goodbye, for one. Never just say you will do it, "
         "and never answer from memory instead; delegate, then tell the caller "
-        "what came back. Delegating is how these get done:\n" + lines
+        "what came back. Delegating is how these get done:\n" + lines + goodbye
     )
 
 
@@ -328,6 +351,7 @@ def _create_openai_live(
     api_key: str,
     tools: Sequence[ToolDefinition] = (),
     delegate: Any = None,
+    hangup_gate: Any = None,
 ) -> Any:
     """Create an OpenAILiveLLMService (gpt-live-1) from S2SConfig.
 
@@ -365,7 +389,9 @@ def _create_openai_live(
     settings_kwargs: dict[str, Any] = {"model": model, "voice": s2s.voice}
     system_prompt = _build_s2s_system_prompt(config)
     if delegation is not None and tools:
-        system_prompt += _delegation_paragraph(tools)
+        system_prompt += _delegation_paragraph(
+            tools, client=delegation.mode == "client"
+        )
     if system_prompt:
         settings_kwargs["system_instruction"] = system_prompt
     if s2s.temperature is not None:
@@ -386,6 +412,7 @@ def _create_openai_live(
         service_kwargs["delegation"] = ClientDelegation(
             backend=delegate, timeout_secs=delegation.timeout_seconds
         )
+        service_kwargs["hangup_gate"] = hangup_gate
     elif delegation is not None:
         service_kwargs["delegation"] = _responses_delegation(config, delegation)
         # pipecat's ResponsesDelegation carries no timeout of its own — the

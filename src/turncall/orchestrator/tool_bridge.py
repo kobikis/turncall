@@ -205,14 +205,17 @@ async def _run_ending_tool(
 
     `hangup_gate` is the call's gate itself, for an LLM outside the call's
     pipeline — an `openai_live` client delegate in its own worker (#245),
-    where pushing from `params.llm` would arm nothing.
+    where pushing from `params.llm` would arm nothing. That delegate's
+    answer is relayed by gpt-live-1, which may say something meanwhile, so
+    the tool only marks the call as ending, and the live service arms the
+    gate as it relays the goodbye (#262, `delegation_events`).
     """
     from turncall.orchestrator.hangup import HangupArmFrame
 
     result = await _execute_builtin(function_name, args, call_context)
     if _ends_the_call(result):
         if hangup_gate is not None:
-            await hangup_gate.queue_frame(HangupArmFrame())
+            hangup_gate.begin_ending()
         else:
             await params.llm.push_frame(HangupArmFrame())
     await params.result_callback(result)
