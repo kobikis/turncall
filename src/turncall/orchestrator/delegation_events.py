@@ -136,6 +136,15 @@ class DelegationTrackingLiveService(OpenAILiveLLMService):
             await gate.queue_frame(HangupArmFrame(current_reply=True))
         await self._completed("client", started, _client_outcome(attempt))
 
+    async def say(self, instruction: str) -> None:
+        """Have gpt-live-1 speak now, in its own words (#257).
+
+        A message appended to the context never reaches it — pipecat sets the
+        session up from the first context and ignores every later one — so
+        this is the channel #248's opening uses: spoken commentary.
+        """
+        await self._send_context_append(None, instruction, spoken=True)
+
     def _ending_gate(self) -> HangupAfterReply | None:
         """The call's gate, once a client delegate's tool has ended the call."""
         gate = self._hangup_gate

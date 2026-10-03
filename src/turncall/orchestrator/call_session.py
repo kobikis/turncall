@@ -430,20 +430,26 @@ class CallSession:
         if self._task is None:
             return
 
+        if self._pipeline_mode == "s2s" and self._s2s_provider == "openai_live":
+            # gpt-live-1 never reads a context after its first (#257).
+            from turncall.orchestrator.delegation_events import (
+                DelegationTrackingLiveService,
+            )
+
+            live = next(
+                p
+                for p in self._pipeline.processors
+                if isinstance(p, DelegationTrackingLiveService)
+            )
+            await live.say(_S2S_CHECK_IN)
+            return
+
         if self._pipeline_mode == "s2s":
             from pipecat.frames.frames import LLMMessagesAppendFrame
 
             await self._task.queue_frame(
                 LLMMessagesAppendFrame(
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": (
-                                "The caller has gone quiet. Briefly check "
-                                "whether they are still there."
-                            ),
-                        }
-                    ],
+                    messages=[{"role": "user", "content": _S2S_CHECK_IN}],
                     run_llm=True,
                 )
             )
@@ -583,6 +589,9 @@ _REQUEST_HEADERS = re.compile(r"headers: \{.*?\}, ")
 _MAX_PIPELINE_ERRORS = 5
 
 _KEY_REFUSED = (ErrorCategory.AUTHENTICATION, ErrorCategory.AUTHORIZATION)
+
+# What an S2S model is asked on the first idle strike; it words the check-in.
+_S2S_CHECK_IN = "The caller has gone quiet. Briefly check whether they are still there."
 
 
 def provider_of(processor: object) -> str | None:

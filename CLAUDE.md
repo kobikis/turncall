@@ -1093,7 +1093,10 @@ disables): after the agent stops speaking, a caller who stays quiet that long
 hears `idle_message` ("Are you still there?"), and a second consecutive silence
 ends the call. Speaking again resets the count. Cascade speaks the line through
 TTS; S2S has no TTS stage, so the model is asked to check in and words it
-itself. Like `max_duration_reached` it records a marker event
+itself — gpt-live-1 as spoken commentary, since it reads no context after its
+first (#257). The timer restarts only when the agent stops speaking, so a
+check-in the model never voices leaves the line silent with no second strike,
+until `max_call_duration_seconds`. Like `max_duration_reached` it records a marker event
 (`call.customer_silent`) and is inferred **above** `assistant_ended` — ending
 the call is how the guard gives up, so without its own branch it would read as
 `assistant_ended_call`. Not to be confused with `silence_timeout_ms`, the VAD

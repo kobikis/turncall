@@ -19,7 +19,7 @@ _SILENT = "call.customer_silent"
 _MAX_DURATION = "call.max_duration_reached"
 
 
-def _session(*, pipeline_mode: str = "cascade"):
+def _session(*, pipeline_mode: str = "cascade", s2s_provider: str | None = None):
     """A CallSession with the pipeline and worker stubbed out."""
     from turncall.orchestrator.call_session import CallSession
 
@@ -52,6 +52,7 @@ def _session(*, pipeline_mode: str = "cascade"):
         transport=MagicMock(),
         pipeline=pipeline,
         pipeline_mode=pipeline_mode,
+        s2s_provider=s2s_provider,
         idle_message="Are you still there?",
     )
     session._task = MagicMock()
@@ -100,7 +101,10 @@ class TestTheStrikeCount:
 @pytest.mark.unit
 class TestTheNudgeFitsTheTransport:
     async def test_cascade_speaks_the_configured_line(self) -> None:
-        session, handlers = _session(pipeline_mode="cascade")
+        # The builder passes `s2s.provider` whatever the mode.
+        session, handlers = _session(
+            pipeline_mode="cascade", s2s_provider="openai_live"
+        )
 
         await handlers["on_user_turn_idle"]()
 
@@ -118,6 +122,56 @@ class TestTheNudgeFitsTheTransport:
         frame = session._task.queue_frame.await_args.args[0]
         assert type(frame).__name__ == "LLMMessagesAppendFrame"
         assert "gone quiet" in frame.messages[0]["content"]
+
+    async def test_openai_live_hears_it_as_commentary(self) -> None:
+        """gpt-live-1 configures its session from the first context and
+        ignores every later one, so the appended message never reached it and
+        a quiet caller was hung up unasked (#257). It goes to the session
+        directly instead — spoken commentary, the channel #248 opens with."""
+        from types import SimpleNamespace
+
+        from pipecat.services.openai.live import events
+
+        from tests.conftest import creds
+        from turncall.domain.models import AgentConfig
+        from turncall.orchestrator.call_session import CallSession
+        from turncall.orchestrator.delegation_events import (
+            DelegationTrackingLiveService,
+        )
+        from turncall.orchestrator.pipeline_factory import create_pipeline
+
+        config = AgentConfig.model_validate(
+            {"pipeline_mode": "s2s", "s2s": {"provider": "openai_live"}}
+        )
+        pipeline = create_pipeline(
+            config=config,
+            transport=MagicMock(),
+            call_context=MagicMock(),
+            pipecat_settings=SimpleNamespace(),
+            credentials=creds("sk-test"),
+        )
+        live = next(
+            p
+            for p in pipeline.processors
+            if isinstance(p, DelegationTrackingLiveService)
+        )
+        live.send_client_event = AsyncMock()  # nothing is connected
+        session = CallSession(
+            call_context=MagicMock(),
+            transport=MagicMock(),
+            pipeline=pipeline,
+            pipeline_mode="s2s",
+            s2s_provider="openai_live",
+        )
+        session._task = MagicMock()
+        session._task.queue_frame = AsyncMock()
+
+        await session._speak_idle_prompt()
+
+        session._task.queue_frame.assert_not_awaited()
+        (event,) = live.send_client_event.await_args.args
+        assert isinstance(event, events.SessionCommentaryAppendEvent)
+        assert "gone quiet" in event.content
 
 
 @pytest.mark.unit
