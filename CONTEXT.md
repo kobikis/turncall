@@ -249,11 +249,11 @@ mixes nothing, so the caller hears no ambience and nothing raises. A missing
 rendition is therefore indistinguishable from a working call, which is why they
 are made in advance rather than converted on the way out.
 
-**Ambience is absent from the [[call recording]]**:
-Not an omission. The recorder sits in the pipeline and the mixing happens
-downstream of it, inside the transport, so the caller hears the room and the
-stored WAV does not. This keeps transcripts and post-call analysis identical to
-an agent without ambience.
+**Ambience is in the [[call recording]]**:
+On the agent's channel, as the caller heard it. The recorder sits after the
+transport's output, and the frames the transport passes on are already mixed.
+Transcripts and post-call analysis read text, so they are identical to an agent
+without ambience.
 
 ## Telephony
 
