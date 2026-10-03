@@ -389,6 +389,23 @@ async def get_agent_kb_attachments(
     ]
 
 
+async def kb_modes_by_agent(
+    session: AsyncSession,
+    agent_ids: list[UUID],
+) -> dict[UUID, list[str]]:
+    """The modes each agent's KBs are linked in, for the agent read's warnings
+    (#254). One query for a page of agents; an agent with none is absent."""
+    result = await session.execute(
+        select(AgentKnowledgeBaseRow.agent_id, AgentKnowledgeBaseRow.mode).where(
+            AgentKnowledgeBaseRow.agent_id.in_(agent_ids)
+        )
+    )
+    modes: dict[UUID, list[str]] = {}
+    for agent_id, mode in result.all():
+        modes.setdefault(agent_id, []).append(mode)
+    return modes
+
+
 async def count_agents_using_kb(
     session: AsyncSession,
     knowledge_base_id: UUID,

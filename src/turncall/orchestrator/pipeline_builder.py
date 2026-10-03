@@ -16,9 +16,12 @@ import asyncio
 from dataclasses import replace
 from typing import Any
 
+from loguru import logger
+
 from turncall.config.settings import Settings
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.call_session import CallSession, fail_unstarted_call
+from turncall.orchestrator.config_warnings import knowledge_mode_warning
 from turncall.orchestrator.pipeline_factory import CallContext, create_pipeline
 from turncall.orchestrator.tool_bridge import register_tools
 from turncall.services.credentials import (
@@ -89,6 +92,16 @@ async def _assemble(
     kb_attachments = await load_agent_kb_attachments(
         session_factory, call_context.agent_id
     )
+    unsupported = knowledge_mode_warning(
+        config, {a.get("mode") for a in kb_attachments}
+    )
+    if unsupported is not None:
+        # Before the preamble: its awareness hint would tell the model it can
+        # answer from a knowledge base it has no way to read (#254).
+        logger.warning(unsupported["message"])
+        kb_attachments = [
+            a for a in kb_attachments if a.get("mode") not in unsupported["modes"]
+        ]
     # Prompt-mode full text + an awareness hint for auto/tool KBs, injected into
     # the system prompt (create_pipeline is sync, so we build it here).
     knowledge_preamble = await build_knowledge_preamble(
@@ -102,7 +115,9 @@ async def _assemble(
     # key it lacks rather than "Missing credentials" from one SDK or a 401
     # mid-call from another. Not in an eval: text mode never opens the speech
     # providers, and a run there must not need their keys.
-    missing = credentials.missing_keys(config)
+    missing = credentials.missing_keys(
+        config, has_knowledge_tool=any(a.get("mode") == "tool" for a in kb_attachments)
+    )
     if missing and not call_context.is_eval:
         raise MissingProviderKeyError(missing)
 

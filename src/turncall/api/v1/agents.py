@@ -1,5 +1,6 @@
 """Agent management endpoints."""
 
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -16,7 +17,7 @@ from turncall.api.v1.schemas.agents import (
     UpdateAgentRequest,
 )
 from turncall.auth import Auth, WriteAuth
-from turncall.storage.repositories import agent_repo, ambience_repo
+from turncall.storage.repositories import agent_repo, ambience_repo, knowledge_repo
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -35,6 +36,15 @@ async def _check_ambience(
             message=f"ambience.sound {sound} is not an ambience sound in this project",
             details={"field": "ambience.sound", "sound": str(sound)},
         )
+
+
+async def _with_kb_warnings(
+    session: AsyncSession, rows: list[Any]
+) -> list[AgentResponse]:
+    """Agents as read, each warned about KB modes its pipeline drops (#254) —
+    the links are not in the config, so they are loaded here, in one query."""
+    modes = await knowledge_repo.kb_modes_by_agent(session, [r.id for r in rows])
+    return [AgentResponse.from_row(r, modes.get(r.id, ())) for r in rows]
 
 
 @router.post("", status_code=201)
@@ -73,7 +83,7 @@ async def get_agent(
     )
     if row is None:
         raise NotFoundError("Agent", str(agent_id))
-    return ok(AgentResponse.from_row(row))
+    return ok((await _with_kb_warnings(session, [row]))[0])
 
 
 @router.get("")
@@ -102,7 +112,7 @@ async def list_agents(
         state=state,
     )
     return paginated(
-        data=[AgentResponse.from_row(r) for r in rows],
+        data=await _with_kb_warnings(session, rows),
         total=total,
         page=page,
         limit=limit,
@@ -140,7 +150,7 @@ async def update_agent(
     if row is None:
         raise ConflictError("Agent was modified concurrently")
 
-    return ok(AgentResponse.from_row(row))
+    return ok((await _with_kb_warnings(session, [row]))[0])
 
 
 @router.delete("/{agent_id}")
@@ -206,7 +216,7 @@ async def publish_agent(
             phone_numbers_updated=promoted_count,
         )
 
-    return ok(AgentResponse.from_row(row))
+    return ok((await _with_kb_warnings(session, [row]))[0])
 
 
 @router.get("/{agent_id}/versions")
@@ -223,7 +233,7 @@ async def list_agent_versions(
         raise NotFoundError("Agent", str(agent_id))
 
     versions = await agent_repo.list_versions(session, auth.project_id, agent.name)
-    return ok([AgentResponse.from_row(v) for v in versions])
+    return ok(await _with_kb_warnings(session, versions))
 
 
 @router.post("/{agent_id}/rollback")
@@ -275,4 +285,4 @@ async def rollback_agent(
         phone_numbers_updated=promoted_count,
     )
 
-    return ok(AgentResponse.from_row(row))
+    return ok((await _with_kb_warnings(session, [row]))[0])

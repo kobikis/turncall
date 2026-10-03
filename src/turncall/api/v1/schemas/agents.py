@@ -1,5 +1,6 @@
 """Agent API schemas with provider config validation."""
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -722,6 +723,9 @@ class AgentResponse(BaseModel):
     config: dict[str, Any]
     created_at: datetime
     published_at: datetime | None
+    # Modes of the agent's linked KBs, which are not in its config: read for
+    # the warnings below (#254), never returned.
+    kb_modes: tuple[str, ...] = Field(default=(), exclude=True)
 
     # Derived, not stored (#148), the shape #95 set for eval scenarios: two
     # things an author needs told that cannot be refusals — a "pronunciation"
@@ -744,13 +748,14 @@ class AgentResponse(BaseModel):
             # agent read. Not silent: `coding-style.md`.
             logger.debug("agent_warning_check_skipped: {error}", error=str(exc))
             return []
-        return config_warnings(parsed)
+        return config_warnings(parsed, self.kb_modes)
 
     @classmethod
-    def from_row(cls, row: Any) -> "AgentResponse":
+    def from_row(cls, row: Any, kb_modes: Sequence[str] = ()) -> "AgentResponse":
         config = row.config_blob
         config = _sanitize_config(config)
         return cls(
+            kb_modes=tuple(kb_modes),
             id=row.id,
             project_id=row.project_id,
             name=row.name,

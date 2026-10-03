@@ -83,6 +83,7 @@ them would break working agents.
 | `pronunciation_looks_like_spelling` | A [pronunciation](/guides/providers#pronunciations) is the word typed back (`{"Metformin": "metformin"}`). Every character is legal IPA, so validation cannot refuse it — and it reaches the voice as real markup, so the word is now mispronounced *differently*. Ignore it if that really is the transcription |
 | `pronunciations_unreadable` | The resolved TTS provider and model will not read the markup, so those words are spoken as written |
 | `pronunciations_ignored_on_s2s` | `pipeline_mode: "s2s"` has no TTS stage for the markup to apply to |
+| `knowledge_mode_unsupported` | A [knowledge base](/guides/s2s#knowledge-bases) is linked in `auto` mode to an S2S agent, which skips it: auto retrieval runs before each LLM turn, and a speech-to-speech model has no such point. Carries `modes` and `provider`. Link it in `tool` or `prompt` mode |
 
 Warnings are **derived on every read**, never stored, so an agent whose model
 moved out from under its pronunciations starts saying so without being edited.

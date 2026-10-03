@@ -105,12 +105,14 @@ There are two modes, and an agent with tools gets one without asking:
 
 - **`client`** — the delegate is your agent's own `llm`: any provider TurnCall
   supports, on its usual keys. It is the **default** for an `openai_live` agent
-  with tools (static or MCP) and no `delegation` block. An agent with no tools
+  with tools (static, MCP, or a `tool`-mode
+  [knowledge base](#knowledge-bases)) and no `delegation` block. An agent with no tools
   gets no delegation at all.
 - **`responses`** — OpenAI hosts the delegate, the model you name.
 
 Either way the delegate runs your agent's own tools — webhook and MCP alike,
-mocked in evals and recorded like on any provider.
+mocked in evals and recorded like on any provider — and `query_knowledge` for a
+`tool`-mode knowledge base.
 
 ```json
 "s2s": {"provider": "openai_live", "delegation": {"mode": "client", "timeout_seconds": 30}}
@@ -220,6 +222,26 @@ Two requirements:
 <Note>
   When `base_url` is set, the OpenAI voice allowlist is bypassed — the gateway routes to models with their own voice sets (e.g. Grok), which it validates upstream. Pass the target model's own voice name.
 </Note>
+
+## Knowledge bases
+
+Two of the three [retrieval modes](/guides/knowledge-base#retrieval-modes) work
+on a speech-to-speech agent, on every provider:
+
+- **`prompt`** — the document text leads the instructions, ahead of
+  `system_prompt`. On `openai_live` the delegate gets it too, unless
+  `delegation.instructions` replaces the delegate's prompt.
+- **`tool`** — `query_knowledge` is one more tool. Realtime, Gemini Live and Nova
+  Sonic call it themselves; on `openai_live` the delegate does, and gpt-live-1's
+  delegation paragraph names it. It counts as a tool, so an `openai_live` agent
+  whose only tool it is still gets a `client` delegate. `llm.failover` is
+  checked when the agent is saved, before any knowledge base is linked, so such
+  an agent sets `"delegation": {"mode": "client"}` to be allowed backups.
+
+**`auto` is not supported**: it retrieves just before each LLM turn, and a
+speech-to-speech model has no such point. The KB is skipped with a warning when
+the call is built, and the agent read carries a `knowledge_mode_unsupported`
+entry in `warnings` naming the mode and provider. Link it in `tool` mode instead.
 
 ## Pipeline
 

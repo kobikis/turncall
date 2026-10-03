@@ -319,3 +319,100 @@ async def test_a_client_delegate_with_a_rejected_key_fails_over(
     assert {"mode": "client", "outcome": "answered"}.items() <= outcomes[0].items(), (
         outcomes
     )
+
+
+async def test_a_tool_mode_kb_is_delegated_and_its_fact_relayed(
+    session_factory: Any,
+    outcomes: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#254: a tool-mode KB, and no other tools, gets a client delegate whose
+    `query_knowledge` answers — and gpt-live-1 relays what it found.
+
+    Retrieval itself is stubbed: an inline target has no agent row to link a
+    KB to, and what is under test is the delegation, not pgvector. The fact
+    is one nothing but the stub could have supplied.
+    """
+    if not os.environ.get("OPENAI_API_KEY"):
+        pytest.skip("needs OPENAI_API_KEY")
+    from turncall.orchestrator import knowledge_processor
+    from turncall.services.retrieval import RetrievalResult, RetrievedChunk
+
+    kb_id = uuid4()
+    queries: list[str] = []
+
+    async def _retrieve(session: Any, *, query: str, **_: Any) -> RetrievalResult:
+        queries.append(query)
+        chunk = RetrievedChunk(
+            chunk_id=uuid4(),
+            document_id=uuid4(),
+            content="This week's house special is saffron risotto.",
+            similarity=0.9,
+            chunk_index=0,
+            token_count=9,
+            filename="menu.txt",
+        )
+        return RetrievalResult(chunks=[chunk], query=query, knowledge_base_ids=[kb_id])
+
+    async def _attachments(*_: Any) -> list[dict[str, Any]]:
+        return [{"knowledge_base_id": kb_id, "mode": "tool", "tool_description": None}]
+
+    monkeypatch.setattr(knowledge_processor, "retrieve", _retrieve)
+    monkeypatch.setattr(knowledge_processor, "load_agent_kb_attachments", _attachments)
+    blob = {
+        "pipeline_mode": "s2s",
+        "system_prompt": "You are the receptionist at Luigi's restaurant.",
+        "first_message": "Thanks for calling Luigi's, how can I help?",
+        "s2s": {"provider": "openai_live"},
+    }
+    target = ResolvedTarget(
+        project_id=uuid4(),
+        config=AgentConfig.model_validate(blob),
+        config_blob=blob,
+        agent_id=None,
+    )
+    definition = {
+        "turns": [
+            {
+                "expect": [
+                    {
+                        "event": "response",
+                        "text_contains": "calling",
+                        "within_ms": 30000,
+                    }
+                ],
+            },
+            {
+                "user": "Hi, what is this week's house special?",
+                "expect": [{"event": "response", "within_ms": 60000}],
+            },
+            # Time for the relayed answer, which follows the acknowledgement.
+            {
+                "user": "Sounds good.",
+                "expect": [{"event": "response", "within_ms": 60000}],
+            },
+        ]
+    }
+    parsed = scenario_mod.parse(
+        scenario_mod.with_modality(definition, EvalModality.AUDIO),
+        name="live-openai-live-kb-tool",
+    )
+    agent_errors: list[str] = []
+    result = await run_iteration(
+        parsed=parsed,
+        kind=EvalKind.SCRIPTED,
+        target=target,
+        modality=EvalModality.AUDIO,
+        settings=Settings(),
+        session_factory=session_factory,
+        run_id=uuid4(),
+        tool_mocks=ToolMocks(responses={}),
+        agent_errors=agent_errors,
+    )
+
+    heard = " ".join(
+        e.get("text", "") for e in result.events_seen if e["type"] == "response"
+    )
+    assert queries, ("query_knowledge never ran", heard, agent_errors)
+    assert "saffron" in heard.lower(), (heard, queries, agent_errors)
+    assert outcomes and outcomes[0]["mode"] == "client", outcomes

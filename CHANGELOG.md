@@ -153,6 +153,17 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **Knowledge bases did nothing on a speech-to-speech agent** (#254). Every S2S
+  build skipped the agent's knowledge bases without a word. `prompt` mode's text
+  now leads the instructions on every provider, and `tool` mode's
+  `query_knowledge` reaches whoever calls tools: Realtime, Gemini Live and Nova
+  Sonic themselves, or gpt-live-1's delegate, whose delegation paragraph names
+  it. On `openai_live` a `tool`-mode KB counts as a tool, so it brings a
+  `client` delegate — whose `llm` key is then checked like any other.
+  `auto` mode cannot run ahead of a realtime model: it is skipped with a
+  build-time warning, and the agent read carries a `knowledge_mode_unsupported`
+  warning naming the mode and provider.
+
 - **Tools on `openai_live` agents never ran** (#243). An S2S call opened its
   session with a fresh, empty context instead of the pipeline's own, and
   gpt-live-1 configures its session — its delegate's tools included — from the
