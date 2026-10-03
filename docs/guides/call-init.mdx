@@ -169,7 +169,7 @@ webhook are unaffected. Correlate such calls through `call_id`, or through
 
 Knowledge bases linked to a *stored* agent do not apply, since the call does not
 run that agent. An inline agent names its own in `knowledge_bases`, with the
-same fields as a link (`knowledge_base_id`, `mode`, `top_k`,
+same fields as a link (`knowledge_base_id`, `mode`, `priority`, `top_k`,
 `similarity_threshold`, `tool_description`):
 
 ```json

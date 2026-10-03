@@ -207,6 +207,22 @@ class TestTheAssembly:
         assert any("knowledge_base_skipped" in m and str(theirs) in m for m in seen)
 
     @pytest.mark.asyncio
+    async def test_a_repeated_kb_is_attached_once(self) -> None:
+        project, kb = uuid.uuid4(), uuid.uuid4()
+        entry = {"knowledge_base_id": str(kb), "mode": "prompt"}
+        config = AgentConfig.model_validate({"knowledge_bases": [entry, entry]})
+
+        cp, _, _ = await _assemble(
+            config,
+            agent_id=DYNAMIC_AGENT_ID,
+            project_id=project,
+            kbs={(kb, project): object()},
+        )
+
+        attached = cp.call_args.kwargs["knowledge_base_attachments"]
+        assert [a["knowledge_base_id"] for a in attached] == [kb]
+
+    @pytest.mark.asyncio
     async def test_a_stored_agent_reads_its_links_never_its_config(self) -> None:
         """A config_blob from before the field was refused could carry one; the
         link table stays the one source for an agent that has a row."""

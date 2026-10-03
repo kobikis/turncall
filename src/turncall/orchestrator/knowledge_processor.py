@@ -53,10 +53,16 @@ async def load_inline_kb_attachments(
     from turncall.storage.repositories import knowledge_repo
 
     usable = []
+    seen = set()
     try:
         async with session_factory() as session:
             # ponytail: one lookup per KB — an agent names a handful.
             for att in sorted(attachments, key=lambda a: a.priority):
+                # A link row is unique per KB; a list is not, and a repeat
+                # would put a prompt-mode document in the instructions twice.
+                if att.knowledge_base_id in seen:
+                    continue
+                seen.add(att.knowledge_base_id)
                 kb = await knowledge_repo.get_knowledge_base_by_id(
                     session, att.knowledge_base_id, project_id=project_id
                 )
