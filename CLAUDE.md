@@ -300,6 +300,12 @@ DELETE /v1/ambience-sounds/{id}       # 409 naming the agents while any names it
   `ambience_skipped` warning instead. Every entry point hands its voice
   transport a `mixer=` — `tests/unit/test_ambience_wiring.py` fails on one
   that does not.
+- **A streamed voice is judged before the mix** (#265). gpt-live-1 and the
+  video avatars stream silence too, and pipecat finds the end of a reply by
+  that silence *after* mixing the room in — so the bot never stopped speaking
+  and the idle guard never armed. `SpeechBeforeAmbience`, right before the
+  output, decides speech or silence first and ends a reply with a
+  `TTSStoppedFrame`. `test_pipecat_still_needs_it` fails once pipecat is fixed.
 - **It can never end a call.** Missing sound, missing rendition, failed fetch:
   a warning, and a silent room.
 - Absent from the call recording and still playing under the voicemail gate —
