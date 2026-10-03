@@ -31,14 +31,15 @@ _GEMINI_LIVE_MODEL = "gemini-3.8-live"
 _GEMINI_LIVE_VOICE = "Charon"
 
 
+def _say_first(first_message: str) -> str:
+    return f'Start the conversation by saying exactly: "{first_message}"'
+
+
 def _build_s2s_system_prompt(config: AgentConfig) -> str:
     """Build system prompt with first_message instruction for S2S."""
     prompt = config.system_prompt or ""
     if config.first_message:
-        prompt += (
-            "\n\nIMPORTANT: Start the conversation by saying exactly: "
-            f'"{config.first_message}"'
-        )
+        prompt += f"\n\nIMPORTANT: {_say_first(config.first_message)}"
     return prompt
 
 
@@ -54,10 +55,11 @@ def s2s_opening_messages(config: AgentConfig) -> list[dict[str, str]]:
     """
     if config.s2s.provider != "openai_live":
         return []
-    if config.first_message:
-        text = f'Start the conversation by saying exactly: "{config.first_message}"'
-    else:
-        text = "Greet the caller and ask how you can help."
+    text = (
+        _say_first(config.first_message)
+        if config.first_message
+        else "Greet the person on the call."  # inbound or outbound alike
+    )
     return [{"role": "developer", "content": text}]
 
 
