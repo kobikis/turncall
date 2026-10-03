@@ -99,6 +99,47 @@ class TestTheStrikeCount:
 
 
 @pytest.mark.unit
+class TestADelegateAtWork:
+    """gpt-live-1 says "one moment" and goes quiet while its delegate works,
+    so the idle timer runs — pipecat stops it only for a function call in the
+    call's own pipeline. Measured with a slow delegate: the check-in landed
+    mid-delegation and the second strike hung up before the answer (#257)."""
+
+    @staticmethod
+    def _live_session(*, delegating: bool):
+        from turncall.orchestrator.delegation_events import (
+            DelegationTrackingLiveService,
+        )
+
+        session, handlers = _session(pipeline_mode="s2s", s2s_provider="openai_live")
+        live = MagicMock()
+        live.__class__ = DelegationTrackingLiveService
+        live.delegating = delegating
+        live.say = AsyncMock()
+        session._pipeline.processors.append(live)
+        return session, handlers, live
+
+    async def test_is_not_a_strike(self) -> None:
+        session, handlers, live = self._live_session(delegating=True)
+
+        await handlers["on_user_turn_idle"]()
+        await handlers["on_user_turn_idle"]()
+
+        live.say.assert_not_awaited()
+        session._task.cancel.assert_not_awaited()
+
+    async def test_once_it_answers_the_guard_counts_again(self) -> None:
+        session, handlers, live = self._live_session(delegating=True)
+
+        await handlers["on_user_turn_idle"]()
+        live.delegating = False
+        await handlers["on_user_turn_idle"]()
+
+        live.say.assert_awaited_once()
+        session._task.cancel.assert_not_awaited()
+
+
+@pytest.mark.unit
 class TestTheNudgeFitsTheTransport:
     async def test_cascade_speaks_the_configured_line(self) -> None:
         # The builder passes `s2s.provider` whatever the mode.
@@ -112,10 +153,13 @@ class TestTheNudgeFitsTheTransport:
         assert type(frame).__name__ == "TTSSpeakFrame"
         assert frame.text == "Are you still there?"
 
-    async def test_s2s_asks_the_model_because_it_has_no_tts_stage(self) -> None:
+    @pytest.mark.parametrize("provider", ["openai", "google", "aws"])
+    async def test_s2s_asks_the_model_because_it_has_no_tts_stage(
+        self, provider: str
+    ) -> None:
         """No realtime service handles a TTSSpeakFrame, so a literal line
         cannot be spoken — the model is asked to check in instead."""
-        session, handlers = _session(pipeline_mode="s2s")
+        session, handlers = _session(pipeline_mode="s2s", s2s_provider=provider)
 
         await handlers["on_user_turn_idle"]()
 
@@ -126,13 +170,12 @@ class TestTheNudgeFitsTheTransport:
     async def test_openai_live_hears_it_as_commentary(self) -> None:
         """gpt-live-1 configures its session from the first context and
         ignores every later one, so the appended message never reached it and
-        a quiet caller was hung up unasked (#257). It goes to the session
-        directly instead — spoken commentary, the channel #248 opens with."""
+        a quiet caller heard silence (#257). It goes to the session directly
+        instead — spoken commentary, the channel #248 opens with."""
         from types import SimpleNamespace
 
         from pipecat.services.openai.live import events
 
-        from tests.conftest import creds
         from turncall.domain.models import AgentConfig
         from turncall.orchestrator.call_session import CallSession
         from turncall.orchestrator.delegation_events import (
