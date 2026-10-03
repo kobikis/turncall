@@ -14,11 +14,13 @@ from turncall.domain.models import (
     KnowledgeBaseAttachment,
 )
 
+KB_ID = uuid.uuid4()
+
 
 @pytest.mark.unit
 class TestKnowledgeBaseAttachment:
     def test_defaults(self) -> None:
-        att = KnowledgeBaseAttachment(knowledge_base_id="kb-123")
+        att = KnowledgeBaseAttachment(knowledge_base_id=KB_ID)
         assert att.mode == KnowledgeRetrievalMode.AUTO
         assert att.priority == 0
         assert att.top_k == 5
@@ -26,13 +28,13 @@ class TestKnowledgeBaseAttachment:
         assert att.tool_description is None
 
     def test_frozen(self) -> None:
-        att = KnowledgeBaseAttachment(knowledge_base_id="kb-123")
+        att = KnowledgeBaseAttachment(knowledge_base_id=KB_ID)
         with pytest.raises(Exception):
             att.mode = KnowledgeRetrievalMode.TOOL  # type: ignore[misc]
 
     def test_tool_mode(self) -> None:
         att = KnowledgeBaseAttachment(
-            knowledge_base_id="kb-123",
+            knowledge_base_id=KB_ID,
             mode=KnowledgeRetrievalMode.TOOL,
             tool_description="Search docs",
         )
@@ -41,7 +43,7 @@ class TestKnowledgeBaseAttachment:
 
     def test_serialization_roundtrip(self) -> None:
         att = KnowledgeBaseAttachment(
-            knowledge_base_id="kb-456",
+            knowledge_base_id=KB_ID,
             mode=KnowledgeRetrievalMode.PROMPT,
             priority=2,
             top_k=10,
@@ -49,24 +51,21 @@ class TestKnowledgeBaseAttachment:
         )
         data = att.model_dump()
         restored = KnowledgeBaseAttachment.model_validate(data)
-        assert restored.knowledge_base_id == "kb-456"
+        assert restored.knowledge_base_id == KB_ID
         assert restored.mode == KnowledgeRetrievalMode.PROMPT
         assert restored.top_k == 10
 
 
 @pytest.mark.unit
-class TestAgentConfigNoLongerCarriesAttachments:
-    """`AgentConfig.knowledge_bases` was vestigial: attachments live in the
-    agent_knowledge_bases table and are loaded by load_agent_kb_attachments, and
-    the API schema forbade the field outright, so nothing could ever set it."""
-
-    def test_the_field_is_gone(self) -> None:
-        assert "knowledge_bases" not in AgentConfig.model_fields
+class TestAgentConfigAttachments:
+    """`AgentConfig.knowledge_bases` names an inline agent's KBs (#260). A
+    stored agent's live in agent_knowledge_bases and are loaded by
+    load_agent_kb_attachments; the agent endpoints refuse the field."""
 
     def test_a_stored_config_carrying_the_old_key_still_loads(self) -> None:
-        """Pydantic ignores unknown keys, so a config_blob written while the
-        field existed is not a migration problem. Worth pinning rather than
-        assuming — this is stored customer data."""
+        """A config_blob from when the field was vestigial may carry ids that
+        were never UUIDs. That entry is skipped, the config still loads — this
+        is stored customer data."""
         config = AgentConfig.model_validate(
             {
                 "system_prompt": "hello",
@@ -75,12 +74,10 @@ class TestAgentConfigNoLongerCarriesAttachments:
         )
 
         assert config.system_prompt == "hello"
+        assert config.knowledge_bases == []
 
-    def test_the_attachment_model_itself_survives(self) -> None:
-        """Retrieval still uses it — only the AgentConfig field went."""
-        att = KnowledgeBaseAttachment(knowledge_base_id="kb-1", mode="prompt")
-
-        assert att.mode == KnowledgeRetrievalMode.PROMPT
+    def test_absent_means_none(self) -> None:
+        assert AgentConfig().knowledge_bases == []
 
 
 @pytest.mark.unit

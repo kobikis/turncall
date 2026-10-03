@@ -361,6 +361,14 @@ the second skips post-call processing, and since that trigger dispatches
 `call.ended`, it skips the webhook too. `tests/unit/test_inline_agent_context.py`
 guards both structurally.
 
+Knowledge bases are links on an agent row, so an inline config names its own in
+`knowledge_bases` (#260, the link's fields). `pipeline_builder._assemble` reads
+them only when `agent_id` is the sentinel, resolving each against the call's
+project (`load_inline_kb_attachments`; a miss is a warning and a skipped KB,
+never a failed call), then carries on exactly as for links. A stored agent's
+come from its links alone: the agent endpoints 422 the field, and
+`AgentConfigSchema` never dumps it into a `config_blob`.
+
 ### Key Files
 - `services/call_init_resolver.py` — Shared response parser (frozen dataclass result)
 - `services/template_renderer.py` — `render_agent_config()` + `prepend_knowledge_context()`
@@ -436,6 +444,12 @@ awareness hint would claim a KB the model cannot read) with a warning, and the
 agent read says the same — `config_warnings.knowledge_mode_warning` is the one
 rule both use. The links live outside the config, so the agent endpoints load
 their modes (`knowledge_repo.kb_modes_by_agent`, one query per page).
+
+### Inline agents
+
+An agent with no row — call-init `agent`, an eval `inline` target — names its
+KBs in `config.knowledge_bases` (#260); see "An inline agent has no agent row".
+On a stored agent that field is a 422 naming the link endpoint.
 
 ### Configuration
 

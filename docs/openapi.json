@@ -6777,6 +6777,13 @@
               }
             ]
           },
+          "knowledge_bases": {
+            "items": {
+              "$ref": "#/components/schemas/InlineKnowledgeBaseSchema"
+            },
+            "type": "array",
+            "title": "Knowledge Bases"
+          },
           "transport": {
             "type": "string",
             "pattern": "^(twilio|webrtc|both)$",
@@ -7986,6 +7993,61 @@
           "message"
         ],
         "title": "InjectContextRequest"
+      },
+      "InlineKnowledgeBaseSchema": {
+        "properties": {
+          "knowledge_base_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Knowledge Base Id"
+          },
+          "mode": {
+            "type": "string",
+            "pattern": "^(auto|tool|prompt)$",
+            "title": "Mode",
+            "default": "auto"
+          },
+          "priority": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Priority",
+            "default": 0
+          },
+          "top_k": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "default": 5
+          },
+          "similarity_threshold": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Similarity Threshold",
+            "default": 0.3
+          },
+          "tool_description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1024
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Description"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "knowledge_base_id"
+        ],
+        "title": "InlineKnowledgeBaseSchema",
+        "description": "An inline agent's knowledge base (#260): the link endpoint's fields,\nvalidated the same way, with unknown keys refused like the rest of the\nconfig."
       },
       "InlineScenario": {
         "properties": {

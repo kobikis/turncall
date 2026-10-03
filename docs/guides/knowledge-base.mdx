@@ -72,6 +72,33 @@ Give your agents access to documents for retrieval-augmented generation. TurnCal
   [Speech-to-speech](/guides/s2s#knowledge-bases).
 </Note>
 
+## Inline agents
+
+An inline agent — a call-init response that answers `agent` instead of
+`agent_id`, or an eval `inline` target — has no agent to link a knowledge base
+to. It names its own in `knowledge_bases`, with the same fields as a link:
+
+```json
+{
+  "agent": {
+    "system_prompt": "You are the receptionist at Luigi's.",
+    "knowledge_bases": [
+      {"knowledge_base_id": "KB_ID", "mode": "prompt"},
+      {
+        "knowledge_base_id": "KB_ID_2",
+        "mode": "tool",
+        "tool_description": "Search the menu"
+      }
+    ]
+  }
+}
+```
+
+Each id is checked against the call's project. A knowledge base from another
+project, or one that does not exist, is skipped with a warning, and the call
+still connects. A stored agent cannot carry the field: creating or updating one
+with it is a 422, because its links are the one place its knowledge bases live.
+
 ## Test Search
 
 Debug your knowledge base by running a test search:

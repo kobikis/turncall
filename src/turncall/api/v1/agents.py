@@ -38,6 +38,22 @@ async def _check_ambience(
         )
 
 
+def _refuse_inline_knowledge_bases(config: AgentConfigSchema | None) -> None:
+    """A stored agent's KBs are its links — one source, never two that can
+    disagree (#260). `knowledge_bases` is for an agent with no row."""
+    if config is None or not config.knowledge_bases:
+        return
+    raise ApiError(
+        status_code=422,
+        code=ErrorCode.INVALID_AGENT_CONFIG,
+        message=(
+            "knowledge_bases is for an inline agent only; link a knowledge base "
+            "to a stored agent with POST /v1/agents/{agent_id}/knowledge-bases"
+        ),
+        details={"field": "knowledge_bases"},
+    )
+
+
 async def _with_kb_warnings(
     session: AsyncSession, rows: list[Any]
 ) -> list[AgentResponse]:
@@ -54,6 +70,7 @@ async def create_agent(
     session: DbSession,
 ) -> dict:
     """Create a new draft agent."""
+    _refuse_inline_knowledge_bases(body.config)
     await _check_ambience(session, auth.project_id, body.config)
     next_version = await agent_repo.get_next_version(
         session, auth.project_id, body.name
@@ -139,6 +156,7 @@ async def update_agent(
             details={"state": existing.state, "version": existing.version},
         )
 
+    _refuse_inline_knowledge_bases(body.config)
     await _check_ambience(session, auth.project_id, body.config)
     config_blob = body.config.model_dump() if body.config else existing.config_blob
     row = await agent_repo.update_agent_config(

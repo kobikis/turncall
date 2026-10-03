@@ -18,7 +18,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from turncall.domain.models import ToolDefinition
+from turncall.domain.models import KnowledgeBaseAttachment, ToolDefinition
 from turncall.services.retrieval import format_retrieved_context, retrieve
 
 
@@ -39,6 +39,43 @@ async def load_agent_kb_attachments(
             "kb_attachments_load_failed for agent {aid}", aid=str(agent_id)
         )
         return []
+
+
+async def load_inline_kb_attachments(
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: UUID,
+    attachments: list[KnowledgeBaseAttachment],
+) -> list[dict[str, Any]]:
+    """An inline agent's knowledge bases (#260), in the shape the link rows
+    give. Each id resolves against the call's project, never the config's word
+    for it: a KB from another project, or none at all, is skipped with a
+    warning and the call still connects."""
+    from turncall.storage.repositories import knowledge_repo
+
+    usable = []
+    try:
+        async with session_factory() as session:
+            # ponytail: one lookup per KB — an agent names a handful.
+            for att in sorted(attachments, key=lambda a: a.priority):
+                kb = await knowledge_repo.get_knowledge_base_by_id(
+                    session, att.knowledge_base_id, project_id=project_id
+                )
+                if kb is None:
+                    logger.warning(
+                        "knowledge_base_skipped: {kb} is not a knowledge base in "
+                        "project {project}, call runs without it",
+                        kb=str(att.knowledge_base_id),
+                        project=str(project_id),
+                    )
+                    continue
+                usable.append(att.model_dump())
+    except Exception:
+        logger.exception(
+            "kb_attachments_load_failed for inline agent in project {pid}",
+            pid=str(project_id),
+        )
+        return []
+    return usable
 
 
 class KnowledgeRetrievalProcessor(FrameProcessor):

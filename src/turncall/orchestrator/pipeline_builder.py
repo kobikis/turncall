@@ -22,7 +22,11 @@ from turncall.config.settings import Settings
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.call_session import CallSession, fail_unstarted_call
 from turncall.orchestrator.config_warnings import knowledge_mode_warning
-from turncall.orchestrator.pipeline_factory import CallContext, create_pipeline
+from turncall.orchestrator.pipeline_factory import (
+    DYNAMIC_AGENT_ID,
+    CallContext,
+    create_pipeline,
+)
 from turncall.orchestrator.tool_bridge import register_tools
 from turncall.services.credentials import (
     Credentials,
@@ -86,12 +90,22 @@ async def _assemble(
     """Assemble the pipeline (KB retrieval + tools wired in). audio_sample_rate
     defaults to 8000 (Twilio mulaw); WebRTC/WhatsApp pass 16000. mcp_tools/avatar
     are transport-specific."""
-    from turncall.orchestrator.knowledge_processor import load_agent_kb_attachments
+    from turncall.orchestrator.knowledge_processor import (
+        load_agent_kb_attachments,
+        load_inline_kb_attachments,
+    )
     from turncall.services.retrieval import build_knowledge_preamble
 
-    kb_attachments = await load_agent_kb_attachments(
-        session_factory, call_context.agent_id
-    )
+    if call_context.agent_id == DYNAMIC_AGENT_ID:
+        # No agent row to link a KB to (ADR-0017): an inline config names its
+        # own, checked against the call's project (#260).
+        kb_attachments = await load_inline_kb_attachments(
+            session_factory, call_context.project_id, config.knowledge_bases
+        )
+    else:
+        kb_attachments = await load_agent_kb_attachments(
+            session_factory, call_context.agent_id
+        )
     unsupported = knowledge_mode_warning(
         config, {a.get("mode") for a in kb_attachments}
     )
