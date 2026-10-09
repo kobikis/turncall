@@ -402,6 +402,14 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **`smart_turn_detection: false` turns Smart Turn off** (#269). The flag only
+  stopped TurnCall adding Smart Turn; pipecat 1.12's *default* stop strategy is
+  Smart Turn V3, so the model still ran and waited after VAD's
+  `silence_timeout_ms` window — the two waits stacked on exactly the agents
+  that asked to avoid it. The turn now ends when VAD reports silence. An S2S
+  agent on `turn_detection: "pipecat_vad"` had the same stacked wait and is
+  VAD-only too, as documented; server-side VAD is unchanged.
+
 - **A campaign's claim and janitor are index lookups** (#229, #232). The claim
   ordered every pending target by position and filtered out the ones not yet
   due, so it walked each deferred target ahead of the first due one — on every

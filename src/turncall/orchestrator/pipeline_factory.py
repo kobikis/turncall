@@ -1005,6 +1005,45 @@ def _build_vad_analyzer(
     return SileroVADAnalyzer(sample_rate=sample_rate, params=VADParams(**params))
 
 
+def _vad_turn_stop(extra_wait_secs: float) -> Any:
+    """End the turn when VAD reports silence, waiting `extra_wait_secs` more.
+
+    VAD's own `stop_secs` window already is the pause that ends a turn, so the
+    extra wait is normally zero: pipecat's 0.6s default would stack on top of
+    it the way Smart Turn did.
+    """
+    from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
+
+    return SpeechTimeoutUserTurnStopStrategy(
+        user_speech_timeout=max(0.0, extra_wait_secs)
+    )
+
+
+def _s2s_vad_turn_strategies() -> Any:
+    """S2S on `pipecat_vad`: VAD's `silence_timeout_ms` window ends the turn.
+
+    S2S has no Smart Turn, but pipecat's default stop strategy is Smart Turn
+    V3, so leaving the strategies unset built the model on every call and
+    stacked its wait on VAD's (#269). Already in the shape realtime mode wants
+    — no transcription start, no waiting for a transcript — so pipecat has
+    nothing to rewrite. Only on `pipecat_vad`: on server VAD an OpenAI realtime
+    service recommends its own external strategies, which any set passed here
+    would override.
+    """
+    from pipecat.turns.user_start import VADUserTurnStartStrategy
+    from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
+    from pipecat.turns.user_turn_strategies import UserTurnStrategies
+
+    return UserTurnStrategies(
+        start=[VADUserTurnStartStrategy()],
+        stop=[
+            SpeechTimeoutUserTurnStopStrategy(
+                user_speech_timeout=0.0, wait_for_transcript=False
+            )
+        ],
+    )
+
+
 def _build_turn_strategies(config: AgentConfig, *, smart_turn: bool) -> Any | None:
     """The user's turn strategies: when a turn starts (barge-in) and when it
     ends (smart turn).
@@ -1065,6 +1104,15 @@ def _build_turn_strategies(config: AgentConfig, *, smart_turn: bool) -> Any | No
             logger.info("Smart turn detection enabled (LocalSmartTurnV3)")
         except Exception:
             logger.warning("Smart turn detection unavailable, using VAD-only")
+            # VAD was built at its 0.2s window for the model; make up the rest.
+            strategies["stop"] = [
+                _vad_turn_stop(config.silence_timeout_ms / 1000 - 0.2)
+            ]
+    elif smart_turn:
+        # Explicitly, never left to pipecat: its default stop strategy *is*
+        # Smart Turn V3, so "off" used to mean Smart Turn anyway, waited on
+        # after VAD's own `silence_timeout_ms` window (#269).
+        strategies["stop"] = [_vad_turn_stop(0.0)]
 
     if not strategies:
         return None
@@ -1845,7 +1893,12 @@ def _create_s2s_pipeline(
     s2s_user_params = LLMUserAggregatorParams(
         user_idle_timeout=config.user_idle_timeout_ms / 1000,
         **(
-            {"vad_analyzer": _build_vad_analyzer(config, sample_rate=audio_sample_rate)}
+            {
+                "vad_analyzer": _build_vad_analyzer(
+                    config, sample_rate=audio_sample_rate
+                ),
+                "user_turn_strategies": _s2s_vad_turn_strategies(),
+            }
             if config.s2s.turn_detection == "pipecat_vad"
             else {}
         ),

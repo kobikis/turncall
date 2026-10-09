@@ -42,13 +42,14 @@ class TestCascade:
         assert all(x._enable_interruptions is False for x in start)
 
     def test_the_default_leaves_barge_in_on(self) -> None:
-        """An agent that never set the field must not acquire a start strategy
-        at all, so Pipecat's own defaults (which interrupt) stand. Checked with
-        smart turn off, since that is the other thing that builds this object."""
-        assert (
+        """An agent that never set the field keeps Pipecat's own start
+        strategies, which interrupt. Checked with smart turn off, since that is
+        the other thing that builds this object (and, since #269, always does)."""
+        start = _start_of(
             _strategies(AgentConfig(smart_turn_detection=False), smart_turn=True)
-            is None
         )
+        assert start, "Pipecat's default start strategies were replaced"
+        assert all(s._enable_interruptions for s in start)
 
     def test_it_composes_with_smart_turn_rather_than_replacing_it(self) -> None:
         """Both land on one UserTurnStrategies. Assigning it twice would drop
