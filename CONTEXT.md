@@ -180,7 +180,9 @@ Name which one is meant.
   caller's sentence. Tuning this changes how eagerly the agent replies. It is
   the VAD stop window only when Smart Turn is off; with Smart Turn on the
   model decides the turn and VAD drops to its own 0.2s, because the two waits
-  run in series rather than together.
+  run in series rather than together. On a Deepgram Flux agent it is not read
+  at all: Flux decides the turn (`eot_threshold`/`eot_timeout_ms`), and VAD
+  stays at 0.2s deciding nothing.
 - **User idle** (`user_idle_timeout_ms`, 10s): how long the caller may stay
   quiet *after the agent has finished speaking* before the idle guard reacts —
   first the [[idle nudge]], then [[customer_silent]]. `0` disables it.

@@ -14,6 +14,7 @@ from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     ClientConnectedFrame,
     MetricsFrame,
+    UserStoppedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
 from pipecat.metrics.metrics import TTFBMetricsData
@@ -132,6 +133,30 @@ async def test_greeting_is_not_a_turn():
     await _push(rec.observer, BotStartedSpeakingFrame())
     await _settle()
     assert written == []
+
+
+async def test_turn_end_is_silence_to_the_turns_release():
+    """The part of the wait spent deciding the caller had finished (#204): from
+    their silence (VAD's stop, less its window) to the turn's release."""
+    clock = _Clock()
+    rec, written = _recorder(clock)
+    await _push(
+        rec.observer, VADUserStoppedSpeakingFrame(stop_secs=0.2, timestamp=clock.t)
+    )
+    clock.t += 0.35
+    await _push(rec.observer, UserStoppedSpeakingFrame())
+    clock.t += 0.6
+    await _push(rec.observer, BotStartedSpeakingFrame())
+    await _settle()
+    assert written[0]["turn_end_ms"] == 550
+    assert written[0]["user_to_bot_ms"] == 1150
+
+
+async def test_no_release_seen_means_no_turn_end_rather_than_zero():
+    clock = _Clock()
+    rec, written = _recorder(clock)
+    await _turn(rec.observer, clock, [("OpenAILLMService#0", 0.3)])
+    assert "turn_end_ms" not in written[0]
 
 
 def test_eval_attaches_no_recorder():

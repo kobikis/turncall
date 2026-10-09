@@ -6737,7 +6737,7 @@
           "smart_turn_detection": {
             "type": "boolean",
             "title": "Smart Turn Detection",
-            "description": "Use ML-based turn detection (SmartTurnV3)",
+            "description": "Use ML-based turn detection (SmartTurnV3). Not used with a Deepgram Flux STT model, which detects the end of the turn itself.",
             "default": true
           },
           "smart_turn_stop_secs": {

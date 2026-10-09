@@ -138,6 +138,38 @@ TurnCall uses **Silero VAD** for barge-in (interruption handling) and **Smart Tu
 }
 ```
 
+### Deepgram Flux
+
+Flux is Deepgram streaming STT that detects the end of the caller's turn
+itself. Pick a `flux-*` model on the `deepgram` provider — same account, same
+key:
+
+```json
+{
+  "stt": {
+    "provider": "deepgram",
+    "model": "flux-general-en",
+    "keyterms": ["Acme"],
+    "extra": {"eot_threshold": 0.7, "eot_timeout_ms": 5000}
+  }
+}
+```
+
+Flux then owns end-of-turn: the turn ends when Flux reports it, and its start
+of turn is what interrupts the agent (unless `interruption_enabled` is false).
+Smart Turn is not run for a Flux agent whatever `smart_turn_detection` says —
+it would only wait again after Flux had decided — and `silence_timeout_ms` is
+not used. Tune Flux with its own `eot_threshold` (confidence needed to end a
+turn) and `eot_timeout_ms` (silence that ends one regardless) in `stt.extra`;
+`eager_eot_threshold`, `min_confidence` and `language_hints` (for
+`flux-general-multi`) go there too. Other keys are ignored. `stt.language` is
+not sent: `flux-general-en` is English and `flux-general-multi` detects the
+language.
+
+Each turn's `metrics.turn` event (`GET /v1/calls/{id}/events?event_type=metrics.turn`)
+carries `turn_end_ms`, the time from the caller going quiet to the turn being
+called over — the number Flux shortens.
+
 ## Callers Who Go Quiet
 
 A caller who puts the phone down without hanging up holds the line open. After

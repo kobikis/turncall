@@ -47,7 +47,13 @@ def turn_payload(
 ) -> dict[str, Any]:
     """One `metrics.turn` payload. A stage absent from the turn is omitted, never
     zeroed; a stage that reported twice (an LLM round after a tool call) keeps its
-    first report, which is the one the caller waited on."""
+    first report, which is the one the caller waited on.
+
+    `turn_end_ms` is the part of `user_to_bot_ms` spent deciding the caller had
+    finished: from their silence to the turn's release — VAD, the transcript,
+    and Smart Turn's verdict or Deepgram Flux's end-of-turn (#204). Absent when
+    pipecat measured none, as for a turn released before VAD heard the silence.
+    """
     stages: dict[str, dict[str, Any]] = {}
     for ttfb in breakdown.ttfb:
         stage = stage_of(ttfb.processor)
@@ -56,9 +62,11 @@ def turn_payload(
                 "ttfb_ms": round(ttfb.duration_secs * 1000),
                 "service": ttfb.processor,
             }
+    turn_end = breakdown.user_turn_secs
     return {
         "turn": turn,
         "user_to_bot_ms": round(user_to_bot_secs * 1000),
+        **({"turn_end_ms": round(turn_end * 1000)} if turn_end is not None else {}),
         "stages": stages,
     }
 

@@ -11,6 +11,18 @@ and is not part of this repository's history.
 
 ## [Unreleased]
 
+### Added
+
+- **Deepgram Flux STT** (#204). A `flux-*` model on the `deepgram` provider
+  (`flux-general-en`, `flux-general-multi`) uses Deepgram's Flux, which detects
+  the end of the caller's turn itself. Flux then owns end-of-turn: Smart Turn
+  is not run for that agent and `silence_timeout_ms` is not used, so the two
+  waits are not stacked. Flux's `eot_threshold`/`eot_timeout_ms` and its other
+  settings go in `stt.extra`. Same Deepgram key.
+- **`metrics.turn` carries `turn_end_ms`** (#204): the time from the caller going
+  quiet to the turn being called over — VAD, the transcript, and Smart Turn's or
+  Flux's verdict. Absent when unmeasured, never zero.
+
 ### Changed
 
 - **An `openai_live` agent with tools now delegates to its own `llm`** (#244).
