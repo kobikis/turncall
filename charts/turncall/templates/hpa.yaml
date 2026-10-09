@@ -1,0 +1,46 @@
+{{- if .Values.autoscaling.enabled }}
+{{- if not (gt (int .Values.autoscaling.activeCallsPerPod) 0) }}
+{{- fail "autoscaling.activeCallsPerPod must be set (see values.yaml)" }}
+{{- end }}
+# Scales the API on live calls per pod (#199's gauge), served to the HPA by
+# the custom metrics API (prometheus-adapter; see docs/guides/kubernetes.mdx).
+# CPU is the wrong signal: a call's cost is mostly waiting on providers, and
+# a pod's event loop turns into dead air before its CPU looks busy.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "turncall.fullname" . }}-api
+  labels:
+    {{- include "turncall.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "turncall.fullname" . }}-api
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: turncall_active_calls
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.activeCallsPerPod | quote }}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    # A removed pod is not gone: it drains its calls first, for up to its
+    # grace period. One pod at a time, after the load has stayed low.
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleDownStabilizationSeconds }}
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 300
+{{- end }}

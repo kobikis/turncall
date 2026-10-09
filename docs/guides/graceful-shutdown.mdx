@@ -45,6 +45,8 @@ The drain is usually far shorter: most calls last minutes, and with no live call
 
 ### Kubernetes
 
+The [Helm chart](/guides/kubernetes) sets all of this up, sized from your agents. By hand:
+
 ```yaml
 spec:
   # 10s preStop + 3600s longest call + 90s drain overhead

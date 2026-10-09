@@ -1,0 +1,21 @@
+# Every optional piece on, for `helm lint` / `helm template` in CI.
+secretEnv:
+  DATABASE_URL: postgresql+asyncpg://turncall:turncall@postgres:5432/turncall
+  REDIS_URL: redis://redis:6379/0
+autoscaling:
+  enabled: true
+  activeCallsPerPod: 10
+asteriskEdge:
+  enabled: true
+evalWorker:
+  image:
+    repository: registry.example.com/turncall-eval
+    tag: "1.2.3"
+ingress:
+  enabled: true
+  className: nginx
+  tls:
+    - secretName: turncall-tls
+      hosts: [turncall.example.com]
+podMonitor:
+  enabled: true

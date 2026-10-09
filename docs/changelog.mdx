@@ -7,6 +7,12 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**Helm chart.** `charts/turncall` runs the API and both workers against your
+own Postgres and Redis, runs migrations before each install and upgrade, and
+sizes every pod's grace period so scaling down or rolling out lets live calls
+finish. Optionally autoscales the API on live calls per pod. See
+[Kubernetes](/guides/kubernetes).
+
 **Deepgram Flux STT.** Set `stt.model` to `flux-general-en` (or
 `flux-general-multi`) on the `deepgram` provider and Flux decides when the
 caller has finished speaking — Smart Turn is not run for that agent. Each
