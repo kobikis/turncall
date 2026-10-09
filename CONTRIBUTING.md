@@ -47,6 +47,12 @@ needs it (`tests/integration/test_call_event_seq_race.py`) **self-skips** when
 the database is unreachable, so run `make docker-up && make migrate` before
 trusting a green run on anything touching call events.
 
+`tests/harness/` runs the real app on stub providers and a fake carrier
+(see its module docstring). Its end-to-end test skips when Postgres is
+unreachable — or holds project credentials this process's
+`CREDENTIAL_ENCRYPTION_KEY` cannot read, which a shared dev database often
+does; point `DATABASE_URL` at a freshly migrated database to run it.
+
 For a hot-reload server use `make run`, but stop the `turncall` container first
 — both bind `:8090`.
 
