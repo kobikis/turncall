@@ -85,11 +85,17 @@ def _overflow(extra: dict[str, Any], *managed: str) -> dict[str, Any]:
 # model decides the spelling, not the caller.
 _DEEPGRAM_KEYTERM_MODELS = ("nova-3", "flux")
 
+# AssemblyAI refuses a session carrying more than 100 keyterms instead of using
+# some of them, and pipecat sends the list as given: one term over is a dead
+# STT stage, not a weaker one. The first 100 are kept, in the order the agent
+# lists them (the API boundary has already dropped blanks and duplicates).
+_ASSEMBLYAI_MAX_KEYTERMS = 100
+
 
 def _keyterm_kwargs(provider: str, model: str, keyterms: list[str]) -> dict[str, Any]:
     """The one `keyterms` field, in the provider's own dialect.
 
-    Four providers, four spellings. Returns the settings kwarg to merge, or
+    Five providers, five spellings. Returns the settings kwarg to merge, or
     nothing at all when there are no keyterms to send — an empty list must not
     become an empty parameter.
     """
@@ -107,6 +113,14 @@ def _keyterm_kwargs(provider: str, model: str, keyterms: list[str]) -> dict[str,
         return {"keywords": keyterms}
     if provider == "elevenlabs":
         return {"keyterms": keyterms}
+    if provider == "assemblyai":
+        if len(keyterms) > _ASSEMBLYAI_MAX_KEYTERMS:
+            logger.warning(
+                "assemblyai_keyterms_truncated count={count} kept={kept}",
+                count=len(keyterms),
+                kept=_ASSEMBLYAI_MAX_KEYTERMS,
+            )
+        return {"keyterms_prompt": keyterms[:_ASSEMBLYAI_MAX_KEYTERMS]}
     return {}
 
 
@@ -135,20 +149,32 @@ _STT_DEFAULTS: dict[str, str] = {
     "openai": "gpt-transcribe",
     "elevenlabs": "scribe_v1",
     "cartesia": "ink-whisper",
+    # Universal-Streaming, $0.15/hr. Not pipecat's default (Universal-3.5 Pro,
+    # three times the price): the cheaper model is the reason to pick this
+    # provider, and Pro stays one `stt.model` away.
+    "assemblyai": "universal-streaming-english",
 }
 
+# AssemblyAI splits its streaming models by language rather than taking one as
+# a parameter, and the English model given Spanish transcribes it as English
+# words with no error to say so. Its multilingual sibling costs the same and
+# covers en/es/de/fr/pt/it; anything wider is Universal-3 Pro, named explicitly.
+_ASSEMBLYAI_MULTILINGUAL = "universal-streaming-multilingual"
 
-def _stt_model(provider: str, configured: str) -> str:
+
+def _stt_model(provider: str, configured: str, language: str | None = "en") -> str:
     """The model to send, resolving an unset or legacy-sentinel value."""
     if configured and not (configured == _NOVA_DEFAULT and provider != "deepgram"):
         return configured
+    if provider == "assemblyai" and not (language or "en").lower().startswith("en"):
+        return _ASSEMBLYAI_MULTILINGUAL
     return _STT_DEFAULTS.get(provider, configured)
 
 
 def _create_stt_service(
     config: AgentConfig, credentials: Credentials, *, sample_rate: int = 8000
 ) -> Any:
-    """Create STT service. Supports deepgram, openai, elevenlabs, and cartesia.
+    """Create STT service: deepgram, openai, elevenlabs, cartesia, assemblyai.
 
     `stt.extra` is forwarded to every provider. Pipecat's `ServiceSettings`
     treats it as overflow — `given_fields()` merges its entries at the top
@@ -162,7 +188,7 @@ def _create_stt_service(
     reach a provider that would 400 on it.
     """
     provider = config.stt.provider
-    model = _stt_model(provider, config.stt.model)
+    model = _stt_model(provider, config.stt.model, config.stt.language)
     keyterm_kwargs = _keyterm_kwargs(provider, model, config.stt.keyterms)
 
     if provider == "deepgram":
@@ -246,7 +272,51 @@ def _create_stt_service(
         stt._sample_rate = sample_rate
         return stt
 
+    if provider == "assemblyai":
+        return _create_assemblyai_stt(
+            config.stt.extra,
+            model=model,
+            keyterm_kwargs=keyterm_kwargs,
+            api_key=credentials.api_key("assemblyai"),
+            sample_rate=sample_rate,
+        )
+
     raise ValueError(f"Unsupported STT provider: {provider}")
+
+
+def _create_assemblyai_stt(
+    extra: dict[str, Any],
+    *,
+    model: str,
+    keyterm_kwargs: dict[str, Any],
+    api_key: str,
+    sample_rate: int,
+) -> Any:
+    """AssemblyAI Universal-Streaming, in pipecat's own turn mode.
+
+    Pipecat builds the connection URL from its declared settings alone and
+    never reads `extra`, so `stt.extra` is promoted onto them by name —
+    `domain`, `mode`, `voice_focus`, `min_turn_silence` — or it would reach
+    nothing. A key with no such setting is warned about rather than dropped
+    in silence. `vad_force_turn_endpoint` stays on: TurnCall's VAD and Smart
+    Turn decide when the caller is done, and AssemblyAI returns finals at once.
+    """
+    from pipecat.services.assemblyai.stt import AssemblyAISTTService
+
+    settings = AssemblyAISTTService.Settings.from_mapping(
+        {
+            **_overflow(extra, "model", *keyterm_kwargs),
+            "model": model,
+            **keyterm_kwargs,
+        }
+    )
+    if settings.extra:
+        logger.warning(
+            "assemblyai_stt_extra_ignored keys={keys}", keys=sorted(settings.extra)
+        )
+    return AssemblyAISTTService(
+        api_key=api_key, sample_rate=sample_rate, settings=settings
+    )
 
 
 def _validate_byom_url(base_url: str, byom_settings: BYOMSettings) -> None:
@@ -1471,7 +1541,9 @@ def create_pipeline(
     logger.info(
         "Pipeline created: STT={stt}/{stt_model} LLM={llm_info} TTS={tts}/{tts_voice}",
         stt=config.stt.provider,
-        stt_model=_stt_model(config.stt.provider, config.stt.model),
+        stt_model=_stt_model(
+            config.stt.provider, config.stt.model, config.stt.language
+        ),
         llm_info=llm_info,
         tts=config.tts.provider,
         tts_voice=config.tts.voice,

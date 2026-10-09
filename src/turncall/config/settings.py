@@ -77,6 +77,12 @@ class CartesiaSettings(BaseSettings):
     api_key: str = Field(default="", alias="CARTESIA_API_KEY")
 
 
+class AssemblyAISettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="ASSEMBLYAI_")
+
+    api_key: str = Field(default="", alias="ASSEMBLYAI_API_KEY")
+
+
 class DeepgramSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DEEPGRAM_")
 
@@ -374,6 +380,7 @@ class Settings(BaseSettings):
     google: GoogleSettings = Field(default_factory=GoogleSettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     cartesia: CartesiaSettings = Field(default_factory=CartesiaSettings)
+    assemblyai: AssemblyAISettings = Field(default_factory=AssemblyAISettings)
     deepgram: DeepgramSettings = Field(default_factory=DeepgramSettings)
     elevenlabs: ElevenLabsSettings = Field(default_factory=ElevenLabsSettings)
     heygen: HeyGenSettings = Field(default_factory=HeyGenSettings)

@@ -31,6 +31,7 @@ class TestTheDialectMapping:
             ("cartesia", "ink-whisper", "keyterm"),
             ("openai", "gpt-transcribe", "keywords"),
             ("elevenlabs", "scribe_v1", "keyterms"),
+            ("assemblyai", "universal-streaming-english", "keyterms_prompt"),
         ],
     )
     def test_each_provider_gets_its_own_spelling(

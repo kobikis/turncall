@@ -66,6 +66,16 @@ and is not part of this repository's history.
 
 ### Added
 
+- **AssemblyAI Universal-Streaming STT** (#203): `"stt": {"provider":
+  "assemblyai"}`. The key resolves agent → project `assemblyai` credential →
+  `ASSEMBLYAI_API_KEY`, and a missing one is reported in `missing_keys` like
+  any other provider. With no `stt.model` it runs `universal-streaming-english`
+  ($0.15/hr) — or `universal-streaming-multilingual` when `stt.language` is not
+  English, since the English model transcribes other languages as English words
+  without an error. `stt.keyterms` is sent as `keyterms_prompt`, capped at the
+  100 AssemblyAI accepts (more is a refused session, not a weaker one), and
+  `stt.extra` reaches AssemblyAI's own settings (`domain`, `mode`, …).
+
 - **`llm.failover` on an `openai_live` client delegate** (#246). The delegate
   is an ordinary LLM, so it is built as a failover group like cascade's: an
   unusable error moves the delegation to the next backup, recorded as
