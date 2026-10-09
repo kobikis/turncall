@@ -46,8 +46,15 @@ class ToolCall:
     arguments: dict[str, Any] = field(default_factory=dict)
 
 
-# One inference's answer: text to say, a tool call, or both in order.
-Reply = str | ToolCall | tuple[str | ToolCall, ...]
+# One inference's answer: text to say, a tool call, or both in order — or a
+# function of the context's messages returning one, to answer from what the
+# model was actually given.
+Reply = (
+    str
+    | ToolCall
+    | tuple[str | ToolCall, ...]
+    | Callable[[list[dict[str, Any]]], "str | ToolCall | tuple[str | ToolCall, ...]"]
+)
 
 
 @dataclass(frozen=True)
@@ -57,7 +64,8 @@ class Script:
     `caller[n]` is what the STT hears for the caller's n-th burst of speech.
     `agent[n]` is the LLM's answer to its n-th inference — a tool result is an
     inference of its own, so a tool call and the reply after it are two
-    entries. A cascade agent's `first_message` is spoken by the TTS directly
+    entries. An entry may be a function of the context's messages, to prove
+    what the model was given. A cascade agent's `first_message` is spoken by the TTS directly
     and takes no entry; without one, the opening is `agent[0]`.
     """
 
@@ -125,6 +133,8 @@ class StubLLM(LLMService):
         await self.push_frame(LLMFullResponseStartFrame())
         await self.start_ttfb_metrics()
         reply = next(self._replies, EXHAUSTED)
+        if callable(reply):
+            reply = reply(list(frame.context.get_messages()))
         await self.stop_ttfb_metrics()
         calls = []
         for part in reply if isinstance(reply, tuple) else (reply,):

@@ -161,6 +161,19 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **`POST /v1/calls/{id}/messages` reaches the live call** (#215). It used to
+  record `context.injected` and answer 200 while the call's model never saw
+  the message: nothing in the call read that event. The request now travels
+  over a per-call Redis channel (`call:{id}:control`) that the task running
+  the call holds for its lifetime, on every voice transport, and the endpoint
+  answers only with what the call itself applied: **409 `call_not_live`** when
+  nothing is running the call, **504 `call_did_not_acknowledge`** when it does
+  not answer within 2s, 409 with the call's reason when it refuses (an S2S
+  call, whose model reads no context added after it starts). The message is
+  added to the context for the agent's next turn. The unused in-process
+  `SessionManager` is gone; the channel is also what reaches a call held by
+  another replica.
+
 - **Knowledge bases never reached an inline agent** (#260). Links live on an
   agent row, and a call-init `agent` or an eval `inline` target has none, so
   every mode was dropped without a word — on every builder agent with an

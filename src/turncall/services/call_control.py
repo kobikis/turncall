@@ -465,19 +465,30 @@ async def inject_context(
     message: str,
     role: str = "system",
 ) -> ControlResult:
-    """Inject a context message into an active call's LLM context."""
+    """Add a message to a live call's LLM context, through the call itself.
+
+    Only the task running the call can change its context, so this asks it
+    over the call's control channel (#215) and reports what it answered.
+    Raises `CallNotLive` when nothing is running the call and
+    `CallDidNotAcknowledge` when it does not answer in time — never a success
+    the call did not confirm.
+    """
+    from turncall.services import live_call_channel
+    from turncall.storage.redis import get_redis
     from turncall.storage.repositories import call_repo
 
     call = await call_repo.get_call_by_id(session, call_id)
     if call is None:
         return ControlResult(success=False, message="Call not found")
 
-    current = CallStatus(call.status)
-    if not is_active_state(current):
-        return ControlResult(
-            success=False,
-            message=f"Call is not active (status: {current.value})",
-        )
+    ack = await live_call_channel.request(
+        get_redis(),
+        call_id,
+        live_call_channel.MESSAGE,
+        {"message": message, "role": role},
+    )
+    if not ack.ok:
+        return ControlResult(success=False, message=ack.error or "Refused by the call")
 
     from turncall.events.emit import emit_call_event
 
@@ -491,6 +502,6 @@ async def inject_context(
 
     return ControlResult(
         success=True,
-        message="Context injected",
-        details={"role": role},
+        message="Message added to the call's context",
+        details=ack.applied,
     )

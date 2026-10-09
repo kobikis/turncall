@@ -70,6 +70,14 @@ the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
 
+**Messages sent to a live call reach its agent.** `POST /v1/calls/{call_id}/messages`
+answered 200 while the agent never saw the message. It is now added to the
+agent's context for its next turn, and the response says what the call did: 200
+once the call has applied it, **409** (`call_not_live`) when the call is not
+running, **504** (`call_did_not_acknowledge`) when it does not confirm within
+two seconds. Speech-to-speech calls refuse it with a 409, since their model
+reads nothing added to its context after the call starts.
+
 **An `openai_live` agent checks in on a quiet caller.** The idle check-in never
 reached gpt-live-1, so a caller who went quiet heard silence until the call's
 maximum duration. gpt-live-1 now asks whether they are still there, and a second

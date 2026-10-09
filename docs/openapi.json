@@ -1918,7 +1918,7 @@
           "call-control"
         ],
         "summary": "Inject Message",
-        "description": "Inject a context message into an active call.",
+        "description": "Add a message to a live call's LLM context, for the agent's next turn.\n\nAnswered only once the call itself has applied it. Cascade calls only: a\nspeech-to-speech call refuses it (409), since its model reads no context\nadded after it starts.",
         "operationId": "inject_message_v1_calls__call_id__messages_post",
         "parameters": [
           {
@@ -1970,6 +1970,12 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The call is not live, or refused the message"
+          },
+          "504": {
+            "description": "The call did not acknowledge the message in time"
           },
           "422": {
             "description": "Validation Error",
