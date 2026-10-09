@@ -41,8 +41,7 @@ and is not part of this repository's history.
   The carrier contract test runs the cold transfer and DTMF on both carriers.
 
 - **Telnyx numbers answer inbound calls** (#217, ADR-0022). Bind a number with
-  `"carrier": "telnyx"` and point its Call Control application at
-  `/webhooks/telnyx/voice`: the call is answered through Call Control, its
+  `"carrier": "telnyx"` (routed for you since #219, below): the call is answered through Call Control, its
   audio streamed with pipecat's Telnyx serializer, and it runs the same agent
   config as on Twilio — recording, ambience and voicemail detection included.
   Webhooks are verified with the account's Ed25519 public key and refused
@@ -51,8 +50,23 @@ and is not part of this repository's history.
   `TELNYX_API_KEY` / `TELNYX_PUBLIC_KEY`; with no key at any level the call
   fails with `missing_keys: ["telnyx"]`. A call over the project's live-call
   limit (#224) is refused busy with a Call Control `reject` and announced as
-  `call.rejected`, as on Twilio. Outbound calls and number configuration
-  on Telnyx come next.
+  `call.rejected`, as on Twilio.
+- **Outbound calls from Telnyx numbers** (#218). `POST /v1/calls/outbound`
+  with a Telnyx number as `from_number_id` dials through Telnyx Call Control —
+  same request, same response, and the same suppression list and limits, so
+  campaigns dial Telnyx numbers too. The dial runs on the number's Call Control
+  application and streams the call once the callee answers. A call nobody
+  answers ends `customer_did_not_answer` (busy: `customer_busy`), as on Twilio.
+  No Telnyx key at any level is a `503 no_telnyx_account` naming
+  `missing_keys: ["telnyx"]`; a number on no Call Control application is a 409.
+- **Binding a Telnyx number routes it** (#219). No Mission Control step: the
+  bind looks the number up on the project's Telnyx account (so
+  `external_number_sid` is optional, and a number the account does not hold
+  is a 422 naming it) and moves it onto this deployment's Call Control
+  application, `TurnCall <host>`, which TurnCall creates, keeps pointed at
+  `/webhooks/telnyx/voice`, and deletes once no number is left on it. Unbind
+  and project deletion take the number off again. Bind and update responses
+  carry `webhooks_configured` for any carrier.
 
 ### Changed
 

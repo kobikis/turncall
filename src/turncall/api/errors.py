@@ -43,6 +43,7 @@ class ErrorCode(StrEnum):
     # Credentials (ADR-0020)
     CREDENTIAL_KEY_UNAVAILABLE = "credential_key_unavailable"
     NO_TWILIO_ACCOUNT = "no_twilio_account"
+    NO_TELNYX_ACCOUNT = "no_telnyx_account"
 
     # Phone Number
     PHONE_NUMBER_NOT_FOUND = "phone_number_not_found"
@@ -56,6 +57,9 @@ class ErrorCode(StrEnum):
     # Twilio
     TWILIO_ERROR = "twilio_error"
     TWILIO_SIGNATURE_INVALID = "twilio_signature_invalid"
+
+    # Telnyx
+    TELNYX_ERROR = "telnyx_error"
 
     # Rate Limiting
     RATE_LIMITED = "rate_limited"

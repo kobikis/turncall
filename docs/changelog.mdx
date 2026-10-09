@@ -48,8 +48,9 @@ operator who doesn't answer gets the caller your `fallback_message`.
 `send_dtmf` works too.
 
 **Telnyx numbers answer inbound calls.** Bind a number with
-`"carrier": "telnyx"` and point its Call Control application at
-`/webhooks/telnyx/voice`. The call runs the same agent as on Twilio, with
+`"carrier": "telnyx"` and TurnCall routes it to itself on your Telnyx account —
+no Mission Control step; a number the account does not hold is refused. The
+call runs the same agent as on Twilio, with
 recording, ambience and voicemail detection unchanged. Webhooks are verified
 with your Telnyx account's public key, and a call over your live-call limit is
 refused busy, as on Twilio. See
@@ -81,6 +82,11 @@ agent by its number, the same way phone-number A/B routing does. Subscribers get
 `outbound_calls_per_second` — never past it, and never past `live_calls`, even
 with several workers — and at one call a second when you set no rate. See
 [How it paces](/guides/campaigns#how-it-paces).
+
+**Outbound calls from Telnyx numbers.** `POST /v1/calls/outbound` — and so a
+campaign — dials from a Telnyx number with the same request as from a Twilio
+one, inside the same suppression list and limits. An unanswered call ends
+`customer_did_not_answer`, as on Twilio.
 
 **`openai_live` agents with tools work out of the box.** An agent with tools and
 no `s2s.delegation` block now delegates to its own `llm` (`"mode": "client"`),

@@ -49,11 +49,8 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.services import transfer as transfer_svc
+from turncall.services.telnyx_accounts import CONNECTION_KEY
 from turncall.services.transfer import TransferIntent
-
-# Where the inbound edge keeps the call's Call Control application id, which a
-# new leg has to be dialled on (calls.metadata_json).
-CONNECTION_KEY = "telnyx_connection_id"
 
 _STATE_KEY = "transfer"
 STARTED = "started"  # caller's leg: the agent's stream stopped

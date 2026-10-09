@@ -23,6 +23,12 @@ if TYPE_CHECKING:
 
     from turncall.config.settings import Settings
 
+# Where a Telnyx call's record keeps the Call Control application it runs on
+# (`calls.metadata_json`), written by the inbound edge from `call.initiated` and
+# by an outbound dial before it dials: a transfer (`services/telnyx_transfer`)
+# dials the operator leg on the same one.
+CONNECTION_KEY = "telnyx_connection_id"
+
 
 @dataclass(frozen=True)
 class TelnyxAccount:

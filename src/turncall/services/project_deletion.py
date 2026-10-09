@@ -1,7 +1,7 @@
 """Project deletion (ADR-0011).
 
 Soft-deletes a project after clearing the external side effects the DB cascade
-can't reach: Twilio bindings (auto-unbind, owns the failure) and object-storage
+can't reach: carrier bindings (auto-unbind, owns the failure) and object-storage
 blobs (best-effort sweep). The project row + children stay for history; auth
 rejects the project's keys once deleted, and a purge job hard-deletes later.
 """
@@ -26,15 +26,25 @@ from turncall.storage.repositories import (
 )
 
 
-async def _clear_twilio_number(settings: Settings, number: Any) -> None:
-    """Point a Twilio number away from TurnCall, on its own Twilio account if it
-    has one. NOT best-effort — a failure propagates so the delete aborts before
-    anything is soft-deleted."""
-    from turncall.domain.carriers import TWILIO
+async def _clear_number(session: AsyncSession, settings: Settings, number: Any) -> None:
+    """Point a number away from TurnCall on its carrier: a Twilio number's
+    webhooks cleared on its own account if it has one, a Telnyx number taken
+    off TurnCall's Call Control application (deleted once empty). NOT
+    best-effort — a failure propagates so the delete aborts before anything is
+    soft-deleted."""
+    from turncall.domain.carriers import TELNYX, TWILIO
+    from turncall.services.telnyx_accounts import account_for_project
     from turncall.services.twilio_accounts import account_for_number
 
+    if number.provider == TELNYX:
+        telnyx = await account_for_project(session, number.project_id, settings)
+        if telnyx.api_key:
+            await telnyx.adapter().configure_number_webhook(
+                number.external_number_sid, voice_url="", status_callback_url=""
+            )
+        return
     if number.provider != TWILIO:
-        return  # only a Twilio number has webhooks pointing at TurnCall
+        return
     account = account_for_number(number, settings)
     if account is None:
         return
@@ -97,12 +107,12 @@ async def _sweep_storage(
 async def delete_project(
     session: AsyncSession, settings: Settings, project_id: UUID
 ) -> None:
-    """Auto-unbind the project's Twilio numbers, sweep its storage, then
+    """Auto-unbind the project's numbers on their carriers, sweep its storage, then
     soft-delete. Unbind runs FIRST and is not swallowed — if it raises, nothing
     is soft-deleted, so the caller retries rather than stranding a live number.
     Idempotent: re-clearing a webhook / re-deleting a blob is harmless."""
     for number in await phone_number_repo.list_for_project(session, project_id):
-        await _clear_twilio_number(settings, number)
+        await _clear_number(session, settings, number)
 
     await _sweep_storage(session, settings, project_id)
     await project_repo.soft_delete_project(session, project_id)

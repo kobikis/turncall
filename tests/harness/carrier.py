@@ -46,6 +46,9 @@ class FakeNumber:
     voice_url: str = ""
     status_callback_url: str = ""
     sms_url: str = ""
+    # Telnyx: the Call Control application the number is on, which binding
+    # it sets (#219); `voice_url` is then that application's webhook URL.
+    connection_id: str = ""
 
 
 class FakeCarrier:
@@ -248,6 +251,21 @@ class FakeTelephonyAdapter(TelephonyAdapter):
             number.sms_url = sms_url
 
 
+# Every field a Telnyx dial's action carries: an outbound call's webhook and
+# stream, a transfer leg's link, state and machine detection.
+_DIAL_FIELDS = (
+    "connection_id",
+    "from_number",
+    "to_number",
+    "webhook_url",
+    "status_callback_url",
+    "stream_url",
+    "link_to",
+    "client_state",
+    "detect_machine",
+)
+
+
 class FakeTelnyxAdapter(FakeTelephonyAdapter):
     """Telnyx's commands, recorded. `account_sid` on its actions is the API key
     the app used. `answer` and `reject` are Telnyx's own: Call Control answers
@@ -295,10 +313,7 @@ class FakeTelnyxAdapter(FakeTelephonyAdapter):
         client_state: str,
         detect_machine: bool,
     ) -> str:
-        leg = "v3:" + secrets.token_urlsafe(24)
-        await self._record(
-            "dial",
-            call_sid=leg,
+        return await self._dial(
             connection_id=connection_id,
             to_number=to,
             from_number=from_number,
@@ -306,7 +321,6 @@ class FakeTelnyxAdapter(FakeTelephonyAdapter):
             client_state=client_state,
             detect_machine=detect_machine,
         )
-        return leg
 
     async def bridge(
         self, call_control_id: str, other: str, *, client_state: str
@@ -314,3 +328,71 @@ class FakeTelnyxAdapter(FakeTelephonyAdapter):
         await self._record(
             "bridge", call_sid=call_control_id, other=other, client_state=client_state
         )
+
+    async def find_number(self, e164: str) -> dict[str, Any] | None:
+        number = self._carrier._numbers.get(e164)
+        if number is None:
+            return None
+        return {
+            "id": number.sid,
+            "phone_number": number.e164,
+            "connection_id": number.connection_id or None,
+        }
+
+    async def configure_number_webhook(
+        self, number_sid: str, voice_url: str, status_callback_url: str
+    ) -> None:
+        """Telnyx routes a number by its Call Control application: put it on
+        the one named for `voice_url`'s host, or take it off ("")."""
+        from turncall.adapters.telephony.telnyx_adapter import application_name
+
+        await self._record(
+            "configure_number",
+            number_sid=number_sid,
+            voice_url=voice_url,
+            status_callback_url=status_callback_url,
+        )
+        number = self._carrier._by_sid(number_sid)
+        if number is not None:
+            number.voice_url = voice_url
+            number.connection_id = application_name(voice_url) if voice_url else ""
+
+    async def connection_for(self, e164: str) -> str:
+        """The Call Control application the number is on; Telnyx refuses a
+        dial on none."""
+        from turncall.adapters.telephony.telnyx_adapter import TelnyxNumberError
+
+        number = self._carrier._numbers.get(e164)
+        if number is None or not number.connection_id:
+            raise TelnyxNumberError(f"{e164} is on no Call Control application")
+        return number.connection_id
+
+    async def initiate_outbound_call(
+        self,
+        from_number: str,
+        to_number: str,
+        webhook_url: str,
+        *,
+        status_callback_url: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        connection_id: str = "",
+        stream_url: str = "",
+    ) -> str:
+        """A Telnyx dial, on `connection_id` or the caller id's application."""
+        return await self._dial(
+            connection_id=connection_id or await self.connection_for(from_number),
+            to_number=to_number,
+            from_number=from_number,
+            webhook_url=webhook_url,
+            status_callback_url=status_callback_url,
+            stream_url=stream_url,
+        )
+
+    async def _dial(self, **params: Any) -> str:
+        """`POST /calls`, whoever asks: an outbound call (#218) or a transfer's
+        operator leg (#220). One `dial` action with every field either sends,
+        absent ones None, so a test reads either the same way."""
+        call_control_id = "v3:" + secrets.token_urlsafe(24)
+        fields = dict.fromkeys(_DIAL_FIELDS) | params
+        await self._record("dial", call_sid=call_control_id, **fields)
+        return call_control_id

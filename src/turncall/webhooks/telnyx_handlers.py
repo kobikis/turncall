@@ -5,9 +5,11 @@ A Telnyx number's Call Control application posts every call event to one URL,
 with the account's Ed25519 key. An incoming `call.initiated` is answered the
 Call Control way — a REST `answer` command whose `stream_url` points the call's
 media at `/ws/telnyx/media-stream/{call_id}` (`telnyx_media_stream.py`), where
-the shared media entry point takes over. `call.hangup` closes a call no
-pipeline ever ran for; one that ran closes itself. A transfer's webhooks, on
-the caller's leg and the operator's, go on to `services/telnyx_transfer`.
+the shared media entry point takes over. An outgoing call (#218) needs nothing
+here until it ends: its dial already named that stream. `call.hangup` closes a
+call no pipeline ever ran for — including a dial nobody answered — and one
+that ran closes itself. A transfer's webhooks, on the caller's leg and the
+operator's, go on to `services/telnyx_transfer`.
 
 Whose key verifies a webhook is decided by whose call or number it names: the
 project's own `telnyx` credential, else the platform's TELNYX_PUBLIC_KEY. No
@@ -18,6 +20,7 @@ dev mode on this carrier.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -29,10 +32,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from turncall.api.deps import DbSession
 from turncall.config import get_settings
 from turncall.domain.carriers import TELNYX
-from turncall.domain.enums import CallEventType, CallStatus
+from turncall.domain.enums import CallDirection, CallEventType, CallStatus
 from turncall.services import telnyx_transfer
 from turncall.services.limits import release_live_call
-from turncall.services.telnyx_accounts import TelnyxAccount, account_for_project
+from turncall.services.telnyx_accounts import (
+    CONNECTION_KEY,
+    TelnyxAccount,
+    account_for_project,
+)
 from turncall.storage.models import CallRow, PhoneNumberRow
 from turncall.storage.repositories import call_repo, phone_number_repo
 from turncall.webhooks.telnyx_signature import (
@@ -47,6 +54,18 @@ router = APIRouter(prefix="/webhooks/telnyx", tags=["telnyx-webhooks"])
 # finalize it: a hangup now is the only end it gets.
 _NOT_YET_STREAMING = {CallStatus.INITIATED.value, CallStatus.RINGING.value}
 
+# How a call TurnCall dialled ends when nobody picked up, by Telnyx's
+# `hangup_cause` — what Twilio's `no-answer`/`busy`/`failed` statuses say, and
+# what a campaign's retry policy reads. A cause not here (the callee answered
+# and hung up before the stream opened) ends the call as completed.
+_UNANSWERED = {
+    "timeout": CallStatus.NO_ANSWER,
+    "no_answer": CallStatus.NO_ANSWER,
+    "user_busy": CallStatus.BUSY,
+    "call_rejected": CallStatus.BUSY,
+    "not_found": CallStatus.FAILED,
+}
+
 
 def _stream_url(request: Request, call_id: UUID) -> str:
     """Where Telnyx opens the call's media stream. wss:// behind HTTPS (ngrok,
@@ -60,7 +79,9 @@ def _stream_url(request: Request, call_id: UUID) -> str:
 async def _whose(
     session: AsyncSession, payload: dict[str, Any]
 ) -> tuple[CallRow | None, PhoneNumberRow | None]:
-    """The Telnyx call this event is about, else the Telnyx number it rang."""
+    """The Telnyx call this event is about, else the Telnyx number on it — the
+    one dialled on an incoming call, the caller id on an outgoing one (whose
+    first events can beat the dial's own write of its `call_control_id`)."""
     call_control_id = payload.get("call_control_id") or ""
     call = (
         await call_repo.get_call_by_provider_sid(session, call_control_id)
@@ -69,7 +90,8 @@ async def _whose(
     )
     if call is not None and call.provider == TELNYX:
         return call, None
-    number = await phone_number_repo.get_by_e164(session, payload.get("to") or "")
+    ours = payload.get("to" if payload.get("direction") == "incoming" else "from")
+    number = await phone_number_repo.get_by_e164(session, ours or "")
     return None, number if number is not None and number.provider == TELNYX else None
 
 
@@ -165,7 +187,7 @@ async def _answer_inbound(
     # The Call Control application a transfer dials the operator's leg on.
     call.metadata_json = {
         **call.metadata_json,
-        telnyx_transfer.CONNECTION_KEY: str(payload.get("connection_id") or ""),
+        CONNECTION_KEY: str(payload.get("connection_id") or ""),
     }
     # Committed before answering: the media stream Telnyx opens next reads the
     # call row in a session of its own.
@@ -270,7 +292,33 @@ async def _on_hangup(
     await release_live_call(call.project_id, call.id)
     if call.status not in _NOT_YET_STREAMING:
         return
+    unanswered = _UNANSWERED.get(str(payload.get("hangup_cause") or ""))
+    if unanswered is not None and call.direction == CallDirection.OUTBOUND.value:
+        await _not_answered(session, call, unanswered)
+        return
     from turncall.orchestrator.call_session import finalize_call
     from turncall.storage.database import get_session_factory
 
     await finalize_call(get_session_factory(), call.id, failed=False)
+
+
+async def _not_answered(
+    session: AsyncSession, call: CallRow, status: CallStatus
+) -> None:
+    """A dialled call nobody picked up: its terminal status, as Twilio's
+    status callback records one. A failed dial also gets `call.failed`, which
+    is what reads it back as `telephony_failed`."""
+    await call_repo.update_call_status(
+        session, call.id, status=status.value, ended_at=datetime.now(UTC)
+    )
+    if status == CallStatus.FAILED:
+        from turncall.events.emit import emit_call_event
+
+        await emit_call_event(
+            session,
+            call_id=call.id,
+            project_id=call.project_id,
+            event_type=CallEventType.CALL_FAILED,
+            payload={"provider_call_sid": call.provider_call_sid},
+        )
+    await session.commit()
