@@ -195,3 +195,57 @@ async def test_a_cancelled_handoff_that_is_then_drained_is_all_or_nothing():
         assert [t.name for t in tool_frames[0].tools.standard_tools] == ["refund"], (
             "the switch landed but advertises the wrong agent's tools"
         )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_both_frames_of_an_api_handoff_survive_an_interruption():
+    """The API's handoff (#216) queues the same two frames through the same
+    path, from the call's control-channel handler: a caller talking over it
+    must not drain either."""
+    from pipecat.frames.frames import LLMSetToolsFrame, LLMUpdateSettingsFrame
+    from pipecat.utils.frame_queue import FrameQueue
+
+    from turncall.orchestrator import tool_bridge
+    from turncall.orchestrator.live_control import CallStages, handoff_handler
+
+    queue = FrameQueue()
+
+    async def queue_frame(frame):
+        queue.put_nowait(frame)
+
+    config = AgentConfig(tools=[_tool("refund")])
+    agent = SimpleNamespace(name="Billing", config_blob=config.model_dump(mode="json"))
+    call_context = SimpleNamespace(
+        call_id=uuid4(),
+        project_id=uuid4(),
+        agent_id=uuid4(),
+        session_factory=_SessionFactory(),
+        mcp_manager=None,
+    )
+    stages = CallStages(
+        llm=MagicMock(),
+        context=MagicMock(),
+        pipeline_worker=SimpleNamespace(queue_frame=queue_frame),
+    )
+    handler = handoff_handler(
+        call_context, lambda: stages, pipeline_mode="cascade", s2s_provider=None
+    )
+
+    with (
+        patch(
+            "turncall.storage.repositories.agent_repo.get_agent_by_id",
+            new=AsyncMock(return_value=agent),
+        ),
+        patch.object(
+            tool_bridge,
+            "_execute_builtin",
+            new=AsyncMock(return_value='{"success": true, "details": {}}'),
+        ),
+        patch("turncall.orchestrator.tool_bridge.register_tools"),
+    ):
+        applied = await handler({"agent_id": str(uuid4())})
+
+    assert applied["tools"] == ["refund"]
+    survivors = _drain(queue)
+    assert [type(f) for f in survivors] == [LLMUpdateSettingsFrame, LLMSetToolsFrame]

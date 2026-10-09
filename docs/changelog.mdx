@@ -70,6 +70,14 @@ the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
 
+**A handoff through the API switches the live call.** `POST /v1/calls/{call_id}/handoff`
+moved the call's record to the new agent while the caller kept talking to the
+previous one. The call now switches itself — the new agent's prompt and tools —
+and the response lists what it applied. It answers like `/messages`: **409**
+(`call_not_live`), **504** (`call_did_not_acknowledge`), a 409 with the reason
+when the call refuses (an `openai_live` agent, as for the `handoff_to_agent`
+tool), and a **404** for an agent outside your project.
+
 **Messages sent to a live call reach its agent.** `POST /v1/calls/{call_id}/messages`
 answered 200 while the agent never saw the message. It is now added to the
 agent's context for its next turn, and the response says what the call did: 200

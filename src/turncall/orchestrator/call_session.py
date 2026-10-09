@@ -22,7 +22,11 @@ from pipecat.workers.runner import WorkerRunner
 
 from turncall.config import get_settings
 from turncall.domain.enums import CallEventType, CallStatus
-from turncall.orchestrator.live_control import call_handlers, control_channel
+from turncall.orchestrator.live_control import (
+    call_handlers,
+    control_channel,
+    stages_of,
+)
 from turncall.orchestrator.pipeline_factory import CallContext
 from turncall.orchestrator.telemetry import (
     build_observers,
@@ -235,7 +239,11 @@ class CallSession:
             async with control_channel(
                 self._call_context,
                 call_handlers(
-                    self._queue_control_frame, pipeline_mode=self._pipeline_mode
+                    self._queue_control_frame,
+                    self._call_context,
+                    lambda: stages_of(self._pipeline, self._task),
+                    pipeline_mode=self._pipeline_mode,
+                    s2s_provider=self._s2s_provider,
                 ),
             ):
                 await self._update_call_status(CallStatus.IN_PROGRESS)

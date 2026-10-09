@@ -46,14 +46,24 @@ class ToolCall:
     arguments: dict[str, Any] = field(default_factory=dict)
 
 
+class Given(list):
+    """What one inference was given, as a provider receives it: the system
+    instruction first (as pipecat's OpenAI adapter sends it), then the
+    context's messages — plus `tools`, the names the context advertised."""
+
+    def __init__(self, messages: list[dict[str, Any]], tools: list[str]) -> None:
+        super().__init__(messages)
+        self.tools = tools
+
+
 # One inference's answer: text to say, a tool call, or both in order — or a
-# function of the context's messages returning one, to answer from what the
-# model was actually given.
+# function of what the model was given (`Given`, a list of its messages)
+# returning one, to answer from what the model was actually given.
 Reply = (
     str
     | ToolCall
     | tuple[str | ToolCall, ...]
-    | Callable[[list[dict[str, Any]]], "str | ToolCall | tuple[str | ToolCall, ...]"]
+    | Callable[[Given], "str | ToolCall | tuple[str | ToolCall, ...]"]
 )
 
 
@@ -134,7 +144,7 @@ class StubLLM(LLMService):
         await self.start_ttfb_metrics()
         reply = next(self._replies, EXHAUSTED)
         if callable(reply):
-            reply = reply(list(frame.context.get_messages()))
+            reply = reply(self._given(frame.context))
         await self.stop_ttfb_metrics()
         calls = []
         for part in reply if isinstance(reply, tuple) else (reply,):
@@ -145,6 +155,14 @@ class StubLLM(LLMService):
         if calls:
             await self.run_function_calls(calls)
         await self.push_frame(LLMFullResponseEndFrame())
+
+    def _given(self, context: Any) -> Given:
+        system = self._settings.system_instruction
+        messages = list(context.get_messages())
+        if isinstance(system, str) and system:
+            messages = [{"role": "system", "content": system}, *messages]
+        tools = getattr(context.tools, "standard_tools", None) or []
+        return Given(messages, [t.name for t in tools])
 
     def _function_call(self, call: ToolCall, context: Any) -> FunctionCallFromLLM:
         self._calls += 1

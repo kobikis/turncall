@@ -1,6 +1,6 @@
 """Every live call holds its control channel for exactly as long as it runs (#215).
 
-The channel is how `POST /v1/calls/{id}/messages` (and #216's handoff) reaches
+The channel is how `POST /v1/calls/{id}/messages` and `/handoff` (#216) reach
 a call. A transport that stopped subscribing would be silent about it — every
 request to its calls a 409 that reads like a hangup — so the wiring is checked
 structurally: the channel lives in `CallSession.start()`, and every voice
@@ -21,7 +21,7 @@ import turncall
 from turncall.orchestrator import call_session as cs
 from turncall.orchestrator import live_control
 from turncall.orchestrator import transport_factory as tf
-from turncall.services.live_call_channel import MESSAGE, ControlRefused
+from turncall.services.live_call_channel import HANDOFF, MESSAGE, ControlRefused
 
 pytestmark = pytest.mark.unit
 
@@ -108,7 +108,7 @@ async def test_start_holds_the_channel_for_the_whole_run(monkeypatch) -> None:
         "_finalize_call",
     ]
     assert given["context"] is context
-    assert MESSAGE in given["handlers"]
+    assert {MESSAGE, HANDOFF} <= set(given["handlers"])
 
     # The handler it was given reaches this call's own pipeline.
     await given["handlers"][MESSAGE]({"message": "hi", "role": "system"})
@@ -207,3 +207,55 @@ class TestTheMessageHandler:
         with pytest.raises(ControlRefused, match="speech-to-speech"):
             await handler({"message": "VIP", "role": "system"})
         queue.assert_not_awaited()
+
+
+class TestTheHandoffHandler:
+    async def test_openai_live_refuses_as_its_tool_does(self, monkeypatch) -> None:
+        """The schema refuses `handoff_to_agent` on openai_live; the API must
+        not do through the side door what the model cannot."""
+        from turncall.orchestrator import tool_bridge
+
+        prepare = AsyncMock()
+        monkeypatch.setattr(tool_bridge, "_prepare_handoff", prepare)
+        handler = live_control.handoff_handler(
+            _context(), lambda: None, pipeline_mode="s2s", s2s_provider="openai_live"
+        )
+        with pytest.raises(ControlRefused, match="openai_live"):
+            await handler({"agent_id": str(uuid.uuid4())})
+        prepare.assert_not_awaited()
+
+    def test_it_finds_what_a_tool_call_would_be_handed(self) -> None:
+        """The LLM, its context and the worker: `FunctionCallParams`' three,
+        found in a real pipeline rather than handed over by pipecat."""
+        from pipecat.pipeline.pipeline import Pipeline
+        from pipecat.processors.aggregators.llm_context import LLMContext
+        from pipecat.processors.aggregators.llm_response_universal import (
+            LLMContextAggregatorPair,
+        )
+
+        from tests.harness.stubs import StubLLM
+
+        context = LLMContext()
+        pair = LLMContextAggregatorPair(context=context)
+        llm = StubLLM([])
+        pipeline = Pipeline([pair.user(), llm, pair.assistant()])
+        worker = object()
+
+        stages = live_control.stages_of(pipeline, worker)
+
+        assert stages == (llm, context, worker)
+        assert live_control.stages_of(pipeline, None) is None
+
+
+def test_the_api_never_commits_a_handoff_itself() -> None:
+    """`call_control.handoff_to_agent` writes the record; only the call may
+    call it, between preparing the switch and applying it (#144, #216)."""
+    src = Path(turncall.__file__).parent
+    callers = sorted(
+        path.relative_to(src).as_posix()
+        for path in src.rglob("*.py")
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "attr", None) == "handoff_to_agent"
+    )
+    assert callers == ["orchestrator/tool_bridge.py"], callers
