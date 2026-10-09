@@ -7,6 +7,13 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**Backup STT and TTS providers.** `stt.failover` and `tts.failover` list backup
+configs in order, like `llm.failover`. If the speech provider stops working
+mid-call (a refused key, an unknown model or voice), the call moves to the next
+one and carries on — the backup transcribes what the caller had just said, or
+speaks the reply that was cut off. Recorded as `provider.failover` and in
+`failovers` on `call.ended`. See [Failover](/guides/providers#failover).
+
 **`openai_live` agents with tools work out of the box.** An agent with tools and
 no `s2s.delegation` block now delegates to its own `llm` (`"mode": "client"`),
 with your keys, running your webhook and MCP tools — `end_call`, `do_not_call`

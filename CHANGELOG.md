@@ -66,6 +66,15 @@ and is not part of this repository's history.
 
 ### Added
 
+- **`stt.failover` and `tts.failover`** (#223). Ordered backup STT and TTS
+  configs, each validated like `stt`/`tts`. An error that leaves the active
+  service unusable moves the call to the next and it carries on: the STT
+  backup is handed the caller's speech nobody transcribed yet, the TTS backup
+  the reply being spoken. Recoverable errors do not switch; there is no
+  switching back. Each switch is `provider.failover` (`role: stt|tts`) and an
+  entry in `failovers`. Backups need keys (`missing_keys`). 422 on S2S agents,
+  and on an STT group mixing Deepgram Flux with other models.
+
 - **`llm.failover` on an `openai_live` client delegate** (#246). The delegate
   is an ordinary LLM, so it is built as a failover group like cascade's: an
   unusable error moves the delegation to the next backup, recorded as

@@ -8554,6 +8554,14 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Extra"
+          },
+          "failover": {
+            "items": {
+              "$ref": "#/components/schemas/STTConfigSchema"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Failover"
           }
         },
         "type": "object",
@@ -8902,6 +8910,14 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Extra"
+          },
+          "failover": {
+            "items": {
+              "$ref": "#/components/schemas/TTSConfigSchema"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Failover"
           }
         },
         "type": "object",

@@ -78,6 +78,9 @@ class STTConfig(DomainModel):
     # provider's dialect lives in the pipeline factory.
     keyterms: list[str] = Field(default_factory=list)
     extra: dict[str, Any] = Field(default_factory=dict)
+    # Backup STTs, in order, a call moves to when this one stops being usable
+    # (#223). Voice cascade only; each entry is a whole STT config of its own.
+    failover: list["STTConfig"] = Field(default_factory=list)
 
 
 class LLMConfig(DomainModel):
@@ -112,6 +115,8 @@ class TTSConfig(DomainModel):
     # exposes it as a classmethod on the TTS service class.
     pronunciations: dict[str, str] = Field(default_factory=dict)
     extra: dict[str, Any] = Field(default_factory=dict)
+    # Backup TTSs, in order (#223), like `STTConfig.failover`.
+    failover: list["TTSConfig"] = Field(default_factory=list)
 
 
 # --- Tool Definition ---
