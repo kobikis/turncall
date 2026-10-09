@@ -15,6 +15,10 @@ from turncall.storage.models import CampaignRow, CampaignTargetRow
 
 # One request carries the whole list, so it is bounded like any request body.
 MAX_TARGETS = 10_000
+# And so is each target's share of it: every value lands in JSONB and in the
+# agent's prompt. A few names and a short note each, not a document.
+MAX_TARGET_VARIABLES = 50
+MAX_TARGET_VARIABLES_CHARS = 4_096
 
 Variable = str | int | float | bool
 
@@ -42,6 +46,21 @@ class CampaignTargetRequest(BaseModel):
     timezone: str | None = None
 
     _timezone = field_validator("timezone")(_iana)
+
+    @field_validator("variables")
+    @classmethod
+    def _bounded(cls, value: dict[str, Variable]) -> dict[str, Variable]:
+        if len(value) > MAX_TARGET_VARIABLES:
+            raise ValueError(
+                f"a target takes at most {MAX_TARGET_VARIABLES} variables"
+            )
+        size = sum(len(k) + len(str(v)) for k, v in value.items())
+        if size > MAX_TARGET_VARIABLES_CHARS:
+            raise ValueError(
+                f"a target's variables total {size} characters, names included; "
+                f"the most is {MAX_TARGET_VARIABLES_CHARS}"
+            )
+        return value
 
 
 Weekday = Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]

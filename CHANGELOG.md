@@ -401,6 +401,11 @@ and is not part of this repository's history.
   restore the `NOT NULL`. It now stops with an error naming how many exist;
   give each an `agent_id` or delete it, then downgrade again.
 
+- **A campaign target's `variables` are bounded** (#229): at most 50 and
+  4,096 characters of them, names included — a `422` past either. `targets`
+  was capped at 10,000 but each target's variables were not, so one request
+  could write any amount into the database and into the agent's prompt.
+
 - **A request's writes are committed before its response is sent.** The
   request session committed in a yield dependency, which FastAPI runs *after*
   the response by default — so Twilio could open the media stream named in the

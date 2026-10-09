@@ -932,6 +932,8 @@ POST /v1/campaigns/{id}/cancel        # final; pending + dialling targets -> can
 - **Variables** go into the call's `metadata.template_variables`, which the
   media stream renders exactly as it renders call-init's; the metadata also
   carries `campaign_id` + `campaign_target_id`.
+  Bounded per target at the API (50 names, 4,096 characters names included):
+  `targets` is capped at 10,000, and each value lands in JSONB and a prompt.
 - **Every dial is `place_outbound_call`**, so suppression and the limits hold
   as for a single API dial.
 - **Pacing** (#233): before claiming, the worker `reserve_dial`s under the call

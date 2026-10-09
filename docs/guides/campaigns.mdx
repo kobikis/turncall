@@ -34,7 +34,7 @@ curl -X POST https://api.example.com/v1/campaigns \
   }'
 ```
 
-- **`variables`** reach the agent the way [call-init](/guides/call-init) variables do: `{{name}}` in the system prompt, first message and tool descriptions is replaced with the target's value.
+- **`variables`** reach the agent the way [call-init](/guides/call-init) variables do: `{{name}}` in the system prompt, first message and tool descriptions is replaced with the target's value. A target takes up to 50 variables and 4,096 characters of them, names included; more is a `422`.
 - **`timezone`** is required for every target — on the target itself, or as the campaign's default. It must be an IANA name such as `America/New_York`. A target with neither is refused (`422`). TurnCall never guesses a zone from the number: a ported mobile keeps its area code wherever its owner lives, and the target's local time is what calling hours are read in.
 - A number listed twice is refused: it would call the same person twice. Up to 10,000 targets per request.
 
