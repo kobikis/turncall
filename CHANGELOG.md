@@ -406,6 +406,14 @@ and is not part of this repository's history.
   was capped at 10,000 but each target's variables were not, so one request
   could write any amount into the database and into the agent's prompt.
 
+- **A dial the carrier placed keeps its live-call slot** (#224). Any failure
+  after the carrier had placed an outbound call — writing its SID or its
+  `call.started` — freed the slot while the phone rang, so another dial could
+  be admitted into it and the project ran one call over its limit once the
+  first call's media stream took its slot back. A slot is freed now only when
+  nothing was dialled; a campaign target in that case ends `failed` with
+  `dial_not_recorded` and keeps its reservation.
+
 - **A request's writes are committed before its response is sent.** The
   request session committed in a yield dependency, which FastAPI runs *after*
   the response by default — so Twilio could open the media stream named in the

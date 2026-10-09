@@ -122,7 +122,7 @@ async def place_outbound_call(
         from_number=phone_number.e164_number,
     )
     try:
-        return await _dial(
+        call, provider_call_sid = await _dial(
             session,
             call_id=call_id,
             project_id=project_id,
@@ -134,8 +134,36 @@ async def place_outbound_call(
             before_carrier=before_carrier,
         )
     except BaseException:
+        # Nothing was dialled: the slot was never the call's.
         await release_live_call(project_id, call_id)
         raise
+    # Past here the phone is ringing, so its slot stays taken whatever
+    # happens: freed by the call ending, or by its lease lapsing if nothing
+    # ever holds it. Freeing it now would admit another dial into a slot a
+    # live call is about to re-take — one call over the limit.
+    try:
+        return await _record_dial(
+            session,
+            call,
+            provider_call_sid=provider_call_sid,
+            from_number=phone_number.e164_number,
+            to_number=to_number,
+            agent_id=agent.id,
+        )
+    except Exception as exc:
+        raise DialNotRecorded(call_id, provider_call_sid) from exc
+
+
+class DialNotRecorded(Exception):
+    """The carrier placed the call, and writing that down failed. The phone
+    may be ringing; the call keeps its live-call slot."""
+
+    def __init__(self, call_id: UUID, provider_call_sid: str) -> None:
+        super().__init__(
+            f"call {call_id} was placed ({provider_call_sid}) but not recorded"
+        )
+        self.call_id = call_id
+        self.provider_call_sid = provider_call_sid
 
 
 async def _carrier_account(
@@ -190,8 +218,8 @@ async def _dial(
     to_number: str,
     metadata: dict[str, Any],
     before_carrier: Callable[[], Awaitable[None]] | None,
-) -> CallRow:
-    """Write the call row, dial, and record the carrier's SID on it."""
+) -> tuple[CallRow, str]:
+    """Write the call row and dial: the row, and the carrier's SID."""
     settings = get_settings()
     call = await call_repo.create_call(
         session,
@@ -233,7 +261,19 @@ async def _dial(
             webhook_url=f"{base_url}/webhooks/twilio/voice/outbound",
             status_callback_url=f"{base_url}/webhooks/twilio/status",
         )
+    return call, provider_call_sid
 
+
+async def _record_dial(
+    session: AsyncSession,
+    call: CallRow,
+    *,
+    provider_call_sid: str,
+    from_number: str,
+    to_number: str,
+    agent_id: UUID,
+) -> CallRow:
+    """Put the carrier's SID on the call row and record `call.started`."""
     updated = await call_repo.update_call_status(
         session, call.id, status="initiated", provider_call_sid=provider_call_sid
     )
@@ -243,7 +283,6 @@ async def _dial(
         raise RuntimeError(
             f"outbound call {call.id} vanished after dialling {provider_call_sid}"
         )
-    call = updated
     seq = await call_repo.get_next_sequence_number(session, call.id)
     await call_repo.create_call_event(
         session,
@@ -251,9 +290,9 @@ async def _dial(
         event_type=CallEventType.CALL_STARTED,
         payload={
             "provider_call_sid": provider_call_sid,
-            "from_number": phone_number.e164_number,
+            "from_number": from_number,
             "to_number": to_number,
-            "agent_id": str(agent.id),
+            "agent_id": str(agent_id),
             "direction": CallDirection.OUTBOUND.value,
         },
         sequence_number=seq,
@@ -264,7 +303,7 @@ async def _dial(
         call_id=str(call.id),
         provider_call_sid=provider_call_sid,
     )
-    return call
+    return updated
 
 
 async def _telnyx_connection(account: Any, phone_number: PhoneNumberRow) -> str:

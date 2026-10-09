@@ -53,7 +53,7 @@ from turncall.config import get_settings
 from turncall.domain.enums import CampaignStatus, CampaignTargetStatus
 from turncall.services import limits
 from turncall.services.call_view import call_view_fields
-from turncall.services.outbound_dial import place_outbound_call
+from turncall.services.outbound_dial import DialNotRecorded, place_outbound_call
 from turncall.storage.models import CampaignRow, CampaignTargetRow
 from turncall.storage.repositories import campaign_repo, phone_number_repo
 
@@ -266,6 +266,13 @@ async def _dial(
                 call_id=call_id,
                 before_carrier=before_carrier,
             )
+        except DialNotRecorded as exc:
+            await _not_recorded(session, target, exc.provider_call_sid, exc)
+            return True
+        except Exception as exc:
+            await _not_dialled(session, campaign, target, exc)
+            return False
+        try:
             if not await campaign_repo.record_dial(session, target.id, call.id):
                 # The janitor gave up on this dial before the carrier answered:
                 # the call is real, the target says `dial_outcome_unknown`.
@@ -276,36 +283,64 @@ async def _dial(
                 )
             # The call row and the target's move commit together.
             await session.commit()
-            return True
-        except _NotPlacing:
-            # Paused or cancelled since the claim, or the janitor took it back.
-            # Hand it back if it is still `dialling`; a cancelled or
-            # re-claimed target is left as it is.
-            await session.rollback()
-            await campaign_repo.unclaim(session, target.id)
-            await session.commit()
-            return False
-        except RateLimitedError:
-            # Only if the reservation lapsed before the dial (a stall of over
-            # a second) and another dialler filled the window meanwhile.
-            await session.rollback()
-            await campaign_repo.unclaim(session, target.id)
-            await session.commit()
-            logger.warning("campaign_reservation_lapsed", target_id=str(target.id))
-            return False
         except Exception as exc:
-            await session.rollback()
-            status, error = _refusal(exc)
-            await campaign_repo.finish_target(session, target.id, status, error=error)
-            await session.commit()
-            logger.warning(
-                "campaign_target_not_dialled",
-                campaign_id=str(campaign.id),
-                target_id=str(target.id),
-                status=status.value,
-                error=error,
-            )
-            return False
+            await _not_recorded(session, target, call.provider_call_sid or "", exc)
+        # Placed, so its reservation is the call's either way: a phone is
+        # ringing, and freeing its slot would admit a dial over the limit.
+        return True
+
+
+async def _not_dialled(
+    session: Any, campaign: CampaignRow, target: CampaignTargetRow, exc: Exception
+) -> None:
+    """Nothing was dialled: hand the target back, or end it with why."""
+    await session.rollback()
+    if isinstance(exc, _NotPlacing):
+        # Paused or cancelled since the claim, or the janitor took it back.
+        # Hand it back if it is still `dialling`; a cancelled or re-claimed
+        # target is left as it is.
+        await campaign_repo.unclaim(session, target.id)
+        await session.commit()
+        return
+    if isinstance(exc, RateLimitedError):
+        # Only if the reservation lapsed before the dial (a stall of over a
+        # second) and another dialler filled the window meanwhile.
+        await campaign_repo.unclaim(session, target.id)
+        await session.commit()
+        logger.warning("campaign_reservation_lapsed", target_id=str(target.id))
+        return
+    status, error = _refusal(exc)
+    await campaign_repo.finish_target(session, target.id, status, error=error)
+    await session.commit()
+    logger.warning(
+        "campaign_target_not_dialled",
+        campaign_id=str(campaign.id),
+        target_id=str(target.id),
+        status=status.value,
+        error=error,
+    )
+
+
+async def _not_recorded(
+    session: Any, target: CampaignTargetRow, provider_call_sid: str, exc: Exception
+) -> None:
+    """The carrier placed the call and writing it down failed: the call row is
+    gone with the rollback, so the target ends `failed` saying so — never
+    dialled again, since the phone may be ringing. Best effort: if this write
+    fails too, the janitor ends the `placing` target the same way."""
+    error = (
+        f"dial_not_recorded: the carrier placed this call ({provider_call_sid}) "
+        f"but recording it failed: {type(exc).__name__}: {exc}"
+    )
+    logger.error("campaign_dial_not_recorded", target_id=str(target.id), error=error)
+    try:
+        await session.rollback()
+        await campaign_repo.finish_target(
+            session, target.id, CampaignTargetStatus.FAILED, error=error
+        )
+        await session.commit()
+    except Exception:
+        logger.exception("campaign_dial_not_recorded_unsaved", target_id=str(target.id))
 
 
 def _refusal(exc: Exception) -> tuple[CampaignTargetStatus, str]:

@@ -966,6 +966,14 @@ POST /v1/campaigns/{id}/cancel        # final; pending + dialling targets -> can
   only from `dialling` in a `running` campaign, so of two claimants exactly one
   dials, and a pause/cancel or a janitor reclaim since the claim makes it fail
   and the worker dials nothing.
+- **A placed call keeps its live-call slot** (#224). `place_outbound_call`
+  frees the slot only when nothing was dialled; once the carrier returns a
+  SID, a failure writing it down raises `DialNotRecorded` and the slot stays
+  the call's — freed when it ends, or when its lease lapses if nothing ever
+  holds it. Freeing it would admit another dial into a slot the ringing call's
+  media stream re-takes: one call over the limit. A campaign counts such a
+  dial as placed (its reservation is kept) and ends the target `failed`
+  `dial_not_recorded`, never dialled again.
 - **The janitor** (`campaign_repo.reclaim_abandoned`, top of every pass, the
   eval worker's no-heartbeat age cutoff — `CAMPAIGN_CLAIM_TIMEOUT_SECONDS`,
   default 120). A stale `dialling` never reached the carrier → `pending`,
