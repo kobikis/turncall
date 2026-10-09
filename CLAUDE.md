@@ -238,10 +238,24 @@ Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
   before answering: `error.raised {stage: "carrier_answer", missing_keys:
   ["telnyx"]}`, `call.ended` failed. A key Telnyx refuses (401/403) carries
   `provider: "telnyx", key_rejected: true`.
-- **Binding**: `carrier: "telnyx"` on `POST /v1/phone-numbers`; until #219 the
-  number's Call Control application is pointed at `/webhooks/telnyx/voice` by
-  hand (`twilio_webhooks_configured` is false). `sms_enabled` and a Twilio
-  account on a Telnyx number are a 422 (SMS on Telnyx is out of scope).
+- **Binding** (#219): `carrier: "telnyx"` on `POST /v1/phone-numbers` looks the
+  number up on the project's Telnyx account (`external_number_sid` optional; a
+  number it cannot see is a 422, no key at any level a 503
+  `no_telnyx_account`) and routes it: Telnyx routes by Call Control
+  application, so `TelnyxAdapter.configure_number_webhook` puts the number on
+  this deployment's application `TurnCall <PUBLIC_BASE_URL host>` — created
+  with webhook format **2** (Telnyx's default 1 is a shape the handler cannot
+  read) and the account's outbound voice profile if it has exactly one,
+  corrected on every bind/update — and `voice_url=""` takes it off. A TurnCall
+  application left empty (the last unbind, or the old host after
+  PUBLIC_BASE_URL moved) is deleted; a connection not named `TurnCall ` is
+  never touched. Unbind is best-effort, project deletion is not (as on
+  Twilio). The bind/update response carries `webhooks_configured` for every
+  carrier; `twilio_webhooks_configured` is null off Twilio. `sms_enabled` and
+  a Twilio account on a Telnyx number are a 422 (SMS on Telnyx is out of
+  scope). Live-verified: create/correct/delete of the application; the
+  number PATCH (`connection_id`, null to unassign) is not — no number on the
+  test account.
 - **Outbound** (#218) takes the same path as Twilio's,
   `services/outbound_dial.place_outbound_call` — suppression, limits, then the
   dial — so `POST /v1/calls/outbound` and campaigns dial Telnyx numbers
@@ -255,8 +269,8 @@ Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
   nobody answered ends by `call.hangup`'s `hangup_cause` — `timeout`/`no_answer`
   → `no_answer`, `user_busy`/`call_rejected` → `busy`, `not_found` → `failed`
   + `call.failed` — which is what a campaign's retry policy reads.
-- **Not yet**: number configuration (#219), transfer + DTMF (#220) raise
-  `NotImplementedError` on `TelnyxAdapter`, naming the ticket.
+- **Not yet**: transfer + DTMF (#220) raise `NotImplementedError` on
+  `TelnyxAdapter`, naming the ticket.
   The live-call limit (#224) admits a call in `open_inbound_call`, ahead of
   call-init, for every carrier.
 

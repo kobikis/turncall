@@ -50,7 +50,9 @@ See [Call Init](/guides/call-init) for details on how dynamic routing works.
 ### Telnyx numbers
 
 A Telnyx number answers inbound calls through Telnyx Call Control. Bind it with
-`"carrier": "telnyx"`; `external_number_sid` is its Telnyx phone number id:
+`"carrier": "telnyx"`. TurnCall looks the number up on your Telnyx account, so
+`external_number_sid` (its Telnyx phone number id) is optional — and a number
+the account does not hold is refused with a `422` naming it:
 
 ```bash
 curl -X POST http://localhost:8090/v1/phone-numbers \
@@ -58,18 +60,24 @@ curl -X POST http://localhost:8090/v1/phone-numbers \
   -H "Content-Type: application/json" \
   -d '{
     "carrier": "telnyx",
-    "external_number_sid": "1293384261075731499",
     "e164_number": "+15551234567",
     "routing_target_type": "agent",
     "routing_target_id": "AGENT_UUID"
   }'
 ```
 
-Then, in Telnyx Mission Control, set the webhook URL of the number's Call
-Control application to `https://<your host>/webhooks/telnyx/voice` (TurnCall
-does not configure it for you yet, so `twilio_webhooks_configured` reads
-`false`). The agent, its tools, recording, ambience and voicemail detection
-behave exactly as on a Twilio number.
+Binding routes the number to TurnCall: there is nothing to set in Mission
+Control. TurnCall keeps one Call Control application per deployment, named
+`TurnCall <your host>`, whose webhooks go to
+`https://<your host>/webhooks/telnyx/voice` — created on the first bind (on
+your account's outbound voice profile, if it has exactly one; otherwise pick
+one for it in Mission Control before dialling out), corrected on every bind or
+update, and deleted when the last number leaves it. The number is moved onto
+it; `webhooks_configured` in the response says whether that worked (it needs
+`PUBLIC_BASE_URL`). Unbinding takes the number off again, unless it has since
+been moved to another connection, which is left alone. The agent, its tools,
+recording, ambience and voicemail detection behave exactly as on a Twilio
+number.
 
 The Telnyx account is the platform's `TELNYX_API_KEY` and `TELNYX_PUBLIC_KEY`,
 or the project's own:
@@ -155,7 +163,8 @@ A secret is minted only when `server_url` appears on a number that never had one
 ## Configure Twilio
 
 TurnCall sets these on bind when `PUBLIC_BASE_URL` is configured (the response
-says so in `twilio_webhooks_configured`). To set them by hand:
+says so in `webhooks_configured`; `twilio_webhooks_configured` is the same
+value under its older, Twilio-only name). To set them by hand:
 
 - **Voice URL**: `https://your-host/webhooks/twilio/voice/inbound` (POST)
 - **Status URL**: `https://your-host/webhooks/twilio/status` (POST)

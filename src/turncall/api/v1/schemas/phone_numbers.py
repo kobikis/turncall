@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from turncall.api.v1.schemas import E164_PATTERN
-from turncall.domain.carriers import CARRIERS, DEFAULT_CARRIER, TWILIO
+from turncall.domain.carriers import CARRIERS, DEFAULT_CARRIER, TELNYX, TWILIO
 
 Carrier = Literal[CARRIERS]  # type: ignore[valid-type]
 
@@ -76,8 +76,9 @@ class BindPhoneNumberRequest(TwilioAccountFields, CarrierField):
         validation_alias=_CARRIER_ALIASES,
         description=_CARRIER_DOC,
     )
-    # Optional with the number's own account: TurnCall looks the SID up by
-    # E.164 there, which is also what proves the credentials own the number.
+    # Optional with the number's own Twilio account, and on Telnyx: TurnCall
+    # looks the SID up by E.164 on the account, which is also what proves the
+    # account owns the number.
     external_number_sid: str | None = Field(default=None, min_length=1, max_length=64)
     e164_number: str = Field(..., pattern=E164_PATTERN)
     routing_target_type: str = Field(..., pattern=r"^(agent|workflow|webhook)$")
@@ -90,7 +91,8 @@ class BindPhoneNumberRequest(TwilioAccountFields, CarrierField):
     def validate_routing(self) -> "BindPhoneNumberRequest":
         if self.carrier != TWILIO:
             only_on_twilio(self, self.carrier)
-        if not self.external_number_sid and not self.has_own_twilio:
+        looked_up = self.has_own_twilio or self.carrier == TELNYX
+        if not self.external_number_sid and not looked_up:
             msg = (
                 "external_number_sid is required unless the number brings its own "
                 "Twilio account (twilio_account_sid + twilio_auth_token)"

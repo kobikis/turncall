@@ -5,15 +5,14 @@ Every Telnyx REST request TurnCall makes goes through here, built by
 is what a test's fake carrier replaces. A command addresses a call by its
 `call_control_id` (stored as the call's `provider_call_sid`).
 
-The actions later tickets bring (number configuration #219, transfer and DTMF
-#220) land here as well; until then they raise, naming the ticket, rather than
-pretend to have done something.
+Transfer and DTMF (#220) land here as well; until then they raise, naming the
+ticket, rather than pretend to have done something.
 """
 
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 from loguru import logger
@@ -27,6 +26,11 @@ STREAM_CODEC = "PCMU"
 # Telnyx's answer to a command on a call that has already hung up.
 CALL_ALREADY_ENDED = "90018"
 _TIMEOUT_SECONDS = 10.0
+# Every Call Control application TurnCall creates is named this, then a host.
+APPLICATION_PREFIX = "TurnCall "
+# The webhook format `webhooks/telnyx_handlers.py` reads ({"data": {...}}).
+# Telnyx's default for a new application is "1", a different shape.
+_WEBHOOK_API_VERSION = "2"
 
 
 class TelnyxApiError(RuntimeError):
@@ -55,6 +59,14 @@ def _media_stream(stream_url: str) -> dict[str, str]:
         "stream_bidirectional_mode": "rtp",
         "stream_bidirectional_codec": STREAM_CODEC,
     }
+
+
+def application_name(webhook_url: str) -> str:
+    """The Call Control application TurnCall keeps for one deployment: named by
+    the host its webhooks go to, so two deployments sharing a Telnyx account
+    (staging and production) each keep their own and never repoint the
+    other's numbers."""
+    return f"{APPLICATION_PREFIX}{urlsplit(webhook_url).netloc}"
 
 
 def _not_yet(action: str, ticket: str) -> NotImplementedError:
@@ -207,10 +219,38 @@ class TelnyxAdapter(TelephonyAdapter):
     async def configure_number_webhook(
         self, number_sid: str, voice_url: str, status_callback_url: str
     ) -> None:
-        raise _not_yet("Configuring a number", "#219")
+        """Route the number (Telnyx's phone number id) to `voice_url`, or away
+        from TurnCall when it is "".
+
+        Telnyx routes a number by the Call Control application it is assigned
+        to, so routing it is assigning it to this deployment's application
+        (created on first use, its webhook URL corrected on every bind), and
+        unrouting is unassigning it. Call Control posts every event to that one
+        URL; `status_callback_url` is unused. An application of TurnCall's left
+        with no numbers — the previous host's after PUBLIC_BASE_URL changed, or
+        this one after the last unbind — is deleted, so the account does not
+        fill with them. A number now on someone else's connection is left
+        there: unbinding it is not ours to undo.
+        """
+        path = f"/phone_numbers/{quote(number_sid, safe='')}"
+        previous = (await self.fetch_number_info(number_sid)).get("connection_id")
+        target = await self.ensure_application(voice_url) if voice_url else None
+        if target is None and not await self._is_ours(previous):
+            return
+        if previous != target:
+            await self._request("PATCH", path, body={"connection_id": target})
+            logger.info(
+                "telnyx_number_routed",
+                number_id=number_sid,
+                connection_id=target,
+                previous=previous,
+            )
+        if previous and previous != target:
+            await self.delete_application_if_unused(previous)
 
     async def fetch_number_info(self, number_sid: str) -> dict[str, Any]:
-        raise _not_yet("Looking up a number", "#219")
+        path = f"/phone_numbers/{quote(number_sid, safe='')}"
+        return dict((await self._request("GET", path)).get("data") or {})
 
     async def find_number(self, e164: str) -> dict[str, Any] | None:
         """The account's phone number `e164`, or None when it cannot see it.
@@ -227,6 +267,91 @@ class TelnyxAdapter(TelephonyAdapter):
             (dict(n) for n in found.get("data") or [] if n.get("phone_number") == e164),
             None,
         )
+
+    async def ensure_application(self, webhook_url: str) -> str:
+        """This deployment's Call Control application, pointed at
+        `webhook_url`, created when missing; its id."""
+        name = application_name(webhook_url)
+        found = await self._request(
+            "GET",
+            "/call_control_applications",
+            params={"filter[application_name][contains]": name, "page[size]": 250},
+        )
+        settings = {
+            "webhook_event_url": webhook_url,
+            "webhook_api_version": _WEBHOOK_API_VERSION,
+        }
+        for app in found.get("data") or []:
+            if app.get("application_name") == name:
+                if any(app.get(k) != v for k, v in settings.items()):
+                    await self._request(
+                        "PATCH",
+                        f"/call_control_applications/{app['id']}",
+                        body=settings,
+                    )
+                return str(app["id"])
+        created = await self._request(
+            "POST",
+            "/call_control_applications",
+            body={"application_name": name, **settings, **await self._outbound()},
+        )
+        app_id = str(created["data"]["id"])
+        logger.info("telnyx_application_created", application_id=app_id, name=name)
+        return app_id
+
+    async def _outbound(self) -> dict[str, Any]:
+        """The outbound voice profile a new application dials through. Telnyx
+        refuses a dial on an application with none, and an account usually has
+        exactly one (its "Default"); with several, which one is the operator's
+        call, so none is chosen and outbound waits on the console."""
+        profiles = (await self._request("GET", "/outbound_voice_profiles")).get(
+            "data"
+        ) or []
+        if len(profiles) != 1:
+            logger.warning(
+                "telnyx_outbound_voice_profile_not_chosen", count=len(profiles)
+            )
+            return {}
+        return {"outbound": {"outbound_voice_profile_id": str(profiles[0]["id"])}}
+
+    async def _application(self, connection_id: str | None) -> dict[str, Any] | None:
+        """The Call Control application `connection_id`, or None when it is not
+        one (another kind of connection, or gone)."""
+        if not connection_id:
+            return None
+        try:
+            found = await self._request(
+                "GET", f"/call_control_applications/{quote(connection_id, safe='')}"
+            )
+        except TelnyxApiError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        return dict(found.get("data") or {})
+
+    async def _is_ours(self, connection_id: str | None) -> bool:
+        app = await self._application(connection_id)
+        return bool(app) and str(app.get("application_name", "")).startswith(
+            APPLICATION_PREFIX
+        )
+
+    async def delete_application_if_unused(self, connection_id: str) -> bool:
+        """Delete one of TurnCall's applications once no number is on it.
+        Whether it was deleted; anyone else's is never touched."""
+        if not await self._is_ours(connection_id):
+            return False
+        on_it = await self._request(
+            "GET",
+            "/phone_numbers",
+            params={"filter[connection_id]": connection_id, "page[size]": 1},
+        )
+        if on_it.get("data"):
+            return False
+        await self._request(
+            "DELETE", f"/call_control_applications/{quote(connection_id, safe='')}"
+        )
+        logger.info("telnyx_application_deleted", application_id=connection_id)
+        return True
 
     async def send_sms(self, from_number: str, to_number: str, body: str) -> str:
         raise NotImplementedError("SMS on Telnyx numbers is not supported")

@@ -11,8 +11,9 @@ pace. An outbound call (#218) has no answer step: the dial names the stream,
 and `answer_outbound_call` opens it once the callee "picks up". Field names follow Telnyx's media streaming and Call Control docs and
 pipecat's `TelnyxFrameSerializer`.
 
-Until #219 configures a number's Call Control application on bind, the
-webhook URL is the one an operator sets by hand: `/webhooks/telnyx/voice`.
+Binding a number through the API routes it to TurnCall's Call Control
+application (#219); the fake carrier keeps that application's webhook URL as
+the number's `voice_url`, and an inbound call is posted there.
 """
 
 from __future__ import annotations
@@ -80,20 +81,21 @@ async def post_signed(
 async def bind_number(
     api: httpx.AsyncClient, carrier: FakeCarrier, agent_id: str
 ) -> str:
-    """Own a fresh number on Telnyx and bind it to the agent through the API."""
+    """Own a fresh number on Telnyx and bind it to the agent through the API —
+    which looks it up on the account and routes it to TurnCall (#219)."""
     e164 = "+1555" + str(uuid.uuid4().int)[:7]
-    number = carrier.add_number(e164)
+    carrier.add_number(e164)
     response = await api.post(
         "/v1/phone-numbers",
         json={
             "carrier": "telnyx",
             "e164_number": e164,
-            "external_number_sid": number.sid,
             "routing_target_type": "agent",
             "routing_target_id": agent_id,
         },
     )
     assert response.status_code == 201, response.text
+    assert response.json()["data"]["webhooks_configured"] is True
     return e164
 
 
@@ -196,7 +198,13 @@ async def place_inbound_call(
         "state": "parked",
         "start_time": datetime.now(UTC).isoformat(),
     }
-    response = await post_signed(http, carrier, event("call.initiated", initiated))
+    # Where binding routed the number: its Call Control application's URL.
+    url = carrier.number(to_number).voice_url
+    if not url:
+        raise AssertionError(f"{to_number} is not routed to TurnCall on Telnyx")
+    response = await post_signed(
+        http, carrier, event("call.initiated", initiated), url=url
+    )
     response.raise_for_status()
     # The app answers within the webhook it is handed.
     answers = [
@@ -208,15 +216,14 @@ async def place_inbound_call(
         raise AssertionError(f"the app did not answer {call_control_id}")
     stream_url = answers[0].params["stream_url"]
     await post_signed(
-        http, carrier, event("call.answered", {**initiated, "state": "answered"})
+        http,
+        carrier,
+        event("call.answered", {**initiated, "state": "answered"}),
+        url=url,
     )
 
     return await _open_stream(
-        carrier,
-        http,
-        initiated,
-        stream_url=stream_url,
-        webhook_url=WEBHOOK_PATH,
+        carrier, http, initiated, stream_url=stream_url, webhook_url=url
     )
 
 

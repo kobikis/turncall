@@ -34,8 +34,9 @@ target's status is on `GET /v1/campaigns/{id}/targets`. See
 [Campaigns](/guides/campaigns).
 
 **Telnyx numbers answer inbound calls.** Bind a number with
-`"carrier": "telnyx"` and point its Call Control application at
-`/webhooks/telnyx/voice`. The call runs the same agent as on Twilio, with
+`"carrier": "telnyx"` and TurnCall routes it to itself on your Telnyx account —
+no Mission Control step; a number the account does not hold is refused. The
+call runs the same agent as on Twilio, with
 recording, ambience and voicemail detection unchanged. Webhooks are verified
 with your Telnyx account's public key, and a call over your live-call limit is
 refused busy, as on Twilio. See
