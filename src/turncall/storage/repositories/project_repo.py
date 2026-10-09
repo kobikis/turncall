@@ -34,6 +34,20 @@ async def get_project_by_id(
     return result.scalar_one_or_none()
 
 
+async def set_limits(
+    session: AsyncSession, project_id: UUID, **limits: int | None
+) -> ProjectRow | None:
+    """Replace a live project's limits (#206); `limits` are `limit_*` columns."""
+    row = await get_project_by_id(session, project_id)
+    if row is None:
+        return None
+    for column, value in limits.items():
+        setattr(row, column, value)
+    await session.flush()
+    await session.refresh(row)
+    return row
+
+
 async def list_projects(
     session: AsyncSession,
     *,

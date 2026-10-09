@@ -28,6 +28,11 @@ def _spawn(coro) -> None:  # type: ignore[no-untyped-def]
     task.add_done_callback(_BG_TASKS.discard)
 
 
+def pending_deliveries() -> frozenset[asyncio.Task]:
+    """Webhook deliveries still in flight — a shutdown drain waits for them."""
+    return frozenset(_BG_TASKS)
+
+
 async def _deliver_and_log(
     event: WebhookEvent,
     subscribers: list[tuple[str, str]],
@@ -81,6 +86,7 @@ async def dispatch_event(
     call_id: UUID | None = None,
     session_id: UUID | None = None,
     eval_run_id: UUID | None = None,
+    campaign_id: UUID | None = None,
     agent_id: UUID | None = None,
     event_id: str | None = None,
 ) -> int:
@@ -110,6 +116,7 @@ async def dispatch_event(
         call_id=call_id,
         session_id=session_id,
         eval_run_id=eval_run_id,
+        campaign_id=campaign_id,
         agent_id=str(resolved_agent_id) if resolved_agent_id else None,
         # One uuid per logical event: stable across retries, shared across
         # subscribers, so consumers can dedupe redeliveries. See ADR-0007.

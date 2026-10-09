@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID
 
 from loguru import logger
-from pipecat.frames.frames import ErrorFrame, LLMRunFrame
+from pipecat.frames.frames import ErrorFrame, Frame, LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import (
     PipelineParams,
@@ -22,6 +22,11 @@ from pipecat.workers.runner import WorkerRunner
 
 from turncall.config import get_settings
 from turncall.domain.enums import CallEventType, CallStatus
+from turncall.orchestrator.live_control import (
+    call_handlers,
+    control_channel,
+    stages_of,
+)
 from turncall.orchestrator.pipeline_factory import CallContext
 from turncall.orchestrator.telemetry import (
     build_observers,
@@ -29,6 +34,7 @@ from turncall.orchestrator.telemetry import (
     is_tracing_active,
 )
 from turncall.services.credentials import MissingProviderKeyError
+from turncall.services.live_call_channel import ControlRefused
 
 
 def s2s_greeting_frame() -> LLMRunFrame:
@@ -228,12 +234,24 @@ class CallSession:
         self._watch_failover()
 
         try:
-            await self._update_call_status(CallStatus.IN_PROGRESS)
-            # Note: call.started event is fired by the inbound handler
-            # (twilio_handlers / whatsapp_handlers) before the pipeline starts.
+            # Open before the call reads as live, closed when it stops running:
+            # the API reaches the call through it (#215).
+            async with control_channel(
+                self._call_context,
+                call_handlers(
+                    self._queue_control_frame,
+                    self._call_context,
+                    lambda: stages_of(self._pipeline, self._task),
+                    pipeline_mode=self._pipeline_mode,
+                    s2s_provider=self._s2s_provider,
+                ),
+            ):
+                await self._update_call_status(CallStatus.IN_PROGRESS)
+                # Note: call.started event is fired by the inbound handler
+                # (twilio_handlers / whatsapp_handlers) before the pipeline starts.
 
-            await self._trigger_first_response(self._task)
-            await run_until_pipeline_done(self._runner, self._task)
+                await self._trigger_first_response(self._task)
+                await run_until_pipeline_done(self._runner, self._task)
         except asyncio.CancelledError:
             logger.info("call_session_cancelled", call_id=str(self.call_id))
         except Exception as exc:
@@ -263,6 +281,11 @@ class CallSession:
             # on_client_disconnected guarantees we reach here promptly instead of
             # hanging in the runner.
             logger.info("call_session_ended", call_id=str(self.call_id))
+
+    async def _queue_control_frame(self, frame: Frame) -> None:
+        if self._task is None:
+            raise ControlRefused("The call is not running")
+        await self._task.queue_frame(frame)
 
     async def _trigger_first_response(self, task: PipelineWorker) -> None:
         """Queue what makes the agent speak first."""
@@ -323,10 +346,11 @@ class CallSession:
         await self._record_error(str(processor), error)
 
     def _watch_failover(self) -> None:
-        """Record each LLM failover (#222): a `provider.failover` event on a
-        call, and among the iteration's agent errors on an eval, which has no
-        event log. The switch absorbs the error, so nothing else would."""
-        from turncall.orchestrator.llm_failover import FailoverLLM
+        """Record each provider failover (#222, #223): a `provider.failover`
+        event on a call, and among the iteration's agent errors on an eval,
+        which has no event log. The switch absorbs the error, so nothing else
+        would."""
+        from turncall.orchestrator.failover import FailoverGroup
 
         processors = self._pipeline.processors
         # A client delegate's group (#246) sits outside the pipeline, behind
@@ -335,9 +359,12 @@ class CallSession:
             *processors,
             *(getattr(p, "delegate_llm", None) for p in processors),
         ]
-        group = next((p for p in candidates if isinstance(p, FailoverLLM)), None)
-        if group is None:
-            return
+        for group in candidates:
+            if isinstance(group, FailoverGroup):
+                self._record_failovers(group)
+
+    def _record_failovers(self, group: Any) -> None:
+        role = group.role
 
         @group.event_handler("on_failover")  # type: ignore[untyped-decorator]
         async def _on_failover(
@@ -347,19 +374,19 @@ class CallSession:
             logger.warning(
                 "provider_failover",
                 call_id=str(self.call_id),
-                role="llm",
+                role=role,
                 src=src,
                 dst=dst,
                 error=error,
             )
             if len(self.pipeline_errors) < _MAX_PIPELINE_ERRORS:
                 self.pipeline_errors.append(
-                    f"llm failed over from {src} to {dst}: {error}"
+                    f"{role} failed over from {src} to {dst}: {error}"
                 )
             if not self._call_context.is_eval:
                 await self._log_event(
                     CallEventType.PROVIDER_FAILOVER,
-                    {"role": "llm", "from": src, "to": dst, "error": error},
+                    {"role": role, "from": src, "to": dst, "error": error},
                 )
 
     def _arm_idle_guard(self) -> None:

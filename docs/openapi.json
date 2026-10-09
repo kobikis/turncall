@@ -36,7 +36,7 @@
           "health"
         ],
         "summary": "Readiness Check",
-        "description": "Kubernetes readiness probe - checks if the service can serve traffic.",
+        "description": "Kubernetes readiness probe - checks if the service can serve traffic.\n\n503 `draining` from the first SIGTERM on (#199): the process keeps serving\nthe calls it has, but new ones belong on another replica.",
         "operationId": "readiness_check_ready_get",
         "responses": {
           "200": {
@@ -62,7 +62,7 @@
           "health"
         ],
         "summary": "Liveness Check",
-        "description": "Kubernetes liveness probe - checks if the process is alive.",
+        "description": "Kubernetes liveness probe - checks if the process is alive.\n\nStays 200 while draining: a draining process is healthy, and a liveness\nfailure would get it killed with its calls still on it.",
         "operationId": "liveness_check_live_get",
         "responses": {
           "200": {
@@ -75,6 +75,28 @@
                   },
                   "type": "object",
                   "title": "Response Liveness Check Live Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Metrics",
+        "description": "Prometheus exposition: live voice calls on this process (#199).\n\nPer process, as every gauge is: scrape each replica, not a load-balanced\naddress. The input to an autoscaler, and to a drain's progress.",
+        "operationId": "metrics_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -249,6 +271,78 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Delete Project V1 Projects  Project Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{project_id}/limits": {
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Set Project Limits",
+        "description": "Set the project's limits (#206), replacing all of them: a field left\nout or null goes back to the platform default. Applies to the next call or\nmessage \u2014 calls already live keep their slots, and count toward the new\nlimit. Admin key; a project can only set its own.",
+        "operationId": "set_project_limits_v1_projects__project_id__limits_put",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectLimits"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Set Project Limits V1 Projects  Project Id  Limits Put"
                 }
               }
             }
@@ -1774,7 +1868,7 @@
           "call-control"
         ],
         "summary": "Handoff Call",
-        "description": "Hand off an active call to another agent.",
+        "description": "Switch a live call to another agent: its prompt and its tools.\n\nApplied by the call itself, through the same path as the model's\n`handoff_to_agent` tool, and answered only once it has: `details` names the\nagent and the tools the call now runs. Refused (409) where that tool is \u2014\nan `openai_live` agent \u2014 and when the call is not in progress.",
         "operationId": "handoff_call_v1_calls__call_id__handoff_post",
         "parameters": [
           {
@@ -1826,6 +1920,15 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No such call, or no such agent in this project"
+          },
+          "409": {
+            "description": "The call is not live, or refused the handoff"
+          },
+          "504": {
+            "description": "The call did not acknowledge the handoff in time"
           },
           "422": {
             "description": "Validation Error",
@@ -1918,7 +2021,7 @@
           "call-control"
         ],
         "summary": "Inject Message",
-        "description": "Inject a context message into an active call.",
+        "description": "Add a message to a live call's LLM context, for the agent's next turn.\n\nAnswered only once the call itself has applied it. Cascade calls only: a\nspeech-to-speech call refuses it (409), since its model reads no context\nadded after it starts.",
         "operationId": "inject_message_v1_calls__call_id__messages_post",
         "parameters": [
           {
@@ -1971,6 +2074,12 @@
               }
             }
           },
+          "409": {
+            "description": "The call is not live, or refused the message"
+          },
+          "504": {
+            "description": "The call did not acknowledge the message in time"
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -1990,7 +2099,7 @@
           "phone-numbers"
         ],
         "summary": "Bind Phone Number",
-        "description": "Bind a Twilio phone number to a routing target.",
+        "description": "Bind a Twilio or Telnyx phone number to a routing target.",
         "operationId": "bind_phone_number_v1_phone_numbers_post",
         "parameters": [
           {
@@ -2252,7 +2361,7 @@
           "phone-numbers"
         ],
         "summary": "Unbind Phone Number",
-        "description": "Remove a phone number binding and clear the Twilio number's webhooks \u2014\nan unbound number must not keep pointing Twilio at TurnCall.",
+        "description": "Remove a phone number binding and point the number away from TurnCall\non its carrier \u2014 an unbound number must not keep reaching TurnCall.",
         "operationId": "unbind_phone_number_v1_phone_numbers__phone_number_id__delete",
         "parameters": [
           {
@@ -2696,6 +2805,489 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Unsuppress Number V1 Suppression List  Entry Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/campaigns": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Create Campaign",
+        "description": "Record a campaign; the campaign worker starts dialling it.",
+        "operationId": "create_campaign_v1_campaigns_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCampaignRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Campaign V1 Campaigns Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "List Campaigns",
+        "description": "The project's campaigns, newest first, each with its target counts.",
+        "operationId": "list_campaigns_v1_campaigns_get",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Campaigns V1 Campaigns Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/campaigns/{campaign_id}": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Get Campaign",
+        "operationId": "get_campaign_v1_campaigns__campaign_id__get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Campaign V1 Campaigns  Campaign Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/campaigns/{campaign_id}/targets": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "List Campaign Targets",
+        "description": "Each target's status, in list order; `status` filters to one.",
+        "operationId": "list_campaign_targets_v1_campaigns__campaign_id__targets_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CampaignTargetStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Campaign Targets V1 Campaigns  Campaign Id  Targets Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/campaigns/{campaign_id}/pause": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Pause Campaign",
+        "description": "Stop dialling new targets. Calls already placed carry on, and their\nendings are still recorded.",
+        "operationId": "pause_campaign_v1_campaigns__campaign_id__pause_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Pause Campaign V1 Campaigns  Campaign Id  Pause Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/campaigns/{campaign_id}/resume": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Resume Campaign",
+        "description": "Dial again where a paused campaign stopped.",
+        "operationId": "resume_campaign_v1_campaigns__campaign_id__resume_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Resume Campaign V1 Campaigns  Campaign Id  Resume Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/campaigns/{campaign_id}/cancel": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Cancel Campaign",
+        "description": "End the campaign for good. Targets not yet dialled become `cancelled`;\ncalls already placed carry on, and their endings are still recorded.",
+        "operationId": "cancel_campaign_v1_campaigns__campaign_id__cancel_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Cancel Campaign V1 Campaigns  Campaign Id  Cancel Post"
                 }
               }
             }
@@ -6514,6 +7106,26 @@
         }
       }
     },
+    "/webhooks/telnyx/voice": {
+      "post": {
+        "tags": [
+          "telnyx-webhooks"
+        ],
+        "summary": "Call Control Webhook",
+        "description": "Every Call Control event for a Telnyx number. 200 for anything verified,\nhandled or not \u2014 Telnyx retries a webhook that is not acknowledged.",
+        "operationId": "call_control_webhook_webhooks_telnyx_voice_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/webhooks/whatsapp": {
       "get": {
         "tags": [
@@ -6737,7 +7349,7 @@
           "smart_turn_detection": {
             "type": "boolean",
             "title": "Smart Turn Detection",
-            "description": "Use ML-based turn detection (SmartTurnV3)",
+            "description": "Use ML-based turn detection (SmartTurnV3). Not used with a Deepgram Flux STT model, which detects the end of the turn itself.",
             "default": true
           },
           "smart_turn_stop_secs": {
@@ -6997,6 +7609,17 @@
               }
             ],
             "title": "Twilio Auth Token"
+          },
+          "carrier": {
+            "type": "string",
+            "enum": [
+              "twilio",
+              "telnyx",
+              "asterisk"
+            ],
+            "title": "Carrier",
+            "description": "The number's carrier. `provider` is accepted as a deprecated alias for it.",
+            "default": "twilio"
           },
           "external_number_sid": {
             "anyOf": [
@@ -7273,6 +7896,106 @@
         "title": "BriefingSummary",
         "description": "Briefing variant: auto-generate a summary from the transcript."
       },
+      "CallingWindowRequest": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "time",
+            "title": "Start"
+          },
+          "end": {
+            "type": "string",
+            "format": "time",
+            "title": "End"
+          },
+          "days": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "mon",
+                "tue",
+                "wed",
+                "thu",
+                "fri",
+                "sat",
+                "sun"
+              ]
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Days"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "CallingWindowRequest",
+        "description": "Local hours every target may be called in, read in the target's own zone."
+      },
+      "CampaignTargetRequest": {
+        "properties": {
+          "number": {
+            "type": "string",
+            "pattern": "^\\+[1-9]\\d{1,14}$",
+            "title": "Number"
+          },
+          "variables": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Variables"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "number"
+        ],
+        "title": "CampaignTargetRequest"
+      },
+      "CampaignTargetStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "dialling",
+          "placing",
+          "calling",
+          "completed",
+          "suppressed",
+          "failed",
+          "cancelled"
+        ],
+        "title": "CampaignTargetStatus",
+        "description": "One target's place in its campaign (#229, #232).\n\n`pending` waits to be dialled; `dialling` is claimed by a worker that has\nnot asked the carrier yet; `placing` is the carrier being asked; `calling`\nhas a call placed; the rest are final.\n\n`dialling` and `placing` are separate committed steps because a worker can\ndie in either, and they mean opposite things: a dead claim in `dialling`\nnever reached the carrier and goes back to `pending`, while one in\n`placing` may have rung a phone with no call row to show for it, so the\njanitor ends it `failed` rather than ever dialling it a second time."
+      },
       "CreateAgentRequest": {
         "properties": {
           "name": {
@@ -7326,6 +8049,108 @@
           "name"
         ],
         "title": "CreateApiKeyRequest"
+      },
+      "CreateCampaignRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "agents": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RoutingWeightEntry"
+                },
+                "type": "array",
+                "maxItems": 10,
+                "minItems": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agents"
+          },
+          "from_number_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "From Number Id"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          },
+          "calling_window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CallingWindowRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retry_policy": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/RetryRule"
+                },
+                "propertyNames": {
+                  "enum": [
+                    "customer_did_not_answer",
+                    "customer_busy",
+                    "voicemail"
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Policy"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignTargetRequest"
+            },
+            "type": "array",
+            "maxItems": 10000,
+            "minItems": 1,
+            "title": "Targets"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "from_number_id",
+          "targets"
+        ],
+        "title": "CreateCampaignRequest"
       },
       "CreateEvalRunRequest": {
         "properties": {
@@ -8348,6 +9173,53 @@
         "title": "MCPServerSchema",
         "description": "MCP server connection configuration."
       },
+      "ProjectLimits": {
+        "properties": {
+          "live_calls": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Calls",
+            "description": "Live calls this project may hold at once, across every server"
+          },
+          "outbound_calls_per_second": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outbound Calls Per Second",
+            "description": "Outbound calls each of this project's numbers may start per second"
+          },
+          "messages_per_minute": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Messages Per Minute",
+            "description": "Inbound messages one text session may send per minute"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ProjectLimits",
+        "description": "A project's limits (#206). Null means the platform default (`LIMIT_*`),\nwhich is unlimited unless the deployment set one. A `PUT` replaces all of\nthem, so a field left out goes back to that default."
+      },
       "ProjectRole": {
         "type": "string",
         "enum": [
@@ -8415,6 +9287,29 @@
           "description"
         ],
         "title": "RegisterToolRequest"
+      },
+      "RetryRule": {
+        "properties": {
+          "max_attempts": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Max Attempts"
+          },
+          "spacing_seconds": {
+            "type": "integer",
+            "maximum": 604800.0,
+            "minimum": 60.0,
+            "title": "Spacing Seconds"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "max_attempts",
+          "spacing_seconds"
+        ],
+        "title": "RetryRule"
       },
       "RoutingWeightEntry": {
         "properties": {
@@ -8554,6 +9449,14 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Extra"
+          },
+          "failover": {
+            "items": {
+              "$ref": "#/components/schemas/STTConfigSchema"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Failover"
           }
         },
         "type": "object",
@@ -8902,6 +9805,14 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Extra"
+          },
+          "failover": {
+            "items": {
+              "$ref": "#/components/schemas/TTSConfigSchema"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Failover"
           }
         },
         "type": "object",
@@ -9244,6 +10155,23 @@
             ],
             "title": "Twilio Auth Token"
           },
+          "carrier": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "twilio",
+                  "telnyx",
+                  "asterisk"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Carrier",
+            "description": "The number's carrier. `provider` is accepted as a deprecated alias for it."
+          },
           "routing_target_type": {
             "type": "string",
             "pattern": "^(agent|workflow|webhook)$",
@@ -9296,7 +10224,7 @@
           "routing_target_type"
         ],
         "title": "UpdatePhoneNumberRequest",
-        "description": "In-place update of a binding's routing/SMS config.\n\nThe number's identity (SID, E.164) and its server_url_secret are stable \u2014\ncall-init endpoints keep verifying with the same secret across edits."
+        "description": "In-place update of a binding's routing/SMS config.\n\nThe number's identity (carrier, SID, E.164) and its server_url_secret are\nstable \u2014 call-init endpoints keep verifying with the same secret across\nedits. `carrier` may be sent but must be the number's own (null = it)."
       },
       "UpdateTakeawayRequest": {
         "properties": {

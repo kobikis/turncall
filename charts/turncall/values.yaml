@@ -1,0 +1,175 @@
+# TurnCall on Kubernetes. Postgres (with pgvector) and Redis are external:
+# point DATABASE_URL and REDIS_URL at them. See docs/guides/kubernetes.mdx.
+
+image:
+  repository: ghcr.io/kobikis/turncall
+  # Empty = the chart's appVersion. Pin a release.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Plain settings, as environment variables, shared by every TurnCall process
+# (CLAUDE.md "Environment Variables"). TURNCALL_ENV, PORT and
+# ASTERISK_EDGE_ENABLED are set by the chart per Deployment and cannot be
+# overridden here.
+config:
+  # Every replica must see the same objects (recordings, KB files, ambience):
+  # `local` storage is one pod's filesystem, so use S3 with more than one pod.
+  STORAGE_BACKEND: s3
+  # S3_BUCKET_NAME: turncall-recordings
+  # AWS_REGION: us-east-1
+  # PUBLIC_BASE_URL: https://turncall.example.com
+
+# Secrets, as environment variables: DATABASE_URL, REDIS_URL, PLATFORM_API_KEY,
+# API_KEY_HASH_SECRET, CREDENTIAL_ENCRYPTION_KEY, provider keys. The chart
+# stores them in a Secret it owns. In production prefer `existingSecret`.
+secretEnv: {}
+  # DATABASE_URL: postgresql+asyncpg://turncall:...@postgres:5432/turncall
+  # REDIS_URL: redis://redis:6379/0
+
+# The name of a Secret you manage, holding the same keys as `secretEnv`. Used
+# instead of `secretEnv` when set. It must hold DATABASE_URL: the migration
+# Job reads it from there.
+existingSecret: ""
+
+# The longest `max_call_duration_seconds` among your agents (the agent
+# default is 3600, the maximum 14400). It sizes the API pods' grace period:
+# preStopSeconds + this + 90 (#199). Kubernetes SIGKILLs a pod at the end of
+# its grace period, which drops its calls, so set it from your agents.
+maxCallDurationSeconds: 3600
+
+api:
+  # Ignored while autoscaling is enabled: the HPA owns the count.
+  replicas: 2
+  # How long a terminating pod keeps serving before SIGTERM, while it leaves
+  # the Service's endpoints and load balancers catch up. It also covers the gap
+  # between Twilio receiving TwiML and opening the media stream, which is not
+  # yet a counted call.
+  preStopSeconds: 10
+  # Sized from the calls-per-pod measurement (#200, docs/guides/capacity.mdx).
+  # No CPU limit, on purpose: a CFS quota freezes the whole process for the
+  # rest of a 100ms period whenever it bursts past it, and every call's audio
+  # runs on that one event loop, so each throttle is a gap on every call at
+  # once. Under `limits.cpu: 1` a pod carried 1 call cleanly where the same
+  # core without a quota carried 2, and a second core of quota did not help
+  # (the loop is single-threaded). Memory: ~205 MiB idle + ~115 MiB per call,
+  # so 1Gi covers the target with room; the limit is higher because hitting it
+  # is an OOM kill, which drops every call on the pod at once.
+  resources:
+    requests:
+      cpu: "1"
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  service:
+    type: ClusterIP
+    port: 80
+
+# Scale the API on live calls per pod, not CPU. Needs the custom metrics API to
+# serve `turncall_active_calls` for pods (prometheus-adapter); a KEDA
+# ScaledObject is the alternative, in docs/guides/kubernetes.mdx.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  # The average live calls per API pod the HPA holds the Deployment to.
+  # #200 measured 2 clean concurrent calls (default cascade agent: Silero VAD,
+  # Smart Turn, recording) on one dedicated core with no CPU quota, and the
+  # first audio gaps at 4. Measured on an Apple M1 Pro, in a Docker Desktop VM
+  # with 8 vCPU, on a noisy host, so treat it as a floor and re-measure on
+  # your node type (`make load-test`; docs/guides/capacity.mdx).
+  activeCallsPerPod: 2
+  # A pod removed by a scale-down drains for as long as its longest call, so
+  # scaling down slowly saves churning pods that would only drain.
+  scaleDownStabilizationSeconds: 600
+
+# Asterisk's ARI edge (#209). ARI gives an app's calls to the newest
+# connection only, so exactly one process may hold it: with this enabled, a
+# separate single-replica Deployment runs it, and every API pod runs with the
+# edge off. Enable it if the platform or any project uses Asterisk; with it
+# disabled, no process connects to Asterisk.
+asteriskEdge:
+  enabled: false
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Eval runs (ADR-0018): never in the API process.
+evalWorker:
+  enabled: true
+  replicas: 1
+  # Audio-modality runs and the `jev` judge need an image built with
+  # INSTALL_EXTRAS=evals-audio,evals-jev; the released image has neither.
+  image: {}
+    # repository: registry.example.com/turncall-eval
+    # tag: "2.1.0"
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Shared with the API, which validates a run's iterations against the cap.
+# They also size the eval worker's grace period: on SIGTERM it finishes the
+# runs it holds, and the longest a run may take is
+# max(maxRunDurationSeconds, 180 x maxIterations) + 60s.
+evals:
+  maxIterations: 50
+  maxRunDurationSeconds: 900
+
+# Campaign dialling (#229): its own process, any number of replicas (targets
+# are claimed with SKIP LOCKED).
+campaignWorker:
+  enabled: true
+  replicas: 1
+  # SIGTERM is honoured between passes, so a dial in progress is recorded
+  # before the process exits. A pass at the default pacing takes seconds; one
+  # with pacing off (CAMPAIGN_DEFAULT_CALLS_PER_SECOND=0) dials until its
+  # campaigns run out of work, so raise this if you turn pacing off.
+  terminationGracePeriodSeconds: 60
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# `alembic upgrade head` as a pre-install/pre-upgrade hook, before any pod of
+# the new version starts.
+migrations:
+  enabled: true
+  resources: {}
+
+# Carriers and browsers reach the API here. Twilio's media streams are
+# WebSockets that last a whole call: raise the controller's proxy timeouts to
+# at least maxCallDurationSeconds, e.g. for ingress-nginx:
+#   nginx.ingress.kubernetes.io/proxy-read-timeout: "3700"
+#   nginx.ingress.kubernetes.io/proxy-send-timeout: "3700"
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: turncall.example.com
+  # What the Ingress routes, by prefix: the API, the carriers' webhooks and
+  # their media streams. Never `/`: /metrics, /ready, /live and /health carry
+  # no credential (a probe cannot present one) and say how many calls a pod
+  # is carrying, so they stay in-cluster — the kubelet and the PodMonitor
+  # reach the pod directly. Add `/docs` and `/openapi.json` to publish those.
+  paths:
+    - /v1
+    - /webhooks
+    - /ws
+  tls: []
+    # - secretName: turncall-tls
+    #   hosts: [turncall.example.com]
+
+# A prometheus-operator PodMonitor scraping /metrics on every API pod. The
+# gauge is per process, so it is scraped per pod, never through the Service.
+podMonitor:
+  enabled: false
+  interval: 15s
+  labels: {}

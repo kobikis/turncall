@@ -1,8 +1,8 @@
 """Shared call control primitives.
 
 Used by both built-in tools (via Pipecat function calling)
-and live call control API endpoints. Always creates a TwilioAdapter
-from env vars — no need to pass one as a parameter.
+and live call control API endpoints. The REST adapter is resolved per call,
+from the call's own carrier and account — never passed in.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from uuid import UUID
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from turncall.adapters.telephony.base import UnsupportedCarrierAction
 from turncall.domain.call_state import is_active_state, is_valid_transition
 from turncall.domain.enums import CallEventType, CallStatus
 
@@ -27,13 +28,33 @@ class ControlResult:
     details: dict[str, Any] | None = None
 
 
-async def _get_twilio_adapter(session: AsyncSession, call: Any) -> Any | None:
-    """A TwilioAdapter on the account of this call's number — its own Twilio
-    account if bound with one, else the platform's. None if neither exists."""
-    from turncall.config import get_settings
-    from turncall.services.twilio_accounts import account_for_call
+async def _carrier_adapter(session: AsyncSession, call: Any) -> Any | None:
+    """The REST adapter of this call's own carrier (ADR-0022), on its account.
 
-    account = await account_for_call(session, call, get_settings())
+    Telnyx: the project's `telnyx` credential, else the platform's key.
+    Asterisk: the project's own Asterisk, else the platform's (#209).
+    Twilio: the number's own account if bound with one, else the platform's.
+    None when no account exists to act with.
+    """
+    from turncall.config import get_settings
+    from turncall.domain.carriers import ASTERISK, TELNYX
+
+    settings = get_settings()
+    if call.provider == TELNYX:
+        from turncall.services.telnyx_accounts import account_for_project
+
+        telnyx = await account_for_project(session, call.project_id, settings)
+        return telnyx.adapter() if telnyx.api_key else None
+    if call.provider == ASTERISK:
+        from turncall.services.asterisk_accounts import (
+            account_for_project as asterisk_account,
+        )
+
+        account: Any = await asterisk_account(session, call.project_id, settings)
+    else:
+        from turncall.services.twilio_accounts import account_for_call
+
+        account = await account_for_call(session, call, settings)
     return account.adapter() if account else None
 
 
@@ -108,7 +129,7 @@ async def end_call(
     *,
     reason: str = "normal",
 ) -> ControlResult:
-    """End an active call now: hang up via Twilio and update internal state.
+    """End an active call now: hang up through its carrier and update internal state.
 
     The live call control API. A tool ending its own call goes through
     `begin_assistant_end` instead, so its goodbye is heard.
@@ -119,15 +140,15 @@ async def end_call(
     if isinstance(call, ControlResult):
         return call
 
-    # Hang up via Twilio
+    # Hang up through the call's carrier
     sid = call.provider_call_sid
     if sid and sid != "webrtc":
-        adapter = await _get_twilio_adapter(session, call)
+        adapter = await _carrier_adapter(session, call)
         if adapter:
             try:
                 await adapter.end_call(sid)
             except Exception:
-                logger.exception("twilio_hangup_failed", call_sid=sid)
+                logger.exception("carrier_hangup_failed", call_sid=sid)
 
     from datetime import UTC, datetime
 
@@ -262,44 +283,63 @@ async def transfer_call(
         session, call_id, status=CallStatus.TRANSFERRING.value
     )
 
+    from turncall.domain.carriers import TELNYX
+
+    # A Telnyx transfer is steered by Telnyx's webhooks, which read the intent
+    # whether or not a public URL exists (services/telnyx_transfer.py).
+    on_telnyx = call.provider == TELNYX
+    intent = transfer_svc.TransferIntent(
+        target_number=target_number,
+        transfer_mode=transfer_mode,
+        transfer_message=transfer_message,
+        briefing_text=briefing_text,
+        briefing_from_summary=briefing_from_summary,
+        fallback_message=fallback_message,
+    )
     whisper_url = action_url = amd_url = None
     if base_url:
         urls = transfer_svc.transfer_callback_urls(base_url, call_id)
         whisper_url = urls["whisper"] if warm else None
         action_url = urls["result"] if fallback_message else None
         amd_url = urls["amd"]  # AMD notify on both modes
-        await transfer_svc.store_transfer_intent(
-            call_id,
-            transfer_svc.TransferIntent(
-                target_number=target_number,
-                transfer_mode=transfer_mode,
-                transfer_message=transfer_message,
-                briefing_text=briefing_text,
-                briefing_from_summary=briefing_from_summary,
-                fallback_message=fallback_message,
-            ),
-        )
+    if base_url or on_telnyx:
+        await transfer_svc.store_transfer_intent(call_id, intent)
 
-    # Execute Twilio transfer
+    # Execute the transfer on the call's carrier
     sid = call.provider_call_sid
     transfer_success = False
+    refusal: str | None = None
     if sid and sid != "webrtc":
-        adapter = await _get_twilio_adapter(session, call)
+        adapter = await _carrier_adapter(session, call)
         if adapter:
             try:
-                await adapter.transfer_call(
-                    sid,
-                    target_number,
-                    transfer_message=transfer_message,
-                    whisper_url=whisper_url,
-                    action_url=action_url,
-                    amd_callback_url=amd_url,
-                )
+                if on_telnyx:
+                    from turncall.services import telnyx_transfer
+
+                    # Same AMD rule as Twilio's: notify where Twilio would.
+                    await telnyx_transfer.start(
+                        adapter, call, intent, detect_machine=amd_url is not None
+                    )
+                else:
+                    await adapter.transfer_call(
+                        sid,
+                        target_number,
+                        transfer_message=transfer_message,
+                        whisper_url=whisper_url,
+                        action_url=action_url,
+                        amd_callback_url=amd_url,
+                    )
                 transfer_success = True
+            except UnsupportedCarrierAction as exc:
+                refusal = str(exc)
             except Exception:
                 logger.exception(
-                    "twilio_transfer_failed", call_sid=sid, target=target_number
+                    "carrier_transfer_failed", call_sid=sid, target=target_number
                 )
+    if on_telnyx and not transfer_success:
+        # Its media edge reads a parked intent as "transferring, leave the call
+        # up" when the stream ends.
+        await transfer_svc.clear_transfer_intent(call_id)
 
     from turncall.events.emit import emit_call_event
 
@@ -329,7 +369,9 @@ async def transfer_call(
     await call_repo.update_call_status(
         session, call_id, status=CallStatus.IN_PROGRESS.value
     )
-    return ControlResult(success=False, message="Transfer failed at provider level")
+    return ControlResult(
+        success=False, message=refusal or "Transfer failed at provider level"
+    )
 
 
 async def handoff_to_agent(
@@ -340,7 +382,15 @@ async def handoff_to_agent(
     reason: str | None = None,
     context_payload: dict[str, Any] | None = None,
 ) -> ControlResult:
-    """Hand off an active call to another agent."""
+    """Commit a handoff to the call record: `HANDED_OFF`, the new active agent,
+    the `call.agent_handoff` event.
+
+    Only the call itself calls this, from `tool_bridge.run_handoff`, between
+    preparing the switch and applying it to the pipeline (#144). The API asks
+    the call to do that (`request_handoff`) instead of writing the record on
+    its own, which left the record handed off while the live pipeline kept the
+    previous agent (#216).
+    """
     from loguru import logger
 
     from turncall.storage.repositories import agent_repo, call_repo
@@ -368,7 +418,9 @@ async def handoff_to_agent(
             message=f"Can only handoff from in_progress (current: {current.value})",
         )
 
-    target = await agent_repo.get_agent_by_id(session, target_agent_id)
+    target = await agent_repo.get_agent_by_id(
+        session, target_agent_id, project_id=call.project_id
+    )
     if target is None:
         logger.error(
             "handoff_to_agent: target agent not found: {id}",
@@ -415,13 +467,50 @@ async def handoff_to_agent(
     )
 
 
+async def request_handoff(
+    call_id: UUID,
+    *,
+    target_agent_id: UUID,
+    reason: str | None = None,
+    context_payload: dict[str, Any] | None = None,
+) -> ControlResult:
+    """Ask the live call to hand itself off to another agent, and report what
+    it applied.
+
+    The call runs the same prepare / commit / apply path the model's
+    `handoff_to_agent` tool does, so the record and the pipeline agree. Raises
+    `CallNotLive` / `CallDidNotAcknowledge` like `inject_context`.
+    """
+    from turncall.services import live_call_channel
+    from turncall.storage.redis import get_redis
+
+    ack = await live_call_channel.request(
+        get_redis(),
+        call_id,
+        live_call_channel.HANDOFF,
+        {
+            "agent_id": str(target_agent_id),
+            "reason": reason,
+            "context": context_payload,
+        },
+    )
+    if not ack.ok:
+        return ControlResult(success=False, message=ack.error or "Refused by the call")
+    applied = ack.applied or {}
+    return ControlResult(
+        success=True,
+        message=f"The call is now running agent '{applied.get('target_assistant_name')}'",
+        details=applied,
+    )
+
+
 async def send_dtmf(
     session: AsyncSession,
     call_id: UUID,
     *,
     digits: str,
 ) -> ControlResult:
-    """Send DTMF tones on an active call via Twilio."""
+    """Send DTMF tones on an active call through its carrier."""
     from turncall.storage.repositories import call_repo
 
     call = await call_repo.get_call_by_id(session, call_id)
@@ -437,12 +526,12 @@ async def send_dtmf(
 
     sid = call.provider_call_sid
     if sid and sid != "webrtc":
-        adapter = await _get_twilio_adapter(session, call)
+        adapter = await _carrier_adapter(session, call)
         if adapter:
             try:
                 await adapter.send_dtmf(sid, digits)
             except Exception:
-                logger.exception("twilio_dtmf_failed", call_sid=sid)
+                logger.exception("carrier_dtmf_failed", call_sid=sid)
                 return ControlResult(success=False, message="DTMF send failed")
 
     from turncall.events.emit import emit_call_event
@@ -465,19 +554,30 @@ async def inject_context(
     message: str,
     role: str = "system",
 ) -> ControlResult:
-    """Inject a context message into an active call's LLM context."""
+    """Add a message to a live call's LLM context, through the call itself.
+
+    Only the task running the call can change its context, so this asks it
+    over the call's control channel (#215) and reports what it answered.
+    Raises `CallNotLive` when nothing is running the call and
+    `CallDidNotAcknowledge` when it does not answer in time — never a success
+    the call did not confirm.
+    """
+    from turncall.services import live_call_channel
+    from turncall.storage.redis import get_redis
     from turncall.storage.repositories import call_repo
 
     call = await call_repo.get_call_by_id(session, call_id)
     if call is None:
         return ControlResult(success=False, message="Call not found")
 
-    current = CallStatus(call.status)
-    if not is_active_state(current):
-        return ControlResult(
-            success=False,
-            message=f"Call is not active (status: {current.value})",
-        )
+    ack = await live_call_channel.request(
+        get_redis(),
+        call_id,
+        live_call_channel.MESSAGE,
+        {"message": message, "role": role},
+    )
+    if not ack.ok:
+        return ControlResult(success=False, message=ack.error or "Refused by the call")
 
     from turncall.events.emit import emit_call_event
 
@@ -491,6 +591,6 @@ async def inject_context(
 
     return ControlResult(
         success=True,
-        message="Context injected",
-        details={"role": role},
+        message="Message added to the call's context",
+        details=ack.applied,
     )

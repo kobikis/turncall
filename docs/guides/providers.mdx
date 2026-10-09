@@ -1,6 +1,6 @@
 ---
 title: Providers
-description: "Per-agent STT, LLM and TTS — OpenAI, Anthropic, AWS Bedrock, Deepgram, ElevenLabs, Cartesia, Ollama, OpenRouter"
+description: "Per-agent STT, LLM and TTS — OpenAI, Anthropic, Google Gemini, AWS Bedrock, Deepgram, ElevenLabs, Cartesia, AssemblyAI, Ollama, OpenRouter"
 icon: "shuffle"
 ---
 
@@ -10,8 +10,8 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 
 | Role | Providers |
 |------|-----------|
-| **STT** | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming) |
-| **LLM** | `openai` (default), `anthropic` (Claude), `ollama` (local), `custom_openai` (any OpenAI-compatible), `openrouter` (multi-model + fallback routing, voice only), `bedrock` (AWS-hosted Anthropic / Meta / Mistral / Amazon models) |
+| **STT** | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming), `assemblyai` (Universal-Streaming) |
+| **LLM** | `openai` (default), `anthropic` (Claude), `google` (Gemini), `ollama` (local), `custom_openai` (any OpenAI-compatible), `openrouter` (multi-model + fallback routing, voice only), `bedrock` (AWS-hosted Anthropic / Meta / Mistral / Amazon models) |
 | **TTS** | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3.6, streaming, 60+ emotions) |
 | **S2S** | `openai` (Realtime API — optional `base_url` targets an OpenAI-Realtime gateway like Vercel AI Gateway / LiteLLM / xAI, e.g. Grok), `openai_live` (GPT-Live-1, full duplex), `google` (Gemini Live), `aws` (Amazon Nova Sonic 2) |
 
@@ -33,20 +33,38 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 ```json Cartesia Ink
 "stt": {"provider": "cartesia"}
 ```
+
+```json AssemblyAI Universal-Streaming
+"stt": {"provider": "assemblyai"}
+```
 </CodeGroup>
 
 ### STT Options
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | No | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` |
-| `model` | No | Leave unset for the provider's own default: `nova-3-general` (Deepgram), `gpt-transcribe` (OpenAI — its predecessor `gpt-4o-transcribe` is withdrawn on 2027-02-26), `scribe_v1` (ElevenLabs), `ink-whisper` (Cartesia) |
+| `provider` | No | `deepgram` (default), `openai`, `elevenlabs`, `cartesia`, `assemblyai` |
+| `model` | No | Leave unset for the provider's own default: `nova-3-general` (Deepgram), `gpt-transcribe` (OpenAI — its predecessor `gpt-4o-transcribe` is withdrawn on 2027-02-26), `scribe_v1` (ElevenLabs), `ink-whisper` (Cartesia), `universal-streaming-english` (AssemblyAI — `universal-streaming-multilingual` when `language` is not English) |
 | `language` | No | BCP-47 code (default `en`) |
 | `keyterms` | No | Vocabulary hints — product names, SKUs, surnames. One list, mapped to each provider's own spelling. See [Keyterms](#keyterms) |
 | `extra` | No | Passthrough to the provider. Keys naming a setting TurnCall already manages — `model`, `language`, and Deepgram's `punctuate` / `smart_format` / `interim_results` — are ignored so they cannot silently override your config |
 
 On Deepgram, `extra` reaches the full transcription surface: `profanity_filter`,
 `diarize`, `redact`, `version`, `utterance_end_ms`.
+
+On AssemblyAI, `extra` reaches its streaming settings by name — `domain`
+(`medical-v1`), `min_turn_silence`, `format_turns`, and on Universal-3 Pro
+models `mode`, `voice_focus`, `language_codes`. A key AssemblyAI has no setting
+for is logged as ignored rather than silently dropped.
+
+AssemblyAI splits its streaming models by language rather than taking a
+`language` parameter. With no `model`, an English agent gets
+`universal-streaming-english` and any other gets
+`universal-streaming-multilingual`, which covers English, Spanish, German,
+French, Portuguese and Italian — the English model given Spanish transcribes
+it as English words, with no error to say so. For other languages, name a
+Universal-3 Pro model (`universal-3-6-pro`), which costs about three times as
+much.
 
 ### Keyterms
 
@@ -64,6 +82,7 @@ calls it.
 | OpenAI | `keywords` | |
 | ElevenLabs | `keyterms` | |
 | Cartesia | `keyterm` | Honored on `ink-2*` / `ink-preview*` only; capped at 100 terms / 1200 characters per connection, truncated past that with a warning |
+| AssemblyAI | `keyterms_prompt` | AssemblyAI refuses a session with more than 100, so the first 100 are sent, with a warning. Terms over 50 characters are ignored by AssemblyAI |
 
 Blanks and duplicates are dropped when the agent is created.
 
@@ -90,6 +109,10 @@ Set `"extra": {"profanity_filter": true}` if you want it on.
 
 ```json Anthropic Claude
 "llm": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
+```
+
+```json Google Gemini
+"llm": {"provider": "google", "model": "gemini-3.6-flash"}
 ```
 
 ```json Ollama (local)
@@ -130,14 +153,14 @@ Set `"extra": {"profanity_filter": true}` if you want it on.
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | Yes | `openai`, `anthropic`, `ollama`, `custom_openai`, `openrouter`, or `bedrock` |
-| `model` | Depends | Optional on `openai` (`gpt-4o-mini`) and `anthropic` (`claude-sonnet-5`), which have a house model. **Required** on `ollama`, `custom_openai`, `bedrock` and `openrouter` — see below |
+| `provider` | Yes | `openai`, `anthropic`, `google`, `ollama`, `custom_openai`, `openrouter`, or `bedrock` |
+| `model` | Depends | Optional on `openai` (`gpt-4o-mini`), `anthropic` (`claude-sonnet-5`) and `google` (`gemini-3.6-flash`), which have a house model. **Required** on `ollama`, `custom_openai`, `bedrock` and `openrouter` — see below |
 | `base_url` | For `custom_openai` | OpenAI-compatible API base URL |
 | `api_key` | No | API key for `custom_openai` (masked in responses) |
 | `fallback_models` | For `openrouter` | Ordered list of fallback models (voice only) |
-| `temperature` | No | 0.0–2.0 (default: 0.7). **Not sent to `anthropic`** — current Claude models reject it and the call fails; set one via `llm.extra` if your model still accepts it |
+| `temperature` | No | 0.0–2.0 (default: 0.7). **Not sent to `anthropic`** — current Claude models reject it and the call fails; set one via `llm.extra` if your model still accepts it. **Not sent to Gemini 3 models on `google`** — Google warns they loop below their own default of 1.0; older Gemini models still get it, and `llm.extra` sets one anyway |
 | `max_tokens` | No | 1–128000 (default: 1024) |
-| `extra` | No | Provider passthrough. On `bedrock` it becomes `additionalModelRequestFields` — how Anthropic extended thinking is reached |
+| `extra` | No | Provider passthrough. On `bedrock` it becomes `additionalModelRequestFields` — how Anthropic extended thinking is reached. On `google` it merges into the generation config, e.g. `{"thinkingConfig": {"thinkingLevel": "low"}}` |
 
 <Warning>
   **`ollama`, `custom_openai`, `bedrock` and `openrouter` reject an agent with
@@ -236,6 +259,42 @@ back as [warnings on an agent read](/guides/agents#warnings-on-a-read).
   Cascade only. An S2S agent has no TTS stage for the markup to apply to, so the
   field is ignored and the agent read says so.
 </Warning>
+
+## Failover
+
+`stt.failover`, `llm.failover` and `tts.failover` each list backup providers,
+in order, for a voice call. Every entry is a whole config of that role,
+validated the same way — its own model, voice, language, keyterms or
+pronunciations; nothing is inherited from the primary.
+
+```json
+{
+  "stt": {"provider": "deepgram", "failover": [{"provider": "openai"}]},
+  "tts": {
+    "provider": "elevenlabs",
+    "voice": "Rachel",
+    "failover": [{"provider": "deepgram", "voice": "aura-2-helena-en"}]
+  }
+}
+```
+
+When the active provider reports an error that leaves it unusable — a refused
+key, an unknown model or voice — the call moves to the next entry and carries
+on. The backup STT is handed what the caller had just said and nobody
+transcribed; the backup TTS speaks the reply that was cut off, from its start.
+A recoverable error (a rate limit, a timeout) does not switch, and a call never
+switches back, so the caller hears the voice change at most once per backup.
+
+Each switch is a `provider.failover` call event `{role, from, to, error}` and an
+entry in `failovers` on `call.ended` and the call read. Backups need keys like
+any provider: a missing one is reported before the call starts.
+
+<Note>
+  Cascade only — a speech-to-speech agent hears and speaks for itself, so
+  `stt.failover` and `tts.failover` are refused (422). An STT group cannot mix
+  Deepgram Flux (`flux-*`) with other models: Flux decides when the caller's
+  turn ends and the others do not.
+</Note>
 
 ## AWS Bedrock
 
@@ -341,6 +400,7 @@ with no restart.
 | Anthropic | `ANTHROPIC_API_KEY` |
 | ElevenLabs | `ELEVENLABS_API_KEY` |
 | Cartesia | `CARTESIA_API_KEY` |
+| AssemblyAI | `ASSEMBLYAI_API_KEY` |
 | Google (Gemini) | `GOOGLE_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
 | HeyGen (video avatar) | `HEYGEN_LIVE_AVATAR_API_KEY` |
@@ -383,11 +443,14 @@ curl -X DELETE http://localhost:8090/v1/credentials/deepgram -H "Authorization: 
 | `openai` | STT, LLM, TTS, S2S (`openai`, `openai_live`), eval judge |
 | `anthropic` | LLM, eval judge |
 | `openrouter` | LLM |
-| `google` | S2S (Gemini Live) |
+| `google` | LLM, S2S (Gemini Live) |
 | `deepgram`, `elevenlabs`, `cartesia` | STT, TTS |
+| `assemblyai` | STT |
 | `heygen`, `tavus` | Video avatar |
 | `aws` | Bedrock LLM, Nova Sonic S2S |
 | `typesafe` | Eval judge (`jev`) |
+| `telnyx` | Telnyx numbers (`carrier` role) — takes `{"api_key", "public_key"}`, see [Telnyx numbers](/guides/phone-numbers#telnyx-numbers) |
+| `asterisk` | A PBX's Asterisk, over ARI (`carrier` role) — `{ari_url, username, password}`, see [Asterisk numbers](/guides/phone-numbers#asterisk-numbers) |
 
 Deleting a credential is idempotent and returns the project to the platform key.
 An `aws` project credential is **not** gated by `AWS_AGENT_CREDENTIALS_ENABLED`

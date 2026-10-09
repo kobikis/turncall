@@ -27,6 +27,13 @@ from turncall.domain.providers import (
     STT_PROVIDERS,
     TTS_PROVIDERS,
 )
+from turncall.orchestrator.deepgram_flux import MIXED_FLUX_GROUP, mixes_flux
+
+
+def _refuse_nested_failover(entries: list[Any]) -> None:
+    if any(entry.failover for entry in entries):
+        msg = "a failover entry cannot nest its own failover list"
+        raise ValueError(msg)
 
 
 class STTConfigSchema(BaseModel):
@@ -38,6 +45,15 @@ class STTConfigSchema(BaseModel):
     language: str | None = "en"
     keyterms: list[str] = Field(default_factory=list)
     extra: dict[str, Any] = Field(default_factory=dict)
+    # Backup STTs for a voice call (#223), each a whole STT config of its own.
+    failover: list["STTConfigSchema"] = Field(default_factory=list, max_length=5)
+
+    @model_validator(mode="after")
+    def validate_failover_flat(self) -> "STTConfigSchema":
+        _refuse_nested_failover(self.failover)
+        if mixes_flux(self):
+            raise ValueError(MIXED_FLUX_GROUP)
+        return self
 
     @model_validator(mode="after")
     def validate_provider(self) -> "STTConfigSchema":
@@ -89,9 +105,7 @@ class LLMConfigSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_failover_flat(self) -> "LLMConfigSchema":
-        if any(entry.failover for entry in self.failover):
-            msg = "a failover entry cannot nest its own failover list"
-            raise ValueError(msg)
+        _refuse_nested_failover(self.failover)
         return self
 
     @model_validator(mode="after")
@@ -107,6 +121,10 @@ class LLMConfigSchema(BaseModel):
                 "base_url is not supported for the bedrock provider "
                 "(see adr/0016). Set config.aws.region instead."
             )
+            raise ValueError(msg)
+        if self.provider == "google" and self.base_url:
+            # Same reason: both routes call Google's own endpoint.
+            msg = "base_url is not supported for the google provider"
             raise ValueError(msg)
         return self
 
@@ -156,6 +174,13 @@ class TTSConfigSchema(BaseModel):
     # markup is generated from it in the pipeline factory.
     pronunciations: dict[str, str] = Field(default_factory=dict)
     extra: dict[str, Any] = Field(default_factory=dict)
+    # Backup TTSs for a voice call (#223), each a whole TTS config of its own.
+    failover: list["TTSConfigSchema"] = Field(default_factory=list, max_length=5)
+
+    @model_validator(mode="after")
+    def validate_failover_flat(self) -> "TTSConfigSchema":
+        _refuse_nested_failover(self.failover)
+        return self
 
     @model_validator(mode="after")
     def clean_pronunciations(self) -> "TTSConfigSchema":
@@ -642,7 +667,9 @@ class AgentConfigSchema(BaseModel):
     )
     interruption_enabled: bool = True
     smart_turn_detection: bool = Field(
-        default=True, description="Use ML-based turn detection (SmartTurnV3)"
+        default=True,
+        description="Use ML-based turn detection (SmartTurnV3). Not used with a "
+        "Deepgram Flux STT model, which detects the end of the turn itself.",
     )
     smart_turn_stop_secs: float = Field(
         default=1.0,
@@ -680,6 +707,13 @@ class AgentConfigSchema(BaseModel):
     def validate_s2s_constraints(self) -> "AgentConfigSchema":
         if self.pipeline_mode == "s2s" and self.voicemail_detection.enabled:
             msg = "Voicemail detection is not supported in S2S pipeline mode"
+            raise ValueError(msg)
+        if self.pipeline_mode == "s2s" and (self.stt.failover or self.tts.failover):
+            msg = (
+                "stt.failover and tts.failover are not supported in S2S pipeline "
+                "mode: a realtime model hears and speaks for itself, so there is "
+                "no STT or TTS stage to fail over"
+            )
             raise ValueError(msg)
         if self.pipeline_mode == "s2s" and self.llm.failover:
             # A client delegate is an ordinary LLM, so it can fail over (#246).

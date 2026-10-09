@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -53,6 +54,15 @@ class ProjectRow(Base):
     # later. Set => the project is gone (auth rejects its keys, GET 404s).
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # Limits (#206), null = the platform default (LIMIT_* env, unlimited
+    # unless set). Enforced in Redis by `services/limits`, not here.
+    limit_live_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    limit_outbound_calls_per_second: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    limit_messages_per_minute: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
     )
 
 
@@ -231,6 +241,11 @@ class CallRow(Base):
     recording_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     analysis_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # When a carrier media stream was attached to the call: one per call, ever
+    # (`call_repo.attach_media`). Internal — on no read and in no webhook.
+    media_attached_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )
@@ -792,5 +807,134 @@ class SuppressedNumberRow(Base):
         # Also the index the per-dial lookup uses.
         UniqueConstraint(
             "project_id", "e164_number", name="uq_suppressed_numbers_project_number"
+        ),
+    )
+
+
+class CampaignRow(Base):
+    """A set of outbound calls one agent places to a list of targets (#229).
+
+    `agent_id` and `from_number_id` carry no foreign key, like an eval run's:
+    they are checked at create, and a row deleted since fails its targets'
+    dials by name instead of blocking the delete or taking the campaign with it.
+    """
+
+    __tablename__ = "campaigns"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Null for a weighted campaign (#234), whose `agent_weights` —
+    # `[{agent_id, weight}]`, a phone number's `routing_weights` shape — assign
+    # each target its agent at create.
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    agent_weights: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    from_number_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    # The default for targets that name none; each target stores its own.
+    timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # `{start, end, days}` in each target's own zone (#230); null = any hour.
+    calling_window: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # `{ended_reason: {max_attempts, spacing_seconds}}` (#231); null = no retries.
+    retry_policy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # A string, not a PG enum: #232 adds states, and a column of strings takes
+    # them without an `ALTER TYPE` that cannot run inside a transaction.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        Index("ix_campaigns_status", "status"),
+        Index("ix_campaigns_project", "project_id"),
+    )
+
+
+class CampaignTargetRow(Base):
+    """One number a campaign dials, with the variables its agent is given.
+
+    `timezone` is resolved at create (the target's own, else the campaign's)
+    and never inferred from the number: a ported mobile keeps its area code.
+    `next_attempt_at` null means due now; a calling window (#230) or a retry's
+    spacing (#231) sets it. `attempts` counts dials actually placed. A target
+    waiting on a retry is `pending` with the last attempt's `ended_reason`.
+    """
+
+    __tablename__ = "campaign_targets"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    e164_number: Mapped[str] = mapped_column(String(20), nullable=False)
+    variables: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False)
+    # The agent that calls this target, assigned at create (#234): the
+    # campaign's own, or its weights' pick for this number. No foreign key, like
+    # the campaign's. Null only on a target from before #234.
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # The latest attempt's call; every attempt's call carries this target's id
+    # in its metadata.
+    call_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("calls.id", ondelete="SET NULL"), nullable=True
+    )
+    ended_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    __table_args__ = (
+        # A number twice in one campaign is a person called twice.
+        UniqueConstraint(
+            "campaign_id", "e164_number", name="uq_campaign_targets_number"
+        ),
+        Index("ix_campaign_targets_claim", "campaign_id", "status", "position"),
+        # The claim's two lookups and the janitor's sweep (see
+        # campaign_repo.claim_statement / reclaim_abandoned).
+        Index(
+            "ix_campaign_targets_fresh",
+            "campaign_id",
+            "position",
+            postgresql_where=text("status = 'pending' AND next_attempt_at IS NULL"),
+        ),
+        Index(
+            "ix_campaign_targets_due",
+            "campaign_id",
+            "next_attempt_at",
+            "position",
+            postgresql_where=text("status = 'pending' AND next_attempt_at IS NOT NULL"),
+        ),
+        Index(
+            "ix_campaign_targets_claimed",
+            "status",
+            "claimed_at",
+            postgresql_where=text("status IN ('dialling', 'placing')"),
         ),
     )

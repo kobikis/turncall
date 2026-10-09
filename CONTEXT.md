@@ -7,7 +7,7 @@ Definitions only; implementation lives in code and ADRs.
 
 **Provider**:
 The named LLM (or STT/TTS) backend selected per agent — e.g. `openai`, `anthropic`,
-`ollama`, `custom_openai`, `openrouter`, `bedrock`. A provider determines which service
+`google`, `ollama`, `custom_openai`, `openrouter`, `bedrock`. A provider determines which service
 the orchestrator instantiates and how its credentials are resolved — a single API key
 for all but [[Bedrock]], which resolves an AWS credential triple plus a region.
 A provider names a *vendor* in every case except [[Bedrock]], which names a gateway
@@ -180,7 +180,9 @@ Name which one is meant.
   caller's sentence. Tuning this changes how eagerly the agent replies. It is
   the VAD stop window only when Smart Turn is off; with Smart Turn on the
   model decides the turn and VAD drops to its own 0.2s, because the two waits
-  run in series rather than together.
+  run in series rather than together. On a Deepgram Flux agent it is not read
+  at all: Flux decides the turn (`eot_threshold`/`eot_timeout_ms`), and VAD
+  stays at 0.2s deciding nothing.
 - **User idle** (`user_idle_timeout_ms`, 10s): how long the caller may stay
   quiet *after the agent has finished speaking* before the idle guard reacts —
   first the [[idle nudge]], then [[customer_silent]]. `0` disables it.
@@ -259,14 +261,16 @@ without ambience.
 
 **Carrier**:
 The telephony company a [[phone number]] belongs to, which connects its calls to the
-phone network — Twilio, Telnyx. Recorded as the number's `provider`.
+phone network — Twilio, Telnyx, or a PBX's own Asterisk reached over ARI. Stored as
+the number's `provider` column, exposed by the API as `carrier`.
 _Avoid_: "provider" for this (a [[provider]] is an STT/LLM/TTS backend), "telephony
 provider", "transport" (the media path a call's audio takes — a carrier's media
 stream, WebRTC, WhatsApp).
 
 **Campaign**:
 A set of outbound calls one agent places to a list of targets, paced and retried by
-the platform; the unit an operator starts, pauses and cancels.
+the platform; the unit an operator starts, pauses and cancels. The agent may be a
+weighted split between agents, each target assigned one by its number.
 _Avoid_: "batch", "broadcast", "dialer list".
 
 **Concurrency limit** (vs **rate limit**):

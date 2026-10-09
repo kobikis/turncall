@@ -324,7 +324,10 @@ async def _prepare_handoff(
         async with call_context.session_factory() as session:
             from turncall.storage.repositories import agent_repo
 
-            target = await agent_repo.get_agent_by_id(session, UUID(target_id))
+            # The call's own project: an agent id is not a capability.
+            target = await agent_repo.get_agent_by_id(
+                session, UUID(target_id), project_id=call_context.project_id
+            )
             if target is None:
                 logger.warning("handoff_context: target agent not found")
                 return None
@@ -387,12 +390,13 @@ async def _complete_handoff(
     result: str,
     call_context: CallContext,
     params: Any,
-) -> None:
+) -> bool:
     """Apply a prepared handoff, but only if the switch was actually committed.
 
     Applying one the database refused would be #144 the other way up: the
     pipeline speaking as the target agent while the call record never moved.
-    The payload is ours, built one frame up by `_execute_builtin`.
+    The payload is ours, built one frame up by `_execute_builtin`. Returns
+    whether the pipeline switched.
     """
     try:
         committed = bool(json.loads(result).get("success"))
@@ -405,9 +409,56 @@ async def _complete_handoff(
             "current agent: {result}",
             result=result,
         )
-        return
+        return False
 
     await _apply_handoff_context(prepared, call_context, params)
+    return True
+
+
+class HandoffOutcome(NamedTuple):
+    """`result` is the tool result's JSON — the model reads it, the API reads
+    its message; `applied` is the switch the call made, None when it made none."""
+
+    result: str
+    applied: PreparedHandoff | None
+
+
+# A handoff that could not be prepared is never committed: the record would
+# say handed off while the pipeline stayed on the current agent. #144.
+_NOT_PREPARED = json.dumps(
+    {
+        "success": False,
+        "message": (
+            "The target agent was not found in this project or could not be "
+            "loaded; the call stays on the current agent"
+        ),
+        "details": None,
+    }
+)
+
+
+async def run_handoff(
+    args: dict[str, Any], call_context: CallContext, params: Any
+) -> HandoffOutcome:
+    """The one handoff: the model's `handoff_to_agent` call and the API's
+    `POST /v1/calls/{id}/handoff` (#216) both run this, inside the call.
+
+    Prepare, then commit, then apply — the order #144 depends on. `params` is
+    anything with the call's `llm`, `context` and `pipeline_worker`: a tool
+    call's `FunctionCallParams`, or what `live_control` found in the pipeline.
+    """
+    prepared = await _prepare_handoff(args, call_context)
+    if prepared is None:
+        return HandoffOutcome(_NOT_PREPARED, None)
+    result = await _execute_builtin("handoff_to_agent", args, call_context)
+    switched = await _complete_handoff(prepared, result, call_context, params)
+    return HandoffOutcome(result, prepared if switched else None)
+
+
+def advertised_tool_names(prepared: PreparedHandoff) -> list[str]:
+    """The tools a handoff's frame advertises: what the model now holds."""
+    tools = getattr(prepared.frames[-1], "tools", None)
+    return [t.name for t in getattr(tools, "standard_tools", None) or []]
 
 
 def register_tools(
@@ -468,7 +519,6 @@ def _register_single_tool(
             return
 
         started = time.perf_counter()
-        prepared_handoff: PreparedHandoff | None = None
         delivered = False
         if function_name in ENDING_TOOL_NAMES and not call_context.is_eval:
             # Shielded as one unit: a built-in is cancelled when the caller
@@ -484,14 +534,23 @@ def _register_single_tool(
                 )
             )
             delivered = True
+        elif function_name == "handoff_to_agent":
+            # Prepared *before* `_execute_builtin` commits `status=HANDED_OFF` +
+            # `active_agent_id`, then applied without waiting on anything:
+            # anything that waits or raises after that commit is a window where
+            # the record says handed off and the pipeline never switched. #144.
+            result = (await run_handoff(dict(args), call_context, params)).result
         elif function_name in BUILTIN_TOOL_NAMES:
-            # Prepare the handoff *first*: `_execute_builtin` commits
-            # `status=HANDED_OFF` + `active_agent_id`, and anything that waits
-            # or raises after that commit is a window where the record says
-            # handed off and the pipeline never switched. #144.
-            if function_name == "handoff_to_agent":
-                prepared_handoff = await _prepare_handoff(args, call_context)
-            result = await _execute_builtin(function_name, args, call_context)
+            execution = _execute_builtin(function_name, args, call_context)
+            # A transfer takes the call away from this pipeline: the carrier
+            # closes the media stream as part of it, which cancels this tool
+            # mid-flight. Unshielded, `call.transferred` and the status were
+            # lost with it and the call read as the caller hanging up.
+            result = await (
+                asyncio.shield(execution)
+                if function_name == "transfer_call"
+                else execution
+            )
         elif (
             # Only when this registration is not itself a webhook tool. Asking
             # the manager by name alone sent a name the agent config had
@@ -506,12 +565,6 @@ def _register_single_tool(
             result = await call_context.mcp_manager.call_tool(function_name, args)
         else:
             result = await _execute_webhook_tool(tool_def, args, call_context)
-
-        # For handoff: switch the running pipeline to the new agent. The
-        # target was read before `_execute_builtin` committed the switch, so
-        # this applies it without waiting on anything. #144.
-        if function_name == "handoff_to_agent" and prepared_handoff is not None:
-            await _complete_handoff(prepared_handoff, result, call_context, params)
 
         # Hand the result back to the LLM immediately — the model is waiting on
         # this to continue speaking. The invocation record + tool.result webhook

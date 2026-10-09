@@ -1,10 +1,18 @@
 ---
 title: Phone Numbers
-description: "Bind Twilio numbers to agents"
+description: "Bind Twilio, Telnyx and Asterisk numbers to agents"
 icon: "phone"
 ---
 
-Phone numbers connect your Twilio numbers to TurnCall agents. Each number can route to a specific agent or to a webhook for dynamic routing.
+Phone numbers connect your Twilio, Telnyx and Asterisk numbers to TurnCall agents. Each number can route to a specific agent or to a webhook for dynamic routing.
+
+A number's `carrier` — the telephony company it belongs to — is `twilio`, the
+default, `telnyx` (see [Telnyx numbers](#telnyx-numbers)), or `asterisk` for a
+PBX of your own (see [Asterisk numbers](#asterisk-numbers)), and is fixed once
+bound: a `PUT` naming a different carrier is a
+`422`. `provider` is accepted for it as a deprecated alias, and reads still
+carry `provider` beside `carrier`; prefer `carrier`, since "provider" means an
+STT, LLM or TTS backend everywhere else in the API.
 
 ## Bind a Phone Number
 
@@ -39,6 +47,61 @@ curl -X POST http://localhost:8090/v1/phone-numbers \
 ```
 
 See [Call Init](/guides/call-init) for details on how dynamic routing works.
+
+### Telnyx numbers
+
+A Telnyx number answers inbound calls through Telnyx Call Control. Bind it with
+`"carrier": "telnyx"`. TurnCall looks the number up on your Telnyx account, so
+`external_number_sid` (its Telnyx phone number id) is optional — and a number
+the account does not hold is refused with a `422` naming it:
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "carrier": "telnyx",
+    "e164_number": "+15551234567",
+    "routing_target_type": "agent",
+    "routing_target_id": "AGENT_UUID"
+  }'
+```
+
+Binding routes the number to TurnCall: there is nothing to set in Mission
+Control. TurnCall keeps one Call Control application per deployment, named
+`TurnCall <your host>`, whose webhooks go to
+`https://<your host>/webhooks/telnyx/voice` — created on the first bind (on
+your account's outbound voice profile, if it has exactly one; otherwise pick
+one for it in Mission Control before dialling out), corrected on every bind or
+update, and deleted when the last number leaves it. The number is moved onto
+it; `webhooks_configured` in the response says whether that worked (it needs
+`PUBLIC_BASE_URL`). Unbinding takes the number off again, unless it has since
+been moved to another connection, which is left alone. The agent, its tools,
+recording, ambience and voicemail detection behave exactly as on a Twilio
+number.
+
+The Telnyx account is the platform's `TELNYX_API_KEY` and `TELNYX_PUBLIC_KEY`,
+or the project's own:
+
+```bash
+curl -X PUT http://localhost:8090/v1/credentials/telnyx \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"api_key": "KEY...", "public_key": "<base64 public key>"}'
+```
+
+The public key (Mission Control > Keys & Credentials > Public Key) is how
+TurnCall knows a webhook came from your Telnyx account: every webhook is
+checked against it, and one that is unsigned, signed by another key, or more
+than five minutes old is refused. With no API key anywhere, a call to the
+number fails before it is answered, and the call's `error.raised` event carries
+`missing_keys: ["telnyx"]`.
+
+Cold and warm transfers and sending DTMF work on a Telnyx number as on Twilio (see
+[Call transfer](/guides/tools#call-transfer-cold-warm)), and so do outbound
+calls (`POST /v1/calls/outbound`, campaigns). Telnyx dials on the number's Call
+Control application, so a number on none is refused with a `409`. SMS on Telnyx
+numbers is not supported, so `sms_enabled` is refused on one.
 
 ### Bring your own Twilio account
 
@@ -100,10 +163,95 @@ A secret is minted only when `server_url` appears on a number that never had one
 ## Configure Twilio
 
 TurnCall sets these on bind when `PUBLIC_BASE_URL` is configured (the response
-says so in `twilio_webhooks_configured`). To set them by hand:
+says so in `webhooks_configured`; `twilio_webhooks_configured` is the same
+value under its older, Twilio-only name). To set them by hand:
 
 - **Voice URL**: `https://your-host/webhooks/twilio/voice/inbound` (POST)
 - **Status URL**: `https://your-host/webhooks/twilio/status` (POST)
+
+## Asterisk numbers
+
+A number on your own Asterisk (a call centre or company PBX) reaches an agent
+over ARI, with no cloud carrier in between. It needs **Asterisk 20.18, 22.8,
+23.2 or later** (the WebSocket channel driver with JSON control messages).
+
+**1. Give TurnCall your Asterisk** as the project's `asterisk` credential.
+TurnCall connects to its ARI events WebSocket and keeps it open:
+
+```bash
+curl -X PUT http://localhost:8090/v1/credentials/asterisk \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ari_url": "https://pbx.example.com:8089",
+    "username": "turncall",
+    "password": "ARI_PASSWORD"
+  }'
+```
+
+Optional fields: `app` (the Stasis app, default `turncall`),
+`media_connection` (the `websocket_client.conf` entry, default `turncall`),
+`transfer_context` (default `turncall-transfer`).
+
+**2. Configure the PBX.** `ari.conf` holds that user; `websocket_client.conf`
+tells Asterisk where to send call audio; the dialplan hands calls to the app,
+and the transfer context dials what an agent transfers to:
+
+```ini
+; websocket_client.conf
+[turncall]
+type = websocket_client
+uri = wss://turncall.example.com/ws/asterisk-media
+protocols = media
+connection_type = per_call_config
+
+; extensions.conf
+[from-trunk]
+exten => _X.,1,Stasis(turncall,+${EXTEN})
+ same => n,Queue(support)        ; reached if TurnCall cannot take the call
+
+[turncall-transfer]
+exten => _+X.,1,Dial(PJSIP/${EXTEN}@my-trunk)
+```
+
+The first `Stasis` argument is the number TurnCall looks up (without one, the
+channel's extension; bare digits get a `+`). A call TurnCall cannot take —
+an unknown number, say, or one over the project's live-call limit (which also
+sends `call.rejected`) — goes back to the dialplan **unanswered**, at the line
+after `Stasis`. The caller's channel carries `TURNCALL_CALL_ID` from then on.
+
+**3. Bind the number** with `carrier: "asterisk"`. It has no SID, Twilio
+account or SMS, and `twilio_webhooks_configured` is `null`:
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "carrier": "asterisk",
+    "e164_number": "+15551234567",
+    "routing_target_type": "agent",
+    "routing_target_id": "AGENT_UUID"
+  }'
+```
+
+What works the same as on Twilio: inbound calls, every routing type,
+`end_call`, `send_dtmf`, live call control, recording and analysis. What
+differs:
+
+- **Transfers are cold only.** The caller continues in the transfer context
+  with the target as extension. A warm transfer, a `transfer_message` or a
+  `fallback_message` is refused, and the agent is told why.
+- **No outbound calls or SMS** from an Asterisk number.
+- **The caller's leg needs continuous audio**, as a SIP trunk sends; turn off
+  silence suppression on endpoints that use it.
+- **One TurnCall replica holds the ARI connection.** Asterisk gives an app's
+  calls to one connection only; with several replicas, set
+  `ASTERISK_EDGE_ENABLED=false` on all but one.
+
+A deployment can also serve one Asterisk for every project from the
+environment (`ASTERISK_ARI_URL`, `ASTERISK_ARI_USERNAME`,
+`ASTERISK_ARI_PASSWORD`); a project with its own credential uses its own.
 
 ## SMS Support
 

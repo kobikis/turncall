@@ -1,0 +1,58 @@
+{{- if .Values.migrations.enabled }}
+{{- include "turncall.checkSecrets" . }}
+{{- $name := printf "%s-migrate" (include "turncall.fullname" .) }}
+{{- if not .Values.existingSecret }}
+# A pre-install hook runs before the release's own Secret exists, so the Job
+# gets the one value it needs in a hook Secret of its own, deleted with it.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "turncall.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+type: Opaque
+stringData:
+  DATABASE_URL: {{ .Values.secretEnv.DATABASE_URL | quote }}
+---
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "turncall.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        {{- include "turncall.selectorLabels" (dict "ctx" . "component" "migrate") | nindent 8 }}
+    spec:
+      {{- include "turncall.podSpec" . | trim | nindent 6 }}
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: {{ include "turncall.image" (dict "ctx" .) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default $name .Values.existingSecret }}
+                  key: DATABASE_URL
+          {{- with .Values.migrations.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

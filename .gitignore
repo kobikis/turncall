@@ -28,6 +28,9 @@ venv/
 # Storage (root only, not src/turncall/storage/)
 /storage/
 
+# Load-test output (scripts/calls_per_pod/run.sh)
+scripts/calls_per_pod/results/
+
 # Testing
 .pytest_cache/
 .coverage

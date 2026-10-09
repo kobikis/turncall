@@ -30,6 +30,26 @@ jobs:
       # they never opened — which is how the 100/88 mismatch went unnoticed.
       - run: ruff format --check src/ tests/ examples/
 
+  # The Helm chart (#210). Lint it, and render it with every optional piece
+  # on, so a template error fails here rather than at someone's `helm install`.
+  # Pinned for ruff's reason.
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.3.0
+      - run: helm lint --strict charts/turncall -f charts/turncall/ci/full-values.yaml
+      - run: helm lint --strict charts/turncall -f charts/turncall/ci/existing-secret-values.yaml
+      - run: helm template turncall charts/turncall -f charts/turncall/ci/full-values.yaml
+      - run: helm template turncall charts/turncall -f charts/turncall/ci/existing-secret-values.yaml
+      # The probes and /metrics need no credential, so they never reach the
+      # public Ingress: no rule may route `/` or one of them.
+      - run: |
+          ! helm template turncall charts/turncall -f charts/turncall/ci/full-values.yaml \
+            -s templates/ingress.yaml | grep -E 'path: /(metrics|ready|live|health)?$'
+
   # CONTRIBUTING.md requires a DCO sign-off; enforce it rather than just asking.
   # Plain bash so there is no third-party action in the supply chain.
   dco:
@@ -97,6 +117,16 @@ jobs:
         ports: ["5432:5432"]
         options: >-
           --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      # A live call's control channel (#215) and the limits (#206) live in
+      # Redis; the harness and limits tests that prove them skip without one.
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5

@@ -2,10 +2,12 @@
 
 import uuid
 import xml.etree.ElementTree as ET
+from types import SimpleNamespace
 
 import pytest
 
 from turncall.adapters.telephony.twilio_adapter import TwilioAdapter
+from turncall.services.media_token import media_token
 
 
 @pytest.mark.unit
@@ -15,11 +17,14 @@ class TestTwiMLGeneration:
         return TwilioAdapter("AC_test_sid", "test_auth_token")
 
     def test_media_stream_twiml_structure(self) -> None:
-        adapter = self._make_adapter()
+        # Answering a call is Twilio's edge, not the adapter's (ADR-0022).
+        from turncall.webhooks.twilio_handlers import generate_media_stream_twiml
+
         call_id = uuid.uuid4()
-        twiml = adapter.generate_media_stream_twiml(
-            "wss://example.com/ws/media-stream", call_id
+        request = SimpleNamespace(
+            headers={"host": "example.com", "x-forwarded-proto": "https"}
         )
+        twiml = generate_media_stream_twiml(request, call_id)
 
         root = ET.fromstring(twiml)
         assert root.tag == "Response"
@@ -31,9 +36,15 @@ class TestTwiMLGeneration:
         assert stream is not None
         assert stream.get("url") == "wss://example.com/ws/media-stream"
 
+        assert stream.get("statusCallback") == (
+            "https://example.com/webhooks/twilio/stream-status"
+        )
+
         params = stream.findall("Parameter")
         param_dict = {p.get("name"): p.get("value") for p in params}
-        assert param_dict["call_id"] == str(call_id)
+        assert param_dict["callId"] == str(call_id)
+        # What proves the stream that opens is this call's (the takeover fix).
+        assert param_dict["mediaToken"] == media_token(call_id)
 
     def test_transfer_twiml_basic(self) -> None:
         # Cold, no extras → bare <Dial>target</Dial>.

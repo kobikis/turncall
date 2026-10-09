@@ -29,6 +29,8 @@ Each file names the gap it closes, from the open-items list:
 | `test_live_nova_sonic.py` | Nova Sonic S2S under aws-sdk-bedrock-runtime 0.9 / smithy 0.8 |
 | `test_live_deepgram_keyterms.py` | Deepgram still splits `keyterm`/`keywords` by model |
 | `test_live_stt_defaults.py` | every STT provider's default model is one it still serves |
+| `test_live_assemblyai.py` | AssemblyAI's default models are served, it still refuses >100 keyterms, and an agent on it hears an audio-mode caller |
+| `test_live_deepgram_flux.py` | a Flux agent completes a call, and its turn latency against Nova-3 + Smart Turn (#204) |
 | `test_live_llm_defaults.py` | the same for LLM house models, and that the old default still 404s |
 
 They are not a substitute for a real phone call. Nothing here carries audio over

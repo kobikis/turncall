@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from turncall.domain.carriers import DEFAULT_CARRIER
 from turncall.domain.enums import CallEventType
 from turncall.storage.models import CallEventRow, CallRow
 
@@ -22,10 +23,16 @@ async def create_call(
     workflow_id: UUID | None = None,
     provider_call_sid: str | None = None,
     metadata_json: dict | None = None,
+    call_id: UUID | None = None,
+    carrier: str = DEFAULT_CARRIER,
 ) -> CallRow:
-    """Create a new call record."""
+    """Create a new call record. `call_id` when the id was needed before the
+    row existed — a live-call slot is taken under it (#224). `carrier` is
+    stored as `calls.provider`."""
     row = CallRow(
+        **({"id": call_id} if call_id is not None else {}),
         project_id=project_id,
+        provider=carrier,
         direction=direction,
         from_number=from_number,
         to_number=to_number,
@@ -93,6 +100,30 @@ async def update_call_status(
         update(CallRow).where(CallRow.id == call_id).values(**values).returning(CallRow)
     )
     return result.scalar_one_or_none()
+
+
+# A call in one of these is over: no stream may start one again.
+_ENDED = ("completed", "failed", "no_answer", "busy")
+
+
+async def attach_media(session: AsyncSession, call_id: UUID, *, carrier: str) -> bool:
+    """Claim the call's one media stream; whether this caller got it.
+
+    A guarded UPDATE, so of two streams racing for one call exactly one wins,
+    whichever replica each landed on. Lands only on a call on `carrier`, not
+    yet attached and not over. The caller commits.
+    """
+    result = await session.execute(
+        update(CallRow)
+        .where(
+            CallRow.id == call_id,
+            CallRow.provider == carrier,
+            CallRow.media_attached_at.is_(None),
+            CallRow.status.not_in(_ENDED),
+        )
+        .values(media_attached_at=func.now())
+    )
+    return bool(result.rowcount)
 
 
 async def update_call_recording_url(

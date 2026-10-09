@@ -49,6 +49,47 @@ class TwilioSettings(BaseSettings):
     auth_token: str = Field(default="", alias="TWILIO_AUTH_TOKEN")
 
 
+class TelnyxSettings(BaseSettings):
+    """The platform's Telnyx account (ADR-0022): a project's `telnyx`
+    credential replaces both values whole (ADR-0020).
+
+    `public_key` is the account's webhook signing key (Mission Control > Keys &
+    Credentials > Public Key), base64. Not a secret — but without it no Telnyx
+    webhook can be verified, so every one is refused.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="TELNYX_")
+
+    api_key: str = Field(default="", alias="TELNYX_API_KEY")
+    public_key: str = Field(default="", alias="TELNYX_PUBLIC_KEY")
+
+
+class AsteriskSettings(BaseSettings):
+    """The platform's Asterisk, reached over ARI (#209, ADR-0022).
+
+    A project's own `asterisk` credential (ADR-0020) replaces it for that
+    project's numbers. Unset `ASTERISK_ARI_URL` = no platform Asterisk.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="ASTERISK_")
+
+    ari_url: str = Field(default="", alias="ASTERISK_ARI_URL")
+    ari_username: str = Field(default="", alias="ASTERISK_ARI_USERNAME")
+    ari_password: str = Field(default="", alias="ASTERISK_ARI_PASSWORD")
+    app: str = Field(default="turncall", alias="ASTERISK_ARI_APP")
+    # The websocket_client.conf entry chan_websocket dials TurnCall's media
+    # route through. Its `uri` is TurnCall's, so it lives on the PBX.
+    media_connection: str = Field(default="turncall", alias="ASTERISK_MEDIA_CONNECTION")
+    # Where a cold transfer sends the caller: this context, extension = target.
+    transfer_context: str = Field(
+        default="turncall-transfer", alias="ASTERISK_TRANSFER_CONTEXT"
+    )
+    # Whether this process holds the ARI connections. ARI gives an app's calls
+    # to one connection only (the newest), so with several replicas exactly
+    # one keeps this on; the rest still serve media streams and call control.
+    edge_enabled: bool = Field(default=True, alias="ASTERISK_EDGE_ENABLED")
+
+
 class OpenAISettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OPENAI_")
 
@@ -75,6 +116,12 @@ class CartesiaSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CARTESIA_")
 
     api_key: str = Field(default="", alias="CARTESIA_API_KEY")
+
+
+class AssemblyAISettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="ASSEMBLYAI_")
+
+    api_key: str = Field(default="", alias="ASSEMBLYAI_API_KEY")
 
 
 class DeepgramSettings(BaseSettings):
@@ -207,6 +254,49 @@ class ToolSettings(BaseSettings):
     # behaviour as MCP_MAX_RESPONSE_BYTES, which capped only half the tools;
     # webhook tools are the half customers actually write.
     max_response_bytes: int = Field(default=1_048_576, alias="TOOL_MAX_RESPONSE_BYTES")
+
+
+class LimitSettings(BaseSettings):
+    """The platform's default limits (#206), 0 = unlimited. A project's own
+    value (`PUT /v1/projects/{id}/limits`) wins over these, in either direction:
+    a default, not a ceiling."""
+
+    model_config = SettingsConfigDict(env_prefix="LIMIT_")
+
+    # Live calls one project may hold at once, across every server.
+    live_calls: int = Field(default=0, ge=0, alias="LIMIT_LIVE_CALLS")
+    # Outbound calls each of a project's numbers may start per second.
+    outbound_calls_per_second: int = Field(
+        default=0, ge=0, alias="LIMIT_OUTBOUND_CALLS_PER_SECOND"
+    )
+    # Inbound messages one text session (chat, SMS, WhatsApp) may send a minute.
+    messages_per_minute: int = Field(default=0, ge=0, alias="LIMIT_MESSAGES_PER_MINUTE")
+
+
+class CampaignSettings(BaseSettings):
+    """The campaign worker (#229)."""
+
+    model_config = SettingsConfigDict(env_prefix="CAMPAIGN_")
+
+    # Longest the worker sleeps between passes. A new campaign wakes it at once
+    # (its id is pushed on a Redis list); this bounds how late it notices
+    # everything else — a call ending and freeing a slot, a target coming due.
+    poll_seconds: int = Field(default=2, ge=1, alias="CAMPAIGN_POLL_SECONDS")
+    # A campaign's pace from a number whose project sets no calls-per-second
+    # limit (#233). Unlimited would dial a whole list in one burst: Twilio
+    # queues an account's dials beyond its CPS (1 by default) on its side, so
+    # they ring late and the burst lands on the agent all at once. A set limit
+    # always wins over this; 0 turns the floor off.
+    default_calls_per_second: int = Field(
+        default=1, ge=0, alias="CAMPAIGN_DEFAULT_CALLS_PER_SECOND"
+    )
+    # How old a claim gets before the janitor takes its worker for dead (#232).
+    # Only how soon a crashed worker's targets move on rests on it, never
+    # whether one is dialled twice; it must outlast a slow carrier request, or
+    # a dial that did go through is recorded as `dial_outcome_unknown`.
+    claim_timeout_seconds: int = Field(
+        default=120, ge=1, alias="CAMPAIGN_CLAIM_TIMEOUT_SECONDS"
+    )
 
 
 class ServerSettings(BaseSettings):
@@ -370,10 +460,13 @@ class Settings(BaseSettings):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     twilio: TwilioSettings = Field(default_factory=TwilioSettings)
+    telnyx: TelnyxSettings = Field(default_factory=TelnyxSettings)
+    asterisk: AsteriskSettings = Field(default_factory=AsteriskSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     google: GoogleSettings = Field(default_factory=GoogleSettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)
     cartesia: CartesiaSettings = Field(default_factory=CartesiaSettings)
+    assemblyai: AssemblyAISettings = Field(default_factory=AssemblyAISettings)
     deepgram: DeepgramSettings = Field(default_factory=DeepgramSettings)
     elevenlabs: ElevenLabsSettings = Field(default_factory=ElevenLabsSettings)
     heygen: HeyGenSettings = Field(default_factory=HeyGenSettings)
@@ -392,6 +485,8 @@ class Settings(BaseSettings):
     mcp: MCPSettings = Field(default_factory=MCPSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)
     evals: EvalSettings = Field(default_factory=EvalSettings)
+    limits: LimitSettings = Field(default_factory=LimitSettings)
+    campaigns: CampaignSettings = Field(default_factory=CampaignSettings)
 
     @property
     def is_production(self) -> bool:

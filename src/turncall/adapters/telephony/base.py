@@ -2,11 +2,25 @@
 
 from abc import ABC, abstractmethod
 from typing import Any
-from uuid import UUID
+
+
+class UnsupportedCarrierAction(RuntimeError):
+    """This carrier cannot do this action the way TurnCall defines it.
+
+    Raised rather than doing something else under the same name: an agent's
+    config must not mean two things depending on its number's carrier
+    (ADR-0022). The message is fit to show the model or an API caller.
+    """
 
 
 class TelephonyAdapter(ABC):
-    """Interface for telephony providers (Twilio, etc.)."""
+    """A carrier's REST actions — the ones every carrier has (ADR-0022).
+
+    Only what TurnCall asks of a carrier: dial, hang up, transfer, DTMF,
+    configure a number. How a carrier signs its webhooks and answers a call
+    (TwiML, a Call Control command, an ARI channel) belongs to its inbound
+    edge under `webhooks/`, never here.
+    """
 
     @abstractmethod
     async def initiate_outbound_call(
@@ -38,7 +52,8 @@ class TelephonyAdapter(ABC):
         """Transfer a call to another number. Returns the call SID.
 
         transfer_message: spoken to the caller before the dial.
-        whisper_url: warm transfer — TwiML played to the operator before bridging.
+        whisper_url: warm transfer — the briefing the operator hears before
+            bridging (each carrier delivers it its own way).
         action_url: dial-result callback (graceful fallback on no-answer).
         amd_callback_url: answering-machine-detection notify callback.
         """
@@ -46,15 +61,6 @@ class TelephonyAdapter(ABC):
     @abstractmethod
     async def send_dtmf(self, provider_call_sid: str, digits: str) -> None:
         """Send DTMF tones on an active call."""
-
-    @abstractmethod
-    def validate_webhook_signature(
-        self,
-        signature: str,
-        url: str,
-        params: dict[str, str],
-    ) -> bool:
-        """Validate an incoming webhook signature."""
 
     @abstractmethod
     async def get_recording_url(self, recording_sid: str) -> str:
@@ -72,14 +78,6 @@ class TelephonyAdapter(ABC):
     @abstractmethod
     async def fetch_number_info(self, number_sid: str) -> dict[str, Any]:
         """Fetch phone number details from the provider."""
-
-    @abstractmethod
-    def generate_media_stream_twiml(
-        self,
-        websocket_url: str,
-        call_id: UUID,
-    ) -> str:
-        """Generate TwiML to start a media stream for a call."""
 
     @abstractmethod
     async def send_sms(

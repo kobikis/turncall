@@ -32,7 +32,7 @@ async def test_unbinds_each_number_then_sweeps_then_soft_deletes():
             "list_for_project",
             new=AsyncMock(return_value=numbers),
         ),
-        patch.object(pd, "_clear_twilio_number", new=AsyncMock()) as clear,
+        patch.object(pd, "_clear_number", new=AsyncMock()) as clear,
         patch.object(pd, "_sweep_storage", new=AsyncMock()) as sweep,
         patch.object(pd.project_repo, "soft_delete_project", new=AsyncMock()) as soft,
     ):
@@ -57,7 +57,7 @@ async def test_unbind_failure_aborts_before_soft_delete():
         ),
         patch.object(
             pd,
-            "_clear_twilio_number",
+            "_clear_number",
             new=AsyncMock(side_effect=RuntimeError("twilio down")),
         ),
         patch.object(pd, "_sweep_storage", new=AsyncMock()) as sweep,
@@ -85,7 +85,7 @@ async def test_numbers_are_cleared_without_platform_creds():
         patch.object(
             pd.phone_number_repo, "list_for_project", new=AsyncMock(return_value=[own])
         ),
-        patch.object(pd, "_clear_twilio_number", new=AsyncMock()) as clear,
+        patch.object(pd, "_clear_number", new=AsyncMock()) as clear,
         patch.object(pd, "_sweep_storage", new=AsyncMock()),
         patch.object(pd.project_repo, "soft_delete_project", new=AsyncMock()) as soft,
     ):
@@ -99,13 +99,53 @@ async def test_numbers_are_cleared_without_platform_creds():
 @pytest.mark.asyncio
 async def test_a_number_with_no_account_anywhere_is_skipped():
     number = SimpleNamespace(
+        provider="twilio",
         external_number_sid="PN1",
         twilio_account_sid=None,
         twilio_auth_token_ciphertext=None,
     )
     with patch("turncall.adapters.telephony.twilio_adapter.TwilioAdapter") as adapter:
-        await pd._clear_twilio_number(_settings(twilio=False), number)
+        await pd._clear_number(AsyncMock(), _settings(twilio=False), number)
     adapter.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_asterisk_number_has_no_twilio_webhooks_to_clear():
+    """Its "SID" is its own E.164; asking Twilio to clear it would fail and
+    abort the whole project delete (#209)."""
+    number = SimpleNamespace(provider="asterisk", external_number_sid="+15550001")
+    with patch("turncall.adapters.telephony.twilio_adapter.TwilioAdapter") as adapter:
+        await pd._clear_number(AsyncMock(), _settings(), number)
+    adapter.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_telnyx_number_is_taken_off_telnyx_not_twilio():
+    """Its id means nothing to Twilio; it is unrouted on the project's Telnyx
+    account (#219)."""
+    from turncall.services.telnyx_accounts import TelnyxAccount
+
+    number = SimpleNamespace(
+        provider="telnyx", project_id=uuid.uuid4(), external_number_sid="12345"
+    )
+    unroute = AsyncMock()
+    with (
+        patch(
+            "turncall.services.telnyx_accounts.account_for_project",
+            AsyncMock(return_value=TelnyxAccount("KEY", "PUB")),
+        ),
+        patch(
+            "turncall.adapters.telephony.telnyx_adapter.TelnyxAdapter"
+            ".configure_number_webhook",
+            unroute,
+        ),
+        patch("turncall.adapters.telephony.twilio_adapter.TwilioAdapter") as twilio,
+    ):
+        await pd._clear_number(AsyncMock(), _settings(), number)
+    unroute.assert_awaited_once_with("12345", voice_url="", status_callback_url="")
+    twilio.assert_not_called()
 
 
 def _session_factory():

@@ -1,0 +1,97 @@
+---
+title: Graceful shutdown
+description: "Deploys and scale-downs that let live calls finish: SIGTERM, readiness vs liveness, and the drain"
+icon: "power-off"
+---
+
+A voice call cannot move between processes: its audio stream, its pipeline and the conversation so far live in the one process that answered it. So the only way to stop a process without dropping its calls is to stop sending it new ones and wait for the ones it has to end. That is what TurnCall does on `SIGTERM`.
+
+Without it, a deploy or a scale-down cut off every call on the replica it stopped: the server's own shutdown closes every open connection at once, and a Twilio media stream simply ends mid-sentence.
+
+## What happens on SIGTERM
+
+1. **Readiness fails at once.** `GET /ready` answers `503` from the instant the signal arrives, so a load balancer stops routing new calls here:
+   ```json
+   {"status": "draining", "active_calls": 2}
+   ```
+2. **Liveness stays green.** `GET /live` keeps answering `200`. A draining process is healthy, just leaving; failing liveness would get it killed with its calls still on it.
+3. **The process keeps serving.** Live calls carry on normally: the caller is heard, the agent answers, tools run. A call that still arrives (a load balancer that has not caught up yet) is accepted and waited for too, rather than refused.
+4. **It waits for the calls to end, then for their post-call work.** When the last call has ended, the process waits for its post-call processing and webhook deliveries, so `call.ended` reaches your subscribers.
+5. **Then it shuts down.** Nothing is left to cut off. The process exits by the signal (exit code `143` in a container).
+
+A **second `SIGTERM`** stops waiting and shuts down immediately, dropping whatever calls remain. `SIGINT` (Ctrl+C) never waits.
+
+## How long the drain can take
+
+A call is counted from the moment its transport knows which agent it runs until the call has been finalized. Each call's own `max_call_duration_seconds`, from its agent config (default `3600`, at most `14400`), is the bound: its duration guard ends it by then, so the drain gives up on a call at that point plus 30 seconds (pipeline build and finalizing), and then allows post-call work 60 seconds more.
+
+So the worst case for one replica is:
+
+```
+longest max_call_duration_seconds among the calls it carries + 30s + 60s
+```
+
+The drain is usually far shorter: most calls last minutes, and with no live calls the process exits at once. To shorten the worst case, lower `max_call_duration_seconds` on agents that never need an hour.
+
+## The contract for an orchestrator
+
+| | |
+|---|---|
+| Signal | `SIGTERM` starts the drain. A second `SIGTERM` ends it. |
+| Readiness | `GET /ready`: `200` when serving, `503` while draining (and when the database is unreachable). |
+| Liveness | `GET /live`: `200` for as long as the process runs, draining included. Checks nothing external, on purpose. |
+| Gauge | `GET /metrics`: `turncall_active_calls`, live calls on this process, in Prometheus text format. |
+| Grace period | At least: preStop sleep + longest `max_call_duration_seconds` + 90 seconds. |
+
+### Kubernetes
+
+The [Helm chart](/guides/kubernetes) sets all of this up, sized from your agents. By hand:
+
+```yaml
+spec:
+  # 10s preStop + 3600s longest call + 90s drain overhead
+  terminationGracePeriodSeconds: 3700
+  containers:
+    - name: turncall
+      image: turncall:latest
+      lifecycle:
+        preStop:
+          exec:
+            command: ["sleep", "10"]
+      readinessProbe:
+        httpGet: {path: /ready, port: 8090}
+        periodSeconds: 5
+        failureThreshold: 1
+      livenessProbe:
+        httpGet: {path: /live, port: 8090}
+        periodSeconds: 10
+        failureThreshold: 3
+```
+
+- **Set `terminationGracePeriodSeconds` from your agents.** Kubernetes sends `SIGKILL` when it runs out, and a killed process drops its calls the same as before. The default of 30 seconds is far too short.
+- **Use a `preStop` sleep.** TurnCall exits as soon as it has nothing left to wait for, so it does not wait for routing to catch up on its own. Kubernetes runs `preStop` before sending `SIGTERM` and removes a terminating pod from its Service endpoints meanwhile; the sleep covers the seconds it takes a load balancer to notice. It also covers the short gap between Twilio receiving TwiML and opening the media stream, which is not yet a counted call.
+- **Never point liveness at `/ready` or `/health`.** `/ready` fails on purpose while draining, so liveness on it would kill the pod mid-drain. `/health` checks the database and Redis, so a database blip would restart every replica and drop every call at once.
+
+### Docker and Compose
+
+The image's `CMD` is `python -m turncall`, in exec form, so with `TURNCALL_ENV=production` (no auto-reload) the server is PID 1 and receives `SIGTERM` itself. Keep it that way: a `sh -c` wrapper does not forward the signal, and the process is killed when the timeout runs out instead. Docker allows 10 seconds by default; raise it with `docker stop -t <seconds>` or `stop_grace_period` in Compose.
+
+Run one server process per container and scale with containers. The live-call count and the drain are per process.
+
+### Local development
+
+`make run` and the Compose stack run with auto-reload. A reload stops the old server process with `SIGTERM`, so a code change waits for live calls to end before it takes effect. Ctrl+C does not wait.
+
+## The active-calls gauge
+
+```
+# HELP turncall_active_calls Live voice calls on this process.
+# TYPE turncall_active_calls gauge
+turncall_active_calls 3
+```
+
+It counts voice calls on every transport: Twilio, WebRTC and WhatsApp voice. Text conversations (SMS, chat, WhatsApp messages) are request/response and are not counted. Eval runs happen in the eval worker and are not counted either.
+
+The gauge is per process, like the drain, so scrape each pod rather than a load-balanced address: a Prometheus `PodMonitor`, or `ServiceMonitor` endpoints that resolve to pods. It is the input for an autoscaler that scales on load rather than CPU, and it shows a drain's progress: a pod whose readiness is failing and whose gauge reads `0` is about to exit.
+
+`/metrics` is unauthenticated, like the probes — a probe cannot present a credential. It reveals only how many calls a process is carrying, but keep it off the public internet like the other health endpoints: route only `/v1`, `/webhooks` and `/ws` publicly. The Helm chart's Ingress does exactly that.

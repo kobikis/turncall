@@ -29,6 +29,10 @@ _LEGACY_OPENAI_SENTINEL = "gpt-4o-mini"
 _LLM_DEFAULTS: dict[str, str] = {
     "openai": "gpt-4o-mini",
     "anthropic": "claude-sonnet-5",
+    # pipecat's own default for its Google service, and the fastest current
+    # Flash that still takes the `minimal` thinking level pipecat sets for a
+    # voice turn (3.7 and 3.8 Flash bottom out at `low`).
+    "google": "gemini-3.6-flash",
 }
 
 # Providers where the model is the deployment, not a preference.

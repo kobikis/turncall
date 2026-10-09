@@ -1,12 +1,39 @@
 """Phone number API schemas."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from turncall.api.v1.schemas import E164_PATTERN
+from turncall.domain.carriers import ASTERISK, CARRIERS, DEFAULT_CARRIER, TELNYX, TWILIO
+
+Carrier = Literal[CARRIERS]  # type: ignore[valid-type]
+
+# `provider` is the column's name and the field's old spelling; "provider"
+# means an STT/LLM/TTS backend everywhere else in the API (ADR-0022).
+_CARRIER_ALIASES = AliasChoices("carrier", "provider")
+_CARRIER_DOC = (
+    "The number's carrier. `provider` is accepted as a deprecated alias for it."
+)
+
+
+class CarrierField(BaseModel):
+    """`carrier` on a write, with `provider` still accepted for it."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def one_carrier_spelling(cls, data: Any) -> Any:
+        if (
+            isinstance(data, dict)
+            and "carrier" in data
+            and "provider" in data
+            and data["carrier"] != data["provider"]
+        ):
+            msg = "carrier and provider (its deprecated alias) disagree; send carrier"
+            raise ValueError(msg)
+        return data
 
 
 class TwilioAccountFields(BaseModel):
@@ -28,9 +55,30 @@ class TwilioAccountFields(BaseModel):
         return bool(self.twilio_account_sid and self.twilio_auth_token)
 
 
-class BindPhoneNumberRequest(TwilioAccountFields):
-    # Optional with the number's own account: TurnCall looks the SID up by
-    # E.164 there, which is also what proves the credentials own the number.
+def only_on_twilio(body: TwilioAccountFields, carrier: str) -> None:
+    """A number's own Twilio account and SMS are Twilio features (ADR-0022:
+    SMS on Telnyx numbers is out of scope); on another carrier they would be
+    stored and never used."""
+    if body.has_own_twilio:
+        msg = (
+            "twilio_account_sid/twilio_auth_token apply to Twilio numbers, "
+            f"not {carrier}"
+        )
+        raise ValueError(msg)
+    if getattr(body, "sms_enabled", False):
+        msg = f"sms_enabled is not supported on {carrier} numbers"
+        raise ValueError(msg)
+
+
+class BindPhoneNumberRequest(TwilioAccountFields, CarrierField):
+    carrier: Carrier = Field(
+        default=DEFAULT_CARRIER,
+        validation_alias=_CARRIER_ALIASES,
+        description=_CARRIER_DOC,
+    )
+    # Optional with the number's own Twilio account, and on Telnyx: TurnCall
+    # looks the SID up by E.164 on the account, which is also what proves the
+    # account owns the number.
     external_number_sid: str | None = Field(default=None, min_length=1, max_length=64)
     e164_number: str = Field(..., pattern=E164_PATTERN)
     routing_target_type: str = Field(..., pattern=r"^(agent|workflow|webhook)$")
@@ -41,7 +89,12 @@ class BindPhoneNumberRequest(TwilioAccountFields):
 
     @model_validator(mode="after")
     def validate_routing(self) -> "BindPhoneNumberRequest":
-        if not self.external_number_sid and not self.has_own_twilio:
+        if self.carrier != TWILIO:
+            only_on_twilio(self, self.carrier)
+        # Telnyx is looked up by its number on the account (#219); the PBX's
+        # dialplan routes an Asterisk number, which has no SID at all (#209).
+        looked_up = self.has_own_twilio or self.carrier in (TELNYX, ASTERISK)
+        if not self.external_number_sid and not looked_up:
             msg = (
                 "external_number_sid is required unless the number brings its own "
                 "Twilio account (twilio_account_sid + twilio_auth_token)"
@@ -57,12 +110,17 @@ class BindPhoneNumberRequest(TwilioAccountFields):
         return self
 
 
-class UpdatePhoneNumberRequest(TwilioAccountFields):
+class UpdatePhoneNumberRequest(TwilioAccountFields, CarrierField):
     """In-place update of a binding's routing/SMS config.
 
-    The number's identity (SID, E.164) and its server_url_secret are stable —
-    call-init endpoints keep verifying with the same secret across edits.
+    The number's identity (carrier, SID, E.164) and its server_url_secret are
+    stable — call-init endpoints keep verifying with the same secret across
+    edits. `carrier` may be sent but must be the number's own (null = it).
     """
+
+    carrier: Carrier | None = Field(
+        default=None, validation_alias=_CARRIER_ALIASES, description=_CARRIER_DOC
+    )
 
     routing_target_type: str = Field(..., pattern=r"^(agent|workflow|webhook)$")
     routing_target_id: UUID | None = None
@@ -120,7 +178,8 @@ class PhoneNumberResponse(BaseModel):
 
     id: UUID
     project_id: UUID
-    provider: str
+    carrier: str
+    provider: str = Field(deprecated="Use `carrier`; this is the same value.")
     external_number_sid: str
     e164_number: str
     routing_target_type: str
@@ -141,6 +200,7 @@ class PhoneNumberResponse(BaseModel):
         return cls(
             id=row.id,
             project_id=row.project_id,
+            carrier=row.provider,
             provider=row.provider,
             external_number_sid=row.external_number_sid,
             e164_number=row.e164_number,

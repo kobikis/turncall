@@ -12,14 +12,21 @@ apply to its target (#227).
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from loguru import logger
 
 from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.config import get_settings
+from turncall.domain.carriers import TELNYX, TWILIO
 from turncall.domain.enums import CallDirection, CallEventType
+from turncall.services.limits import admit_outbound_call, release_live_call
+from turncall.services.telnyx_accounts import CONNECTION_KEY
+from turncall.services.telnyx_accounts import (
+    account_for_project as telnyx_account_for_project,
+)
 from turncall.services.twilio_accounts import account_for_number
 from turncall.storage.repositories import (
     agent_repo,
@@ -32,7 +39,9 @@ from turncall.storage.repositories.credential_repo import CredentialKeyError
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from turncall.storage.models import CallRow
+    from turncall.services.telnyx_accounts import TelnyxAccount
+    from turncall.services.twilio_accounts import TwilioAccount
+    from turncall.storage.models import AgentRow, CallRow, PhoneNumberRow
 
 
 # ponytail: raises the API's own errors, which every caller so far answers
@@ -45,10 +54,20 @@ async def place_outbound_call(
     from_number_id: UUID,
     to_number: str,
     metadata: dict[str, Any],
+    call_id: UUID | None = None,
+    before_carrier: Callable[[], Awaitable[None]] | None = None,
 ) -> CallRow:
     """Dial `to_number` from one of the project's numbers, as `agent_id`.
 
-    Returns the call row, `initiated` and carrying the carrier's call SID.
+    `call_id` is the id a campaign reserved its slots under
+    (`limits.reserve_dial`), which the admission here then finds already
+    taken; the limits are still checked, never skipped. Returns the call row,
+    `initiated` and carrying the carrier's call SID.
+
+    `before_carrier` runs after every refusal has had its chance and just
+    before the carrier is asked: past it, a phone may ring. A campaign records
+    that point there (#232), so a worker that dies on either side of it is
+    known to have dialled or not; raising from it dials nothing.
     """
     settings = get_settings()
 
@@ -73,7 +92,101 @@ async def place_outbound_call(
     if phone_number is None:
         raise NotFoundError("PhoneNumber", str(from_number_id))
 
-    # The caller-id number's own Twilio account, else the platform's.
+    if phone_number.provider not in (TWILIO, TELNYX):
+        raise ApiError(
+            status_code=422,
+            code=ErrorCode.VALIDATION_ERROR,
+            message=(
+                f"Outbound calls from a {phone_number.provider} number are not "
+                "supported; place them from a Twilio or Telnyx number"
+            ),
+        )
+
+    account = await _carrier_account(session, phone_number, project_id, settings)
+    if phone_number.provider == TELNYX:
+        # The application the dial runs on, on the call record before it is
+        # dialled: a Telnyx transfer dials the operator on the same one.
+        metadata = {
+            **metadata,
+            CONNECTION_KEY: await _telnyx_connection(account, phone_number),
+        }
+
+    # Last, so a dial refused for any other reason holds no slot. The slot is
+    # the call's from here: freed when it ends (a status callback, or the media
+    # stream's hold), or at once if the dial never happens.
+    call_id = call_id or uuid4()
+    await admit_outbound_call(
+        session,
+        project_id=project_id,
+        call_id=call_id,
+        from_number=phone_number.e164_number,
+    )
+    try:
+        call, provider_call_sid = await _dial(
+            session,
+            call_id=call_id,
+            project_id=project_id,
+            agent=agent,
+            phone_number=phone_number,
+            account=account,
+            to_number=to_number,
+            metadata=metadata,
+            before_carrier=before_carrier,
+        )
+    except BaseException:
+        # Nothing was dialled: the slot was never the call's.
+        await release_live_call(project_id, call_id)
+        raise
+    # Past here the phone is ringing, so its slot stays taken whatever
+    # happens: freed by the call ending, or by its lease lapsing if nothing
+    # ever holds it. Freeing it now would admit another dial into a slot a
+    # live call is about to re-take — one call over the limit.
+    try:
+        return await _record_dial(
+            session,
+            call,
+            provider_call_sid=provider_call_sid,
+            from_number=phone_number.e164_number,
+            to_number=to_number,
+            agent_id=agent.id,
+        )
+    except Exception as exc:
+        raise DialNotRecorded(call_id, provider_call_sid) from exc
+
+
+class DialNotRecorded(Exception):
+    """The carrier placed the call, and writing that down failed. The phone
+    may be ringing; the call keeps its live-call slot."""
+
+    def __init__(self, call_id: UUID, provider_call_sid: str) -> None:
+        super().__init__(
+            f"call {call_id} was placed ({provider_call_sid}) but not recorded"
+        )
+        self.call_id = call_id
+        self.provider_call_sid = provider_call_sid
+
+
+async def _carrier_account(
+    session: AsyncSession,
+    phone_number: PhoneNumberRow,
+    project_id: UUID,
+    settings: Any,
+) -> TwilioAccount | TelnyxAccount:
+    """The account the caller-id number dials on: on Twilio the number's own,
+    else the platform's; on Telnyx the project's, else the platform's."""
+    if phone_number.provider == TELNYX:
+        telnyx = await telnyx_account_for_project(session, project_id, settings)
+        if not telnyx.api_key:
+            raise ApiError(
+                status_code=503,
+                code=ErrorCode.NO_TELNYX_ACCOUNT,
+                message=(
+                    "No Telnyx account for this number: store the project's "
+                    "`telnyx` credential, or set TELNYX_API_KEY"
+                ),
+                details={"missing_keys": [TELNYX]},
+            )
+        return telnyx
     try:
         account = account_for_number(phone_number, settings)
     except CredentialKeyError as exc:
@@ -91,34 +204,76 @@ async def place_outbound_call(
                 "and TWILIO_AUTH_TOKEN"
             ),
         )
+    return account
 
+
+async def _dial(
+    session: AsyncSession,
+    *,
+    call_id: UUID,
+    project_id: UUID,
+    agent: AgentRow,
+    phone_number: PhoneNumberRow,
+    account: TwilioAccount | TelnyxAccount,
+    to_number: str,
+    metadata: dict[str, Any],
+    before_carrier: Callable[[], Awaitable[None]] | None,
+) -> tuple[CallRow, str]:
+    """Write the call row and dial: the row, and the carrier's SID."""
+    settings = get_settings()
     call = await call_repo.create_call(
         session,
         project_id=project_id,
+        call_id=call_id,
         direction=CallDirection.OUTBOUND,
         from_number=phone_number.e164_number,
         to_number=to_number,
         active_agent_id=agent.id,
         metadata_json=metadata,
+        carrier=phone_number.provider,
     )
 
     # Build webhook URLs from the configured public base — NEVER the client Host
-    # header, which a caller can spoof to make Twilio fetch call TwiML from an
-    # attacker-controlled server using our Twilio credentials.
+    # header, which a caller can spoof to make the carrier fetch call TwiML (or
+    # send the call's audio) to an attacker-controlled server.
     base_url = (settings.server.public_base_url or "").rstrip("/")
     if not base_url:
         raise ConflictError(
             "PUBLIC_BASE_URL must be configured to place outbound calls "
-            "(Twilio needs a reachable webhook URL)."
+            "(the carrier needs a reachable webhook URL)."
         )
 
-    provider_call_sid = await account.adapter().initiate_outbound_call(
-        from_number=phone_number.e164_number,
-        to_number=to_number,
-        webhook_url=f"{base_url}/webhooks/twilio/voice/outbound",
-        status_callback_url=f"{base_url}/webhooks/twilio/status",
-    )
+    if before_carrier is not None:
+        await before_carrier()
+    if phone_number.provider == TELNYX:
+        provider_call_sid = await _dial_telnyx(
+            account.adapter(),
+            from_number=phone_number.e164_number,
+            to_number=to_number,
+            connection_id=metadata[CONNECTION_KEY],
+            base_url=base_url,
+            call_id=call.id,
+        )
+    else:
+        provider_call_sid = await account.adapter().initiate_outbound_call(
+            from_number=phone_number.e164_number,
+            to_number=to_number,
+            webhook_url=f"{base_url}/webhooks/twilio/voice/outbound",
+            status_callback_url=f"{base_url}/webhooks/twilio/status",
+        )
+    return call, provider_call_sid
 
+
+async def _record_dial(
+    session: AsyncSession,
+    call: CallRow,
+    *,
+    provider_call_sid: str,
+    from_number: str,
+    to_number: str,
+    agent_id: UUID,
+) -> CallRow:
+    """Put the carrier's SID on the call row and record `call.started`."""
     updated = await call_repo.update_call_status(
         session, call.id, status="initiated", provider_call_sid=provider_call_sid
     )
@@ -128,7 +283,6 @@ async def place_outbound_call(
         raise RuntimeError(
             f"outbound call {call.id} vanished after dialling {provider_call_sid}"
         )
-    call = updated
     seq = await call_repo.get_next_sequence_number(session, call.id)
     await call_repo.create_call_event(
         session,
@@ -136,9 +290,9 @@ async def place_outbound_call(
         event_type=CallEventType.CALL_STARTED,
         payload={
             "provider_call_sid": provider_call_sid,
-            "from_number": phone_number.e164_number,
+            "from_number": from_number,
             "to_number": to_number,
-            "agent_id": str(agent.id),
+            "agent_id": str(agent_id),
             "direction": CallDirection.OUTBOUND.value,
         },
         sequence_number=seq,
@@ -149,4 +303,54 @@ async def place_outbound_call(
         call_id=str(call.id),
         provider_call_sid=provider_call_sid,
     )
-    return call
+    return updated
+
+
+async def _telnyx_connection(account: Any, phone_number: PhoneNumberRow) -> str:
+    """The Call Control application the caller-id number is on. Asked before
+    the call is admitted, so a number that cannot dial holds no slot."""
+    from turncall.adapters.telephony.telnyx_adapter import (
+        TelnyxApiError,
+        TelnyxNumberError,
+    )
+
+    try:
+        return str(await account.adapter().connection_for(phone_number.e164_number))
+    except TelnyxNumberError as exc:
+        raise ConflictError(str(exc)) from exc
+    except TelnyxApiError as exc:
+        raise _telnyx_refused(exc) from exc
+
+
+def _telnyx_refused(exc: Exception) -> ApiError:
+    return ApiError(status_code=502, code=ErrorCode.TELNYX_ERROR, message=str(exc))
+
+
+async def _dial_telnyx(
+    adapter: Any,
+    *,
+    from_number: str,
+    to_number: str,
+    connection_id: str,
+    base_url: str,
+    call_id: UUID,
+) -> str:
+    """Dial on Telnyx: its events to TurnCall's Call Control webhook, and the
+    callee's media straight to the call's stream once they answer (Telnyx
+    opens it; there is no answer step on an outbound call)."""
+    from turncall.adapters.telephony.telnyx_adapter import TelnyxApiError
+    from turncall.webhooks.telnyx_media_stream import media_stream_path
+
+    ws_base = base_url.replace("http", "ws", 1)  # https -> wss, http -> ws
+    try:
+        return str(
+            await adapter.initiate_outbound_call(
+                from_number=from_number,
+                to_number=to_number,
+                webhook_url=f"{base_url}/webhooks/telnyx/voice",
+                connection_id=connection_id,
+                stream_url=f"{ws_base}{media_stream_path(call_id)}",
+            )
+        )
+    except TelnyxApiError as exc:
+        raise _telnyx_refused(exc) from exc

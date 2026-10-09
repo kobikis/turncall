@@ -141,10 +141,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     purge_task = asyncio.create_task(_purge_soft_deleted_projects())
 
+    # Asterisk's inbound edge: an ARI connection to every Asterisk served (#209).
+    from turncall.webhooks.asterisk_edge import EDGES
+
+    asterisk_task = asyncio.create_task(
+        EDGES.run() if settings.asterisk.edge_enabled else asyncio.sleep(0)
+    )
+
+    # Last, once the app can serve: SIGTERM now drains live calls (#199).
+    from turncall.services.drain import install_sigterm_drain, uninstall_sigterm_drain
+
+    install_sigterm_drain()
+
     yield
 
+    uninstall_sigterm_drain()
     cleanup_task.cancel()
     purge_task.cancel()
+    asterisk_task.cancel()
+    await asyncio.gather(asterisk_task, return_exceptions=True)
 
     # Shutdown
     logger.info("shutting_down_turncall")
@@ -221,6 +236,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(suppression_router, prefix="/v1")
 
+    from turncall.api.v1.campaigns import router as campaigns_router
+
+    app.include_router(campaigns_router, prefix="/v1")
+
     from turncall.api.v1.chat import router as chat_router
 
     app.include_router(chat_router, prefix="/v1")
@@ -259,12 +278,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(webrtc_router, prefix="/v1")
 
-    # Twilio webhooks (no /v1 prefix)
-    from turncall.webhooks.media_stream import router as media_stream_router
+    # Twilio's inbound edge (no /v1 prefix): webhooks + its media stream
+    # WebSocket, which hands over to the shared media entry point (ADR-0022).
     from turncall.webhooks.twilio_handlers import router as twilio_webhook_router
+    from turncall.webhooks.twilio_media_stream import router as twilio_media_router
 
     app.include_router(twilio_webhook_router)
-    app.include_router(media_stream_router)
+    app.include_router(twilio_media_router)
+
+    # Telnyx's inbound edge: Call Control webhooks + its media stream.
+    from turncall.webhooks.telnyx_handlers import router as telnyx_webhook_router
+    from turncall.webhooks.telnyx_media_stream import router as telnyx_media_router
+
+    app.include_router(telnyx_webhook_router)
+    app.include_router(telnyx_media_router)
+
+    # Asterisk's media stream (chan_websocket). Its other half, the ARI
+    # client, is started by the lifespan (#209).
+    from turncall.webhooks.asterisk_media_stream import router as asterisk_media_router
+
+    app.include_router(asterisk_media_router)
 
     # WhatsApp webhooks (no /v1 prefix)
     from turncall.webhooks.whatsapp_handlers import router as whatsapp_webhook_router

@@ -13,9 +13,11 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from turncall.domain.carriers import CARRIERS
 from turncall.orchestrator.transport_factory import (
     VOICE_OUTPUT_RATES,
-    create_twilio_transport,
+    CarrierStream,
+    create_carrier_transport,
     create_webrtc_transport,
     create_whatsapp_transport,
 )
@@ -104,11 +106,16 @@ class TestEveryVoiceTransportRateHasARendition:
     @pytest.mark.parametrize(
         "build",
         [
-            lambda: create_twilio_transport(MagicMock(), "MZ1"),
+            *(
+                lambda c=c: create_carrier_transport(
+                    c, MagicMock(), CarrierStream("MZ1")
+                )
+                for c in CARRIERS
+            ),
             lambda: create_webrtc_transport()[0],
             lambda: create_whatsapp_transport(MagicMock()),
         ],
-        ids=["twilio", "webrtc", "whatsapp"],
+        ids=[*CARRIERS, "webrtc", "whatsapp"],
     )
     def test_output_rate_is_rendered(self, build) -> None:
         assert build()._params.audio_out_sample_rate in VOICE_OUTPUT_RATES

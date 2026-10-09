@@ -343,6 +343,12 @@ async def _extract_takeaways(
 _POST_CALL_TASKS: set[asyncio.Task] = set()
 
 
+def pending_post_call_tasks() -> frozenset[asyncio.Task]:
+    """Post-call processing still running — a shutdown drain waits for it,
+    since it is what sends `call.ended`."""
+    return frozenset(_POST_CALL_TASKS)
+
+
 async def config_for_call(session: AsyncSession, call: Any) -> dict[str, Any] | None:
     """The agent config a call actually ran with.
 

@@ -21,11 +21,15 @@ from turncall.api.deps import get_session
 from turncall.auth.context import AuthContext
 from turncall.auth.dependencies import resolve_auth_context
 from turncall.domain.enums import CallEventType, ProjectRole
+from turncall.services.limits import ProjectLimits
+from turncall.services.media_token import media_token
 
 pytestmark = pytest.mark.unit
 
 H = {"Authorization": "Bearer x"}
 ADAPTER = "turncall.adapters.telephony.twilio_adapter.TwilioAdapter"
+TELNYX_ADAPTER = "turncall.adapters.telephony.telnyx_adapter.TelnyxAdapter"
+TELNYX_ACCOUNT = "turncall.services.outbound_dial.telnyx_account_for_project"
 CALLS = "turncall.storage.repositories.call_repo"
 AGENTS = "turncall.storage.repositories.agent_repo"
 NUMBERS = "turncall.storage.repositories.phone_number_repo"
@@ -88,6 +92,7 @@ def dial(app, monkeypatch):
     number = SimpleNamespace(
         id=uuid.uuid4(),
         e164_number="+15550000001",
+        provider="twilio",
         twilio_account_sid=None,
         twilio_auth_token_ciphertext=None,
     )
@@ -126,6 +131,11 @@ def dial(app, monkeypatch):
             ),
         ) as update,
         patch(f"{CALLS}.get_next_sequence_number", AsyncMock(return_value=1)),
+        # No limits here: those are tests/integration/test_limits.py's.
+        patch(
+            "turncall.services.limits.limits_for_project",
+            AsyncMock(return_value=ProjectLimits()),
+        ),
         patch(f"{CALLS}.create_call_event", AsyncMock()) as event,
         patch(
             f"{ADAPTER}.initiate_outbound_call", AsyncMock(return_value="CA123")
@@ -187,6 +197,77 @@ class TestRoute:
         assert r.status_code == 503
         assert r.json()["code"] == "no_twilio_account"
         dial.carrier.assert_not_awaited()
+
+    def test_a_telnyx_number_dials_on_telnyx(self, dial) -> None:
+        """Same request, same answer; the dial goes to Telnyx, with the call's
+        media stream named up front (#218)."""
+        from turncall.services.telnyx_accounts import TelnyxAccount
+
+        dial.number.provider = "telnyx"
+        telnyx = AsyncMock(return_value="v3:abc")
+        with (
+            patch(
+                f"{TELNYX_ACCOUNT}",
+                AsyncMock(return_value=TelnyxAccount("KEY", "PUB")),
+            ),
+            patch(f"{TELNYX_ADAPTER}.connection_for", AsyncMock(return_value="app-1")),
+            patch(f"{TELNYX_ADAPTER}.initiate_outbound_call", telnyx),
+        ):
+            r = dial.post()
+
+        assert r.status_code == 201, r.text
+        assert r.json()["data"]["provider_call_sid"] == "v3:abc"
+        created = dial.create.await_args.kwargs
+        assert created["carrier"] == "telnyx"
+        # A transfer on this call dials the operator on the same application.
+        assert created["metadata_json"] == {
+            "crm": "C-1",
+            "telnyx_connection_id": "app-1",
+        }
+        call_id = dial.created.id
+        assert telnyx.await_args.kwargs == {
+            "from_number": "+15550000001",
+            "to_number": "+15550000002",
+            "webhook_url": "https://tc.example/webhooks/telnyx/voice",
+            "connection_id": "app-1",
+            "stream_url": (
+                f"wss://tc.example/ws/telnyx/media-stream/{call_id}/"
+                f"{media_token(call_id)}"
+            ),
+        }
+        dial.carrier.assert_not_awaited()
+
+    def test_no_telnyx_key_is_503_naming_it(self, dial) -> None:
+        from turncall.services.telnyx_accounts import TelnyxAccount
+
+        dial.number.provider = "telnyx"
+        with patch(f"{TELNYX_ACCOUNT}", AsyncMock(return_value=TelnyxAccount("", ""))):
+            r = dial.post()
+        assert r.status_code == 503
+        assert r.json()["code"] == "no_telnyx_account"
+        assert r.json()["details"] == {"missing_keys": ["telnyx"]}
+        dial.create.assert_not_awaited()
+
+    def test_a_telnyx_number_on_no_application_is_409(self, dial) -> None:
+        from turncall.adapters.telephony.telnyx_adapter import TelnyxNumberError
+        from turncall.services.telnyx_accounts import TelnyxAccount
+
+        dial.number.provider = "telnyx"
+        refused = AsyncMock(side_effect=TelnyxNumberError("on no application"))
+        telnyx = AsyncMock()
+        with (
+            patch(
+                f"{TELNYX_ACCOUNT}",
+                AsyncMock(return_value=TelnyxAccount("KEY", "PUB")),
+            ),
+            patch(f"{TELNYX_ADAPTER}.connection_for", refused),
+            patch(f"{TELNYX_ADAPTER}.initiate_outbound_call", telnyx),
+        ):
+            r = dial.post()
+        assert r.status_code == 409
+        assert "on no application" in r.json()["error"]
+        dial.create.assert_not_awaited()  # refused before the call row
+        telnyx.assert_not_awaited()
 
     def test_a_sealed_token_without_the_key_is_503(self, dial) -> None:
         from turncall.storage.repositories.credential_repo import CredentialKeyError

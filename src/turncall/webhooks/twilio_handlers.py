@@ -1,6 +1,7 @@
 """Twilio webhook handlers for inbound calls, status callbacks, and recordings."""
 
 import xml.etree.ElementTree as ET
+import xml.sax.saxutils
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -10,9 +11,17 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.deps import DbSession
+from turncall.api.errors import RateLimitedError
 from turncall.config import get_settings
-from turncall.domain.call_state import TWILIO_STATUS_MAP, is_valid_transition
-from turncall.domain.enums import CallDirection, CallEventType, CallStatus
+from turncall.domain.call_state import (
+    TWILIO_STATUS_MAP,
+    is_terminal_state,
+    is_valid_transition,
+)
+from turncall.domain.carriers import TWILIO
+from turncall.domain.enums import CallEventType, CallStatus
+from turncall.services.limits import release_live_call
+from turncall.services.media_token import media_token
 from turncall.storage.repositories import (
     agent_repo,
     call_repo,
@@ -23,6 +32,9 @@ from turncall.webhooks.twilio_signature import validate_twilio_signature
 router = APIRouter(prefix="/webhooks/twilio", tags=["twilio-webhooks"])
 
 TWIML_CONTENT_TYPE = "application/xml"
+# Over the live-call limit (#224): refused before answering, so nothing is
+# billed for saying no, and the caller hears busy and can try again.
+BUSY_TWIML = '<Response><Reject reason="busy"/></Response>'
 
 
 def _public_url(request: Request) -> str:
@@ -75,6 +87,34 @@ async def _validate_twilio_request(
     return validate_twilio_signature(token, signature, url, params)
 
 
+def generate_media_stream_twiml(request: Request, call_id: UUID) -> str:
+    """TwiML answering a call with a bidirectional media stream (ADR-0022).
+
+    Twilio's answer format, so it lives at Twilio's edge rather than on the
+    carrier adapter. The call id and its media token are passed — the token
+    is what proves the stream that opens is this call's — and the media entry
+    point resolves everything else from the call record. wss:// when behind
+    HTTPS (ngrok, production) — detected via X-Forwarded-Proto.
+    """
+    host = request.headers.get("host", "localhost:8000")
+    forwarded_proto = request.headers.get("x-forwarded-proto", "")
+    is_https = forwarded_proto == "https" or get_settings().is_production
+    ws_url = f"{'wss' if is_https else 'ws'}://{host}/ws/media-stream"
+    status_cb = (
+        f"{'https' if is_https else 'http'}://{host}/webhooks/twilio/stream-status"
+    )
+    return (
+        "<Response>"
+        "<Connect>"
+        f'<Stream url="{ws_url}" statusCallback="{status_cb}">'
+        f'<Parameter name="callId" value="{call_id}" />'
+        f'<Parameter name="mediaToken" value="{media_token(call_id)}" />'
+        "</Stream>"
+        "</Connect>"
+        "</Response>"
+    )
+
+
 @router.post("/sms/inbound")
 async def inbound_sms_webhook(
     request: Request,
@@ -117,18 +157,11 @@ async def inbound_sms_webhook(
     phone_number = await phone_number_repo.get_by_e164(session, to_number)
     if phone_number is None:
         logger.warning("twilio_sms_unknown_number", to_number=to_number)
-        msg = "This number is not configured for SMS."
-        return Response(
-            content=f"<Response><Message>{msg}</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
-        )
+        return _sms_twiml("This number is not configured for SMS.")
 
     if not phone_number.sms_enabled:
         logger.warning("twilio_sms_not_enabled", to_number=to_number)
-        return Response(
-            content="<Response><Message>SMS is not enabled on this number.</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
-        )
+        return _sms_twiml("SMS is not enabled on this number.")
 
     try:
         from turncall.services.sms_chat import handle_inbound_sms
@@ -146,30 +179,30 @@ async def inbound_sms_webhook(
             session_id=str(result.session_id),
             is_new_session=result.is_new_session,
         )
-
-        # Return TwiML with the agent's reply
-        # XML-escape the reply text to prevent injection
-        import xml.sax.saxutils
-
-        escaped_reply = xml.sax.saxutils.escape(result.reply_text)
-        return Response(
-            content=f"<Response><Message>{escaped_reply}</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
+        return _sms_twiml(result.reply_text)
+    except RateLimitedError as exc:
+        # Over the session's messages per minute (#226): no LLM, no reply.
+        logger.warning(
+            "twilio_sms_rate_limited", from_number=from_number, **exc.details
         )
+        return _sms_twiml(None)
     except ValueError as exc:
         logger.error("twilio_sms_error", error=str(exc))
-        err_msg = "Sorry, I'm unable to process your message right now."
-        return Response(
-            content=f"<Response><Message>{err_msg}</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
-        )
+        return _sms_twiml("Sorry, I'm unable to process your message right now.")
     except Exception:
         logger.exception("twilio_sms_unexpected_error")
-        err_msg = "An error occurred. Please try again later."
-        return Response(
-            content=f"<Response><Message>{err_msg}</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
-        )
+        return _sms_twiml("An error occurred. Please try again later.")
+
+
+def _sms_twiml(text: str | None) -> Response:
+    """TwiML answering an SMS with `text` (escaped), or with nothing at all."""
+    if text is None:
+        return Response(content="<Response/>", media_type=TWIML_CONTENT_TYPE)
+    message = xml.sax.saxutils.escape(text)
+    return Response(
+        content=f"<Response><Message>{message}</Message></Response>",
+        media_type=TWIML_CONTENT_TYPE,
+    )
 
 
 @router.post("/voice/inbound")
@@ -207,172 +240,31 @@ async def inbound_voice_webhook(
 
     # Resolve phone number to routing target
     phone_number = await phone_number_repo.get_by_e164(session, to_number)
-    if phone_number is None:
+    if phone_number is None or phone_number.provider != TWILIO:
         logger.warning("twilio_inbound_unknown_number", to_number=to_number)
         return Response(
             content="<Response><Say>This number is not configured.</Say><Hangup/></Response>",
             media_type=TWIML_CONTENT_TYPE,
         )
 
-    # Resolve agent — either static or dynamic via server URL
-    agent = None
-    dynamic_config = None
-    template_variables: dict[str, str] = {}
-    request_metadata: dict = {}
-    knowledge_context: str | None = None
+    from turncall.services.inbound_call import InboundRefusal, open_inbound_call
 
-    if phone_number.routing_target_type == "webhook" and phone_number.server_url:
-        # Dynamic agent resolution via call-init server event
-        from uuid import uuid4
-
-        from turncall.events.server_events import send_call_init
-        from turncall.services.call_init_resolver import resolve_call_init
-
-        temp_call_id = str(uuid4())
-        response = await send_call_init(
-            phone_number.server_url,
-            call_id=temp_call_id,
-            from_number=from_number,
-            to_number=to_number,
-            call_sid=call_sid,
-            transport_type="inboundPhoneCall",
-            secret=phone_number.server_url_secret,
-        )
-        if response.success and response.data:
-            result = await resolve_call_init(session, response.data)
-            agent = result.agent
-            dynamic_config = result.dynamic_config
-            template_variables = result.template_variables
-            request_metadata = result.metadata
-            knowledge_context = result.knowledge_context
-
-        if agent is None and dynamic_config is None:
-            logger.warning(
-                "twilio_inbound_server_url_no_agent",
-                server_url=phone_number.server_url,
-            )
-            return Response(
-                content=(
-                    "<Response><Say>Unable to resolve agent.</Say><Hangup/></Response>"
-                ),
-                media_type=TWIML_CONTENT_TYPE,
-            )
-
-    elif phone_number.routing_target_type == "agent" and phone_number.routing_target_id:
-        # A/B weighted routing: pick agent by caller number hash
-        if phone_number.routing_weights:
-            from turncall.services.weighted_routing import pick_agent_by_weight
-
-            selected_id = pick_agent_by_weight(
-                phone_number.routing_weights, from_number
-            )
-            agent = await agent_repo.get_agent_by_id(session, selected_id)
-            logger.info(
-                "ab_routing_selected",
-                phone_number=to_number,
-                caller=from_number,
-                selected_agent_id=str(selected_id),
-            )
-        else:
-            agent = await agent_repo.get_agent_by_id(
-                session, phone_number.routing_target_id
-            )
-
-    if agent is None and dynamic_config is None:
-        logger.warning(
-            "twilio_inbound_no_agent",
-            routing_target_type=phone_number.routing_target_type,
-            routing_target_id=str(phone_number.routing_target_id),
-        )
+    call = await open_inbound_call(
+        session,
+        phone_number,
+        carrier=TWILIO,
+        from_number=from_number,
+        to_number=to_number,
+        provider_call_sid=call_sid,
+    )
+    if isinstance(call, InboundRefusal):
+        # Busy is refused unanswered; any other refusal is answered and told why.
         return Response(
-            content="<Response><Say>This agent is not available.</Say><Hangup/></Response>",
+            content=BUSY_TWIML if call.busy else _say_twiml(call.message, hangup=True),
             media_type=TWIML_CONTENT_TYPE,
         )
 
-    # Determine agent ID for the call record
-    agent_id_for_call = agent.id if agent else None
-
-    # Create internal call record
-    call_metadata: dict = {
-        **({"dynamic_config": dynamic_config} if dynamic_config else {}),
-        **({"template_variables": template_variables} if template_variables else {}),
-        **({"metadata": request_metadata} if request_metadata else {}),
-        **({"knowledge_context": knowledge_context} if knowledge_context else {}),
-    }
-    call = await call_repo.create_call(
-        session,
-        project_id=phone_number.project_id,
-        direction=CallDirection.INBOUND,
-        from_number=from_number,
-        to_number=to_number,
-        active_agent_id=agent_id_for_call,
-        provider_call_sid=call_sid,
-        metadata_json=call_metadata,
-    )
-
-    # Fire call.initializing + call.started events (DB + webhook)
-    from turncall.events.emit import emit_call_event
-
-    await emit_call_event(
-        session,
-        call_id=call.id,
-        project_id=phone_number.project_id,
-        event_type=CallEventType.CALL_INITIALIZING,
-        payload={
-            "from_number": from_number,
-            "to_number": to_number,
-            "direction": "inbound",
-            "transport": "twilio",
-        },
-    )
-
-    await emit_call_event(
-        session,
-        call_id=call.id,
-        project_id=phone_number.project_id,
-        event_type=CallEventType.CALL_STARTED,
-        payload={
-            "provider_call_sid": call_sid,
-            "from_number": from_number,
-            "to_number": to_number,
-            # agent_id is carried in the envelope (ADR-0007), not the payload.
-            "agent_name": agent.name if agent else "dynamic",
-            "dynamic_config": bool(dynamic_config),
-        },
-    )
-
-    # Generate TwiML to start Media Stream
-    settings = get_settings()
-    host = request.headers.get("host", "localhost:8000")
-    # Use wss:// when behind HTTPS (ngrok, production) — detect via X-Forwarded-Proto
-    forwarded_proto = request.headers.get("x-forwarded-proto", "")
-    is_https = forwarded_proto == "https" or settings.is_production
-    scheme = "wss" if is_https else "ws"
-    ws_url = f"{scheme}://{host}/ws/media-stream"
-
-    # Simplified TwiML — only pass call_id.
-    # Everything else resolved server-side from the call record.
-    http_scheme = "https" if is_https else "http"
-    status_cb = f"{http_scheme}://{host}/webhooks/twilio/stream-status"
-    twiml = (
-        "<Response>"
-        "<Connect>"
-        f'<Stream url="{ws_url}" statusCallback="{status_cb}">'
-        f'<Parameter name="callId" value="{call.id}" />'
-        "</Stream>"
-        "</Connect>"
-        "</Response>"
-    )
-
-    logger.info(
-        "twilio_inbound_connected",
-        call_id=str(call.id),
-        # Not agent.id: a call whose agent came from call-init as an inline
-        # config has no agent row, and this line used to crash the webhook.
-        agent_id=str(agent_id_for_call) if agent_id_for_call else "dynamic",
-        call_sid=call_sid,
-    )
-
+    twiml = generate_media_stream_twiml(request, call.id)
     return Response(content=twiml, media_type=TWIML_CONTENT_TYPE)
 
 
@@ -416,25 +308,7 @@ async def outbound_voice_webhook(
             media_type=TWIML_CONTENT_TYPE,
         )
 
-    # Generate TwiML to start Media Stream
-    settings = get_settings()
-    host = request.headers.get("host", "localhost:8000")
-    forwarded_proto = request.headers.get("x-forwarded-proto", "")
-    is_https = forwarded_proto == "https" or settings.is_production
-    scheme = "wss" if is_https else "ws"
-    ws_url = f"{scheme}://{host}/ws/media-stream"
-
-    http_scheme = "https" if is_https else "http"
-    status_cb = f"{http_scheme}://{host}/webhooks/twilio/stream-status"
-    twiml = (
-        "<Response>"
-        "<Connect>"
-        f'<Stream url="{ws_url}" statusCallback="{status_cb}">'
-        f'<Parameter name="callId" value="{call.id}" />'
-        "</Stream>"
-        "</Connect>"
-        "</Response>"
-    )
+    twiml = generate_media_stream_twiml(request, call.id)
 
     logger.info(
         "twilio_outbound_connected",
@@ -481,6 +355,11 @@ async def status_callback(
             "twilio_status_unmapped", call_sid=call_sid, twilio_status=call_status
         )
         return Response(status_code=204)
+
+    if is_terminal_state(new_status):
+        # The carrier says the call is over, whatever our state machine thinks
+        # — often the only ending an unanswered call gets (#224).
+        await release_live_call(call.project_id, call.id)
 
     current_status = CallStatus(call.status)
     if not is_valid_transition(current_status, new_status):

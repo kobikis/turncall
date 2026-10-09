@@ -95,7 +95,7 @@ locally through Ollama and no audio leaves your network except to the telco.
 - **Twilio PSTN calls** — Inbound and outbound phone calls via Twilio
 - **WebRTC browser calls** — Talk to agents from the browser
 - **Video Avatar** — Optional HeyGen or Tavus (lip-synced video) on WebRTC cascade calls
-- **Multi-provider STT/LLM/TTS** — Deepgram, OpenAI, Anthropic Claude, ElevenLabs, Cartesia, Ollama, OpenRouter, AWS Bedrock, or any OpenAI-compatible endpoint (configurable per agent)
+- **Multi-provider STT/LLM/TTS** — Deepgram, OpenAI, Anthropic Claude, Google Gemini, ElevenLabs, Cartesia, AssemblyAI, Ollama, OpenRouter, AWS Bedrock, or any OpenAI-compatible endpoint (configurable per agent)
 - **Bring Your Own Model** — Use local LLMs via Ollama or remote endpoints (Together AI, Groq, vLLM, etc.)
 - **Speech-to-Speech** — ~300ms processing (vs ~800ms cascade) via OpenAI Realtime, GPT-Live-1 (full duplex), Gemini Live or Amazon Nova Sonic 2
 - **Smart Turn Detection** — ML-based (SmartTurnV3) understands natural pauses
@@ -511,8 +511,8 @@ each one needs — several run with no phone number and no tunnel.
 | Telephony | Twilio Voice + Media Streams |
 | Browser | WebRTC (SmallWebRTCTransport) |
 | Video Avatar | HeyGen / Tavus (Pipecat avatar services) |
-| STT | Deepgram / OpenAI / ElevenLabs / Cartesia |
-| LLM | OpenAI / Anthropic Claude / Ollama / OpenRouter / AWS Bedrock / Any OpenAI-compatible |
+| STT | Deepgram / OpenAI / ElevenLabs / Cartesia / AssemblyAI |
+| LLM | OpenAI / Anthropic Claude / Google Gemini / Ollama / OpenRouter / AWS Bedrock / Any OpenAI-compatible |
 | TTS | Deepgram / OpenAI / ElevenLabs / Cartesia |
 | S2S | OpenAI Realtime / GPT-Live-1 / Gemini Live / Nova Sonic 2 |
 | Knowledge Base | pgvector + OpenAI embeddings |

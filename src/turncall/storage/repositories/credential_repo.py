@@ -14,7 +14,12 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.config.settings import Settings
-from turncall.storage.models import PhoneNumberRow, ProjectCredentialRow, utc_now
+from turncall.storage.models import (
+    PhoneNumberRow,
+    ProjectCredentialRow,
+    ProjectRow,
+    utc_now,
+)
 
 
 class CredentialKeyError(RuntimeError):
@@ -118,6 +123,28 @@ async def load_documents(
     """Every credential the project holds, decrypted: provider -> document."""
     rows = await list_for_project(session, project_id)
     return {row.provider: decrypt(row.ciphertext, settings) for row in rows}
+
+
+async def documents_for_provider(
+    session: AsyncSession, provider: str, settings: Settings
+) -> dict[UUID, dict[str, Any]]:
+    """One provider's credential in every live project: project -> document.
+
+    For the work that runs for every project at once rather than inside one —
+    the Asterisk edge connects to each project's PBX (#209).
+    """
+    result = await session.execute(
+        select(ProjectCredentialRow)
+        .join(ProjectRow, ProjectRow.id == ProjectCredentialRow.project_id)
+        .where(
+            ProjectCredentialRow.provider == provider,
+            ProjectRow.deleted_at.is_(None),
+        )
+    )
+    return {
+        row.project_id: decrypt(row.ciphertext, settings)
+        for row in result.scalars().all()
+    }
 
 
 async def ensure_readable(session: AsyncSession, settings: Settings) -> None:

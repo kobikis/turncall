@@ -24,6 +24,13 @@ from turncall.domain.models import (
     LLMConfig,
     resolve_delegation,
 )
+from turncall.orchestrator.deepgram_flux import (
+    MIXED_FLUX_GROUP,
+    create_flux_stt,
+    flux_turn_strategies,
+    is_flux,
+    mixes_flux,
+)
 from turncall.orchestrator.knowledge_processor import KnowledgeTool, knowledge_tool
 from turncall.orchestrator.observability import ObservabilityProcessor
 from turncall.services.credentials import Credentials
@@ -85,11 +92,17 @@ def _overflow(extra: dict[str, Any], *managed: str) -> dict[str, Any]:
 # model decides the spelling, not the caller.
 _DEEPGRAM_KEYTERM_MODELS = ("nova-3", "flux")
 
+# AssemblyAI refuses a session carrying more than 100 keyterms instead of using
+# some of them, and pipecat sends the list as given: one term over is a dead
+# STT stage, not a weaker one. The first 100 are kept, in the order the agent
+# lists them (the API boundary has already dropped blanks and duplicates).
+_ASSEMBLYAI_MAX_KEYTERMS = 100
+
 
 def _keyterm_kwargs(provider: str, model: str, keyterms: list[str]) -> dict[str, Any]:
     """The one `keyterms` field, in the provider's own dialect.
 
-    Four providers, four spellings. Returns the settings kwarg to merge, or
+    Five providers, five spellings. Returns the settings kwarg to merge, or
     nothing at all when there are no keyterms to send — an empty list must not
     become an empty parameter.
     """
@@ -107,6 +120,14 @@ def _keyterm_kwargs(provider: str, model: str, keyterms: list[str]) -> dict[str,
         return {"keywords": keyterms}
     if provider == "elevenlabs":
         return {"keyterms": keyterms}
+    if provider == "assemblyai":
+        if len(keyterms) > _ASSEMBLYAI_MAX_KEYTERMS:
+            logger.warning(
+                "assemblyai_keyterms_truncated count={count} kept={kept}",
+                count=len(keyterms),
+                kept=_ASSEMBLYAI_MAX_KEYTERMS,
+            )
+        return {"keyterms_prompt": keyterms[:_ASSEMBLYAI_MAX_KEYTERMS]}
     return {}
 
 
@@ -135,20 +156,39 @@ _STT_DEFAULTS: dict[str, str] = {
     "openai": "gpt-transcribe",
     "elevenlabs": "scribe_v1",
     "cartesia": "ink-whisper",
+    # Universal-Streaming, $0.15/hr. Not pipecat's default (Universal-3.5 Pro,
+    # three times the price): the cheaper model is the reason to pick this
+    # provider, and Pro stays one `stt.model` away.
+    "assemblyai": "universal-streaming-english",
 }
 
+# AssemblyAI splits its streaming models by language rather than taking one as
+# a parameter, and the English model given Spanish transcribes it as English
+# words with no error to say so. Its multilingual sibling costs the same and
+# covers en/es/de/fr/pt/it; anything wider is Universal-3 Pro, named explicitly.
+_ASSEMBLYAI_MULTILINGUAL = "universal-streaming-multilingual"
 
-def _stt_model(provider: str, configured: str) -> str:
+
+def _stt_model(provider: str, configured: str, language: str | None = "en") -> str:
     """The model to send, resolving an unset or legacy-sentinel value."""
     if configured and not (configured == _NOVA_DEFAULT and provider != "deepgram"):
         return configured
+    if provider == "assemblyai" and not (language or "en").lower().startswith("en"):
+        return _ASSEMBLYAI_MULTILINGUAL
     return _STT_DEFAULTS.get(provider, configured)
+
+
+def _flux_owns_turn(config: AgentConfig) -> bool:
+    """Whether the agent's STT decides when the caller's turn is over (#204)."""
+    return config.stt.provider == "deepgram" and is_flux(
+        _stt_model("deepgram", config.stt.model)
+    )
 
 
 def _create_stt_service(
     config: AgentConfig, credentials: Credentials, *, sample_rate: int = 8000
 ) -> Any:
-    """Create STT service. Supports deepgram, openai, elevenlabs, and cartesia.
+    """Create STT service: deepgram, openai, elevenlabs, cartesia, assemblyai.
 
     `stt.extra` is forwarded to every provider. Pipecat's `ServiceSettings`
     treats it as overflow — `given_fields()` merges its entries at the top
@@ -162,8 +202,20 @@ def _create_stt_service(
     reach a provider that would 400 on it.
     """
     provider = config.stt.provider
-    model = _stt_model(provider, config.stt.model)
+    model = _stt_model(provider, config.stt.model, config.stt.language)
     keyterm_kwargs = _keyterm_kwargs(provider, model, config.stt.keyterms)
+
+    if provider == "deepgram" and is_flux(model):
+        return create_flux_stt(
+            api_key=credentials.api_key("deepgram"),
+            settings={
+                **_overflow(config.stt.extra, "model", *keyterm_kwargs),
+                "model": model,
+                **keyterm_kwargs,
+            },
+            sample_rate=sample_rate,
+            interruptions=config.interruption_enabled,
+        )
 
     if provider == "deepgram":
         from pipecat.services.deepgram.stt import DeepgramSTTService
@@ -246,7 +298,80 @@ def _create_stt_service(
         stt._sample_rate = sample_rate
         return stt
 
+    if provider == "assemblyai":
+        return _create_assemblyai_stt(
+            config.stt.extra,
+            model=model,
+            keyterm_kwargs=keyterm_kwargs,
+            api_key=credentials.api_key("assemblyai"),
+            sample_rate=sample_rate,
+        )
+
     raise ValueError(f"Unsupported STT provider: {provider}")
+
+
+def _create_assemblyai_stt(
+    extra: dict[str, Any],
+    *,
+    model: str,
+    keyterm_kwargs: dict[str, Any],
+    api_key: str,
+    sample_rate: int,
+) -> Any:
+    """AssemblyAI Universal-Streaming, in pipecat's own turn mode.
+
+    Pipecat builds the connection URL from its declared settings alone and
+    never reads `extra`, so `stt.extra` is promoted onto them by name —
+    `domain`, `mode`, `voice_focus`, `min_turn_silence` — or it would reach
+    nothing. A key with no such setting is warned about rather than dropped
+    in silence. `vad_force_turn_endpoint` stays on: TurnCall's VAD and Smart
+    Turn decide when the caller is done, and AssemblyAI returns finals at once.
+    """
+    from pipecat.services.assemblyai.stt import AssemblyAISTTService
+
+    settings = AssemblyAISTTService.Settings.from_mapping(
+        {
+            **_overflow(extra, "model", *keyterm_kwargs),
+            "model": model,
+            **keyterm_kwargs,
+        }
+    )
+    if settings.extra:
+        logger.warning(
+            "assemblyai_stt_extra_ignored keys={keys}", keys=sorted(settings.extra)
+        )
+    return AssemblyAISTTService(
+        api_key=api_key, sample_rate=sample_rate, settings=settings
+    )
+
+
+def _create_stt_stage(
+    config: AgentConfig, credentials: Credentials, *, sample_rate: int
+) -> Any:
+    """The call's STT: the service itself, or it and its backups (#223). Each
+    entry is built as `stt` would be, so its model resolves on its own terms.
+
+    A group mixing Flux with other models is refused here as well as at the
+    API: a call-init inline agent reaches the build without passing the API's
+    schema, and the call then fails at build, saying why, rather than leaving
+    every turn after a switch on a 5s timeout."""
+    if mixes_flux(config.stt):
+        raise ValueError(MIXED_FLUX_GROUP)
+    stt = _create_stt_service(config, credentials, sample_rate=sample_rate)
+    if not config.stt.failover:
+        return stt
+    from turncall.orchestrator.failover import FailoverSTT
+
+    members = [(_stt_label(config.stt), stt)]
+    for entry in config.stt.failover:
+        backup = config.model_copy(update={"stt": entry})
+        service = _create_stt_service(backup, credentials, sample_rate=sample_rate)
+        members.append((_stt_label(entry), service))
+    return FailoverSTT(members)
+
+
+def _stt_label(stt: Any) -> str:
+    return f"{stt.provider}/{_stt_model(stt.provider, stt.model, stt.language)}"
 
 
 def _validate_byom_url(base_url: str, byom_settings: BYOMSettings) -> None:
@@ -288,7 +413,8 @@ def _create_llm_service(
     reasoning_effort: str | None = _USE_CONFIG,
     system_instruction: str = "",
 ) -> Any:
-    """Create LLM service. Supports openai, ollama, custom_openai, anthropic, openrouter.
+    """Create LLM service. Supports openai, ollama, custom_openai, anthropic,
+    openrouter, bedrock, google.
 
     temperature/max_tokens default to the agent's llm config; pass explicit
     values to override (e.g. the voicemail classifier pins a low temperature).
@@ -374,6 +500,30 @@ def _create_llm_service(
                 max_tokens=max_tokens,
                 **({"extra": anthropic_extra} if anthropic_extra else {}),
             ),
+        )
+
+    if provider == "google":
+        from pipecat.services.google.llm import GoogleLLMService
+
+        from turncall.services.gemini_models import takes_temperature
+
+        google_settings: dict[str, Any] = {
+            "model": model,
+            **si,
+            "max_tokens": max_tokens,
+        }
+        # No temperature for Gemini 3, which Google says loops below its own
+        # 1.0 — and 0.7 is TurnCall's default, not the agent's choice. That
+        # includes the voicemail classifier's pin. services/gemini_models.py.
+        if takes_temperature(model):
+            google_settings["temperature"] = temperature
+        if config.llm.extra:
+            # Merged into the generation config last, so it can set a
+            # temperature on Gemini 3 anyway, or a thinking level.
+            google_settings["extra"] = dict(config.llm.extra)
+        return GoogleLLMService(
+            api_key=credentials.api_key("google", config.llm.api_key),
+            settings=GoogleLLMService.Settings(**google_settings),
         )
 
     if provider == "ollama":
@@ -694,6 +844,28 @@ def _create_tts_service(config: AgentConfig, credentials: Credentials) -> Any:
     raise ValueError(f"Unsupported TTS provider: {provider}")
 
 
+def _create_tts_stage(config: AgentConfig, credentials: Credentials) -> Any:
+    """The call's TTS: the service itself, or it and its backups (#223). Each
+    entry is a whole TTS config, its pronunciations included."""
+    tts = _create_tts_service(config, credentials)
+    _warn_unusable_pronunciations(config, tts)
+    if not config.tts.failover:
+        return tts
+    from turncall.orchestrator.failover import FailoverTTS
+
+    members = [(_tts_label(config), tts)]
+    for entry in config.tts.failover:
+        backup = config.model_copy(update={"tts": entry})
+        service = _create_tts_service(backup, credentials)
+        _warn_unusable_pronunciations(backup, service)
+        members.append((_tts_label(backup), service))
+    return FailoverTTS(members)
+
+
+def _tts_label(config: AgentConfig) -> str:
+    return f"{config.tts.provider}/{_tts_model_voice(config)[0]}"
+
+
 def _build_tools_prompt_section(config: AgentConfig) -> str:
     """Build a prompt section describing tools for models without native tool API support.
 
@@ -814,16 +986,17 @@ def _build_vad_analyzer(
     turns.
 
     Without Smart Turn nothing else decides the turn, so `silence_timeout_ms`
-    keeps driving VAD there — including on S2S.
+    keeps driving VAD there — including on S2S. Unless the STT is Deepgram
+    Flux, which decides the turn itself (#204): VAD stays at 0.2 then, deciding
+    nothing, as the point the latency observer measures from.
     """
     from pipecat.audio.vad.silero import SileroVADAnalyzer
     from pipecat.audio.vad.vad_analyzer import VAD_STOP_SECS, VADParams
 
-    stop_secs = (
-        VAD_STOP_SECS
-        if smart_turn and config.smart_turn_detection
-        else config.silence_timeout_ms / 1000
+    decided_elsewhere = smart_turn and (
+        config.smart_turn_detection or _flux_owns_turn(config)
     )
+    stop_secs = VAD_STOP_SECS if decided_elsewhere else config.silence_timeout_ms / 1000
     params: dict[str, Any] = {"stop_secs": stop_secs}
     confidence = getattr(pipecat_settings, "vad_confidence_threshold", None)
     if confidence is not None:
@@ -842,7 +1015,14 @@ def _build_turn_strategies(config: AgentConfig, *, smart_turn: bool) -> Any | No
 
     Returns None when the agent asked for neither, leaving Pipecat's defaults
     alone. `smart_turn=False` for S2S, which has no cascade turn analyzer.
+
+    A Deepgram Flux agent gets Flux's strategies instead, whatever
+    `smart_turn_detection` says: Flux decides the turn, and a Smart Turn stop
+    strategy beside it would only add a second wait after Flux's (#204).
     """
+    if smart_turn and _flux_owns_turn(config):
+        return flux_turn_strategies(interruptions=config.interruption_enabled)
+
     strategies: dict[str, Any] = {}
 
     # Barge-in. `interruption_enabled: false` was accepted, validated and read
@@ -1160,7 +1340,7 @@ def create_pipeline(
 
     # --- Cascade pipeline (STT → LLM → TTS) ---
     # Create AI services
-    stt = _create_stt_service(config, credentials, sample_rate=audio_sample_rate)
+    stt = _create_stt_stage(config, credentials, sample_rate=audio_sample_rate)
 
     # BYOM providers describe their tools in the prompt rather than advertising
     # them through the API: many local models (Gemma and friends) only do
@@ -1184,8 +1364,7 @@ def create_pipeline(
         byom_settings=byom_settings,
         system_instruction=system_instruction,
     )
-    tts = _create_tts_service(config, credentials)
-    _warn_unusable_pronunciations(config, tts)
+    tts = _create_tts_stage(config, credentials)
 
     # query_knowledge (tool mode) is registered here, before pipeline_builder
     # registers static + MCP tools — so on a name clash the agent's tool wins,
@@ -1471,7 +1650,9 @@ def create_pipeline(
     logger.info(
         "Pipeline created: STT={stt}/{stt_model} LLM={llm_info} TTS={tts}/{tts_voice}",
         stt=config.stt.provider,
-        stt_model=_stt_model(config.stt.provider, config.stt.model),
+        stt_model=_stt_model(
+            config.stt.provider, config.stt.model, config.stt.language
+        ),
         llm_info=llm_info,
         tts=config.tts.provider,
         tts_voice=config.tts.voice,

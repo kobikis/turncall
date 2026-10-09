@@ -34,6 +34,8 @@ class ErrorCode(StrEnum):
     # Call
     CALL_NOT_FOUND = "call_not_found"
     CALL_NOT_ACTIVE = "call_not_active"
+    CALL_NOT_LIVE = "call_not_live"
+    CALL_DID_NOT_ACKNOWLEDGE = "call_did_not_acknowledge"
     INVALID_STATE_TRANSITION = "invalid_state_transition"
     NUMBER_SUPPRESSED = "number_suppressed"
     PIPELINE_START_FAILED = "pipeline_start_failed"
@@ -41,6 +43,7 @@ class ErrorCode(StrEnum):
     # Credentials (ADR-0020)
     CREDENTIAL_KEY_UNAVAILABLE = "credential_key_unavailable"
     NO_TWILIO_ACCOUNT = "no_twilio_account"
+    NO_TELNYX_ACCOUNT = "no_telnyx_account"
 
     # Phone Number
     PHONE_NUMBER_NOT_FOUND = "phone_number_not_found"
@@ -54,6 +57,9 @@ class ErrorCode(StrEnum):
     # Twilio
     TWILIO_ERROR = "twilio_error"
     TWILIO_SIGNATURE_INVALID = "twilio_signature_invalid"
+
+    # Telnyx
+    TELNYX_ERROR = "telnyx_error"
 
     # Rate Limiting
     RATE_LIMITED = "rate_limited"
@@ -94,6 +100,19 @@ class BadRequestError(ApiError):
         super().__init__(
             status_code=400,
             code=ErrorCode.VALIDATION_ERROR,
+            message=message,
+            details=details,
+        )
+
+
+class RateLimitedError(ApiError):
+    """A concurrency or rate limit refused this (#206). Both are 429
+    `rate_limited` (CONTEXT.md): either way the caller's move is to back off."""
+
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(
+            status_code=429,
+            code=ErrorCode.RATE_LIMITED,
             message=message,
             details=details,
         )

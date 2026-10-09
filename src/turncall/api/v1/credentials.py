@@ -20,11 +20,21 @@ from turncall.api.v1.schemas.credentials import (
 from turncall.auth import Auth, WriteAuth
 from turncall.config.settings import get_settings
 from turncall.domain.providers import AWS_ACCOUNT, ROLE_PROVIDERS, accounts
+from turncall.services.asterisk_accounts import ASTERISK_ACCOUNT
 from turncall.services.credentials import ambient_aws_available, platform_keys
 from turncall.storage.repositories import credential_repo
 
 router = APIRouter(prefix="/credentials", tags=["credentials"])
 providers_router = APIRouter(prefix="/providers", tags=["credentials"])
+
+
+def _changed(provider: str) -> None:
+    """An Asterisk credential is a connection, not just a key read per call:
+    the edge reconnects now rather than at its next minute (#209)."""
+    if provider == ASTERISK_ACCOUNT:
+        from turncall.webhooks.asterisk_edge import EDGES
+
+        EDGES.poke()
 
 
 @router.put("/{provider}")
@@ -53,6 +63,7 @@ async def put_credential(
             status_code=503, code=ErrorCode.CREDENTIAL_KEY_UNAVAILABLE, message=str(exc)
         ) from exc
     await session.commit()
+    _changed(provider)
     return ok(CredentialResponse.from_row(row))
 
 
@@ -74,6 +85,7 @@ async def delete_credential(provider: str, auth: WriteAuth, session: DbSession) 
         session, auth.project_id, provider
     )
     await session.commit()
+    _changed(provider)
     return ok({"provider": provider, "deleted": deleted})
 
 

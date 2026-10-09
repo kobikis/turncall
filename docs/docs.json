@@ -64,7 +64,12 @@
                   "guides/post-call-analysis",
                   "guides/takeaways",
                   "guides/evals",
-                  "guides/observability"
+                  "guides/limits",
+                  "guides/campaigns",
+                  "guides/observability",
+                  "guides/graceful-shutdown",
+                  "guides/capacity",
+                  "guides/kubernetes"
                 ]
               }
             ]
@@ -97,6 +102,7 @@
             "pages": [
               "POST /v1/projects",
               "GET /v1/projects/{project_id}",
+              "PUT /v1/projects/{project_id}/limits",
               "DELETE /v1/projects/{project_id}"
             ]
           },
@@ -166,6 +172,18 @@
               "POST /v1/suppression-list",
               "GET /v1/suppression-list",
               "DELETE /v1/suppression-list/{entry_id}"
+            ]
+          },
+          {
+            "group": "Campaigns",
+            "pages": [
+              "POST /v1/campaigns",
+              "GET /v1/campaigns",
+              "GET /v1/campaigns/{campaign_id}",
+              "GET /v1/campaigns/{campaign_id}/targets",
+              "POST /v1/campaigns/{campaign_id}/pause",
+              "POST /v1/campaigns/{campaign_id}/resume",
+              "POST /v1/campaigns/{campaign_id}/cancel"
             ]
           },
           {
@@ -268,7 +286,8 @@
             "pages": [
               "GET /health",
               "GET /ready",
-              "GET /live"
+              "GET /live",
+              "GET /metrics"
             ]
           }
         ]

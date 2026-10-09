@@ -17,10 +17,13 @@ from turncall.api.v1.schemas.phone_numbers import (
     SetRoutingWeightsRequest,
     TwilioAccountFields,
     UpdatePhoneNumberRequest,
+    only_on_twilio,
 )
 from turncall.auth import Auth, WriteAuth
 from turncall.config.settings import Settings, get_settings
-from turncall.services import twilio_accounts
+from turncall.domain.carriers import TELNYX, TWILIO
+from turncall.services import telnyx_accounts, twilio_accounts
+from turncall.services.telnyx_accounts import TelnyxAccount
 from turncall.services.twilio_accounts import TwilioAccount
 from turncall.storage.repositories import credential_repo, phone_number_repo
 from turncall.storage.repositories.phone_number_repo import StoredTwilioAccount
@@ -34,7 +37,7 @@ async def bind_phone_number(
     auth: WriteAuth,
     session: DbSession,
 ) -> dict:
-    """Bind a Twilio phone number to a routing target."""
+    """Bind a Twilio or Telnyx phone number to a routing target."""
     existing = await phone_number_repo.get_by_e164(session, body.e164_number)
     if existing is not None:
         raise ConflictError(
@@ -44,11 +47,16 @@ async def bind_phone_number(
 
     server_url_secret = secrets_mod.token_urlsafe(32) if body.server_url else None
     settings = get_settings()
-    number_sid = body.external_number_sid
+    # An Asterisk number has no carrier-side id: the number is its own.
+    number_sid = body.external_number_sid or body.e164_number
     own: StoredTwilioAccount | None = None
     if body.has_own_twilio:
         number_sid, own = await _own_twilio(
             body, body.e164_number, body.external_number_sid, settings
+        )
+    if body.carrier == TELNYX:
+        number_sid = await _on_telnyx(
+            session, auth.project_id, body.e164_number, body.external_number_sid
         )
 
     row = await phone_number_repo.bind_phone_number(
@@ -63,16 +71,24 @@ async def bind_phone_number(
         sms_enabled=body.sms_enabled,
         metadata_json=body.metadata,
         twilio_account=own,
+        carrier=body.carrier,
     )
 
-    configured = await _configure_twilio_webhooks(row, body.sms_enabled)
+    configured = await _configure_webhooks(session, row, body.sms_enabled)
+    return ok(_with_configured(row, configured))
 
+
+def _with_configured(row: Any, configured: bool | None) -> dict[str, Any]:
+    """The binding, and whether TurnCall pointed the number at itself on its
+    carrier. False = it did not (no PUBLIC_BASE_URL, no credentials, or the
+    carrier refused) — the number won't receive calls until it is, so clients
+    can warn. None = the carrier has nothing to configure (Asterisk: the PBX's
+    dialplan routes it). `twilio_webhooks_configured` is the older, Twilio-only
+    name, null off Twilio."""
     data = PhoneNumberResponse.from_row(row).model_dump()
-    # False = TurnCall did NOT point the Twilio number at itself (missing
-    # PUBLIC_BASE_URL/credentials or a Twilio error) — the number won't receive
-    # calls until its Voice webhook is set. Surfaced so clients can warn.
-    data["twilio_webhooks_configured"] = configured
-    return ok(data)
+    data["webhooks_configured"] = configured
+    data["twilio_webhooks_configured"] = configured if row.provider == TWILIO else None
+    return data
 
 
 def _unprocessable(message: str) -> ApiError:
@@ -115,6 +131,93 @@ async def _own_twilio(
             status_code=503, code=ErrorCode.CREDENTIAL_KEY_UNAVAILABLE, message=str(exc)
         ) from exc
     return found, StoredTwilioAccount(account.account_sid, ciphertext)
+
+
+async def _telnyx_account(session: Any, project_id: UUID) -> TelnyxAccount:
+    """The project's Telnyx account, else the platform's — the one that must
+    be able to see a number bound on Telnyx."""
+    try:
+        account = await telnyx_accounts.account_for_project(
+            session, project_id, get_settings()
+        )
+    except credential_repo.CredentialKeyError as exc:
+        raise ApiError(
+            status_code=503, code=ErrorCode.CREDENTIAL_KEY_UNAVAILABLE, message=str(exc)
+        ) from exc
+    if not account.api_key:
+        raise ApiError(
+            status_code=503,
+            code=ErrorCode.NO_TELNYX_ACCOUNT,
+            message=(
+                "No Telnyx account to bind the number on: store the project's "
+                "`telnyx` credential, or set TELNYX_API_KEY"
+            ),
+            details={"missing_keys": [TELNYX]},
+        )
+    return account
+
+
+async def _on_telnyx(
+    session: Any, project_id: UUID, e164: str, given_sid: str | None
+) -> str:
+    """Prove the project's Telnyx account holds the number; its Telnyx phone
+    number id. Checked at bind, rather than when the first call never comes."""
+    from turncall.adapters.telephony.telnyx_adapter import TelnyxApiError
+
+    account = await _telnyx_account(session, project_id)
+    try:
+        found = await account.adapter().find_number(e164)
+    except TelnyxApiError as exc:
+        if exc.status in (401, 403):
+            raise _unprocessable("Telnyx rejected this account's API key") from exc
+        raise ApiError(
+            status_code=502, code=ErrorCode.TELNYX_ERROR, message=str(exc)
+        ) from exc
+    if found is None:
+        raise _unprocessable(
+            f"{e164} is not a phone number on this project's Telnyx account"
+        )
+    if given_sid and given_sid != str(found["id"]):
+        raise _unprocessable(f"{e164} on Telnyx is {found['id']}, not {given_sid}")
+    return str(found["id"])
+
+
+async def _configure_webhooks(session: Any, row: Any, sms_enabled: bool) -> bool | None:
+    """Point the number at TurnCall on its carrier. Best-effort, like
+    Twilio's: the routing row is already recorded. None on a carrier with
+    nothing to configure (Asterisk)."""
+    if row.provider == TELNYX:
+        return await _route_telnyx_number(session, row)
+    if row.provider == TWILIO:
+        return await _configure_twilio_webhooks(row, sms_enabled)
+    return None
+
+
+async def _route_telnyx_number(session: Any, row: Any) -> bool:
+    """Put the Telnyx number on this deployment's Call Control application,
+    whose webhooks go to /webhooks/telnyx/voice (TelnyxAdapter
+    .configure_number_webhook). Needs PUBLIC_BASE_URL."""
+    base = (get_settings().server.public_base_url or "").rstrip("/")
+    if not base:
+        logger.warning(
+            "telnyx_number_not_routed: set PUBLIC_BASE_URL", e164=row.e164_number
+        )
+        return False
+    account = await _telnyx_account(session, row.project_id)
+    try:
+        await account.adapter().configure_number_webhook(
+            row.external_number_sid,
+            voice_url=f"{base}/webhooks/telnyx/voice",
+            status_callback_url="",
+        )
+    except Exception as exc:  # don't fail the bind on a Telnyx hiccup
+        logger.warning(
+            "telnyx_number_route_failed for {sid}: {err}",
+            sid=row.external_number_sid,
+            err=exc,
+        )
+        return False
+    return True
 
 
 async def _configure_twilio_webhooks(row: Any, sms_enabled: bool) -> bool:
@@ -209,6 +312,19 @@ async def update_phone_number(
     )
     if row is None:
         raise NotFoundError("PhoneNumber", str(phone_number_id))
+    if body.carrier is not None and body.carrier != row.provider:
+        # Its SID, webhooks and calls all live on that carrier: moving it is
+        # unbinding there and binding on the other.
+        raise _unprocessable(
+            f"this number's carrier is {row.provider}; a carrier cannot be changed "
+            "in place — unbind the number and bind it again"
+        )
+
+    if row.provider != TWILIO:
+        try:
+            only_on_twilio(body, row.provider)
+        except ValueError as exc:
+            raise _unprocessable(str(exc)) from exc
 
     # Mint a secret only when webhook routing appears for the first time.
     secret = row.server_url_secret
@@ -234,13 +350,11 @@ async def update_phone_number(
         metadata_json=body.metadata,
         twilio_account=own,
     )
-    # Re-run the full Twilio config on every update: it's idempotent, and it's
+    # Re-run the full carrier config on every update: it's idempotent, and it's
     # the recovery path after PUBLIC_BASE_URL changes (ngrok rotation) or a
     # bind that happened before PUBLIC_BASE_URL was set.
-    configured = await _configure_twilio_webhooks(updated, body.sms_enabled)
-    data = PhoneNumberResponse.from_row(updated).model_dump()
-    data["twilio_webhooks_configured"] = configured
-    return ok(data)
+    configured = await _configure_webhooks(session, updated, body.sms_enabled)
+    return ok(_with_configured(updated, configured))
 
 
 @router.delete("/{phone_number_id}")
@@ -249,17 +363,40 @@ async def unbind_phone_number(
     auth: WriteAuth,
     session: DbSession,
 ) -> dict:
-    """Remove a phone number binding and clear the Twilio number's webhooks —
-    an unbound number must not keep pointing Twilio at TurnCall."""
+    """Remove a phone number binding and point the number away from TurnCall
+    on its carrier — an unbound number must not keep reaching TurnCall."""
     row = await phone_number_repo.get_by_id(
         session, phone_number_id, project_id=auth.project_id
     )
     if row is None:
         raise NotFoundError("PhoneNumber", str(phone_number_id))
     # Resolved before the delete: the number's own account goes with its row.
-    account = twilio_accounts.account_for_number(row, get_settings())
+    # Only a Twilio number has webhooks pointing at TurnCall to clear.
+    account = (
+        twilio_accounts.account_for_number(row, get_settings())
+        if row.provider == TWILIO
+        else None
+    )
+    telnyx = (
+        await telnyx_accounts.account_for_project(
+            session, auth.project_id, get_settings()
+        )
+        if row.provider == TELNYX
+        else None
+    )
     await phone_number_repo.delete_phone_number(session, phone_number_id)
 
+    if telnyx and telnyx.api_key:
+        try:
+            await telnyx.adapter().configure_number_webhook(
+                row.external_number_sid, voice_url="", status_callback_url=""
+            )
+        except Exception as exc:  # best-effort — the binding is gone either way
+            logger.warning(
+                "telnyx_number_unroute_failed for {sid}: {err}",
+                sid=row.external_number_sid,
+                err=exc,
+            )
     if account:
         adapter = account.adapter()
         try:

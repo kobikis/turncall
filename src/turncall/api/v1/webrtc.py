@@ -7,7 +7,7 @@ Pipecat 1.0 uses SmallWebRTCRequestHandler for signaling:
 
 from dataclasses import fields
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -35,6 +35,7 @@ from turncall.orchestrator.transport_factory import (
     create_whatsapp_transport,
 )
 from turncall.services.credentials import MissingProviderKeyError
+from turncall.services.limits import admit_live_call, release_live_call
 from turncall.storage.database import create_session_factory, get_engine
 from turncall.storage.repositories import agent_repo
 
@@ -151,6 +152,11 @@ async def webrtc_connect(
 
         config = prepend_knowledge_context(config, knowledge_context)
 
+    # Before the call row, so a refusal leaves nothing behind (#224). The slot
+    # is the pipeline task's to free once it runs; until then, ours.
+    call_id = uuid4()
+    await admit_live_call(session, project_id=auth.project_id, call_id=call_id)
+
     engine = get_engine()
     session_factory = create_session_factory(engine)
 
@@ -175,6 +181,7 @@ async def webrtc_connect(
         call = await call_repo.create_call(
             db_session,
             project_id=auth.project_id,
+            call_id=call_id,
             direction=CallDirection.INBOUND,
             active_agent_id=agent_id_for_call,
             metadata_json=call_metadata,
@@ -241,7 +248,13 @@ async def webrtc_connect(
             build_failure.append((connection, exc))
             raise
 
-    answer = await _request_handler.handle_web_request(webrtc_request, on_connection)
+    try:
+        answer = await _request_handler.handle_web_request(
+            webrtc_request, on_connection
+        )
+    except BaseException:
+        await release_live_call(auth.project_id, call_id)
+        raise
 
     if build_failure:
         connection, exc = build_failure[0]
@@ -258,6 +271,7 @@ async def webrtc_connect(
         )
 
     if answer is None:
+        await release_live_call(auth.project_id, call_id)
         raise ApiError(
             status_code=500,
             code=ErrorCode.INTERNAL_ERROR,
@@ -327,8 +341,6 @@ async def _resolve_agent(
         if agent is None:
             raise NotFoundError("Agent", str(agent_id))
     elif server_url:
-        from uuid import uuid4
-
         from turncall.events.server_events import send_call_init
         from turncall.services.call_init_resolver import resolve_call_init
 

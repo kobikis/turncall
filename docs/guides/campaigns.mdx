@@ -1,0 +1,155 @@
+---
+title: Campaigns
+description: "One agent calls a list of numbers, each with its own variables, inside your suppression list and limits"
+icon: "list-check"
+---
+
+A **campaign** is a set of outbound calls one agent places to a list of targets. You send the list; TurnCall dials each target — again, if you ask it to, when nobody answered — skips numbers on your suppression list (`POST /v1/suppression-list`), and never holds more live calls than your project's [live-call limit](/guides/limits).
+
+<Note>
+Campaigns are dialled by a separate process, `turncall-campaign-worker` — the same image as the API with a different entrypoint. A campaign runs for hours, and the API's event loop is busy carrying live calls. Run at least one worker wherever campaigns should dial; several can run side by side.
+</Note>
+
+## Create a campaign
+
+```bash
+curl -X POST https://api.example.com/v1/campaigns \
+  -H "Authorization: Bearer tc_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "October renewals",
+    "agent_id": "AGENT_ID",
+    "from_number_id": "PHONE_NUMBER_ID",
+    "timezone": "America/New_York",
+    "calling_window": {"start": "09:00", "end": "20:00", "days": ["mon", "tue", "wed", "thu", "fri", "sat"]},
+    "retry_policy": {
+      "customer_did_not_answer": {"max_attempts": 3, "spacing_seconds": 7200},
+      "customer_busy": {"max_attempts": 3, "spacing_seconds": 900},
+      "voicemail": {"max_attempts": 2, "spacing_seconds": 86400}
+    },
+    "targets": [
+      {"number": "+15550001111", "variables": {"name": "Ada", "plan": "Pro"}},
+      {"number": "+447700900123", "variables": {"name": "Alan"}, "timezone": "Europe/London"}
+    ]
+  }'
+```
+
+- **`variables`** reach the agent the way [call-init](/guides/call-init) variables do: `{{name}}` in the system prompt, first message and tool descriptions is replaced with the target's value. A target takes up to 50 variables and 4,096 characters of them, names included; more is a `422`.
+- **`timezone`** is required for every target — on the target itself, or as the campaign's default. It must be an IANA name such as `America/New_York`. A target with neither is refused (`422`). TurnCall never guesses a zone from the number: a ported mobile keeps its area code wherever its owner lives, and the target's local time is what calling hours are read in.
+- A number listed twice is refused: it would call the same person twice. Up to 10,000 targets per request.
+
+## A/B test agents
+
+Instead of `agent_id`, give `agents` — two to ten agents with weights that sum to 100 — and the targets are split between them:
+
+```json
+"agents": [
+  {"agent_id": "AGENT_A", "weight": 50},
+  {"agent_id": "AGENT_B", "weight": 50}
+]
+```
+
+Each target is assigned its agent when the campaign is created, by its number — the same rule as [phone-number A/B routing](/guides/ab-testing), so the same list with the same weights always splits the same way, and a number that calls you back on an A/B-routed line reaches the agent that called it. The assignment is the target's `agent_id`; each call's `agent_id` and `call.ended` say who called. Send exactly one of `agent_id` and `agents`.
+
+The response is the campaign, `queued` until the worker reaches it, with its targets counted by status.
+
+## Calling windows
+
+`calling_window` is the hours a target may be called, in **that target's own timezone**: with `{"start": "09:00", "end": "20:00"}`, a New York target is called between 09:00 and 20:00 New York time and a London target between 09:00 and 20:00 London time, whatever the clock says where the worker runs. Daylight saving is applied on the day itself, so the window does not drift by an hour when a zone changes.
+
+- `start` is inclusive and `end` exclusive, as `HH:MM`, with no offset — the zone is always the target's. `start` must be before `end`; a window across midnight is refused rather than guessed at.
+- `days` (`mon` … `sun`) limits it to those days of the target's week. Leave it out for every day.
+- A target whose turn comes outside its window goes back to `pending`, and its `next_attempt_at` says when its window next opens.
+- With no `calling_window`, targets are called at any hour.
+
+## Retries
+
+`retry_policy` says which endings are dialled again, how many times and how far apart. Its keys are the call's `ended_reason`:
+
+| Key | The call |
+|-----|----------|
+| `customer_did_not_answer` | Rang out |
+| `customer_busy` | Was busy |
+| `voicemail` | Reached voicemail |
+
+Each takes `max_attempts` — dials to the target in all, the first one included, at most 10 — and `spacing_seconds`, how long after the call ended to try again (at least 60). A call that ends in a listed way puts its target back to `pending` with `next_attempt_at` set, until its `attempts` reach that ending's `max_attempts`. `attempts` counts every dial whatever its ending, so a target that went unanswered once and was then busy has used two of busy's attempts.
+
+A retry respects the calling window: one that comes due after hours waits for the window's next opening. A retry that has come due is dialled before targets not yet tried, so its spacing is kept even in a long list. Every other ending — the person answered, the call was transferred, the carrier failed — is final. With no `retry_policy`, each target is dialled once.
+
+## Follow it
+
+```bash
+curl https://api.example.com/v1/campaigns/$CAMPAIGN_ID/targets?status=failed \
+  -H "Authorization: Bearer tc_..."
+```
+
+| Target status | Meaning |
+|---------------|---------|
+| `pending` | Waiting to be dialled — at `next_attempt_at` when that is set. After a retryable ending, `ended_reason` is the last attempt's |
+| `dialling` | A worker has claimed it and is about to dial |
+| `placing` | The carrier is being asked to place the call right now |
+| `calling` | Dialled; `call_id` is the call, still in progress |
+| `completed` | Done: the last call ended in a way that is final, or used its last attempt; `ended_reason` says how (`customer_did_not_answer`, `customer_busy`, `voicemail`, …) and `attempts` how many dials it took |
+| `suppressed` | On the suppression list when its turn came — never dialled |
+| `failed` | Could not be dialled; `error` says why |
+| `cancelled` | The campaign was cancelled before it was dialled |
+
+Each call also carries `campaign_id` and `campaign_target_id` in its `metadata`, so `call.ended` webhooks tie back to the target. The campaign moves from `running` to `completed` once no target is left to dial.
+
+## Events
+
+Webhook subscribers (`POST /v1/webhooks`) get three campaign events, each at most once:
+
+| Event | When |
+|-------|------|
+| `campaign.started` | The worker picked the campaign up — it is `running` |
+| `campaign.completed` | No target is left to dial |
+| `campaign.cancelled` | The campaign was cancelled (`POST /v1/campaigns/{id}/cancel`) — instead of `campaign.completed` |
+
+The payload is the campaign as `GET /v1/campaigns/{id}` returns it — status, agent or weights, target counts per status, timestamps — and the envelope carries `campaign_id` (null on every other event). Per-target results are on `GET /v1/campaigns/{id}/targets`.
+
+```json
+{
+  "event": "campaign.completed",
+  "campaign_id": "…",
+  "call_id": null,
+  "agent_id": "…",
+  "payload": {
+    "name": "October renewals",
+    "status": "completed",
+    "targets": {"pending": 0, "dialling": 0, "calling": 0, "completed": 412, "suppressed": 9, "failed": 1},
+    "started_at": "…",
+    "completed_at": "…"
+  }
+}
+```
+
+## Pause, resume, cancel
+
+```bash
+curl -X POST https://api.example.com/v1/campaigns/$CAMPAIGN_ID/pause \
+  -H "Authorization: Bearer tc_..."
+```
+
+- **`pause`** stops new dials. Calls already placed stay up, and their endings are still recorded on their targets. The campaign is `paused` until you resume it.
+- **`resume`** carries on where it stopped.
+- **`cancel`** ends the campaign for good: it becomes `cancelled`, and so does every target not yet dialled. Calls already placed finish normally.
+
+Each returns the campaign. Asking for the state it is already in is answered with the campaign; a move it cannot make — resuming a cancelled campaign, pausing a completed one — is `409 invalid_state_transition`. A pause or cancel that lands while a worker is about to dial a target still stops that dial.
+
+## If a worker crashes
+
+Nothing is lost, and nobody is called twice. A worker that dies mid-dial leaves its target `dialling` or `placing`, and the next worker to run picks it up once the claim is older than `CAMPAIGN_CLAIM_TIMEOUT_SECONDS` (default 120):
+
+- **`dialling`** — the carrier was never asked, so the target goes back to `pending` and is dialled.
+- **`placing`** — the carrier may have placed the call before the worker could record it, so the target is ended `failed` with `error` starting `dial_outcome_unknown`, and is **not** dialled again. Check the carrier's call log for that number before adding it to a new campaign.
+
+## How it paces
+
+Every dial — a first attempt or a retry — goes through the same path as `POST /v1/calls/outbound`, and a campaign is never refused by your [limits](/guides/limits): before each dial the worker *reserves* the call's live-call slot and its place in the number's calls-per-second window, so several workers — or a worker and your own API dials — never race each other into a `429`.
+
+- **At `live_calls`**, the campaign waits and picks up again as calls end.
+- **At `outbound_calls_per_second`**, it comes back the moment the number's one-second window frees: a number limited to 5 dials five a second, not one per poll.
+- **With no rate set**, a campaign dials one call a second from each number (`CAMPAIGN_DEFAULT_CALLS_PER_SECOND`, default `1` — Twilio's default rate for an account, past which Twilio queues your calls and they ring late). Set `outbound_calls_per_second` to go faster, or `0` on that variable to turn the floor off.
+
+With no `live_calls` limit, how many calls run at once is the pace times how long your calls last — set one if your agent's backends have a ceiling.

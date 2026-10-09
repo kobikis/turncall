@@ -17,7 +17,7 @@ license = "MIT"
 
 dependencies = [
     # Web Framework
-    "fastapi>=0.115.0",
+    "fastapi>=0.121.0",  # Depends(scope="function")
     "uvicorn[standard]>=0.30.0",
     "python-multipart>=0.0.9",
 
@@ -73,7 +73,7 @@ dependencies = [
     # pins aiobotocore==2.25.1 and has no 3.x-compatible release — declaring it
     # makes the project uninstallable. AWSBedrockLLMService works fine on
     # aiobotocore 2.25.1, which aioboto3 already provides. See adr/0016.
-    "pipecat-ai[openai,deepgram,elevenlabs,silero,webrtc,webrtc-video,local-smart-turn,google,anthropic,cartesia,heygen,tavus,aws-nova-sonic,tracing,mcp]>=1.12.0,<2.0.0",
+    "pipecat-ai[openai,deepgram,elevenlabs,silero,webrtc,webrtc-video,local-smart-turn,google,anthropic,cartesia,assemblyai,heygen,tavus,aws-nova-sonic,tracing,mcp]>=1.12.0,<2.0.0",
     # OTLP span exporter (pipecat[tracing] ships otel api/sdk but not an exporter).
     # See ADR-0010.
     "opentelemetry-exporter-otlp>=1.43.0",
@@ -96,6 +96,8 @@ dependencies = [
 # run in the API process -- ADR-0004: event-loop jitter becomes dead air on a
 # live call, and an eval run is exactly the load that causes it.
 turncall-eval-worker = "turncall.evals.worker:main"
+# The campaign worker (#229): same image, its own process, for the same reason.
+turncall-campaign-worker = "turncall.campaigns.worker:main"
 # The CLI (#77). An ordinary API client — same key, same endpoints — whose
 # exit code is what lets a pull request be gated on agent behaviour.
 turncall = "turncall.cli.main:run"

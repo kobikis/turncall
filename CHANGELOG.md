@@ -11,7 +11,83 @@ and is not part of this repository's history.
 
 ## [Unreleased]
 
+### Added
+
+- **Helm chart** (#210, `charts/turncall`). Runs the API, the eval worker and
+  the campaign worker against your own Postgres and Redis, with migrations as a
+  hook Job before each install and upgrade. Each grace period is sized from what
+  that process may still be holding — the API's from your longest
+  `max_call_duration_seconds` (`maxCallDurationSeconds`) — so a scale-down or a
+  rollout lets live calls finish instead of cutting them off. An optional
+  `HorizontalPodAutoscaler` scales the API on live calls per pod
+  (`turncall_active_calls`) rather than CPU. Asterisk's ARI connection runs in
+  one dedicated pod, never in an API replica, since ARI gives an app's calls
+  to one connection only. See the Kubernetes guide.
+- **Deepgram Flux STT** (#204). A `flux-*` model on the `deepgram` provider
+  (`flux-general-en`, `flux-general-multi`) uses Deepgram's Flux, which detects
+  the end of the caller's turn itself. Flux then owns end-of-turn: Smart Turn
+  is not run for that agent and `silence_timeout_ms` is not used, so the two
+  waits are not stacked. Flux's `eot_threshold`/`eot_timeout_ms` and its other
+  settings go in `stt.extra`. Same Deepgram key.
+- **`metrics.turn` carries `turn_end_ms`** (#204): the time from the caller going
+  quiet to the turn being called over — VAD, the transcript, and Smart Turn's or
+  Flux's verdict. Absent when unmeasured, never zero.
+
+- **Warm transfer on Telnyx numbers** (#221, ADR-0009, ADR-0022). The
+  operator hears the `briefing` — a string or `{"from_summary": true}`,
+  summarized when they pick up — spoken on their own leg before the caller is
+  connected, while the caller hears ringing. Machine detection on the
+  operator's line reports `transfer.answered` (`human`/`machine`/`unknown`) and
+  never holds the bridge; an operator who does not answer gets the caller the
+  `fallback_message` and the call ends. The carrier contract runs the same
+  three warm scenarios — answered, voicemail, no answer — on Twilio and Telnyx.
+- **Cold transfer and DTMF on Telnyx numbers** (#220, ADR-0009, ADR-0022).
+  `transfer_call` and `POST /v1/calls/{id}/transfer` behave on a Telnyx call as
+  on Twilio: the caller hears the `transfer_message`, then ringing, then the
+  operator, whose caller ID shows the caller's number; if nobody answers, the
+  call ends. On Call Control that is a sequence of commands driven by Telnyx's
+  webhooks (stop the agent's stream, speak, ringback, dial a linked leg,
+  bridge). `send_dtmf` sends its digits with Telnyx's `send_dtmf` command.
+  The carrier contract test runs the cold transfer and DTMF on both carriers.
+
+- **Telnyx numbers answer inbound calls** (#217, ADR-0022). Bind a number with
+  `"carrier": "telnyx"` (routed for you since #219, below): the call is answered through Call Control, its
+  audio streamed with pipecat's Telnyx serializer, and it runs the same agent
+  config as on Twilio — recording, ambience and voicemail detection included.
+  Webhooks are verified with the account's Ed25519 public key and refused
+  without a valid signature; there is no unsigned mode. The account is a
+  `telnyx` project credential (`api_key` + `public_key`) over the platform's
+  `TELNYX_API_KEY` / `TELNYX_PUBLIC_KEY`; with no key at any level the call
+  fails with `missing_keys: ["telnyx"]`. A call over the project's live-call
+  limit (#224) is refused busy with a Call Control `reject` and announced as
+  `call.rejected`, as on Twilio.
+- **Outbound calls from Telnyx numbers** (#218). `POST /v1/calls/outbound`
+  with a Telnyx number as `from_number_id` dials through Telnyx Call Control —
+  same request, same response, and the same suppression list and limits, so
+  campaigns dial Telnyx numbers too. The dial runs on the number's Call Control
+  application and streams the call once the callee answers. A call nobody
+  answers ends `customer_did_not_answer` (busy: `customer_busy`), as on Twilio.
+  No Telnyx key at any level is a `503 no_telnyx_account` naming
+  `missing_keys: ["telnyx"]`; a number on no Call Control application is a 409.
+- **Binding a Telnyx number routes it** (#219). No Mission Control step: the
+  bind looks the number up on the project's Telnyx account (so
+  `external_number_sid` is optional, and a number the account does not hold
+  is a 422 naming it) and moves it onto this deployment's Call Control
+  application, `TurnCall <host>`, which TurnCall creates, keeps pointed at
+  `/webhooks/telnyx/voice`, and deletes once no number is left on it. Unbind
+  and project deletion take the number off again. Bind and update responses
+  carry `webhooks_configured` for any carrier.
+
 ### Changed
+
+- **A phone number's carrier is `carrier` in the API** (#201, ADR-0022).
+  Reads carry `carrier`; `provider` is still there with the same value and
+  still accepted on a write, both deprecated — "provider" means an STT, LLM or
+  TTS backend everywhere else. Sending both with different values is a 422, as
+  is a `PUT` that would move a number to another carrier. Behind it the
+  carrier boundary is cut for Telnyx and Asterisk: the telephony adapter is
+  REST actions only, and one media entry point picks the serializer from the
+  call's own carrier. Twilio calls behave exactly as before.
 
 - **An `openai_live` agent with tools now delegates to its own `llm`** (#244).
   With no `s2s.delegation` block its tools were never offered; it now gets
@@ -65,6 +141,161 @@ and is not part of this repository's history.
   config. False no longer means "no static AWS keys on this deployment".
 
 ### Added
+
+- **AssemblyAI Universal-Streaming STT** (#203): `"stt": {"provider":
+  "assemblyai"}`. The key resolves agent → project `assemblyai` credential →
+  `ASSEMBLYAI_API_KEY`, and a missing one is reported in `missing_keys` like
+  any other provider. With no `stt.model` it runs `universal-streaming-english`
+  ($0.15/hr) — or `universal-streaming-multilingual` when `stt.language` is not
+  English, since the English model transcribes other languages as English words
+  without an error. `stt.keyterms` is sent as `keyterms_prompt`, capped at the
+  100 AssemblyAI accepts (more is a refused session, not a weaker one), and
+  `stt.extra` reaches AssemblyAI's own settings (`domain`, `mode`, …).
+
+- **`google` LLM provider: Gemini as a cascade LLM** (#205), on voice and
+  chat/SMS/WhatsApp text, tools included, on the `google` account Gemini Live
+  already uses (`GOOGLE_API_KEY` or a project credential). House model
+  `gemini-3.6-flash`. Gemini 3 models are sent no temperature — Google warns
+  they loop below their own 1.0, and TurnCall's 0.7 is a default nobody chose;
+  `llm.extra` merges into the generation config to set one anyway. Usable as
+  an `llm.failover` entry; `base_url` is refused (422).
+
+- **A deploy no longer drops live calls** (#199). On `SIGTERM`, `GET /ready`
+  answers `503 {"status": "draining"}` at once while `GET /live` stays `200`,
+  and the process keeps serving until its live calls (Twilio, WebRTC and
+  WhatsApp voice) have ended and their `call.ended` webhooks have gone out —
+  bounded by the longest `max_call_duration_seconds` among them, plus 90
+  seconds. Before, the server's own shutdown closed every media stream at once
+  and cut each call off mid-sentence. A second `SIGTERM` stops waiting. Set
+  `terminationGracePeriodSeconds` from your agents' durations, not the 30-second
+  default; see the Graceful shutdown guide. `GET /metrics` exposes
+  `turncall_active_calls`, live calls per process, in Prometheus text format.
+- **Weighted agents and start/finish events on campaigns** (#234). A campaign
+  takes `agents: [{agent_id, weight}]` (weights summing to 100) instead of
+  `agent_id`, and each target is assigned its agent at create by the phone
+  number A/B rule — a hash of its number, so the same list splits the same way
+  every time — readable as the target's `agent_id`. Webhook subscribers get
+  `campaign.started` and `campaign.completed`, each carrying the campaign's
+  read (status and target counts), with the campaign's id in a new nullable
+  envelope field, `campaign_id`. A weighted campaign reads back `agent_id: null`.
+
+- **Campaigns keep a number's pace and are never refused by a limit** (#233).
+  The worker reserves each dial's live-call slot and calls-per-second place
+  before it claims a target, so two workers — or a worker and an API dial —
+  racing one project no longer end in a `429` for the campaign; and it comes
+  back as soon as the number's one-second window frees, so a campaign dials
+  *at* `outbound_calls_per_second` rather than once per poll. With no rate set
+  on the project, a campaign paces at `CAMPAIGN_DEFAULT_CALLS_PER_SECOND`
+  (default `1`, Twilio's default account rate; `0` turns it off) instead of
+  dialling the whole list in one burst.
+- **Campaign pause, resume and cancel; a worker crash loses no target** (#232).
+  `POST /v1/campaigns/{id}/pause` stops new dials and leaves calls already
+  placed up — their endings are still recorded — and `/resume` carries on
+  where it stopped. `/cancel` ends the campaign: targets not yet dialled become
+  `cancelled`, live calls finish, and subscribers get `campaign.cancelled`
+  (the same payload as `campaign.completed`). A move that lands between a worker's claim
+  and its dial still stops that dial. A worker killed mid-dial is recovered by
+  a janitor in the next worker's pass (`CAMPAIGN_CLAIM_TIMEOUT_SECONDS`,
+  default 120): a target claimed but not yet sent to the carrier is dialled
+  again, and one the carrier was being asked about — a new `placing` status —
+  is ended `failed` with `dial_outcome_unknown` instead, because it may already
+  have rung and calling a person twice is worse than reporting one call as
+  unknown.
+
+- **Campaigns: outbound calls to a list** (#229). `POST /v1/campaigns` takes
+  one agent, a caller-id number and JSON targets — a number, per-target
+  `variables` (rendered into the agent as `{{name}}`, like call-init's) and an
+  IANA `timezone`, on each target or as the campaign default. A target with
+  neither is refused at create: its local time is what a calling window will be
+  read in, and a zone guessed from the number calls people at night. A new
+  process, `turncall-campaign-worker`, dials each target once through the same
+  dial path as `POST /v1/calls/outbound`, so suppressed numbers are skipped
+  (and marked `suppressed`) and the project's live-call limit is never
+  exceeded. `GET /v1/campaigns/{id}/targets` gives each target's status, call
+  and `ended_reason`. Calling windows, retries, pause/cancel, pacing and
+  weighted agents follow (#230-#234).
+
+- **Campaign calling windows** (#230). `calling_window: {start, end, days}` on
+  `POST /v1/campaigns` — local hours, read in **each target's own** IANA zone
+  on the day in question, so a New York target's 09:00 is 13:00 UTC in October
+  and 14:00 UTC after the November change. A target reached outside its window
+  goes back to `pending` with `next_attempt_at` at its next opening; the check
+  sits on the claimed target right before the dial, so nothing reaches the
+  carrier outside it. `days` defaults to every day; an overnight window or a
+  time with an offset is a 422. No window, no restriction — as before.
+
+- **Campaign retries by `ended_reason`** (#231). `retry_policy` on
+  `POST /v1/campaigns` maps `customer_did_not_answer`, `customer_busy` and
+  `voicemail` each to `{max_attempts, spacing_seconds}`. A call ending that way
+  puts its target back to `pending`, due after the spacing — moved to the next
+  opening of its calling window when it lands outside — until the target's
+  `attempts` (dials placed, the first included) reach that ending's
+  `max_attempts`. Every other ending is final: a person who answered is not
+  called back. No policy, no retries — as before.
+
+- **A messages-per-minute limit per text session** (#226).
+  `messages_per_minute` on `PUT /v1/projects/{id}/limits`, with
+  `LIMIT_MESSAGES_PER_MINUTE` as the platform default — unlimited unless set —
+  so a looping or abusive conversation cannot run up LLM cost. Past it a
+  message is neither stored nor sent to the LLM: `POST /v1/chat` answers
+  `429 rate_limited` with `retry_after_ms`, and an SMS or WhatsApp message gets
+  no reply. Counted per session, across every server.
+
+- **An outbound calls-per-second limit per number** (#225).
+  `outbound_calls_per_second` on `PUT /v1/projects/{id}/limits`, with
+  `LIMIT_OUTBOUND_CALLS_PER_SECOND` as the platform default — unlimited unless
+  set. Each of the project's numbers starts at most that many outbound calls
+  in any one second, across every server; a dial past it is
+  `429 rate_limited` with `retry_after_ms`, and never reaches the carrier.
+
+- **A live-call limit per project** (#224). `PUT /v1/projects/{id}/limits`
+  `{"live_calls": n}` (admin key; the project read shows `limits`), with
+  `LIMIT_LIVE_CALLS` as the platform default — unlimited unless set. Over it,
+  an inbound Twilio or WhatsApp call is refused unanswered at the carrier
+  (busy) and dispatched as the new `call.rejected` event (no `call_id`: the
+  call never started); `POST /v1/calls/outbound` and `POST /v1/webrtc/connect`
+  answer `429 rate_limited`. Counted in Redis across every server. A call
+  frees its slot however it ends, and one whose server died frees it within
+  two minutes.
+- **Asterisk numbers, over ARI** (#209, ADR-0022). A call centre or company
+  PBX reaches an agent with no cloud carrier in between: bind a number with
+  `carrier: "asterisk"`, give the project its Asterisk as an `asterisk`
+  credential (`ari_url`, `username`, `password`) or set `ASTERISK_ARI_*` for
+  the platform, and point the dialplan at `Stasis(turncall)`. TurnCall keeps
+  an ARI connection to it, takes the call's audio over the WebSocket channel
+  driver (Asterisk 20.18 / 22.8 / 23.2 or later) and runs the same pipeline as
+  on Twilio. Hang-up, DTMF and cold transfers (into a dialplan context) go
+  through ARI; a warm transfer, a transfer or fallback message, outbound
+  calls and SMS are refused on Asterisk numbers rather than done differently.
+  A call TurnCall cannot take goes back to the dialplan unanswered — one over
+  the project's live-call limit (#224) too, with `call.rejected`. One
+  replica holds the ARI connection (`ASTERISK_EDGE_ENABLED`). See
+  [Phone numbers](docs/guides/phone-numbers.mdx#asterisk-numbers).
+
+- **`make load-test`: how many concurrent calls one pod carries** (#200,
+  `scripts/calls_per_pod/`). Runs the app in the API image under a pod's CPU
+  and memory budget, on the harness's stub providers, and ramps N real-time
+  Twilio media streams playing recorded speech. Per step: CPU (process and
+  event-loop thread), CFS throttling, RSS, loop lag, full-GC pauses, audio
+  underruns as a caller's playout buffer hears them, and turn latency. The
+  measured figure and its conditions are in `docs/guides/capacity.mdx`.
+
+- **A test harness that drives the running app like a carrier** (#214,
+  `tests/harness/`). Stub STT/LLM/TTS answer instantly from a script (a tool
+  call included), a fake carrier records every REST action TurnCall takes, and
+  a Twilio client posts signed webhooks and streams real-time mulaw media.
+  `tests/integration/test_harness_inbound_call.py` runs one inbound call from
+  webhook to `call.ended` on it. Later carrier, limit and campaign tests extend
+  it rather than mock their own way in.
+
+- **`stt.failover` and `tts.failover`** (#223). Ordered backup STT and TTS
+  configs, each validated like `stt`/`tts`. An error that leaves the active
+  service unusable moves the call to the next and it carries on: the STT
+  backup is handed the caller's speech nobody transcribed yet, the TTS backup
+  the reply being spoken. Recoverable errors do not switch; there is no
+  switching back. Each switch is `provider.failover` (`role: stt|tts`) and an
+  entry in `failovers`. Backups need keys (`missing_keys`). 422 on S2S agents,
+  and on an STT group mixing Deepgram Flux with other models.
 
 - **`llm.failover` on an `openai_live` client delegate** (#246). The delegate
   is an ordinary LLM, so it is built as a failover group like cascade's: an
@@ -151,7 +382,133 @@ and is not part of this repository's history.
   `AMBIENCE_CACHE_DIR`. See `adr/0021`. Checked on a real PSTN call: no
   spurious interruptions and no empty turns at the default volume (#171).
 
+### Security
+
+- **A carrier media stream must prove it is the call's.** Every media route —
+  Twilio's `/ws/media-stream`, and Telnyx's and Asterisk's added in this
+  release — built the call's real pipeline on any socket that named its call
+  id, on any carrier's route, as many times as asked. A call id is not a
+  secret (it rides in webhooks, call-init, the API and logs), so whoever held
+  one could talk to the caller's agent, hear its replies and drive its tools.
+  Each call's stream setup now carries a **media token** (an HMAC of the call
+  id keyed by `API_KEY_HASH_SECRET` — set it; the default is public), and a
+  stream without it, on another carrier's route than the call's, or for a call
+  that already has one is refused before anything is built. Telnyx's stream
+  path gains a segment (`/ws/telnyx/media-stream/{call_id}/{token}`) and
+  Asterisk's external-media channel id the token; both are minted by TurnCall,
+  so no carrier configuration changes. Migration `b9f5d3a7e1c2`
+  (`calls.media_attached_at`). A call answered before the upgrade and not yet
+  streaming when it lands has no token and is refused.
+
 ### Fixed
+
+- **A campaign's claim and janitor are index lookups** (#229, #232). The claim
+  ordered every pending target by position and filtered out the ones not yet
+  due, so it walked each deferred target ahead of the first due one — on every
+  dial, quadratic over a campaign whose early targets wait on a retry or a
+  closed calling window (4,000 rows filtered to find one, measured). It is now
+  two partial-index lookups: a target whose `next_attempt_at` has come — a
+  retry, or one deferred to its window — is claimed first, earliest first,
+  then the never-dialled ones in list order. The janitor, which reads claims
+  across every campaign on every pass, has its own partial index instead of a
+  table scan. Migration `a8e4c2f6d0b1`.
+
+- **Downgrading past weighted campaigns refuses instead of deleting them**
+  (#234). Revision `f7c3d5e9a1b4`'s downgrade deleted every campaign with no
+  single agent — and, by cascade, its targets and their attempt history — to
+  restore the `NOT NULL`. It now stops with an error naming how many exist;
+  give each an `agent_id` or delete it, then downgrade again.
+
+- **A campaign target's `variables` are bounded** (#229): at most 50 and
+  4,096 characters of them, names included — a `422` past either. `targets`
+  was capped at 10,000 but each target's variables were not, so one request
+  could write any amount into the database and into the agent's prompt.
+
+- **A dial the carrier placed keeps its live-call slot** (#224). Any failure
+  after the carrier had placed an outbound call — writing its SID or its
+  `call.started` — freed the slot while the phone rang, so another dial could
+  be admitted into it and the project ran one call over its limit once the
+  first call's media stream took its slot back. A slot is freed now only when
+  nothing was dialled; a campaign target in that case ends `failed` with
+  `dial_not_recorded` and keeps its reservation.
+
+- **A call cancelled while its control channel subscribes closes the
+  channel's Redis client** (#215). The subscribe step cleaned up only on an
+  error, and cancellation is not one, so a call torn down in that window — a
+  forced shutdown, a caller gone at once — left its dedicated connection open.
+
+- **A call-init inline agent cannot mix Deepgram Flux into an STT failover
+  group either** (#223, #204). The API refused such a group in both
+  directions, but an inline agent from call-init never passes the API's
+  schema, so it reached the build and a switch across the Flux line left every
+  turn waiting on pipecat's 5s timeout. The build applies the same rule now and
+  the call fails with `pipeline_error`, saying why.
+
+- **A retried Telnyx `call.initiated` opens the call once** (#217). A retry
+  arriving while the first delivery was still resolving the agent (a slow
+  call-init) found no call row yet and opened the call again: a second
+  live-call slot, a second row, duplicate `call.initializing`/`call.started`,
+  and a second `answer` for the same leg. The two are now serialized on the
+  leg's `call_control_id`.
+
+- **A Telnyx call whose `answer` fails is hung up** (#217). The call was
+  failed and its slot freed, but nothing told Telnyx to end the leg — and an
+  answer that reached Telnyx with only its reply lost left the caller on a
+  live, silent line until they hung up.
+
+- **An Asterisk call whose bridge fails is hung up** (#209). The bridge was
+  the one step of the ARI edge with no recovery: if ARI refused it, the caller
+  and the pipeline stayed up unbridged, each hearing silence, the live-call
+  slot held, until `max_call_duration_seconds`. Both channels are hung up now,
+  which ends the call as any other ending does.
+
+- **The Helm chart's Ingress no longer publishes `/metrics` and the probes**
+  (#210). It routed `/`, so `/metrics` and `/ready` — no credential, each
+  counting a pod's live calls — were reachable from the internet. It routes
+  `ingress.paths` now (`/v1`, `/webhooks`, `/ws`); the kubelet and the
+  PodMonitor reach the pod directly.
+
+- **A request's writes are committed before its response is sent.** The
+  request session committed in a yield dependency, which FastAPI runs *after*
+  the response by default — so Twilio could open the media stream named in the
+  inbound TwiML before the call row existed, and the caller heard silence
+  (`media_stream_call_not_found`; seen in CI). Binding a number had the same
+  race with the first call to it. The session is now `scope="function"`, which
+  needs FastAPI 0.121 or later.
+
+- **`POST /v1/calls/{id}/handoff` switches the live call** (#216). It used to
+  move the call record to the target agent from the API process and change
+  nothing in the call: the caller kept talking to the previous agent's prompt
+  and tools while every event named the new one. The call now applies it
+  itself, over the control channel, through the same prepare / commit / apply
+  path as the model's `handoff_to_agent` (#144) — so the record moves only
+  when the pipeline does, and a caller talking over it cannot leave it half
+  done. Same contract as `/messages`: 200 with what the call applied (the
+  agent and the `tools` it now advertises), **409 `call_not_live`**, **504
+  `call_did_not_acknowledge`**, 409 with the call's reason (`openai_live`,
+  which refuses the tool too; a call not in progress). A target agent outside
+  the call's project is now a 404 — the endpoint and the tool used to accept
+  any agent id. A handoff whose target cannot be loaded is no longer committed
+  to the record either, on either path.
+
+- **`POST /v1/calls/{id}/messages` reaches the live call** (#215). It used to
+  record `context.injected` and answer 200 while the call's model never saw
+  the message: nothing in the call read that event. The request now travels
+  over a per-call Redis channel (`call:{id}:control`) that the task running
+  the call holds for its lifetime, on every voice transport, and the endpoint
+  answers only with what the call itself applied: **409 `call_not_live`** when
+  nothing is running the call, **504 `call_did_not_acknowledge`** when it does
+  not answer within 2s, 409 with the call's reason when it refuses (an S2S
+  call, whose model reads no context added after it starts). The message is
+  added to the context for the agent's next turn. The unused in-process
+  `SessionManager` is gone; the channel is also what reaches a call held by
+  another replica.
+
+- **A transfer's own record could be lost with the call** (#220). Every
+  carrier ends the agent's media stream as part of a transfer, which cancels
+  the pipeline — and the `transfer_call` tool still recording
+  `call.transferred` and the call's status with it, so the call could read as
+  the caller hanging up. The tool now runs shielded, as `end_call` does.
 
 - **Knowledge bases never reached an inline agent** (#260). Links live on an
   agent row, and a call-init `agent` or an eval `inline` target has none, so

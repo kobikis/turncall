@@ -45,9 +45,14 @@ def platform_keys(settings: Settings) -> dict[str, str]:
         "deepgram": settings.deepgram.api_key,
         "elevenlabs": settings.elevenlabs.api_key,
         "cartesia": settings.cartesia.api_key,
+        "assemblyai": settings.assemblyai.api_key,
         "heygen": settings.heygen.api_key,
         "tavus": settings.tavus.api_key,
         "typesafe": settings.typesafe.api_key,
+        "telnyx": settings.telnyx.api_key,
+        # Not a key: an Asterisk account is a URL and a login (#209). Present
+        # when the platform has one, which is all `GET /v1/providers` reports.
+        "asterisk": settings.asterisk.ari_url,
     }
 
 
@@ -142,6 +147,8 @@ class Credentials:
                 (config.tts.provider, None),
                 # A backup with no key would only be found out mid-outage.
                 *((e.provider, e.api_key) for e in config.llm.failover),
+                *((e.provider, None) for e in config.stt.failover),
+                *((e.provider, None) for e in config.tts.failover),
             ]
             if config.avatar.enabled:
                 needed.append((config.avatar.provider, None))

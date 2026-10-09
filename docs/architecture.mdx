@@ -57,7 +57,7 @@ sequenceDiagram
     C->>T: Dials number
     T->>W: POST /webhooks/twilio/voice/inbound
     W->>DB: Resolve phone → agent, create Call record
-    W-->>T: TwiML Stream directive + callId
+    W-->>T: TwiML Stream directive + callId + mediaToken
     T->>P: WebSocket /ws/media-stream (8kHz μ-law)
     P->>DB: Stream transcripts, events, tool calls
     loop Conversation
@@ -99,7 +99,7 @@ Two pipeline modes, selected per agent via `pipeline_mode`.
 
 ```mermaid
 flowchart LR
-    IN["transport.input"] --> STT["STT<br/>Deepgram · OpenAI<br/>ElevenLabs · Cartesia"]
+    IN["transport.input"] --> STT["STT<br/>Deepgram · OpenAI<br/>ElevenLabs · Cartesia<br/>AssemblyAI"]
     STT -.-> VM["Voicemail<br/>detector"]
     VM -.-> TURN
     STT --> TURN["user_agg<br/>VAD + SmartTurn V3"]
@@ -233,7 +233,7 @@ stateDiagram-v2
 | `storage/` | SQLAlchemy async models, repository pattern, PostgreSQL + Redis |
 | `adapters/` | Object storage (local filesystem, S3) |
 | `events/` | Webhook delivery, server events, signing |
-| `webhooks/` | Twilio + WhatsApp handlers, media stream WebSocket |
+| `webhooks/` | Each carrier's inbound edge (Twilio), WhatsApp handlers, and the shared media entry point that picks a serializer by the call's carrier |
 
 ## Data Model
 

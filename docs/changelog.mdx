@@ -7,6 +7,93 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**Helm chart.** `charts/turncall` runs the API and both workers against your
+own Postgres and Redis, runs migrations before each install and upgrade, and
+sizes every pod's grace period so scaling down or rolling out lets live calls
+finish. Optionally autoscales the API on live calls per pod. See
+[Kubernetes](/guides/kubernetes).
+
+**Deepgram Flux STT.** Set `stt.model` to `flux-general-en` (or
+`flux-general-multi`) on the `deepgram` provider and Flux decides when the
+caller has finished speaking — Smart Turn is not run for that agent. Each
+turn's `metrics.turn` event now carries `turn_end_ms`, the time it took to call
+the turn over. See [Deepgram Flux](/guides/agents#deepgram-flux).
+
+**Backup STT and TTS providers.** `stt.failover` and `tts.failover` list backup
+configs in order, like `llm.failover`. If the speech provider stops working
+mid-call (a refused key, an unknown model or voice), the call moves to the next
+one and carries on — the backup transcribes what the caller had just said, or
+speaks the reply that was cut off. Recorded as `provider.failover` and in
+`failovers` on `call.ended`. See [Failover](/guides/providers#failover).
+
+**A deploy no longer drops live calls.** On `SIGTERM` the readiness probe fails
+at once while liveness stays green, and the process keeps serving until its
+live calls have ended and their `call.ended` webhooks have gone out. A new
+`GET /metrics` exposes `turncall_active_calls` for autoscaling. See
+[Graceful shutdown](/guides/graceful-shutdown) for the grace period to set.
+
+**Pause, resume or cancel a campaign.** `POST /v1/campaigns/{id}/pause` stops
+new dials without hanging up calls in progress; `/resume` picks up where it
+stopped; `/cancel` ends it, marking undialled targets `cancelled` and
+sending `campaign.cancelled`. A campaign worker that crashes mid-dial no longer
+leaves targets stuck, and never dials a target twice to recover. See [Campaigns](/guides/campaigns#pause-resume-cancel).
+
+**Campaigns — one agent calls a list.** `POST /v1/campaigns` with JSON
+targets (a number, its own variables for the agent, and a timezone), and the
+new `turncall-campaign-worker` process dials each one once, skipping your
+suppression list and staying inside the project's live-call limit. Each
+target's status is on `GET /v1/campaigns/{id}/targets`. See
+[Campaigns](/guides/campaigns).
+
+**Transfers and DTMF on Telnyx numbers.** `transfer_call` and
+`POST /v1/calls/{id}/transfer` work on a Telnyx call as on Twilio, cold and
+warm: the caller hears your `transfer_message`, then ringing; on a warm
+transfer the operator hears the `briefing` before being connected; a
+voicemail on the operator's line is reported as `transfer.answered`, and an
+operator who doesn't answer gets the caller your `fallback_message`.
+`send_dtmf` works too.
+
+**Telnyx numbers answer inbound calls.** Bind a number with
+`"carrier": "telnyx"` and TurnCall routes it to itself on your Telnyx account —
+no Mission Control step; a number the account does not hold is refused. The
+call runs the same agent as on Twilio, with
+recording, ambience and voicemail detection unchanged. Webhooks are verified
+with your Telnyx account's public key, and a call over your live-call limit is
+refused busy, as on Twilio. See
+[Telnyx numbers](/guides/phone-numbers#telnyx-numbers).
+
+**Asterisk numbers.** A number on your own Asterisk PBX can now reach an agent
+over ARI, with no cloud carrier in between: bind it with `carrier: "asterisk"`
+and give the project its Asterisk as an `asterisk` credential. Hang-up, DTMF
+and cold transfers go through ARI. See
+[Asterisk numbers](/guides/phone-numbers#asterisk-numbers).
+
+**Campaign calling windows.** `calling_window` sets the hours and days a
+campaign may call, read in each target's own timezone — daylight saving
+included. A target outside its window waits for the next opening. See
+[Campaigns](/guides/campaigns#calling-windows).
+
+**Campaign retries.** `retry_policy` redials a target whose call went
+unanswered, was busy or reached voicemail — each with its own number of
+attempts and spacing, inside the calling window. See
+[Campaigns](/guides/campaigns#retries).
+
+**Campaigns split between agents, and tell you when they start and finish.**
+Give `agents` with weights instead of `agent_id` and each target is assigned an
+agent by its number, the same way phone-number A/B routing does. Subscribers get
+`campaign.started` and `campaign.completed`. See
+[Campaigns](/guides/campaigns#a-b-test-agents).
+
+**Campaigns pace themselves.** A campaign dials at your number's
+`outbound_calls_per_second` — never past it, and never past `live_calls`, even
+with several workers — and at one call a second when you set no rate. See
+[How it paces](/guides/campaigns#how-it-paces).
+
+**Outbound calls from Telnyx numbers.** `POST /v1/calls/outbound` — and so a
+campaign — dials from a Telnyx number with the same request as from a Twilio
+one, inside the same suppression list and limits. An unanswered call ends
+`customer_did_not_answer`, as on Twilio.
+
 **`openai_live` agents with tools work out of the box.** An agent with tools and
 no `s2s.delegation` block now delegates to its own `llm` (`"mode": "client"`),
 with your keys, running your webhook and MCP tools — `end_call`, `do_not_call`
@@ -49,6 +136,12 @@ phone line is flagged at upload. See [Ambience](/guides/ambience).
 
 ## Changed
 
+**A phone number's carrier is `carrier`.** Phone-number reads carry
+`carrier`; `provider` keeps the same value and is still accepted on a write,
+both deprecated, since "provider" names an STT, LLM or TTS backend everywhere
+else. A number's carrier is fixed once bound. See
+[Phone Numbers](/guides/phone-numbers).
+
 **A call that fails says so, and why.** A provider that stops working mid-call
 (a refused key, an unknown model) used to leave the call reading as
 `customer_ended_call`. It now ends `failed` with an `ended_reason` of
@@ -69,6 +162,22 @@ the caller heard it. The docs said it was left out, but it has always been in
 the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
+
+**A handoff through the API switches the live call.** `POST /v1/calls/{call_id}/handoff`
+moved the call's record to the new agent while the caller kept talking to the
+previous one. The call now switches itself — the new agent's prompt and tools —
+and the response lists what it applied. It answers like `/messages`: **409**
+(`call_not_live`), **504** (`call_did_not_acknowledge`), a 409 with the reason
+when the call refuses (an `openai_live` agent, as for the `handoff_to_agent`
+tool), and a **404** for an agent outside your project.
+
+**Messages sent to a live call reach its agent.** `POST /v1/calls/{call_id}/messages`
+answered 200 while the agent never saw the message. It is now added to the
+agent's context for its next turn, and the response says what the call did: 200
+once the call has applied it, **409** (`call_not_live`) when the call is not
+running, **504** (`call_did_not_acknowledge`) when it does not confirm within
+two seconds. Speech-to-speech calls refuse it with a 409, since their model
+reads nothing added to its context after the call starts.
 
 **An `openai_live` agent checks in on a quiet caller.** The idle check-in never
 reached gpt-live-1, so a caller who went quiet heard silence until the call's
