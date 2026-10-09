@@ -14,6 +14,12 @@ suppression list and staying inside the project's live-call limit. Each
 target's status is on `GET /v1/campaigns/{id}/targets`. See
 [Campaigns](/guides/campaigns).
 
+**Campaigns split between agents, and tell you when they start and finish.**
+Give `agents` with weights instead of `agent_id` and each target is assigned an
+agent by its number, the same way phone-number A/B routing does. Subscribers get
+`campaign.started` and `campaign.completed`. See
+[Campaigns](/guides/campaigns#a-b-test-agents).
+
 **Campaigns pace themselves.** A campaign dials at your number's
 `outbound_calls_per_second` — never past it, and never past `live_calls`, even
 with several workers — and at one call a second when you set no rate. See

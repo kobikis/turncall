@@ -34,13 +34,14 @@ async def create_campaign(
     body: CreateCampaignRequest, auth: WriteAuth, session: DbSession
 ) -> dict:
     """Record a campaign; the campaign worker starts dialling it."""
-    if (
-        await agent_repo.get_agent_by_id(
-            session, body.agent_id, project_id=auth.project_id
-        )
-        is None
-    ):
-        raise NotFoundError("Agent", str(body.agent_id))
+    for agent_id in body.agent_ids():
+        if (
+            await agent_repo.get_agent_by_id(
+                session, agent_id, project_id=auth.project_id
+            )
+            is None
+        ):
+            raise NotFoundError("Agent", str(agent_id))
     if (
         await phone_number_repo.get_by_id(
             session, body.from_number_id, project_id=auth.project_id
@@ -54,6 +55,7 @@ async def create_campaign(
         project_id=auth.project_id,
         name=body.name,
         agent_id=body.agent_id,
+        agent_weights=body.agent_weights(),
         from_number_id=body.from_number_id,
         timezone=body.timezone,
         targets=body.resolved_targets(),

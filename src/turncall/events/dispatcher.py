@@ -81,6 +81,7 @@ async def dispatch_event(
     call_id: UUID | None = None,
     session_id: UUID | None = None,
     eval_run_id: UUID | None = None,
+    campaign_id: UUID | None = None,
     agent_id: UUID | None = None,
     event_id: str | None = None,
 ) -> int:
@@ -110,6 +111,7 @@ async def dispatch_event(
         call_id=call_id,
         session_id=session_id,
         eval_run_id=eval_run_id,
+        campaign_id=campaign_id,
         agent_id=str(resolved_agent_id) if resolved_agent_id else None,
         # One uuid per logical event: stable across retries, shared across
         # subscribers, so consumers can dedupe redeliveries. See ADR-0007.

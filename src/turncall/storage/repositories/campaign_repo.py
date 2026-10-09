@@ -34,19 +34,22 @@ async def create_campaign(
     *,
     project_id: UUID,
     name: str,
-    agent_id: UUID,
+    agent_id: UUID | None,
+    agent_weights: list[dict[str, Any]] | None,
     from_number_id: UUID,
     timezone: str | None,
     targets: list[dict[str, Any]],
 ) -> CampaignRow:
     """A campaign and all of its targets, in one flush.
 
-    Each target dict carries `number`, `variables` and its resolved `timezone`.
+    Each target dict carries `number`, `variables`, its resolved `timezone` and
+    its assigned `agent_id`.
     """
     row = CampaignRow(
         project_id=project_id,
         name=name,
         agent_id=agent_id,
+        agent_weights=agent_weights,
         from_number_id=from_number_id,
         timezone=timezone,
         status=CampaignStatus.QUEUED.value,
@@ -64,6 +67,7 @@ async def create_campaign(
                 "e164_number": target["number"],
                 "variables": target["variables"],
                 "timezone": target["timezone"],
+                "agent_id": target["agent_id"],
                 "status": CampaignTargetStatus.PENDING.value,
                 "attempts": 0,
                 "updated_at": now,
@@ -85,6 +89,13 @@ async def get_campaign(
             )
         )
     ).scalar_one_or_none()
+
+
+async def get_campaign_by_id(
+    session: AsyncSession, campaign_id: UUID
+) -> CampaignRow | None:
+    """Any project's campaign: for the worker, which serves them all."""
+    return await session.get(CampaignRow, campaign_id, populate_existing=True)
 
 
 async def list_campaigns(

@@ -37,6 +37,7 @@ from uuid import UUID, uuid4
 from loguru import logger
 
 from turncall.api.errors import ApiError, ErrorCode, RateLimitedError
+from turncall.campaigns import lifecycle
 from turncall.config import get_settings
 from turncall.domain.enums import CampaignStatus, CampaignTargetStatus
 from turncall.services import limits
@@ -85,7 +86,7 @@ async def advance(
     await _settle(session_factory, campaign)
     async with session_factory() as session:
         if campaign.status == CampaignStatus.QUEUED.value:
-            await campaign_repo.start_campaign(session, campaign.id, clock())
+            await lifecycle.start(session, campaign.id, clock())
         number = await phone_number_repo.get_by_id(
             session, campaign.from_number_id, project_id=campaign.project_id
         )
@@ -97,9 +98,7 @@ async def advance(
     ).allowed:
         pass
     async with session_factory() as session:
-        if await campaign_repo.complete_if_done(session, campaign.id, clock()):
-            logger.info("campaign_completed", campaign_id=str(campaign.id))
-        await session.commit()
+        await lifecycle.finish_if_done(session, campaign.id, clock())
     return go.retry_after_ms / 1000 if go.retry_after_ms else None
 
 
@@ -170,7 +169,8 @@ async def _dial(
             call = await place_outbound_call(
                 session,
                 project_id=campaign.project_id,
-                agent_id=campaign.agent_id,
+                # Its own, assigned at create by the campaign's weights (#234).
+                agent_id=target.agent_id or campaign.agent_id,
                 from_number_id=campaign.from_number_id,
                 to_number=target.e164_number,
                 metadata=_call_metadata(campaign, target),

@@ -576,7 +576,7 @@ CONTEXT.md). The API records one; `turncall-campaign-worker` — its own process
 same image, never the API's event loop (ADR-0018's reason) — dials it.
 
 ```
-POST /v1/campaigns                    # {name, agent_id, from_number_id, timezone?, targets: [{number, variables?, timezone?}]}
+POST /v1/campaigns                    # {name, agent_id | agents: [{agent_id, weight}], from_number_id, timezone?, targets: [{number, variables?, timezone?}]}
 GET  /v1/campaigns                    # ?page= ?limit=; each with target counts per status
 GET  /v1/campaigns/{id}
 GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target status, call_id, ended_reason, error
@@ -587,6 +587,20 @@ GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target stat
   Never inferred from the number (a ported mobile keeps its area code). Each
   target stores its resolved zone, for #230's calling window. A number twice in
   one campaign is a 422; at most 10,000 targets a request.
+- **Weighted agents** (#234): `agents` (2-10, weights summing to 100) instead of
+  `agent_id` — exactly one of the two, else 422; an agent not in the project is
+  404. Each target is assigned at create by `services/weighted_routing`'s
+  `pick_agent_by_weight(weights, number)` — the phone-number A/B rule, a pure
+  function of the number and the weights — stored as the target's `agent_id`
+  and dialled as that agent. The campaign keeps the weights as
+  `agent_weights` (read back as `agents`) and has `agent_id` null. A target
+  from before #234 has no `agent_id` and dials as its campaign's.
+- **Start and finish** (#234) are `campaigns/lifecycle.start` and
+  `lifecycle.finish_if_done` — the **one** place a campaign moves to `running`
+  or `completed`, each a guarded UPDATE that dispatches `campaign.started` /
+  `campaign.completed` (see Webhook Events) only when it made the move.
+  Finished means no target open (`campaign_repo.complete_if_done`); anything
+  that leaves the last target terminal calls `finish_if_done`.
 - **Variables** go into the call's `metadata.template_variables`, which the
   media stream renders exactly as it renders call-init's; the metadata also
   carries `campaign_id` + `campaign_target_id`.
@@ -622,12 +636,13 @@ GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target stat
   costs one poll. A stop is honoured between passes.
 
 Not yet: calling windows (#230), retries (#231), pause/resume/cancel and the
-janitor (#232), weighted agents and start/finish events (#234). Concurrency
-with no `live_calls` limit is the pace times the calls' length.
+janitor (#232). Concurrency with no `live_calls` limit is the pace times the
+calls' length.
 
 Key files: `campaigns/dialer.py`, `campaigns/worker.py`, `campaigns/queue.py`,
-`api/v1/campaigns.py`, `storage/repositories/campaign_repo.py`. Tests:
-`tests/integration/test_campaigns.py` (the worker's pass against the fake
+`campaigns/lifecycle.py`, `api/v1/campaigns.py`,
+`storage/repositories/campaign_repo.py`. Tests:
+`tests/integration/test_campaigns.py`, `test_campaign_agents_and_events.py` (the worker's pass against the fake
 carrier; `answer_outbound_call` picks up a dialled call).
 
 ## Takeaways (Structured Outputs)
@@ -1149,6 +1164,7 @@ Subscribers (`POST /v1/webhooks`) receive a signed envelope per event:
   "call_id": "uuid | null",
   "session_id": "uuid | null",   // set on sms/chat events
   "eval_run_id": "uuid | null",  // set on eval.run.* events (#76)
+  "campaign_id": "uuid | null",  // set on campaign.* events (#234)
   "agent_id": "uuid | null",     // the call's active agent (handoff-aware); null for an inline agent
   "event_id": "uuid",            // unique; stable across retries → dedupe key
   "timestamp": "ISO-8601",
@@ -1247,6 +1263,15 @@ never has to call back. Same precedent as `call.ended`, and the reason
 run dispatches it too: accepted-then-silent would leave a subscriber waiting on
 a terminal event forever. The run id is in the **envelope**, never the payload;
 `agent_id` resolves as always and is null for an inline target.
+
+`campaign.started` / `campaign.completed` are the campaign pair (#234), the
+same shape one level over: the payload is the campaign's read (`GET
+/v1/campaigns/{id}` less its `id`) — status, agent or weights, target counts
+per status, timestamps — and `campaign_id` rides in the envelope. `agent_id` is
+the campaign's agent, null for a weighted one. Each is sent once, by whichever
+worker's guarded UPDATE made the move, after its commit
+(`campaigns/lifecycle.py`). Per-target outcomes stay on `GET .../targets`, not
+in the payload: a list of 10,000 is not a webhook.
 
 Key files: `events/webhook_delivery.py` (envelope + signing + retry),
 `events/dispatcher.py` (agent_id/event_id resolution), `domain/call_state.py`

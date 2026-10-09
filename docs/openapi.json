@@ -7764,9 +7764,32 @@
             "title": "Name"
           },
           "agent_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Agent Id"
+          },
+          "agents": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RoutingWeightEntry"
+                },
+                "type": "array",
+                "maxItems": 10,
+                "minItems": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agents"
           },
           "from_number_id": {
             "type": "string",
@@ -7798,7 +7821,6 @@
         "type": "object",
         "required": [
           "name",
-          "agent_id",
           "from_number_id",
           "targets"
         ],

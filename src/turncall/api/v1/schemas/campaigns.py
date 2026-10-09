@@ -9,6 +9,8 @@ from zoneinfo import available_timezones
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from turncall.api.v1.schemas import E164_PATTERN
+from turncall.api.v1.schemas.phone_numbers import RoutingWeightEntry
+from turncall.services.weighted_routing import pick_agent_by_weight
 from turncall.storage.models import CampaignRow, CampaignTargetRow
 
 # One request carries the whole list, so it is bounded like any request body.
@@ -46,7 +48,10 @@ class CreateCampaignRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(..., min_length=1, max_length=255)
-    agent_id: UUID
+    # Exactly one of these: one agent for every target, or weights (summing to
+    # 100) that split the targets between agents, each by its number (#234).
+    agent_id: UUID | None = None
+    agents: list[RoutingWeightEntry] | None = Field(None, min_length=2, max_length=10)
     from_number_id: UUID
     # The timezone of every target that names none.
     timezone: str | None = None
@@ -55,6 +60,16 @@ class CreateCampaignRequest(BaseModel):
     )
 
     _timezone = field_validator("timezone")(_iana)
+
+    @model_validator(mode="after")
+    def _one_way_to_pick_agents(self) -> "CreateCampaignRequest":
+        if (self.agent_id is None) == (self.agents is None):
+            raise ValueError("give exactly one of agent_id and agents")
+        if self.agents is not None:
+            total = sum(a.weight for a in self.agents)
+            if total != 100:
+                raise ValueError(f"agents' weights must sum to 100 (got {total})")
+        return self
 
     @model_validator(mode="after")
     def _every_target_placed(self) -> "CreateCampaignRequest":
@@ -77,13 +92,33 @@ class CreateCampaignRequest(BaseModel):
             seen.add(target.number)
         return self
 
+    def agent_ids(self) -> list[UUID]:
+        """Every agent this campaign may dial as."""
+        if self.agents is not None:
+            return [a.agent_id for a in self.agents]
+        return [self.agent_id] if self.agent_id is not None else []
+
+    def agent_weights(self) -> list[dict[str, Any]] | None:
+        """The weights as a phone number's `routing_weights` stores them."""
+        if self.agents is None:
+            return None
+        return [{"agent_id": str(a.agent_id), "weight": a.weight} for a in self.agents]
+
     def resolved_targets(self) -> list[dict[str, Any]]:
-        """Each target with its own timezone, else the campaign's."""
+        """Each target with its own timezone, else the campaign's, and its
+        agent — the weights' pick by its number, the phone-number A/B rule, so
+        one number always draws the same agent from the same weights."""
+        weights = self.agent_weights()
         return [
             {
                 "number": t.number,
                 "variables": {k: str(v) for k, v in t.variables.items()},
                 "timezone": t.timezone or self.timezone,
+                "agent_id": (
+                    pick_agent_by_weight(weights, t.number)
+                    if weights
+                    else self.agent_id
+                ),
             }
             for t in self.targets
         ]
@@ -94,7 +129,9 @@ class CampaignResponse(BaseModel):
 
     id: UUID
     name: str
-    agent_id: UUID
+    # One of the two: a single agent, or `[{agent_id, weight}]`.
+    agent_id: UUID | None
+    agents: list[dict[str, Any]] | None
     from_number_id: UUID
     timezone: str | None
     status: str
@@ -110,6 +147,7 @@ class CampaignResponse(BaseModel):
             id=row.id,
             name=row.name,
             agent_id=row.agent_id,
+            agents=row.agent_weights,
             from_number_id=row.from_number_id,
             timezone=row.timezone,
             status=row.status,
@@ -128,6 +166,9 @@ class CampaignTargetResponse(BaseModel):
     number: str
     variables: dict[str, str]
     timezone: str
+    # The agent that calls this target (#234). Null only on a target from
+    # before weighted campaigns, which is called by the campaign's `agent_id`.
+    agent_id: UUID | None
     status: str
     attempts: int
     # The latest attempt's call, and how it ended once it has.
@@ -146,6 +187,7 @@ class CampaignTargetResponse(BaseModel):
             number=row.e164_number,
             variables=row.variables,
             timezone=row.timezone,
+            agent_id=row.agent_id,
             status=row.status,
             attempts=row.attempts,
             call_id=row.call_id,
