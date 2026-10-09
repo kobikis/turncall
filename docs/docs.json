@@ -64,6 +64,7 @@
                   "guides/post-call-analysis",
                   "guides/takeaways",
                   "guides/evals",
+                  "guides/limits",
                   "guides/observability",
                   "guides/graceful-shutdown"
                 ]
@@ -98,6 +99,7 @@
             "pages": [
               "POST /v1/projects",
               "GET /v1/projects/{project_id}",
+              "PUT /v1/projects/{project_id}/limits",
               "DELETE /v1/projects/{project_id}"
             ]
           },

@@ -1,8 +1,9 @@
 """Twilio webhook handlers for inbound calls, status callbacks, and recordings."""
 
 import xml.etree.ElementTree as ET
+import xml.sax.saxutils
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Form, Header, Request
 from fastapi.responses import Response
@@ -10,9 +11,15 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.deps import DbSession
+from turncall.api.errors import RateLimitedError
 from turncall.config import get_settings
-from turncall.domain.call_state import TWILIO_STATUS_MAP, is_valid_transition
+from turncall.domain.call_state import (
+    TWILIO_STATUS_MAP,
+    is_terminal_state,
+    is_valid_transition,
+)
 from turncall.domain.enums import CallDirection, CallEventType, CallStatus
+from turncall.services.limits import admit_inbound_call, release_live_call
 from turncall.storage.repositories import (
     agent_repo,
     call_repo,
@@ -23,6 +30,9 @@ from turncall.webhooks.twilio_signature import validate_twilio_signature
 router = APIRouter(prefix="/webhooks/twilio", tags=["twilio-webhooks"])
 
 TWIML_CONTENT_TYPE = "application/xml"
+# Over the live-call limit (#224): refused before answering, so nothing is
+# billed for saying no, and the caller hears busy and can try again.
+BUSY_TWIML = '<Response><Reject reason="busy"/></Response>'
 
 
 def _public_url(request: Request) -> str:
@@ -143,18 +153,11 @@ async def inbound_sms_webhook(
     phone_number = await phone_number_repo.get_by_e164(session, to_number)
     if phone_number is None:
         logger.warning("twilio_sms_unknown_number", to_number=to_number)
-        msg = "This number is not configured for SMS."
-        return Response(
-            content=f"<Response><Message>{msg}</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
-        )
+        return _sms_twiml("This number is not configured for SMS.")
 
     if not phone_number.sms_enabled:
         logger.warning("twilio_sms_not_enabled", to_number=to_number)
-        return Response(
-            content="<Response><Message>SMS is not enabled on this number.</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
-        )
+        return _sms_twiml("SMS is not enabled on this number.")
 
     try:
         from turncall.services.sms_chat import handle_inbound_sms
@@ -172,30 +175,30 @@ async def inbound_sms_webhook(
             session_id=str(result.session_id),
             is_new_session=result.is_new_session,
         )
-
-        # Return TwiML with the agent's reply
-        # XML-escape the reply text to prevent injection
-        import xml.sax.saxutils
-
-        escaped_reply = xml.sax.saxutils.escape(result.reply_text)
-        return Response(
-            content=f"<Response><Message>{escaped_reply}</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
+        return _sms_twiml(result.reply_text)
+    except RateLimitedError as exc:
+        # Over the session's messages per minute (#226): no LLM, no reply.
+        logger.warning(
+            "twilio_sms_rate_limited", from_number=from_number, **exc.details
         )
+        return _sms_twiml(None)
     except ValueError as exc:
         logger.error("twilio_sms_error", error=str(exc))
-        err_msg = "Sorry, I'm unable to process your message right now."
-        return Response(
-            content=f"<Response><Message>{err_msg}</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
-        )
+        return _sms_twiml("Sorry, I'm unable to process your message right now.")
     except Exception:
         logger.exception("twilio_sms_unexpected_error")
-        err_msg = "An error occurred. Please try again later."
-        return Response(
-            content=f"<Response><Message>{err_msg}</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
-        )
+        return _sms_twiml("An error occurred. Please try again later.")
+
+
+def _sms_twiml(text: str | None) -> Response:
+    """TwiML answering an SMS with `text` (escaped), or with nothing at all."""
+    if text is None:
+        return Response(content="<Response/>", media_type=TWIML_CONTENT_TYPE)
+    message = xml.sax.saxutils.escape(text)
+    return Response(
+        content=f"<Response><Message>{message}</Message></Response>",
+        media_type=TWIML_CONTENT_TYPE,
+    )
 
 
 @router.post("/voice/inbound")
@@ -240,6 +243,19 @@ async def inbound_voice_webhook(
             media_type=TWIML_CONTENT_TYPE,
         )
 
+    # Before call-init: a call refused at the carrier asks nobody for an agent.
+    call_id = uuid4()
+    if not await admit_inbound_call(
+        session,
+        project_id=phone_number.project_id,
+        call_id=call_id,
+        transport="twilio",
+        from_number=from_number,
+        to_number=to_number,
+        provider_call_id=call_sid,
+    ):
+        return Response(content=BUSY_TWIML, media_type=TWIML_CONTENT_TYPE)
+
     # Resolve agent — either static or dynamic via server URL
     agent = None
     dynamic_config = None
@@ -249,8 +265,6 @@ async def inbound_voice_webhook(
 
     if phone_number.routing_target_type == "webhook" and phone_number.server_url:
         # Dynamic agent resolution via call-init server event
-        from uuid import uuid4
-
         from turncall.events.server_events import send_call_init
         from turncall.services.call_init_resolver import resolve_call_init
 
@@ -277,6 +291,7 @@ async def inbound_voice_webhook(
                 "twilio_inbound_server_url_no_agent",
                 server_url=phone_number.server_url,
             )
+            await release_live_call(phone_number.project_id, call_id)
             return Response(
                 content=(
                     "<Response><Say>Unable to resolve agent.</Say><Hangup/></Response>"
@@ -310,6 +325,7 @@ async def inbound_voice_webhook(
             routing_target_type=phone_number.routing_target_type,
             routing_target_id=str(phone_number.routing_target_id),
         )
+        await release_live_call(phone_number.project_id, call_id)
         return Response(
             content="<Response><Say>This agent is not available.</Say><Hangup/></Response>",
             media_type=TWIML_CONTENT_TYPE,
@@ -328,6 +344,7 @@ async def inbound_voice_webhook(
     call = await call_repo.create_call(
         session,
         project_id=phone_number.project_id,
+        call_id=call_id,
         direction=CallDirection.INBOUND,
         from_number=from_number,
         to_number=to_number,
@@ -468,6 +485,11 @@ async def status_callback(
             "twilio_status_unmapped", call_sid=call_sid, twilio_status=call_status
         )
         return Response(status_code=204)
+
+    if is_terminal_state(new_status):
+        # The carrier says the call is over, whatever our state machine thinks
+        # — often the only ending an unanswered call gets (#224).
+        await release_live_call(call.project_id, call.id)
 
     current_status = CallStatus(call.status)
     if not is_valid_transition(current_status, new_status):

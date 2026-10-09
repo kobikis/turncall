@@ -22,9 +22,12 @@ async def create_call(
     workflow_id: UUID | None = None,
     provider_call_sid: str | None = None,
     metadata_json: dict | None = None,
+    call_id: UUID | None = None,
 ) -> CallRow:
-    """Create a new call record."""
+    """Create a new call record. `call_id` when the id was needed before the
+    row existed — a live-call slot is taken under it (#224)."""
     row = CallRow(
+        **({"id": call_id} if call_id is not None else {}),
         project_id=project_id,
         direction=direction,
         from_number=from_number,

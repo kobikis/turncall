@@ -104,6 +104,9 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 | `EVAL_JUDGE_PROVIDER` | No | What decides every verdict, set once for the platform (#119) — one of `ollama` (pipecat's own, the default when nothing is set), `openai`, `anthropic`, `jev` (#141: TypeSafe's classifier — a few hundred ms per verdict with a *calibrated* probability, judge-only, needs `TYPESAFE_API_KEY` + the `evals-jev` extra, and supplies no prose so the **explainer** comes from this same setting). With `EVAL_JUDGE_MODEL` (that provider's own default when empty) and `EVAL_JUDGE_TEMPERATURE` (unset by default — a verdict that varies run to run is not a verdict; dropped entirely for Anthropic and the OpenAI reasoning families, as on the call path). `EVAL_SIMULATOR_PROVIDER` / `_MODEL` / `_TEMPERATURE` are the same three for the LLM that plays the caller in a simulation. A **scenario's** own `judge:`/`simulator:` block wins, taken whole; a `judge` on a **run** request is a 422, since a run is what it was queued as |
 | `PROJECT_PURGE_RETENTION_DAYS` | No | Days a soft-deleted project (ADR-0011) is kept before the hourly purge job hard-deletes it (cascade). Default `30`; `0` disables |
 | `TYPESAFE_API_KEY` | No | Jev, for a `jev` eval judge (#141). A fallback: a project's `typesafe` credential wins (ADR-0020). Evals only — no live call contacts this vendor, which is why the dependency is the optional `evals-jev` extra rather than a base one. Neither the key nor the extra is checked at scenario create: both are properties of a *deployment* and a stored scenario outlives the one it was written against, so the **run** fails, naming which of the two is missing |
+| `LIMIT_LIVE_CALLS` | No | Platform default for a project's live-call concurrency limit (#224), `0` (default) = unlimited. A project's own value (`PUT /v1/projects/{id}/limits`) wins in either direction — a default, not a ceiling. See "Limits" |
+| `LIMIT_OUTBOUND_CALLS_PER_SECOND` | No | Platform default for how many outbound calls each of a project's numbers may start per second (#225), `0` (default) = unlimited; per project the same way |
+| `LIMIT_MESSAGES_PER_MINUTE` | No | Platform default for how many inbound messages one text session (chat, SMS, WhatsApp) may send per minute (#226), `0` (default) = unlimited; per project the same way |
 | `PLATFORM_API_KEY` | Prod | Privileged credential gating the unauthenticated bootstrap endpoints — project creation + first-API-key creation. Only the builder holds it; presented as the `X-Platform-Key` header. Empty default fails **closed** (rejects all bootstrap calls), so set it wherever those endpoints must work. TurnCall stays identity-free — this is a caller check, not a user |
 
 ## Providers (per-agent config)
@@ -214,6 +217,7 @@ Context threading: use `session_id` (group messages) or `previous_chat_id` (line
 - Auto-created on first inbound SMS or Chat API call
 - Resumed if same (customer_number, turncall_number) pair and < 24h since last activity
 - Expired after 24h inactivity (lazy on lookup + background cleanup every 15 min)
+- Over the project's `messages_per_minute` (#226): not stored, no LLM; Chat API `429`, SMS/WhatsApp unanswered (see "Limits")
 - Webhook events: `session.created`, `session.updated`, `session.deleted`, `chat.created`
 
 ### Phone Number Config
@@ -597,6 +601,49 @@ Orchestrator contract (preStop sleep, `terminationGracePeriodSeconds` ≥ preSto
 + longest `max_call_duration_seconds` + 90): `docs/guides/graceful-shutdown.mdx`.
 Proof against a real process: `tests/integration/test_graceful_shutdown.py`
 (`tests/harness/server.py` boots the app as a child process).
+
+## Limits
+
+A **concurrency limit** caps how many are in progress at once, a **rate limit**
+how many start per unit of time (CONTEXT.md); both refuse as `rate_limited`
+(#206). Counted in Redis by `services/limits.py`, so they hold across servers;
+per project (`PUT /v1/projects/{id}/limits`, admin key, null = the `LIMIT_*`
+env default, `0` there = unlimited). Redis unreachable → admitted and logged:
+a guardrail must not take the phone line down.
+
+- **Live calls per project** (#224). Every voice call takes a slot under its
+  call id *before* its row is written (`call_repo.create_call(call_id=)`):
+  inbound Twilio and WhatsApp voice in their webhooks — over the limit, refused
+  unanswered at the carrier (`<Reject reason="busy"/>` / WhatsApp `reject`) and
+  dispatched as `call.rejected` with **no** `call_id` (there is no row) —
+  outbound in `place_outbound_call` and WebRTC in `/connect`, both `429`.
+  A slot is a **lease** (`LIVE_CALL_LEASE_MS`, 2 min) that whoever runs the call
+  renews (`hold_live_call`, in `media_stream` and `start_call_pipeline`) and
+  frees on any exit; the Twilio status callback frees it on any terminal status
+  (an unanswered outbound call's only ending), and a failed dial frees it at
+  once. A server that dies frees nothing — its leases lapse, so a crash costs a
+  project slots for two minutes, never for good. Every call is counted even
+  unlimited, so a limit set mid-day counts what is already live.
+  `test_live_call_limit_wiring.py` fails on a call row written without a slot
+  or a call run without a hold. Evals take none (not calls).
+- **Outbound calls per second, per number** (#225). A sliding one-second
+  window keyed on the from-number's E.164 (a carrier's cap is on the number),
+  checked in `place_outbound_call` after the live-call slot
+  (`admit_outbound_call`); refused → the slot is given back and `429` with
+  `retry_after_ms`. A refused dial consumes nothing in either count.
+- **Messages per minute, per text session** (#226). `admit_message` in
+  `sms_chat._process_chat_message`, after the session is resolved and before
+  the message is stored or reaches the LLM: the Chat API answers `429`, SMS
+  answers an empty `<Response/>` and WhatsApp sends nothing. Per session, so
+  one runaway conversation holds back no other.
+- **`may_dial(session, project_id=, from_number=)`** answers "would a dial be admitted now?"
+  without taking anything — for a campaign worker pacing itself (#229, #233);
+  a `RateLimitedError` from the dial itself still means "not yet".
+
+Tests: `tests/integration/test_live_call_limit.py` on the #214 harness, with
+a second server **process** (`tests/harness/second_instance.py`) on the same
+Postgres and Redis — two apps in one interpreter share every global, so they
+cannot show "across servers".
 
 ## Takeaways (Structured Outputs)
 
@@ -1136,6 +1183,11 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 nearest-rank `p50_ms`/`p95_ms` plus `count`. Null with no measured turns (zeros
 would read as "instant"); a stage no turn reported is absent. Never stored, and
 the per-turn records never ride in the webhook.
+
+`call.rejected` (#224) is an inbound call refused at the carrier over the
+project's live-call limit: never answered, no call row, so `call_id` is null
+and the payload carries `{reason, limit, transport, from_number, to_number,
+provider_call_id}`. Dispatched only — there is no event log to store it on.
 
 Stored-only call events — on the call's event log (`GET /v1/calls/{id}/events`),
 never sent to webhook subscribers, none in an eval: `metrics.turn` (#176) and

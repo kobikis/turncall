@@ -1,0 +1,75 @@
+---
+title: Limits
+description: "Cap a project's live calls, how fast its numbers dial, and how fast a conversation spends on the LLM"
+icon: "gauge"
+---
+
+A **concurrency limit** caps how many of something are in progress at once; a **rate limit** caps how many start per unit of time. Every limit is counted in Redis, so it holds across all your servers — adding a server does not multiply it. All are off unless you set them, and anything over a limit is refused as `rate_limited`.
+
+| Limit | Kind | Counts |
+|-------|------|--------|
+| `live_calls` | concurrency | live calls in the project, every transport (Twilio, WebRTC, WhatsApp voice), inbound and outbound |
+| `outbound_calls_per_second` | rate | outbound calls started from each of the project's numbers, in any one-second window |
+| `messages_per_minute` | rate | inbound messages in each text session (Chat API, SMS, WhatsApp), in any one-minute window |
+
+## Set a project's limits
+
+```bash
+curl -X PUT https://api.example.com/v1/projects/$PROJECT_ID/limits \
+  -H "Authorization: Bearer tc_..." \
+  -H "Content-Type: application/json" \
+  -d '{"live_calls": 20, "outbound_calls_per_second": 1, "messages_per_minute": 20}'
+```
+
+An admin key, and only for its own project. The `PUT` replaces every limit: a field left out, or `null`, goes back to the platform default (`LIMIT_LIVE_CALLS`, `LIMIT_OUTBOUND_CALLS_PER_SECOND`, `LIMIT_MESSAGES_PER_MINUTE`), which is unlimited unless the deployment set one. The project read (`GET /v1/projects/{id}`) shows them under `limits`. A new value applies to the next call; calls already live keep going, and count toward it.
+
+## Live calls
+
+What happens to a call over the limit depends on who started it:
+
+- **Inbound (Twilio, WhatsApp voice)**: refused at the carrier before it is answered — busy on Twilio (`<Reject reason="busy"/>`), a rejection on WhatsApp. Answering only to say no would bill minutes, and so would queueing. Your webhook subscribers get `call.rejected`:
+
+  ```json
+  {
+    "event": "call.rejected",
+    "call_id": null,
+    "payload": {
+      "reason": "live_call_limit",
+      "limit": 20,
+      "transport": "twilio",
+      "from_number": "+15550001234",
+      "to_number": "+15557654321",
+      "provider_call_id": "CA..."
+    }
+  }
+  ```
+
+  The call never started, so it has no call record and `call_id` is null; `provider_call_id` is the carrier's id for it.
+
+- **`POST /v1/calls/outbound` and `POST /v1/webrtc/connect`**: `429 rate_limited`, with `details: {"limit": "live_calls", "max": 20}`. Nothing is dialled and no call record is written, so back off and retry.
+
+A call counts from the moment it is admitted — an outbound call while it rings — until it ends however it ends: a hangup, the agent ending it, an error, a transfer away from the agent. If the server running a call dies, its slot frees itself within two minutes rather than staying taken: a crash costs you capacity briefly, never for good.
+
+## Outbound calls per second
+
+Carriers cap how fast one number may start calls, and flag a number that dials faster. `outbound_calls_per_second` holds each of the project's numbers under its carrier's cap: a dial past it is `429 rate_limited` before anything is dialled, with how long to wait.
+
+```json
+{
+  "success": false,
+  "error": "+15557654321 is at its limit of 1 outbound calls per second",
+  "code": "rate_limited",
+  "details": {"limit": "outbound_calls_per_second", "max": 1, "retry_after_ms": 412}
+}
+```
+
+The window slides: no more than `max` dials from one number in any one second, whichever servers placed them. A refused dial does not count against the window, so a retry after `retry_after_ms` finds room unless another dial took it first.
+
+## Messages per minute
+
+Every message a text conversation receives costs an LLM turn, so a looping integration or an abusive sender can run up the bill as fast as it can post. `messages_per_minute` caps the inbound messages in each session — per conversation, so one runaway conversation never holds back the others. A message past it is not stored and never reaches the LLM:
+
+- **Chat API** (`POST /v1/chat`): `429 rate_limited`, with `details: {"limit": "messages_per_minute", "max": 20, "retry_after_ms": ...}`.
+- **SMS and WhatsApp**: no reply is sent. There is no one to hand an error to, and answering would spend the very thing the limit saves.
+
+If Redis is unreachable, calls and messages are admitted and a warning is logged. A limit is a guardrail; it should not be the thing that takes your phone line down.

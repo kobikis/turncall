@@ -101,6 +101,19 @@ class BadRequestError(ApiError):
         )
 
 
+class RateLimitedError(ApiError):
+    """A concurrency or rate limit refused this (#206). Both are 429
+    `rate_limited` (CONTEXT.md): either way the caller's move is to back off."""
+
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(
+            status_code=429,
+            code=ErrorCode.RATE_LIMITED,
+            message=message,
+            details=details,
+        )
+
+
 class NotFoundError(ApiError):
     def __init__(self, resource: str, resource_id: str) -> None:
         super().__init__(

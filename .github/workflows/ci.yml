@@ -100,8 +100,8 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      # A live call's control channel (#215): the harness tests that prove an
-      # API message reaches the call skip without one.
+      # A live call's control channel (#215) and the limits (#206) live in
+      # Redis; the harness and limits tests that prove them skip without one.
       redis:
         image: redis:7
         ports: ["6379:6379"]

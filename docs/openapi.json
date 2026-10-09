@@ -288,6 +288,78 @@
         }
       }
     },
+    "/v1/projects/{project_id}/limits": {
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Set Project Limits",
+        "description": "Set the project's limits (#206), replacing all of them: a field left\nout or null goes back to the platform default. Applies to the next call or\nmessage \u2014 calls already live keep their slots, and count toward the new\nlimit. Admin key; a project can only set its own.",
+        "operationId": "set_project_limits_v1_projects__project_id__limits_put",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectLimits"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Set Project Limits V1 Projects  Project Id  Limits Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/api-keys": {
       "post": {
         "tags": [
@@ -8382,6 +8454,53 @@
         ],
         "title": "MCPServerSchema",
         "description": "MCP server connection configuration."
+      },
+      "ProjectLimits": {
+        "properties": {
+          "live_calls": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Live Calls",
+            "description": "Live calls this project may hold at once, across every server"
+          },
+          "outbound_calls_per_second": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outbound Calls Per Second",
+            "description": "Outbound calls each of this project's numbers may start per second"
+          },
+          "messages_per_minute": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Messages Per Minute",
+            "description": "Inbound messages one text session may send per minute"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ProjectLimits",
+        "description": "A project's limits (#206). Null means the platform default (`LIMIT_*`),\nwhich is unlimited unless the deployment set one. A `PUT` replaces all of\nthem, so a field left out goes back to that default."
       },
       "ProjectRole": {
         "type": "string",
