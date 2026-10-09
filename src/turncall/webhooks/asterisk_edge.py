@@ -239,7 +239,18 @@ class AriEdge:
             if call.media_answered or not (call.caller_in_stasis and call.media_alive):
                 return
             call.media_answered = True
-            await self._adapter.bridge(call.bridge_id, [call.caller_id, call.media_id])
+            try:
+                await self._adapter.bridge(
+                    call.bridge_id, [call.caller_id, call.media_id]
+                )
+            except Exception:
+                # Unbridged, the caller and the pipeline would each hear
+                # silence until max_call_duration_seconds, holding the slot.
+                # Hanging both up lets their StasisEnds end the call as any
+                # other ending does.
+                logger.exception("asterisk_bridge_failed", call_id=str(call.call_id))
+                await self._quietly(self._adapter.end_call(call.caller_id))
+                await self._quietly(self._adapter.end_call(call.media_id))
 
     async def _on_stasis_end(self, event: dict[str, Any]) -> None:
         channel_id = event.get("channel", {}).get("id", "")

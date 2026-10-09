@@ -438,6 +438,12 @@ and is not part of this repository's history.
   answer that reached Telnyx with only its reply lost left the caller on a
   live, silent line until they hung up.
 
+- **An Asterisk call whose bridge fails is hung up** (#209). The bridge was
+  the one step of the ARI edge with no recovery: if ARI refused it, the caller
+  and the pipeline stayed up unbridged, each hearing silence, the live-call
+  slot held, until `max_call_duration_seconds`. Both channels are hung up now,
+  which ends the call as any other ending does.
+
 - **A request's writes are committed before its response is sent.** The
   request session committed in a yield dependency, which FastAPI runs *after*
   the response by default — so Twilio could open the media stream named in the

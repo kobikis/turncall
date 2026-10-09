@@ -384,7 +384,10 @@ the channel id. Verified against a real 23.4.1 by `tests/live/test_live_asterisk
   caller; the caller leaving Stasis (hung up, or continued by a transfer)
   hangs up the media — never the other way after a transfer. A caller who
   leaves before the media is up gets the call row failed with `call.failed`,
-  and the live-call slot freed (the media stream never came to hold it).
+  and the live-call slot freed (the media stream never came to hold it). A
+  bridge ARI refuses hangs both channels up, and their `StasisEnd`s end the
+  call — left unbridged, each side would hear silence until
+  `max_call_duration_seconds`, slot held.
 - **Actions** (`adapters/telephony/asterisk_adapter.py`): hang-up is
   `DELETE /channels/{caller}`; DTMF `POST .../dtmf`; a transfer is **cold
   only** — `continue` in `ASTERISK_TRANSFER_CONTEXT` (default
