@@ -828,6 +828,10 @@ class CampaignRow(Base):
     )
     # The default for targets that name none; each target stores its own.
     timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # `{start, end, days}` in each target's own zone (#230); null = any hour.
+    calling_window: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # `{ended_reason: {max_attempts, spacing_seconds}}` (#231); null = no retries.
+    retry_policy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # A string, not a PG enum: #232 adds states, and a column of strings takes
     # them without an `ALTER TYPE` that cannot run inside a transaction.
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
@@ -853,7 +857,8 @@ class CampaignTargetRow(Base):
     `timezone` is resolved at create (the target's own, else the campaign's)
     and never inferred from the number: a ported mobile keeps its area code.
     `next_attempt_at` null means due now; a calling window (#230) or a retry's
-    spacing (#231) sets it. `attempts` counts dials actually placed.
+    spacing (#231) sets it. `attempts` counts dials actually placed. A target
+    waiting on a retry is `pending` with the last attempt's `ended_reason`.
     """
 
     __tablename__ = "campaign_targets"

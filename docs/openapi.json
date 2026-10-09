@@ -7710,6 +7710,45 @@
         "title": "BriefingSummary",
         "description": "Briefing variant: auto-generate a summary from the transcript."
       },
+      "CallingWindowRequest": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "time",
+            "title": "Start"
+          },
+          "end": {
+            "type": "string",
+            "format": "time",
+            "title": "End"
+          },
+          "days": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "mon",
+                "tue",
+                "wed",
+                "thu",
+                "fri",
+                "sat",
+                "sun"
+              ]
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Days"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "CallingWindowRequest",
+        "description": "Local hours every target may be called in, read in the target's own zone."
+      },
       "CampaignTargetRequest": {
         "properties": {
           "number": {
@@ -7851,6 +7890,37 @@
               }
             ],
             "title": "Timezone"
+          },
+          "calling_window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CallingWindowRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retry_policy": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/RetryRule"
+                },
+                "propertyNames": {
+                  "enum": [
+                    "customer_did_not_answer",
+                    "customer_busy",
+                    "voicemail"
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Policy"
           },
           "targets": {
             "items": {
@@ -9007,6 +9077,29 @@
           "description"
         ],
         "title": "RegisterToolRequest"
+      },
+      "RetryRule": {
+        "properties": {
+          "max_attempts": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Max Attempts"
+          },
+          "spacing_seconds": {
+            "type": "integer",
+            "maximum": 604800.0,
+            "minimum": 60.0,
+            "title": "Spacing Seconds"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "max_attempts",
+          "spacing_seconds"
+        ],
+        "title": "RetryRule"
       },
       "RoutingWeightEntry": {
         "properties": {

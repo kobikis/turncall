@@ -4,7 +4,7 @@ description: "One agent calls a list of numbers, each with its own variables, in
 icon: "list-check"
 ---
 
-A **campaign** is a set of outbound calls one agent places to a list of targets. You send the list; TurnCall dials each target once, skips numbers on your suppression list (`POST /v1/suppression-list`), and never holds more live calls than your project's [live-call limit](/guides/limits).
+A **campaign** is a set of outbound calls one agent places to a list of targets. You send the list; TurnCall dials each target — again, if you ask it to, when nobody answered — skips numbers on your suppression list (`POST /v1/suppression-list`), and never holds more live calls than your project's [live-call limit](/guides/limits).
 
 <Note>
 Campaigns are dialled by a separate process, `turncall-campaign-worker` — the same image as the API with a different entrypoint. A campaign runs for hours, and the API's event loop is busy carrying live calls. Run at least one worker wherever campaigns should dial; several can run side by side.
@@ -21,6 +21,12 @@ curl -X POST https://api.example.com/v1/campaigns \
     "agent_id": "AGENT_ID",
     "from_number_id": "PHONE_NUMBER_ID",
     "timezone": "America/New_York",
+    "calling_window": {"start": "09:00", "end": "20:00", "days": ["mon", "tue", "wed", "thu", "fri", "sat"]},
+    "retry_policy": {
+      "customer_did_not_answer": {"max_attempts": 3, "spacing_seconds": 7200},
+      "customer_busy": {"max_attempts": 3, "spacing_seconds": 900},
+      "voicemail": {"max_attempts": 2, "spacing_seconds": 86400}
+    },
     "targets": [
       {"number": "+15550001111", "variables": {"name": "Ada", "plan": "Pro"}},
       {"number": "+447700900123", "variables": {"name": "Alan"}, "timezone": "Europe/London"}
@@ -34,6 +40,29 @@ curl -X POST https://api.example.com/v1/campaigns \
 
 The response is the campaign, `queued` until the worker reaches it, with its targets counted by status.
 
+## Calling windows
+
+`calling_window` is the hours a target may be called, in **that target's own timezone**: with `{"start": "09:00", "end": "20:00"}`, a New York target is called between 09:00 and 20:00 New York time and a London target between 09:00 and 20:00 London time, whatever the clock says where the worker runs. Daylight saving is applied on the day itself, so the window does not drift by an hour when a zone changes.
+
+- `start` is inclusive and `end` exclusive, as `HH:MM`, with no offset — the zone is always the target's. `start` must be before `end`; a window across midnight is refused rather than guessed at.
+- `days` (`mon` … `sun`) limits it to those days of the target's week. Leave it out for every day.
+- A target whose turn comes outside its window goes back to `pending`, and its `next_attempt_at` says when its window next opens.
+- With no `calling_window`, targets are called at any hour.
+
+## Retries
+
+`retry_policy` says which endings are dialled again, how many times and how far apart. Its keys are the call's `ended_reason`:
+
+| Key | The call |
+|-----|----------|
+| `customer_did_not_answer` | Rang out |
+| `customer_busy` | Was busy |
+| `voicemail` | Reached voicemail |
+
+Each takes `max_attempts` — dials to the target in all, the first one included, at most 10 — and `spacing_seconds`, how long after the call ended to try again (at least 60). A call that ends in a listed way puts its target back to `pending` with `next_attempt_at` set, until its `attempts` reach that ending's `max_attempts`. `attempts` counts every dial whatever its ending, so a target that went unanswered once and was then busy has used two of busy's attempts.
+
+A retry respects the calling window: one that comes due after hours waits for the window's next opening. Every other ending — the person answered, the call was transferred, the carrier failed — is final. With no `retry_policy`, each target is dialled once.
+
 ## Follow it
 
 ```bash
@@ -43,10 +72,10 @@ curl https://api.example.com/v1/campaigns/$CAMPAIGN_ID/targets?status=failed \
 
 | Target status | Meaning |
 |---------------|---------|
-| `pending` | Waiting to be dialled |
+| `pending` | Waiting to be dialled — at `next_attempt_at` when that is set. After a retryable ending, `ended_reason` is the last attempt's |
 | `dialling` | A worker is dialling it right now |
 | `calling` | Dialled; `call_id` is the call, still in progress |
-| `completed` | The call ended; `ended_reason` says how (`customer_did_not_answer`, `customer_busy`, `voicemail`, …) |
+| `completed` | Done: the last call ended in a way that is final, or used its last attempt; `ended_reason` says how (`customer_did_not_answer`, `customer_busy`, `voicemail`, …) and `attempts` how many dials it took |
 | `suppressed` | On the suppression list when its turn came — never dialled |
 | `failed` | Could not be dialled; `error` says why |
 
@@ -54,4 +83,4 @@ Each call also carries `campaign_id` and `campaign_target_id` in its `metadata`,
 
 ## How it paces
 
-Each target is dialled once, through the same path as `POST /v1/calls/outbound`. The worker asks your project's limits before every dial and waits while you are at `live_calls`; it picks up again as calls end. Set `outbound_calls_per_second` too if your carrier caps how fast a number may dial — without a live-call limit, a campaign dials as fast as it can.
+Every dial — a first attempt or a retry — goes through the same path as `POST /v1/calls/outbound`. The worker asks your project's limits before every dial and waits while you are at `live_calls`; it picks up again as calls end. Set `outbound_calls_per_second` too if your carrier caps how fast a number may dial — without a live-call limit, a campaign dials as fast as it can.

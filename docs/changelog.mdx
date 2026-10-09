@@ -47,6 +47,16 @@ and give the project its Asterisk as an `asterisk` credential. Hang-up, DTMF
 and cold transfers go through ARI. See
 [Asterisk numbers](/guides/phone-numbers#asterisk-numbers).
 
+**Campaign calling windows.** `calling_window` sets the hours and days a
+campaign may call, read in each target's own timezone — daylight saving
+included. A target outside its window waits for the next opening. See
+[Campaigns](/guides/campaigns#calling-windows).
+
+**Campaign retries.** `retry_policy` redials a target whose call went
+unanswered, was busy or reached voicemail — each with its own number of
+attempts and spacing, inside the calling window. See
+[Campaigns](/guides/campaigns#retries).
+
 **`openai_live` agents with tools work out of the box.** An agent with tools and
 no `s2s.delegation` block now delegates to its own `llm` (`"mode": "client"`),
 with your keys, running your webhook and MCP tools — `end_call`, `do_not_call`
