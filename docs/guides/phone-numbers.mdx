@@ -88,8 +88,12 @@ than five minutes old is refused. With no API key anywhere, a call to the
 number fails before it is answered, and the call's `error.raised` event carries
 `missing_keys: ["telnyx"]`.
 
-Not yet on Telnyx: outbound calls, transfers and sending DTMF. SMS on Telnyx
-numbers is not supported, so `sms_enabled` is refused on one.
+Outbound calls from a Telnyx number (`POST /v1/calls/outbound`, campaigns) work
+exactly as from a Twilio one. Telnyx dials on the number's Call Control
+application, so a number on none is refused with a `409`.
+
+Not yet on Telnyx: transfers and sending DTMF. SMS on Telnyx numbers is not
+supported, so `sms_enabled` is refused on one.
 
 ### Bring your own Twilio account
 

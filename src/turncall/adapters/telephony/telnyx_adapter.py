@@ -5,9 +5,9 @@ Every Telnyx REST request TurnCall makes goes through here, built by
 is what a test's fake carrier replaces. A command addresses a call by its
 `call_control_id` (stored as the call's `provider_call_sid`).
 
-The actions later tickets bring (outbound dial #218, number configuration
-#219, transfer and DTMF #220) land here as well; until then they raise, naming
-the ticket, rather than pretend to have done something.
+The actions later tickets bring (number configuration #219, transfer and DTMF
+#220) land here as well; until then they raise, naming the ticket, rather than
+pretend to have done something.
 """
 
 from __future__ import annotations
@@ -39,6 +39,24 @@ class TelnyxApiError(RuntimeError):
         super().__init__(f"Telnyx {status}: {detail}")
 
 
+class TelnyxNumberError(RuntimeError):
+    """A number this account cannot use the way TurnCall needs: not on the
+    account, or on no Call Control application to dial from."""
+
+
+def _media_stream(stream_url: str) -> dict[str, str]:
+    """The fields that point a call's media at `stream_url`, on `answer` and
+    `dial` alike. Only the far end's track is streamed; the agent's audio goes
+    back over the same socket as RTP in `STREAM_CODEC`."""
+    return {
+        "stream_url": stream_url,
+        "stream_track": "inbound_track",
+        "stream_codec": STREAM_CODEC,
+        "stream_bidirectional_mode": "rtp",
+        "stream_bidirectional_codec": STREAM_CODEC,
+    }
+
+
 def _not_yet(action: str, ticket: str) -> NotImplementedError:
     return NotImplementedError(f"{action} on a Telnyx number arrives with {ticket}")
 
@@ -52,21 +70,28 @@ class TelnyxAdapter(TelephonyAdapter):
         self._api_key = api_key
         self._transport = transport
 
-    async def _command(
-        self, call_control_id: str, action: str, body: dict[str, Any] | None = None
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """POST /calls/{id}/actions/{action}; the response's `data`."""
-        url = f"{TELNYX_API_BASE}/calls/{quote(call_control_id, safe=':')}/actions/{action}"
+        """One REST request; the response's JSON body. Raises `TelnyxApiError`
+        on anything but success."""
         async with httpx.AsyncClient(
             transport=self._transport, timeout=_TIMEOUT_SECONDS
         ) as client:
-            response = await client.post(
-                url,
-                json=body or {},
+            response = await client.request(
+                method,
+                f"{TELNYX_API_BASE}{path}",
+                params=params,
+                json=body,
                 headers={"Authorization": f"Bearer {self._api_key}"},
             )
         if response.is_success:
-            return dict(response.json().get("data") or {})
+            return dict(response.json()) if response.content else {}
         try:
             errors = response.json().get("errors") or []
         except ValueError:
@@ -74,6 +99,15 @@ class TelnyxAdapter(TelephonyAdapter):
         codes = [str(e.get("code", "")) for e in errors]
         detail = "; ".join(str(e.get("detail") or e.get("title")) for e in errors)
         raise TelnyxApiError(response.status_code, codes, detail or response.text)
+
+    async def _command(
+        self, call_control_id: str, action: str, body: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """POST /calls/{id}/actions/{action}; the response's `data`."""
+        path = f"/calls/{quote(call_control_id, safe=':')}/actions/{action}"
+        return dict(
+            (await self._request("POST", path, body=body or {})).get("data") or {}
+        )
 
     async def answer_call(self, call_control_id: str, *, stream_url: str) -> None:
         """Answer a ringing call with a bidirectional media stream to `stream_url`.
@@ -83,17 +117,7 @@ class TelnyxAdapter(TelephonyAdapter):
         Only the caller's track is streamed; the agent's audio goes back over
         the same socket as RTP in `STREAM_CODEC`.
         """
-        await self._command(
-            call_control_id,
-            "answer",
-            {
-                "stream_url": stream_url,
-                "stream_track": "inbound_track",
-                "stream_codec": STREAM_CODEC,
-                "stream_bidirectional_mode": "rtp",
-                "stream_bidirectional_codec": STREAM_CODEC,
-            },
-        )
+        await self._command(call_control_id, "answer", _media_stream(stream_url))
         logger.info("telnyx_call_answered", call_control_id=call_control_id)
 
     async def reject_call(
@@ -125,8 +149,41 @@ class TelnyxAdapter(TelephonyAdapter):
         *,
         status_callback_url: str | None = None,
         metadata: dict[str, Any] | None = None,
+        connection_id: str = "",
+        stream_url: str = "",
     ) -> str:
-        raise _not_yet("An outbound call", "#218")
+        """Dial `to_number` from `from_number`; the new call's `call_control_id`.
+
+        A Telnyx dial runs on a Call Control application: `connection_id`, or
+        else the caller-id number's own. Every event of the call goes to
+        `webhook_url` (Call Control has no separate status callback, so
+        `status_callback_url` is unused), and once the callee answers its media
+        goes to `stream_url`: there is no answer step on an outbound call.
+        """
+        body = {
+            "to": to_number,
+            "from": from_number,
+            "connection_id": connection_id or await self.connection_for(from_number),
+            "webhook_url": webhook_url,
+            **(_media_stream(stream_url) if stream_url else {}),
+        }
+        data = (await self._request("POST", "/calls", body=body)).get("data") or {}
+        call_control_id = str(data["call_control_id"])
+        logger.info("telnyx_call_dialled", call_control_id=call_control_id)
+        return call_control_id
+
+    async def connection_for(self, e164: str) -> str:
+        """The Call Control application the number `e164` is on — what a dial
+        from it runs on. Raises `TelnyxNumberError` naming why there is none."""
+        number = await self.find_number(e164)
+        if number is None:
+            raise TelnyxNumberError(f"{e164} is not on this Telnyx account")
+        if not number.get("connection_id"):
+            raise TelnyxNumberError(
+                f"{e164} is on no Call Control application to dial from; "
+                "update its binding (PUT /v1/phone-numbers/{id}) to route it"
+            )
+        return str(number["connection_id"])
 
     async def transfer_call(
         self,
@@ -154,6 +211,22 @@ class TelnyxAdapter(TelephonyAdapter):
 
     async def fetch_number_info(self, number_sid: str) -> dict[str, Any]:
         raise _not_yet("Looking up a number", "#219")
+
+    async def find_number(self, e164: str) -> dict[str, Any] | None:
+        """The account's phone number `e164`, or None when it cannot see it.
+
+        Telnyx's filter takes digits only (a `+` matches nothing) and matches
+        partially, so the exact number is picked out of what comes back.
+        """
+        found = await self._request(
+            "GET",
+            "/phone_numbers",
+            params={"filter[phone_number]": e164.lstrip("+"), "page[size]": 250},
+        )
+        return next(
+            (dict(n) for n in found.get("data") or [] if n.get("phone_number") == e164),
+            None,
+        )
 
     async def send_sms(self, from_number: str, to_number: str, body: str) -> str:
         raise NotImplementedError("SMS on Telnyx numbers is not supported")

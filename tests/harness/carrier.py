@@ -46,6 +46,9 @@ class FakeNumber:
     voice_url: str = ""
     status_callback_url: str = ""
     sms_url: str = ""
+    # Telnyx: the Call Control application the number is on — set by hand in
+    # the console, as an operator does before #219 configures it on bind.
+    connection_id: str = "harness-connection"
 
 
 class FakeCarrier:
@@ -251,3 +254,38 @@ class FakeTelnyxAdapter(FakeTelephonyAdapter):
         self, call_control_id: str, *, cause: str = "USER_BUSY"
     ) -> None:
         await self._record("reject", call_sid=call_control_id, cause=cause)
+
+    async def connection_for(self, e164: str) -> str:
+        """The Call Control application the number is on; Telnyx refuses a
+        dial on none."""
+        from turncall.adapters.telephony.telnyx_adapter import TelnyxNumberError
+
+        number = self._carrier._numbers.get(e164)
+        if number is None or not number.connection_id:
+            raise TelnyxNumberError(f"{e164} is on no Call Control application")
+        return number.connection_id
+
+    async def initiate_outbound_call(
+        self,
+        from_number: str,
+        to_number: str,
+        webhook_url: str,
+        *,
+        status_callback_url: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        connection_id: str = "",
+        stream_url: str = "",
+    ) -> str:
+        """A Telnyx dial, on `connection_id` or the caller id's application."""
+        call_control_id = "v3:" + secrets.token_urlsafe(24)
+        await self._record(
+            "dial",
+            call_sid=call_control_id,
+            from_number=from_number,
+            to_number=to_number,
+            webhook_url=webhook_url,
+            status_callback_url=status_callback_url,
+            stream_url=stream_url,
+            connection_id=connection_id or await self.connection_for(from_number),
+        )
+        return call_control_id

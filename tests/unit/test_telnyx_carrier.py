@@ -17,7 +17,11 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from pipecat.serializers.telnyx import TelnyxFrameSerializer
 from pydantic import ValidationError
 
-from turncall.adapters.telephony.telnyx_adapter import TelnyxAdapter, TelnyxApiError
+from turncall.adapters.telephony.telnyx_adapter import (
+    TelnyxAdapter,
+    TelnyxApiError,
+    TelnyxNumberError,
+)
 from turncall.api.errors import ApiError
 from turncall.api.v1.schemas.credentials import parse_credential
 from turncall.api.v1.schemas.phone_numbers import BindPhoneNumberRequest
@@ -143,6 +147,73 @@ class TestTheAdapter:
             await adapter.end_call("v3:abc")
         assert exc.value.status == 401
         assert "Authentication failed" in str(exc.value)
+
+    async def test_it_dials_on_the_caller_ids_application(self) -> None:
+        """Telnyx's dial names a Call Control application: the caller-id
+        number's own. Its filter matches partially, so the exact one is picked;
+        the media goes straight to the stream once the callee answers."""
+        numbers = {
+            "data": [
+                {"phone_number": "+155512345670", "connection_id": "other"},
+                {"phone_number": "+15551234567", "connection_id": "app-1"},
+            ]
+        }
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(200, json=numbers)
+            return httpx.Response(200, json={"data": {"call_control_id": "v3:new"}})
+
+        adapter, seen = _adapter(respond)
+        sid = await adapter.initiate_outbound_call(
+            "+15551234567",
+            "+15559876543",
+            "https://tc.example/webhooks/telnyx/voice",
+            stream_url="wss://tc.example/ws/telnyx/media-stream/1",
+        )
+        assert sid == "v3:new"
+        lookup, dial = seen
+        assert lookup.url.path == "/v2/phone_numbers"
+        # Digits only: a `+` in Telnyx's filter matches nothing.
+        assert lookup.url.params["filter[phone_number]"] == "15551234567"
+        assert dial.url == "https://api.telnyx.com/v2/calls"
+        assert json.loads(dial.content) == {
+            "to": "+15559876543",
+            "from": "+15551234567",
+            "connection_id": "app-1",
+            "webhook_url": "https://tc.example/webhooks/telnyx/voice",
+            "stream_url": "wss://tc.example/ws/telnyx/media-stream/1",
+            "stream_track": "inbound_track",
+            "stream_codec": "PCMU",
+            "stream_bidirectional_mode": "rtp",
+            "stream_bidirectional_codec": "PCMU",
+        }
+
+    @pytest.mark.parametrize(
+        "numbers,reason",
+        [
+            ([], "not on this Telnyx account"),
+            (
+                [{"phone_number": "+15551234567", "connection_id": None}],
+                "no Call Control application",
+            ),
+        ],
+    )
+    async def test_a_number_it_cannot_dial_from_is_named(self, numbers, reason) -> None:
+        adapter, seen = _adapter(lambda _r: httpx.Response(200, json={"data": numbers}))
+        with pytest.raises(TelnyxNumberError, match=reason):
+            await adapter.initiate_outbound_call("+15551234567", "+15559876543", "u")
+        assert [r.method for r in seen] == ["GET"]  # nothing dialled
+
+    async def test_a_given_application_is_dialled_on_without_a_lookup(self) -> None:
+        adapter, seen = _adapter(
+            lambda _r: httpx.Response(200, json={"data": {"call_control_id": "v3:x"}})
+        )
+        await adapter.initiate_outbound_call(
+            "+15551234567", "+15559876543", "u", connection_id="app-9"
+        )
+        assert [r.method for r in seen] == ["POST"]
+        assert json.loads(seen[0].content)["connection_id"] == "app-9"
 
     async def test_what_later_tickets_bring_raises_rather_than_pretends(self) -> None:
         adapter, seen = _adapter(lambda _r: httpx.Response(200))

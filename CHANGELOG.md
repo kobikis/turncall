@@ -35,6 +35,14 @@ and is not part of this repository's history.
   limit (#224) is refused busy with a Call Control `reject` and announced as
   `call.rejected`, as on Twilio. Outbound calls, number configuration,
   transfer and DTMF on Telnyx come next.
+- **Outbound calls from Telnyx numbers** (#218). `POST /v1/calls/outbound`
+  with a Telnyx number as `from_number_id` dials through Telnyx Call Control —
+  same request, same response, and the same suppression list and limits, so
+  campaigns dial Telnyx numbers too. The dial runs on the number's Call Control
+  application and streams the call once the callee answers. A call nobody
+  answers ends `customer_did_not_answer` (busy: `customer_busy`), as on Twilio.
+  No Telnyx key at any level is a `503 no_telnyx_account` naming
+  `missing_keys: ["telnyx"]`; a number on no Call Control application is a 409.
 
 ### Changed
 

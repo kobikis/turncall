@@ -242,8 +242,21 @@ Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
   number's Call Control application is pointed at `/webhooks/telnyx/voice` by
   hand (`twilio_webhooks_configured` is false). `sms_enabled` and a Twilio
   account on a Telnyx number are a 422 (SMS on Telnyx is out of scope).
-- **Not yet**: outbound (#218), number configuration (#219), transfer + DTMF
-  (#220) raise `NotImplementedError` on `TelnyxAdapter`, naming the ticket.
+- **Outbound** (#218) takes the same path as Twilio's,
+  `services/outbound_dial.place_outbound_call` — suppression, limits, then the
+  dial — so `POST /v1/calls/outbound` and campaigns dial Telnyx numbers
+  unchanged. The carrier is chosen at the adapter call. Telnyx's dial names a
+  Call Control application, so the caller-id number's `connection_id` is looked
+  up before the call is admitted (a number on none is a 409 naming the fix) and
+  stored as `metadata_json["telnyx_connection_id"]`, where a transfer reads it
+  as on an inbound call; the dial passes the call's `stream_url` up front: Telnyx opens the stream when the
+  callee answers, with no answer step. Its events go to `/webhooks/telnyx/voice`
+  (`webhook_url` on the dial); an outgoing call's number is its `from`. A dial
+  nobody answered ends by `call.hangup`'s `hangup_cause` — `timeout`/`no_answer`
+  → `no_answer`, `user_busy`/`call_rejected` → `busy`, `not_found` → `failed`
+  + `call.failed` — which is what a campaign's retry policy reads.
+- **Not yet**: number configuration (#219), transfer + DTMF (#220) raise
+  `NotImplementedError` on `TelnyxAdapter`, naming the ticket.
   The live-call limit (#224) admits a call in `open_inbound_call`, ahead of
   call-init, for every carrier.
 
