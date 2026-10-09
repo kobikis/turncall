@@ -66,6 +66,14 @@ and is not part of this repository's history.
 
 ### Added
 
+- **A messages-per-minute limit per text session** (#226).
+  `messages_per_minute` on `PUT /v1/projects/{id}/limits`, with
+  `LIMIT_MESSAGES_PER_MINUTE` as the platform default — unlimited unless set —
+  so a looping or abusive conversation cannot run up LLM cost. Past it a
+  message is neither stored nor sent to the LLM: `POST /v1/chat` answers
+  `429 rate_limited` with `retry_after_ms`, and an SMS or WhatsApp message gets
+  no reply. Counted per session, across every server.
+
 - **An outbound calls-per-second limit per number** (#225).
   `outbound_calls_per_second` on `PUT /v1/projects/{id}/limits`, with
   `LIMIT_OUTBOUND_CALLS_PER_SECOND` as the platform default — unlimited unless

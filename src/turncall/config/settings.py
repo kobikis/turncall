@@ -222,6 +222,8 @@ class LimitSettings(BaseSettings):
     outbound_calls_per_second: int = Field(
         default=0, ge=0, alias="LIMIT_OUTBOUND_CALLS_PER_SECOND"
     )
+    # Inbound messages one text session (chat, SMS, WhatsApp) may send a minute.
+    messages_per_minute: int = Field(default=0, ge=0, alias="LIMIT_MESSAGES_PER_MINUTE")
 
 
 class ServerSettings(BaseSettings):

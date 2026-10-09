@@ -64,6 +64,7 @@ async def set_project_limits(
         project_id,
         limit_live_calls=body.live_calls,
         limit_outbound_calls_per_second=body.outbound_calls_per_second,
+        limit_messages_per_minute=body.messages_per_minute,
     )
     if row is None:
         raise NotFoundError("Project", str(project_id))

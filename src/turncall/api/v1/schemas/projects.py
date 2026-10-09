@@ -28,12 +28,18 @@ class ProjectLimits(BaseModel):
         ge=1,
         description="Outbound calls each of this project's numbers may start per second",
     )
+    messages_per_minute: int | None = Field(
+        default=None,
+        ge=1,
+        description="Inbound messages one text session may send per minute",
+    )
 
     @classmethod
     def from_row(cls, row: Any) -> "ProjectLimits":
         return cls(
             live_calls=row.limit_live_calls,
             outbound_calls_per_second=row.limit_outbound_calls_per_second,
+            messages_per_minute=row.limit_messages_per_minute,
         )
 
 

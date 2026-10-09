@@ -1,6 +1,6 @@
 ---
 title: Limits
-description: "Cap a project's live calls and how fast its numbers dial, across every server"
+description: "Cap a project's live calls, how fast its numbers dial, and how fast a conversation spends on the LLM"
 icon: "gauge"
 ---
 
@@ -10,6 +10,7 @@ A **concurrency limit** caps how many of something are in progress at once; a **
 |-------|------|--------|
 | `live_calls` | concurrency | live calls in the project, every transport (Twilio, WebRTC, WhatsApp voice), inbound and outbound |
 | `outbound_calls_per_second` | rate | outbound calls started from each of the project's numbers, in any one-second window |
+| `messages_per_minute` | rate | inbound messages in each text session (Chat API, SMS, WhatsApp), in any one-minute window |
 
 ## Set a project's limits
 
@@ -17,10 +18,10 @@ A **concurrency limit** caps how many of something are in progress at once; a **
 curl -X PUT https://api.example.com/v1/projects/$PROJECT_ID/limits \
   -H "Authorization: Bearer tc_..." \
   -H "Content-Type: application/json" \
-  -d '{"live_calls": 20, "outbound_calls_per_second": 1}'
+  -d '{"live_calls": 20, "outbound_calls_per_second": 1, "messages_per_minute": 20}'
 ```
 
-An admin key, and only for its own project. The `PUT` replaces every limit: a field left out, or `null`, goes back to the platform default (`LIMIT_LIVE_CALLS`, `LIMIT_OUTBOUND_CALLS_PER_SECOND`), which is unlimited unless the deployment set one. The project read (`GET /v1/projects/{id}`) shows them under `limits`. A new value applies to the next call; calls already live keep going, and count toward it.
+An admin key, and only for its own project. The `PUT` replaces every limit: a field left out, or `null`, goes back to the platform default (`LIMIT_LIVE_CALLS`, `LIMIT_OUTBOUND_CALLS_PER_SECOND`, `LIMIT_MESSAGES_PER_MINUTE`), which is unlimited unless the deployment set one. The project read (`GET /v1/projects/{id}`) shows them under `limits`. A new value applies to the next call; calls already live keep going, and count toward it.
 
 ## Live calls
 
@@ -64,4 +65,11 @@ Carriers cap how fast one number may start calls, and flag a number that dials f
 
 The window slides: no more than `max` dials from one number in any one second, whichever servers placed them. A refused dial does not count against the window, so a retry after `retry_after_ms` finds room unless another dial took it first.
 
-If Redis is unreachable, calls are admitted and a warning is logged. A limit is a guardrail; it should not be the thing that takes your phone line down.
+## Messages per minute
+
+Every message a text conversation receives costs an LLM turn, so a looping integration or an abusive sender can run up the bill as fast as it can post. `messages_per_minute` caps the inbound messages in each session — per conversation, so one runaway conversation never holds back the others. A message past it is not stored and never reaches the LLM:
+
+- **Chat API** (`POST /v1/chat`): `429 rate_limited`, with `details: {"limit": "messages_per_minute", "max": 20, "retry_after_ms": ...}`.
+- **SMS and WhatsApp**: no reply is sent. There is no one to hand an error to, and answering would spend the very thing the limit saves.
+
+If Redis is unreachable, calls and messages are admitted and a warning is logged. A limit is a guardrail; it should not be the thing that takes your phone line down.

@@ -105,6 +105,7 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 | `TYPESAFE_API_KEY` | No | Jev, for a `jev` eval judge (#141). A fallback: a project's `typesafe` credential wins (ADR-0020). Evals only — no live call contacts this vendor, which is why the dependency is the optional `evals-jev` extra rather than a base one. Neither the key nor the extra is checked at scenario create: both are properties of a *deployment* and a stored scenario outlives the one it was written against, so the **run** fails, naming which of the two is missing |
 | `LIMIT_LIVE_CALLS` | No | Platform default for a project's live-call concurrency limit (#224), `0` (default) = unlimited. A project's own value (`PUT /v1/projects/{id}/limits`) wins in either direction — a default, not a ceiling. See "Limits" |
 | `LIMIT_OUTBOUND_CALLS_PER_SECOND` | No | Platform default for how many outbound calls each of a project's numbers may start per second (#225), `0` (default) = unlimited; per project the same way |
+| `LIMIT_MESSAGES_PER_MINUTE` | No | Platform default for how many inbound messages one text session (chat, SMS, WhatsApp) may send per minute (#226), `0` (default) = unlimited; per project the same way |
 | `PLATFORM_API_KEY` | Prod | Privileged credential gating the unauthenticated bootstrap endpoints — project creation + first-API-key creation. Only the builder holds it; presented as the `X-Platform-Key` header. Empty default fails **closed** (rejects all bootstrap calls), so set it wherever those endpoints must work. TurnCall stays identity-free — this is a caller check, not a user |
 
 ## Providers (per-agent config)
@@ -186,6 +187,7 @@ Context threading: use `session_id` (group messages) or `previous_chat_id` (line
 - Auto-created on first inbound SMS or Chat API call
 - Resumed if same (customer_number, turncall_number) pair and < 24h since last activity
 - Expired after 24h inactivity (lazy on lookup + background cleanup every 15 min)
+- Over the project's `messages_per_minute` (#226): not stored, no LLM; Chat API `429`, SMS/WhatsApp unanswered (see "Limits")
 - Webhook events: `session.created`, `session.updated`, `session.deleted`, `chat.created`
 
 ### Phone Number Config
@@ -547,6 +549,11 @@ a guardrail must not take the phone line down.
   checked in `place_outbound_call` after the live-call slot
   (`admit_outbound_call`); refused → the slot is given back and `429` with
   `retry_after_ms`. A refused dial consumes nothing in either count.
+- **Messages per minute, per text session** (#226). `admit_message` in
+  `sms_chat._process_chat_message`, after the session is resolved and before
+  the message is stored or reaches the LLM: the Chat API answers `429`, SMS
+  answers an empty `<Response/>` and WhatsApp sends nothing. Per session, so
+  one runaway conversation holds back no other.
 - **`may_dial(session, project_id=, from_number=)`** answers "would a dial be admitted now?"
   without taking anything — for a campaign worker pacing itself (#229, #233);
   a `RateLimitedError` from the dial itself still means "not yet".

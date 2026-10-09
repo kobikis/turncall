@@ -8447,6 +8447,19 @@
             ],
             "title": "Outbound Calls Per Second",
             "description": "Outbound calls each of this project's numbers may start per second"
+          },
+          "messages_per_minute": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Messages Per Minute",
+            "description": "Inbound messages one text session may send per minute"
           }
         },
         "additionalProperties": false,

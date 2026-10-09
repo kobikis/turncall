@@ -18,6 +18,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.deps import DbSession
+from turncall.api.errors import RateLimitedError
 from turncall.config import get_settings
 from turncall.domain.enums import CallDirection, CallEventType
 from turncall.domain.models import AgentConfig
@@ -484,6 +485,11 @@ async def _handle_message_event(
                 is_new_session=result.is_new_session,
             )
 
+        except RateLimitedError as exc:
+            # Over the session's messages per minute (#226): no LLM, no reply.
+            logger.warning(
+                "whatsapp_message_rate_limited", from_number=from_number, **exc.details
+            )
         except ValueError as exc:
             logger.error(f"whatsapp_message_error: {exc}")
         except Exception:

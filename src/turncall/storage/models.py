@@ -60,6 +60,9 @@ class ProjectRow(Base):
     limit_outbound_calls_per_second: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
+    limit_messages_per_minute: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
 
 
 class ApiKeyRow(Base):

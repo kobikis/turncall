@@ -25,7 +25,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +42,7 @@ from turncall.storage.repositories import project_repo
 LIVE_CALL_LEASE_MS = 120_000
 LIVE_CALL_RENEW_SECONDS = 30
 DIAL_WINDOW_MS = 1_000
+MESSAGE_WINDOW_MS = 60_000
 
 # KEYS[1]: the set. ARGV: member, limit (0 = none), ttl ms, peek ("1" = count
 # only). Returns 0 when admitted, else the ms until the oldest member expires.
@@ -70,6 +71,7 @@ class ProjectLimits:
 
     live_calls: int = 0
     outbound_calls_per_second: int = 0
+    messages_per_minute: int = 0
 
 
 @dataclass(frozen=True)
@@ -97,6 +99,7 @@ async def limits_for_project(session: AsyncSession, project_id: UUID) -> Project
     return ProjectLimits(
         live_calls=pick("live_calls"),
         outbound_calls_per_second=pick("outbound_calls_per_second"),
+        messages_per_minute=pick("messages_per_minute"),
     )
 
 
@@ -231,6 +234,27 @@ async def may_dial(
             allowed=False, limit="outbound_calls_per_second", retry_after_ms=wait_ms
         )
     return DialCheck(allowed=True)
+
+
+async def admit_message(
+    session: AsyncSession, *, project_id: UUID, session_id: UUID
+) -> None:
+    """Count one inbound message on a text session, or raise 429 `rate_limited`.
+
+    Checked before the message is stored or reaches the LLM, so a looping or
+    abusive conversation stops costing anything at the limit (#226). A refused
+    message is not counted: the window frees on schedule however hard it is hit.
+    """
+    limits = await limits_for_project(session, project_id)
+    cap = limits.messages_per_minute
+    wait_ms = await _admit(
+        f"limits:messages:{session_id}", uuid4().hex, cap, MESSAGE_WINDOW_MS
+    )
+    if wait_ms:
+        raise RateLimitedError(
+            f"This conversation is at its limit of {cap} messages per minute",
+            {"limit": "messages_per_minute", "max": cap, "retry_after_ms": wait_ms},
+        )
 
 
 async def admit_inbound_call(

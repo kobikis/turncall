@@ -20,6 +20,7 @@ from turncall.domain.models import AgentConfig
 from turncall.domain.session_state import is_session_expired
 from turncall.events.dispatcher import dispatch_event
 from turncall.services.chat_tools import build_chat_tools
+from turncall.services.limits import admit_message
 from turncall.services.llm_text import complete_text
 from turncall.services.template_renderer import render_template
 from turncall.storage.models import SmsSessionRow
@@ -155,6 +156,11 @@ async def _process_chat_message(
         channel=channel.value,
         existing_session_id=existing_session_id,
     )
+
+    # Over the session's messages per minute (#226): raised before anything is
+    # stored or sent to the LLM. The Chat API answers 429; SMS and WhatsApp
+    # catch it and send nothing.
+    await admit_message(db, project_id=project_id, session_id=session_row.id)
 
     # 2. Store the customer message
     customer_msg = await sms_message_repo.create_message(

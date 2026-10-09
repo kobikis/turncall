@@ -1,6 +1,7 @@
 """Twilio webhook handlers for inbound calls, status callbacks, and recordings."""
 
 import xml.etree.ElementTree as ET
+import xml.sax.saxutils
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -10,6 +11,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.deps import DbSession
+from turncall.api.errors import RateLimitedError
 from turncall.config import get_settings
 from turncall.domain.call_state import (
     TWILIO_STATUS_MAP,
@@ -147,18 +149,11 @@ async def inbound_sms_webhook(
     phone_number = await phone_number_repo.get_by_e164(session, to_number)
     if phone_number is None:
         logger.warning("twilio_sms_unknown_number", to_number=to_number)
-        msg = "This number is not configured for SMS."
-        return Response(
-            content=f"<Response><Message>{msg}</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
-        )
+        return _sms_twiml("This number is not configured for SMS.")
 
     if not phone_number.sms_enabled:
         logger.warning("twilio_sms_not_enabled", to_number=to_number)
-        return Response(
-            content="<Response><Message>SMS is not enabled on this number.</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
-        )
+        return _sms_twiml("SMS is not enabled on this number.")
 
     try:
         from turncall.services.sms_chat import handle_inbound_sms
@@ -176,30 +171,30 @@ async def inbound_sms_webhook(
             session_id=str(result.session_id),
             is_new_session=result.is_new_session,
         )
-
-        # Return TwiML with the agent's reply
-        # XML-escape the reply text to prevent injection
-        import xml.sax.saxutils
-
-        escaped_reply = xml.sax.saxutils.escape(result.reply_text)
-        return Response(
-            content=f"<Response><Message>{escaped_reply}</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
+        return _sms_twiml(result.reply_text)
+    except RateLimitedError as exc:
+        # Over the session's messages per minute (#226): no LLM, no reply.
+        logger.warning(
+            "twilio_sms_rate_limited", from_number=from_number, **exc.details
         )
+        return _sms_twiml(None)
     except ValueError as exc:
         logger.error("twilio_sms_error", error=str(exc))
-        err_msg = "Sorry, I'm unable to process your message right now."
-        return Response(
-            content=f"<Response><Message>{err_msg}</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
-        )
+        return _sms_twiml("Sorry, I'm unable to process your message right now.")
     except Exception:
         logger.exception("twilio_sms_unexpected_error")
-        err_msg = "An error occurred. Please try again later."
-        return Response(
-            content=f"<Response><Message>{err_msg}</Message></Response>",
-            media_type=TWIML_CONTENT_TYPE,
-        )
+        return _sms_twiml("An error occurred. Please try again later.")
+
+
+def _sms_twiml(text: str | None) -> Response:
+    """TwiML answering an SMS with `text` (escaped), or with nothing at all."""
+    if text is None:
+        return Response(content="<Response/>", media_type=TWIML_CONTENT_TYPE)
+    message = xml.sax.saxutils.escape(text)
+    return Response(
+        content=f"<Response><Message>{message}</Message></Response>",
+        media_type=TWIML_CONTENT_TYPE,
+    )
 
 
 @router.post("/voice/inbound")
