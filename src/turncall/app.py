@@ -141,8 +141,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     purge_task = asyncio.create_task(_purge_soft_deleted_projects())
 
+    # Last, once the app can serve: SIGTERM now drains live calls (#199).
+    from turncall.services.drain import install_sigterm_drain, uninstall_sigterm_drain
+
+    install_sigterm_drain()
+
     yield
 
+    uninstall_sigterm_drain()
     cleanup_task.cancel()
     purge_task.cancel()
 

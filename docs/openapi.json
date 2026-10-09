@@ -36,7 +36,7 @@
           "health"
         ],
         "summary": "Readiness Check",
-        "description": "Kubernetes readiness probe - checks if the service can serve traffic.",
+        "description": "Kubernetes readiness probe - checks if the service can serve traffic.\n\n503 `draining` from the first SIGTERM on (#199): the process keeps serving\nthe calls it has, but new ones belong on another replica.",
         "operationId": "readiness_check_ready_get",
         "responses": {
           "200": {
@@ -62,7 +62,7 @@
           "health"
         ],
         "summary": "Liveness Check",
-        "description": "Kubernetes liveness probe - checks if the process is alive.",
+        "description": "Kubernetes liveness probe - checks if the process is alive.\n\nStays 200 while draining: a draining process is healthy, and a liveness\nfailure would get it killed with its calls still on it.",
         "operationId": "liveness_check_live_get",
         "responses": {
           "200": {
@@ -75,6 +75,28 @@
                   },
                   "type": "object",
                   "title": "Response Liveness Check Live Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Metrics",
+        "description": "Prometheus exposition: live voice calls on this process (#199).\n\nPer process, as every gauge is: scrape each replica, not a load-balanced\naddress. The input to an autoscaler, and to a drain's progress.",
+        "operationId": "metrics_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }

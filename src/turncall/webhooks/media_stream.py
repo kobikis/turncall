@@ -6,6 +6,7 @@ Pipecat-based voice pipeline via CallSession.
 """
 
 import json
+from contextlib import ExitStack
 from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -15,6 +16,7 @@ from turncall.config import get_settings
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.pipeline_builder import build_call_pipeline
 from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
+from turncall.services import drain
 from turncall.storage.database import create_session_factory, get_engine
 
 router = APIRouter()
@@ -45,6 +47,7 @@ async def media_stream_websocket(websocket: WebSocket) -> None:
     """
     await websocket.accept()
 
+    live = ExitStack()
     try:
         # Wait for Twilio's start event with call metadata
         start_data = await _wait_for_start_event(websocket)
@@ -138,6 +141,11 @@ async def media_stream_websocket(websocket: WebSocket) -> None:
                 config = prepend_knowledge_context(config, knowledge_context)
                 logger.info("Knowledge context applied to system prompt")
 
+        # Live from here until the session has finalized: a SIGTERM waits (#199).
+        live.enter_context(
+            drain.live_call(UUID(call_id_str), config.max_call_duration_seconds)
+        )
+
         # Connect MCP servers and discover tools (if configured)
         mcp_manager = None
         mcp_tools: list = []
@@ -192,3 +200,5 @@ async def media_stream_websocket(websocket: WebSocket) -> None:
         logger.info("media_stream_disconnected")
     except Exception:
         logger.exception("media_stream_error")
+    finally:
+        live.close()

@@ -66,6 +66,17 @@ and is not part of this repository's history.
 
 ### Added
 
+- **A deploy no longer drops live calls** (#199). On `SIGTERM`, `GET /ready`
+  answers `503 {"status": "draining"}` at once while `GET /live` stays `200`,
+  and the process keeps serving until its live calls (Twilio, WebRTC and
+  WhatsApp voice) have ended and their `call.ended` webhooks have gone out —
+  bounded by the longest `max_call_duration_seconds` among them, plus 90
+  seconds. Before, the server's own shutdown closed every media stream at once
+  and cut each call off mid-sentence. A second `SIGTERM` stops waiting. Set
+  `terminationGracePeriodSeconds` from your agents' durations, not the 30-second
+  default; see the Graceful shutdown guide. `GET /metrics` exposes
+  `turncall_active_calls`, live calls per process, in Prometheus text format.
+
 - **A test harness that drives the running app like a carrier** (#214,
   `tests/harness/`). Stub STT/LLM/TTS answer instantly from a script (a tool
   call included), a fake carrier records every REST action TurnCall takes, and

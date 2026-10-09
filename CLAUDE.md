@@ -516,6 +516,34 @@ GET    /v1/suppression-list        # ?page= ?limit= ?number= (finds one entry's 
 DELETE /v1/suppression-list/{id}
 ```
 
+## Graceful Shutdown
+
+A deploy must not drop live calls (#199). Uvicorn's own SIGTERM closes the
+listening socket and every connection at once — a Twilio media stream gets
+close code 1012 — so `services/drain.py` takes SIGTERM over in the lifespan
+(uvicorn installs its handler *before* the lifespan runs, so ours replaces it)
+and only hands the signal back once the process is empty:
+
+- `/ready` is `503 {"status": "draining", "active_calls": n}` from the first
+  SIGTERM; `/live` stays `200` throughout (a liveness failure would kill the pod
+  mid-drain). The process keeps serving, late arrivals included.
+- It waits for live calls, each bounded by its own `max_call_duration_seconds`
+  + 30s from when it was counted, then up to 60s for post-call work
+  (`pending_post_call_tasks`, `pending_deliveries`) so `call.ended` goes out.
+  Then `signal.raise_signal(SIGTERM)` with uvicorn's handler restored; the
+  process exits by the signal (-15 / 143). A second SIGTERM hands back at once.
+- A call is counted by `drain.live_call(...)` at the transport entry points —
+  `webhooks/media_stream.py` (Twilio) and `pipeline_builder.start_call_pipeline`
+  (WebRTC, WhatsApp voice) — from config resolution through finalize. A new
+  voice entry point must count its calls the same way.
+- `GET /metrics`: `turncall_active_calls`, per process, Prometheus text, no
+  client library.
+
+Orchestrator contract (preStop sleep, `terminationGracePeriodSeconds` ≥ preStop
++ longest `max_call_duration_seconds` + 90): `docs/guides/graceful-shutdown.mdx`.
+Proof against a real process: `tests/integration/test_graceful_shutdown.py`
+(`tests/harness/server.py` boots the app as a child process).
+
 ## Takeaways (Structured Outputs)
 
 Reusable post-call extractions (ADR-0013). Define once (`name`, JSON `schema`, optional `prompt`/`model`), attach via `analysis.takeaway_ids`, results keyed by name in `call.ended` → `analysis.takeaways` (`{result, valid, model, duration_ms}`). One concurrent LLM call per takeaway, schema-validated with one retry.

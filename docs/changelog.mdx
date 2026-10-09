@@ -7,6 +7,12 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**A deploy no longer drops live calls.** On `SIGTERM` the readiness probe fails
+at once while liveness stays green, and the process keeps serving until its
+live calls have ended and their `call.ended` webhooks have gone out. A new
+`GET /metrics` exposes `turncall_active_calls` for autoscaling. See
+[Graceful shutdown](/guides/graceful-shutdown) for the grace period to set.
+
 **`openai_live` agents with tools work out of the box.** An agent with tools and
 no `s2s.delegation` block now delegates to its own `llm` (`"mode": "client"`),
 with your keys, running your webhook and MCP tools — `end_call`, `do_not_call`

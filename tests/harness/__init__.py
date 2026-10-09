@@ -31,6 +31,10 @@ Pieces
   in the test's loop, a fresh project + admin key via the platform endpoints, a
   `WebhookSink` subscribed to `*` that verifies signatures. Skips when Postgres
   is unreachable or holds credentials this process cannot decrypt.
+- `server.py` — `serve_process(script)`: the same app in a child process
+  (`uvicorn.run`, as production serves it), for what only a real process shows
+  — signals (#199). Text replies only; the test keeps a mirror `FakeCarrier`
+  and `ServerProcess.bind_number` copies the configured URLs onto it.
 
 Extending it
 ------------

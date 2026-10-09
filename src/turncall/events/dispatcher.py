@@ -28,6 +28,11 @@ def _spawn(coro) -> None:  # type: ignore[no-untyped-def]
     task.add_done_callback(_BG_TASKS.discard)
 
 
+def pending_deliveries() -> frozenset[asyncio.Task]:
+    """Webhook deliveries still in flight — a shutdown drain waits for them."""
+    return frozenset(_BG_TASKS)
+
+
 async def _deliver_and_log(
     event: WebhookEvent,
     subscribers: list[tuple[str, str]],

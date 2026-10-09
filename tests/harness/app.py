@@ -126,6 +126,21 @@ HARNESS_AGENT: dict[str, Any] = {
 }
 
 
+def app_env(carrier: FakeCarrier, base_url: str) -> dict[str, str]:
+    """The environment the app runs under in the harness, in or out of process."""
+    return {
+        "TWILIO_ACCOUNT_SID": carrier.account_sid,
+        "TWILIO_AUTH_TOKEN": carrier.auth_token,
+        # Present so the missing-key check passes; the stubs never send them.
+        "DEEPGRAM_API_KEY": "harness-stub",
+        "OPENAI_API_KEY": "harness-stub",
+        "PUBLIC_BASE_URL": base_url,
+        "PLATFORM_API_KEY": PLATFORM_KEY,
+        "LOCAL_STORAGE_PATH": tempfile.mkdtemp(prefix="turncall-harness-"),
+        "PIPECAT_ENABLE_TRACING": "false",
+    }
+
+
 async def _database_usable() -> str | None:
     """Why this database cannot host the app, or None if it can."""
     from turncall.config.settings import Settings
@@ -186,17 +201,7 @@ async def run_app(
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     base_url = f"http://127.0.0.1:{sock.getsockname()[1]}"
-    for name, value in {
-        "TWILIO_ACCOUNT_SID": carrier.account_sid,
-        "TWILIO_AUTH_TOKEN": carrier.auth_token,
-        # Present so the missing-key check passes; the stubs never send them.
-        "DEEPGRAM_API_KEY": "harness-stub",
-        "OPENAI_API_KEY": "harness-stub",
-        "PUBLIC_BASE_URL": base_url,
-        "PLATFORM_API_KEY": PLATFORM_KEY,
-        "LOCAL_STORAGE_PATH": tempfile.mkdtemp(prefix="turncall-harness-"),
-        "PIPECAT_ENABLE_TRACING": "false",
-    }.items():
+    for name, value in app_env(carrier, base_url).items():
         set_env(name, value)
     get_settings.cache_clear()
     install_stub_providers(script, set_attr)
