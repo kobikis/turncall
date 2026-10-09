@@ -130,6 +130,12 @@ class CallEventType(StrEnum):
     EVAL_RUN_STARTED = "eval.run.started"
     EVAL_RUN_COMPLETED = "eval.run.completed"
 
+    # Campaigns (#234): a pair on the eval pattern. `campaign.completed` carries
+    # the campaign's read — status and target counts per status — and the
+    # campaign's id rides in the envelope, never the payload.
+    CAMPAIGN_STARTED = "campaign.started"
+    CAMPAIGN_COMPLETED = "campaign.completed"
+
     # Live control
     CONTEXT_INJECTED = "context.injected"
     DTMF_SENT = "dtmf.sent"

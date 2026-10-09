@@ -781,9 +781,14 @@ a guardrail must not take the phone line down.
   the message is stored or reaches the LLM: the Chat API answers `429`, SMS
   answers an empty `<Response/>` and WhatsApp sends nothing. Per session, so
   one runaway conversation holds back no other.
-- **`may_dial(session, project_id=, from_number=)`** answers "would a dial be admitted now?"
-  without taking anything — for a campaign worker pacing itself (#229, #233);
-  a `RateLimitedError` from the dial itself still means "not yet".
+- **`reserve_dial(session, project_id=, call_id=, from_number=, default_calls_per_second=)`**
+  takes both of a dial's slots under `call_id`, or neither, and answers a
+  `DialCheck` (`allowed`, `limit`, `max`, `retry_after_ms`) instead of raising.
+  Both counts are sets, so `place_outbound_call(call_id=)` re-admits a reserved
+  call without counting it twice: a campaign worker asks *and* takes in one
+  step and is never refused (#233). A question that took nothing could not
+  promise that — two workers both heard "yes". `admit_outbound_call` is the
+  same reservation answering 429; `release_dial` gives back an unused one.
 
 Tests: `tests/integration/test_live_call_limit.py` on the #214 harness, with
 a second server **process** (`tests/harness/second_instance.py`) on the same
@@ -797,7 +802,7 @@ CONTEXT.md). The API records one; `turncall-campaign-worker` — its own process
 same image, never the API's event loop (ADR-0018's reason) — dials it.
 
 ```
-POST /v1/campaigns                    # {name, agent_id, from_number_id, timezone?, calling_window?, retry_policy?, targets: [{number, variables?, timezone?}]}
+POST /v1/campaigns                    # {name, agent_id | agents: [{agent_id, weight}], from_number_id, timezone?, calling_window?, retry_policy?, targets: [{number, variables?, timezone?}]}
 GET  /v1/campaigns                    # ?page= ?limit=; each with target counts per status
 GET  /v1/campaigns/{id}
 GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target status, call_id, ended_reason, error
@@ -808,12 +813,38 @@ GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target stat
   Never inferred from the number (a ported mobile keeps its area code). Each
   target stores its resolved zone, for #230's calling window. A number twice in
   one campaign is a 422; at most 10,000 targets a request.
+- **Weighted agents** (#234): `agents` (2-10, weights summing to 100) instead of
+  `agent_id` — exactly one of the two, else 422; an agent not in the project is
+  404. Each target is assigned at create by `services/weighted_routing`'s
+  `pick_agent_by_weight(weights, number)` — the phone-number A/B rule, a pure
+  function of the number and the weights — stored as the target's `agent_id`
+  and dialled as that agent. The campaign keeps the weights as
+  `agent_weights` (read back as `agents`) and has `agent_id` null. A target
+  from before #234 has no `agent_id` and dials as its campaign's.
+- **Start and finish** (#234) are `campaigns/lifecycle.start` and
+  `lifecycle.finish_if_done` — the **one** place a campaign moves to `running`
+  or `completed`, each a guarded UPDATE that dispatches `campaign.started` /
+  `campaign.completed` (see Webhook Events) only when it made the move.
+  Finished means no target open (`campaign_repo.complete_if_done`); anything
+  that leaves the last target terminal calls `finish_if_done`.
 - **Variables** go into the call's `metadata.template_variables`, which the
   media stream renders exactly as it renders call-init's; the metadata also
   carries `campaign_id` + `campaign_target_id`.
 - **Every dial is `place_outbound_call`**, so suppression and the limits hold
-  as for a single API dial. The worker asks `limits.may_dial` before claiming
-  and stops the campaign's pass on "no"; a `429` from the dial itself unclaims.
+  as for a single API dial.
+- **Pacing** (#233): before claiming, the worker `reserve_dial`s under the call
+  id it will dial with, so a campaign is never refused by either limit, however
+  many workers race. A "no" ends that campaign's pass; a rate limit's
+  `retry_after_ms` comes back out of `run_pass`, and `serve` sleeps that long
+  instead of the poll, so a campaign dials *at* the number's CPS. A project
+  with no CPS set paces at `CAMPAIGN_DEFAULT_CALLS_PER_SECOND` (default `1`,
+  Twilio's default account rate — past it Twilio queues the dials and they
+  ring late; a set limit always wins, `0` turns the floor off). A suppressed or
+  failed dial gives its reservation back, so it costs no slot — and so does a
+  target the calling window defers (#230): the reservation is taken before the
+  claim, and a deferral dials nothing under it. A `429` from the
+  dial itself is left only for a reservation that lapsed (a >1 s stall between
+  reserve and dial): it unclaims and logs `campaign_reservation_lapsed`.
 - **Target states** (`domain/enums.CampaignTargetStatus`): `pending` →
   `dialling` (claimed) → `calling` (dialled; `attempts` +1, `call_id`) →
   `completed` with the call's `ended_reason` (read through `call_view`, settled
@@ -853,18 +884,18 @@ GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target stat
   (default 2). The database is the work; the list only wakes it, so a lost push
   costs one poll. A stop is honoured between passes.
 
-Not yet: pause/resume/cancel and the janitor (#232), pacing beyond the limits
-(#233), weighted agents and start/finish events (#234). Until #233, a project with no live-call limit is
-dialled as fast as one pass can go.
+Not yet: pause/resume/cancel and the janitor (#232). Concurrency with no
+`live_calls` limit is the pace times the calls' length.
 
 Key files: `campaigns/dialer.py`, `campaigns/worker.py`, `campaigns/queue.py`,
-`campaigns/schedule.py`, `api/v1/campaigns.py`,
+`campaigns/schedule.py`, `campaigns/lifecycle.py`, `api/v1/campaigns.py`,
 `storage/repositories/campaign_repo.py`. Tests:
-`tests/integration/test_campaigns.py` (the worker's pass against the fake
-carrier; `answer_outbound_call` picks up a dialled call),
-`tests/integration/test_campaign_schedule.py` (a clock stepped across a DST
-change, four zones; each retryable ending's spacing and attempts, `voicemail`
-by recording the detector's event), `tests/unit/test_campaign_schedule.py`.
+`tests/integration/test_campaigns.py` and `test_campaign_agents_and_events.py`
+(the worker's pass against the fake carrier; `answer_outbound_call` picks up a
+dialled call), `tests/integration/test_campaign_schedule.py` (a clock stepped
+across a DST change, four zones; each retryable ending's spacing and attempts,
+`voicemail` by recording the detector's event),
+`tests/unit/test_campaign_schedule.py`.
 
 ## Takeaways (Structured Outputs)
 
@@ -1386,6 +1417,7 @@ Subscribers (`POST /v1/webhooks`) receive a signed envelope per event:
   "call_id": "uuid | null",
   "session_id": "uuid | null",   // set on sms/chat events
   "eval_run_id": "uuid | null",  // set on eval.run.* events (#76)
+  "campaign_id": "uuid | null",  // set on campaign.* events (#234)
   "agent_id": "uuid | null",     // the call's active agent (handoff-aware); null for an inline agent
   "event_id": "uuid",            // unique; stable across retries → dedupe key
   "timestamp": "ISO-8601",
@@ -1484,6 +1516,15 @@ never has to call back. Same precedent as `call.ended`, and the reason
 run dispatches it too: accepted-then-silent would leave a subscriber waiting on
 a terminal event forever. The run id is in the **envelope**, never the payload;
 `agent_id` resolves as always and is null for an inline target.
+
+`campaign.started` / `campaign.completed` are the campaign pair (#234), the
+same shape one level over: the payload is the campaign's read (`GET
+/v1/campaigns/{id}` less its `id`) — status, agent or weights, target counts
+per status, timestamps — and `campaign_id` rides in the envelope. `agent_id` is
+the campaign's agent, null for a weighted one. Each is sent once, by whichever
+worker's guarded UPDATE made the move, after its commit
+(`campaigns/lifecycle.py`). Per-target outcomes stay on `GET .../targets`, not
+in the payload: a list of 10,000 is not a webhook.
 
 Key files: `events/webhook_delivery.py` (envelope + signing + retry),
 `events/dispatcher.py` (agent_id/event_id resolution), `domain/call_state.py`

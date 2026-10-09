@@ -48,10 +48,14 @@ async def place_outbound_call(
     from_number_id: UUID,
     to_number: str,
     metadata: dict[str, Any],
+    call_id: UUID | None = None,
 ) -> CallRow:
     """Dial `to_number` from one of the project's numbers, as `agent_id`.
 
-    Returns the call row, `initiated` and carrying the carrier's call SID.
+    `call_id` is the id a campaign reserved its slots under
+    (`limits.reserve_dial`), which the admission here then finds already
+    taken; the limits are still checked, never skipped. Returns the call row,
+    `initiated` and carrying the carrier's call SID.
     """
     settings = get_settings()
 
@@ -108,7 +112,7 @@ async def place_outbound_call(
     # Last, so a dial refused for any other reason holds no slot. The slot is
     # the call's from here: freed when it ends (a status callback, or the media
     # stream's hold), or at once if the dial never happens.
-    call_id = uuid4()
+    call_id = call_id or uuid4()
     await admit_outbound_call(
         session,
         project_id=project_id,

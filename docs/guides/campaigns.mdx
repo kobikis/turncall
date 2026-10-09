@@ -38,6 +38,19 @@ curl -X POST https://api.example.com/v1/campaigns \
 - **`timezone`** is required for every target — on the target itself, or as the campaign's default. It must be an IANA name such as `America/New_York`. A target with neither is refused (`422`). TurnCall never guesses a zone from the number: a ported mobile keeps its area code wherever its owner lives, and the target's local time is what calling hours are read in.
 - A number listed twice is refused: it would call the same person twice. Up to 10,000 targets per request.
 
+## A/B test agents
+
+Instead of `agent_id`, give `agents` — two to ten agents with weights that sum to 100 — and the targets are split between them:
+
+```json
+"agents": [
+  {"agent_id": "AGENT_A", "weight": 50},
+  {"agent_id": "AGENT_B", "weight": 50}
+]
+```
+
+Each target is assigned its agent when the campaign is created, by its number — the same rule as [phone-number A/B routing](/guides/ab-testing), so the same list with the same weights always splits the same way, and a number that calls you back on an A/B-routed line reaches the agent that called it. The assignment is the target's `agent_id`; each call's `agent_id` and `call.ended` say who called. Send exactly one of `agent_id` and `agents`.
+
 The response is the campaign, `queued` until the worker reaches it, with its targets counted by status.
 
 ## Calling windows
@@ -81,6 +94,39 @@ curl https://api.example.com/v1/campaigns/$CAMPAIGN_ID/targets?status=failed \
 
 Each call also carries `campaign_id` and `campaign_target_id` in its `metadata`, so `call.ended` webhooks tie back to the target. The campaign moves from `running` to `completed` once no target is left to dial.
 
+## Events
+
+Webhook subscribers (`POST /v1/webhooks`) get two campaign events, each once:
+
+| Event | When |
+|-------|------|
+| `campaign.started` | The worker picked the campaign up — it is `running` |
+| `campaign.completed` | No target is left to dial |
+
+The payload is the campaign as `GET /v1/campaigns/{id}` returns it — status, agent or weights, target counts per status, timestamps — and the envelope carries `campaign_id` (null on every other event). Per-target results are on `GET /v1/campaigns/{id}/targets`.
+
+```json
+{
+  "event": "campaign.completed",
+  "campaign_id": "…",
+  "call_id": null,
+  "agent_id": "…",
+  "payload": {
+    "name": "October renewals",
+    "status": "completed",
+    "targets": {"pending": 0, "dialling": 0, "calling": 0, "completed": 412, "suppressed": 9, "failed": 1},
+    "started_at": "…",
+    "completed_at": "…"
+  }
+}
+```
+
 ## How it paces
 
-Every dial — a first attempt or a retry — goes through the same path as `POST /v1/calls/outbound`. The worker asks your project's limits before every dial and waits while you are at `live_calls`; it picks up again as calls end. Set `outbound_calls_per_second` too if your carrier caps how fast a number may dial — without a live-call limit, a campaign dials as fast as it can.
+Every dial — a first attempt or a retry — goes through the same path as `POST /v1/calls/outbound`, and a campaign is never refused by your [limits](/guides/limits): before each dial the worker *reserves* the call's live-call slot and its place in the number's calls-per-second window, so several workers — or a worker and your own API dials — never race each other into a `429`.
+
+- **At `live_calls`**, the campaign waits and picks up again as calls end.
+- **At `outbound_calls_per_second`**, it comes back the moment the number's one-second window frees: a number limited to 5 dials five a second, not one per poll.
+- **With no rate set**, a campaign dials one call a second from each number (`CAMPAIGN_DEFAULT_CALLS_PER_SECOND`, default `1` — Twilio's default rate for an account, past which Twilio queues your calls and they ring late). Set `outbound_calls_per_second` to go faster, or `0` on that variable to turn the floor off.
+
+With no `live_calls` limit, how many calls run at once is the pace times how long your calls last — set one if your agent's backends have a ceiling.

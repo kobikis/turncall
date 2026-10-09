@@ -21,6 +21,15 @@ from tests.integration.limits_support import SCRIPT, limited_project
 
 pytestmark = pytest.mark.integration
 
+
+@pytest.fixture(autouse=True)
+def _unpaced(monkeypatch: Any) -> None:
+    """No calls-per-second floor (#233): these tests are about when a target
+    may be dialled, so one pass dials every target that is due. Pace is
+    test_campaigns.py's."""
+    monkeypatch.setenv("CAMPAIGN_DEFAULT_CALLS_PER_SECOND", "0")
+
+
 WINDOW = {
     "start": "09:00",
     "end": "17:00",
@@ -136,6 +145,65 @@ async def test_no_target_is_dialled_outside_its_own_window(monkeypatch, redis_en
         assert 9 <= local.hour < 17
         assert targets[number]["status"] == "calling"
         assert targets[number]["attempts"] == 1
+
+
+async def test_a_deferred_target_gives_its_dial_reservation_back(
+    monkeypatch, redis_env
+):
+    """Windows and pacing compose (#230, #233): the pass reserves a dial's
+    live-call slot and calls-per-second place before it claims, and a target
+    the window defers dials nothing under them — so they go back, and the next
+    due target dials in the same pass. Held, one live call and one call a
+    second would leave the open target waiting behind three closed ones."""
+    from uuid import UUID
+
+    from turncall.services import limits
+    from turncall.storage.redis import get_redis
+
+    clock = Clock(_utc(2026, 11, 2, 10))  # Monday: 10:00 in London only
+    closed = {
+        _number(): z for z in ("America/New_York", "Asia/Tokyo", "Australia/Sydney")
+    }
+    london = _number()
+    async with run_app(
+        SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        agent_id, caller_id, number_id = await limited_project(
+            app, live_calls=1, outbound_calls_per_second=1
+        )
+        r = await app.api.post(
+            "/v1/campaigns",
+            json={
+                "name": "london first",
+                "agent_id": agent_id,
+                "from_number_id": number_id,
+                "calling_window": WINDOW,
+                "targets": [
+                    *({"number": n, "timezone": z} for n, z in closed.items()),
+                    {"number": london, "timezone": "Europe/London"},
+                ],
+            },
+        )
+        assert r.status_code == 201, r.text
+        campaign_id = r.json()["data"]["id"]
+
+        await _pass(clock)
+        dialled = [d.params["to_number"] for d in _dials(app, caller_id)]
+        targets = await _targets(app, campaign_id)
+        held = await get_redis().zrange(
+            limits._live_calls_key(UUID(app.project_id)), 0, -1
+        )
+
+    assert dialled == [london]
+    assert targets[london]["status"] == "calling"
+    # The only slot held is the London call's own.
+    assert [h.decode() if isinstance(h, bytes) else h for h in held] == [
+        targets[london]["call_id"]
+    ]
+    for number, zone in closed.items():
+        assert targets[number]["status"] == "pending"
+        assert targets[number]["attempts"] == 0
+        assert _parse(targets[number]["next_attempt_at"]) > clock.now, zone
 
 
 async def test_a_campaign_with_no_window_dials_at_any_hour(monkeypatch, redis_env):

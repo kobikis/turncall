@@ -31,11 +31,19 @@ async def serve(
     poll_seconds: int,
     clock: Clock = system_clock,
 ) -> None:
-    """Run passes until `stop` is set, waking early when a campaign is created."""
+    """Run passes until `stop` is set, waking early when a campaign is created.
+
+    A pass a rate limit cut short is followed by the next as soon as the limit
+    frees (#233), so a campaign keeps the number's pace instead of one poll's.
+    """
     while not stop.is_set():
-        await run_pass(session_factory, clock=clock)
+        rate_wait = await run_pass(session_factory, clock=clock)
         if stop.is_set():
             return
+        if rate_wait is not None and rate_wait < poll_seconds:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=rate_wait)
+            continue
         try:
             await campaign_queue.wait(redis, timeout=poll_seconds)
         except Exception:

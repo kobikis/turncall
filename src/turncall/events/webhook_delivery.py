@@ -36,6 +36,8 @@ class WebhookEvent:
     # text session. Additive and nullable exactly as `session_id` was, so no
     # existing subscriber breaks (ADR-0007: identity lives in the envelope).
     eval_run_id: UUID | None = None
+    # A campaign is the fourth (#234), added the same way.
+    campaign_id: UUID | None = None
     agent_id: str | None = None
     event_id: str | None = None
 
@@ -71,6 +73,7 @@ async def deliver_webhook(
             "call_id": str(event.call_id) if event.call_id else None,
             "session_id": str(event.session_id) if event.session_id else None,
             "eval_run_id": str(event.eval_run_id) if event.eval_run_id else None,
+            "campaign_id": str(event.campaign_id) if event.campaign_id else None,
             "agent_id": event.agent_id,
             "event_id": event.event_id,
             "timestamp": datetime.now(UTC).isoformat(),

@@ -128,6 +128,24 @@ and is not part of this repository's history.
   `terminationGracePeriodSeconds` from your agents' durations, not the 30-second
   default; see the Graceful shutdown guide. `GET /metrics` exposes
   `turncall_active_calls`, live calls per process, in Prometheus text format.
+- **Weighted agents and start/finish events on campaigns** (#234). A campaign
+  takes `agents: [{agent_id, weight}]` (weights summing to 100) instead of
+  `agent_id`, and each target is assigned its agent at create by the phone
+  number A/B rule — a hash of its number, so the same list splits the same way
+  every time — readable as the target's `agent_id`. Webhook subscribers get
+  `campaign.started` and `campaign.completed`, each carrying the campaign's
+  read (status and target counts), with the campaign's id in a new nullable
+  envelope field, `campaign_id`. A weighted campaign reads back `agent_id: null`.
+
+- **Campaigns keep a number's pace and are never refused by a limit** (#233).
+  The worker reserves each dial's live-call slot and calls-per-second place
+  before it claims a target, so two workers — or a worker and an API dial —
+  racing one project no longer end in a `429` for the campaign; and it comes
+  back as soon as the number's one-second window frees, so a campaign dials
+  *at* `outbound_calls_per_second` rather than once per poll. With no rate set
+  on the project, a campaign paces at `CAMPAIGN_DEFAULT_CALLS_PER_SECOND`
+  (default `1`, Twilio's default account rate; `0` turns it off) instead of
+  dialling the whole list in one burst.
 
 - **Campaigns: outbound calls to a list** (#229). `POST /v1/campaigns` takes
   one agent, a caller-id number and JSON targets — a number, per-target

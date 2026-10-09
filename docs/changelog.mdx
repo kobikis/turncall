@@ -57,6 +57,17 @@ unanswered, was busy or reached voicemail — each with its own number of
 attempts and spacing, inside the calling window. See
 [Campaigns](/guides/campaigns#retries).
 
+**Campaigns split between agents, and tell you when they start and finish.**
+Give `agents` with weights instead of `agent_id` and each target is assigned an
+agent by its number, the same way phone-number A/B routing does. Subscribers get
+`campaign.started` and `campaign.completed`. See
+[Campaigns](/guides/campaigns#a-b-test-agents).
+
+**Campaigns pace themselves.** A campaign dials at your number's
+`outbound_calls_per_second` — never past it, and never past `live_calls`, even
+with several workers — and at one call a second when you set no rate. See
+[How it paces](/guides/campaigns#how-it-paces).
+
 **`openai_live` agents with tools work out of the box.** An agent with tools and
 no `s2s.delegation` block now delegates to its own `llm` (`"mode": "client"`),
 with your keys, running your webhook and MCP tools — `end_call`, `do_not_call`

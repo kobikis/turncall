@@ -822,7 +822,13 @@ class CampaignRow(Base):
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    agent_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    # Null for a weighted campaign (#234), whose `agent_weights` —
+    # `[{agent_id, weight}]`, a phone number's `routing_weights` shape — assign
+    # each target its agent at create.
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    agent_weights: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     from_number_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), nullable=False
     )
@@ -873,6 +879,12 @@ class CampaignTargetRow(Base):
     e164_number: Mapped[str] = mapped_column(String(20), nullable=False)
     variables: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     timezone: Mapped[str] = mapped_column(String(64), nullable=False)
+    # The agent that calls this target, assigned at create (#234): the
+    # campaign's own, or its weights' pick for this number. No foreign key, like
+    # the campaign's. Null only on a target from before #234.
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_attempt_at: Mapped[datetime | None] = mapped_column(

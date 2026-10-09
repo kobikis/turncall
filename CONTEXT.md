@@ -269,7 +269,8 @@ stream, WebRTC, WhatsApp).
 
 **Campaign**:
 A set of outbound calls one agent places to a list of targets, paced and retried by
-the platform; the unit an operator starts, pauses and cancels.
+the platform; the unit an operator starts, pauses and cancels. The agent may be a
+weighted split between agents, each target assigned one by its number.
 _Avoid_: "batch", "broadcast", "dialer list".
 
 **Concurrency limit** (vs **rate limit**):
