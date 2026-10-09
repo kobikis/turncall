@@ -7,9 +7,9 @@ Smart Turn off and was handed pipecat's defaults still waited on the model,
 after VAD's own `silence_timeout_ms` window. So every pipeline that has turn
 strategies of its own passes an explicit stop strategy (`vad_turn_stop`).
 
-**Each Smart Turn analyzer loads its own ONNX session** (#271): about 36 MiB of
-the ~115 MiB a call costs (measured, `docs/guides/capacity.mdx`) for identical
-weights. The session holds only the model; what a call has heard — its audio
+**Each Smart Turn analyzer loads its own ONNX session** (#271): 36 MiB of
+identical weights plus ONNX Runtime's per-session inference buffers — sharing
+it took a call from ~123 MiB to ~45 (measured, `docs/guides/capacity.mdx`). The session holds only the model; what a call has heard — its audio
 buffer, its speech state, its executor thread — lives on the analyzer, which
 stays per call. ONNX Runtime's `run()` is safe to call from several threads at
 once, and each analyzer runs the model on its own thread, so calls never queue

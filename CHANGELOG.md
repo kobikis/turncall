@@ -413,10 +413,19 @@ and is not part of this repository's history.
   model below.
 
 - **One Smart Turn model per process** (#271). Every call loaded its own ONNX
-  session of the same Smart Turn weights — about 36 MiB of the ~115 MiB a call
-  cost. The session is now loaded once and shared; each call keeps its own
-  audio buffer and speech state. That covers S2S on server-side VAD too, where
+  session of the same Smart Turn weights, plus the inference buffers ONNX
+  Runtime keeps per session. The session is now loaded once and shared; each
+  call keeps its own audio buffer and speech state. Measured per call on a pod:
+  ~123 MiB before, ~45 MiB after. That covers S2S on server-side VAD too, where
   pipecat builds its default Smart Turn analyzer on every call.
+
+- **No full garbage collection pause across every call** (#270). From about 6
+  calls a pod, a full collection ran every couple of minutes and paused the
+  whole process — every call's audio at once — for 300–800 ms, scanning
+  objects (pipecat and its imports) that live as long as the process. The app
+  now freezes its startup heap (`gc.freeze()`) before serving, so those objects
+  are never scanned again; in the same load run no full collection happened at
+  all, and the longest audio gap at 6–8 calls fell from 230–350 ms to ~70 ms.
 
 - **A campaign's claim and janitor are index lookups** (#229, #232). The claim
   ordered every pending target by position and filtered out the ones not yet

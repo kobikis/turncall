@@ -53,7 +53,7 @@ api:
   # runs on that one event loop, so each throttle is a gap on every call at
   # once. Under `limits.cpu: 1` a pod carried 1 call cleanly where the same
   # core without a quota carried 2, and a second core of quota did not help
-  # (the loop is single-threaded). Memory: ~205 MiB idle + ~115 MiB per call,
+  # (the loop is single-threaded). Memory: ~265 MiB + ~45 MiB per call (#271),
   # so 1Gi covers the target with room; the limit is higher because hitting it
   # is an OOM kill, which drops every call on the pod at once.
   resources:
