@@ -25,9 +25,11 @@ from turncall.domain.models import (
     resolve_delegation,
 )
 from turncall.orchestrator.deepgram_flux import (
+    MIXED_FLUX_GROUP,
     create_flux_stt,
     flux_turn_strategies,
     is_flux,
+    mixes_flux,
 )
 from turncall.orchestrator.knowledge_processor import KnowledgeTool, knowledge_tool
 from turncall.orchestrator.observability import ObservabilityProcessor
@@ -347,7 +349,14 @@ def _create_stt_stage(
     config: AgentConfig, credentials: Credentials, *, sample_rate: int
 ) -> Any:
     """The call's STT: the service itself, or it and its backups (#223). Each
-    entry is built as `stt` would be, so its model resolves on its own terms."""
+    entry is built as `stt` would be, so its model resolves on its own terms.
+
+    A group mixing Flux with other models is refused here as well as at the
+    API: a call-init inline agent reaches the build without passing the API's
+    schema, and the call then fails at build, saying why, rather than leaving
+    every turn after a switch on a 5s timeout."""
+    if mixes_flux(config.stt):
+        raise ValueError(MIXED_FLUX_GROUP)
     stt = _create_stt_service(config, credentials, sample_rate=sample_rate)
     if not config.stt.failover:
         return stt

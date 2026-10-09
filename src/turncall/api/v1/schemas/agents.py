@@ -27,7 +27,7 @@ from turncall.domain.providers import (
     STT_PROVIDERS,
     TTS_PROVIDERS,
 )
-from turncall.orchestrator.deepgram_flux import is_flux
+from turncall.orchestrator.deepgram_flux import MIXED_FLUX_GROUP, mixes_flux
 
 
 def _refuse_nested_failover(entries: list[Any]) -> None:
@@ -51,22 +51,8 @@ class STTConfigSchema(BaseModel):
     @model_validator(mode="after")
     def validate_failover_flat(self) -> "STTConfigSchema":
         _refuse_nested_failover(self.failover)
-        flux = {
-            s.provider == "deepgram" and is_flux(s.model)
-            for s in (self, *self.failover)
-        }
-        if len(flux) > 1:
-            # Turn handling is chosen once, at build, from the primary (#204):
-            # Flux ends turns itself, the others need VAD + Smart Turn. After
-            # a switch across the line nothing would end the caller's turns
-            # but pipecat's 5s timeout.
-            msg = (
-                "stt.failover cannot mix Deepgram Flux (flux-*) with other "
-                "STT models: Flux decides when the caller's turn ends and the "
-                "others do not, so a switch between them would leave every "
-                "turn waiting on a 5s timeout"
-            )
-            raise ValueError(msg)
+        if mixes_flux(self):
+            raise ValueError(MIXED_FLUX_GROUP)
         return self
 
     @model_validator(mode="after")

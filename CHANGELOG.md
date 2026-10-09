@@ -419,6 +419,13 @@ and is not part of this repository's history.
   error, and cancellation is not one, so a call torn down in that window — a
   forced shutdown, a caller gone at once — left its dedicated connection open.
 
+- **A call-init inline agent cannot mix Deepgram Flux into an STT failover
+  group either** (#223, #204). The API refused such a group in both
+  directions, but an inline agent from call-init never passes the API's
+  schema, so it reached the build and a switch across the Flux line left every
+  turn waiting on pipecat's 5s timeout. The build applies the same rule now and
+  the call fails with `pipeline_error`, saying why.
+
 - **A request's writes are committed before its response is sent.** The
   request session committed in a yield dependency, which FastAPI runs *after*
   the response by default — so Twilio could open the media stream named in the

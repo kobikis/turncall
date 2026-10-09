@@ -355,6 +355,34 @@ class TestBuild:
             "assemblyai/universal-streaming-multilingual"
         )
 
+    @pytest.mark.parametrize(
+        "stt",
+        [
+            {
+                "model": "flux-general-en",
+                "failover": [{"provider": "deepgram", "model": "nova-3-general"}],
+            },
+            {
+                "provider": "deepgram",
+                "failover": [{"provider": "deepgram", "model": "flux-general-en"}],
+            },
+            {
+                "model": "flux-general-en",
+                "failover": [{"provider": "openai"}],
+            },
+        ],
+        ids=["flux-then-nova", "nova-then-flux", "flux-then-openai"],
+    )
+    def test_a_mixed_flux_group_never_builds(self, stt: dict) -> None:
+        """Either direction, and whichever way the config arrived: a stored
+        agent is refused at the API (422), but a call-init inline agent never
+        passes through it — it reaches the build as a plain domain config."""
+        with pytest.raises(ValidationError, match="Flux"):
+            STTConfigSchema.model_validate(stt)
+        config = AgentConfig.model_validate({"stt": stt})
+        with pytest.raises(ValueError, match="Flux"):
+            _create_stt_stage(config, creds("sk", deepgram="dg"), sample_rate=8000)
+
     def test_flux_only_group_builds_flux_members(self) -> None:
         from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
 

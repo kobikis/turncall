@@ -32,6 +32,30 @@ def is_flux(model: str) -> bool:
     return str(model).startswith(_FLUX_PREFIX)
 
 
+# Turn handling is chosen once, at build, from the primary STT (#204): Flux
+# ends turns itself, the others need VAD + Smart Turn. After a failover switch
+# across that line nothing would end the caller's turns but pipecat's 5s
+# timeout, so a group is all Flux or none.
+MIXED_FLUX_GROUP = (
+    "stt.failover cannot mix Deepgram Flux (flux-*) with other STT models: "
+    "Flux decides when the caller's turn ends and the others do not, so a "
+    "switch between them would leave every turn waiting on a 5s timeout"
+)
+
+
+def mixes_flux(stt: Any) -> bool:
+    """Whether an STT config and its failover entries straddle Flux."""
+    return (
+        len(
+            {
+                entry.provider == "deepgram" and is_flux(entry.model)
+                for entry in (stt, *stt.failover)
+            }
+        )
+        > 1
+    )
+
+
 def create_flux_stt(
     *,
     api_key: str,
