@@ -134,6 +134,40 @@ services:
       redis:
         condition: service_healthy
 
+  # The campaign worker (#229): the same image again, its own process for the
+  # eval worker's reason — a campaign is a loop that runs for hours, and the
+  # API's event loop carries live calls. It dials through Twilio, so it needs
+  # the API's PUBLIC_BASE_URL (from .env) for the call's webhooks. Restarts on
+  # a change under src/ like the eval worker; SIGINT is honoured between
+  # passes, so a dial in progress is recorded before it exits.
+  campaign-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command:
+      - watchfiles
+      - --target-type=command
+      - --filter=python
+      - turncall-campaign-worker
+      - /app/src
+    env_file:
+      - ../.env
+    environment:
+      TURNCALL_ENV: development
+      DATABASE_URL: postgresql+asyncpg://turncall:turncall@postgres:5432/turncall
+      REDIS_URL: redis://redis:6379/0
+      API_KEY_HASH_SECRET: turncall-local-dev-pepper-do-not-change
+      PYTHONPATH: /app/src
+    volumes:
+      - ../src:/app/src
+    networks:
+      - turncall_nw
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 networks:
   turncall_nw:
     external: false

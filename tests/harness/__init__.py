@@ -26,7 +26,8 @@ Pieces
   `place_inbound_call` (POST the number's configured voice URL, open the
   `<Stream>`), and `TwilioCall`: 20ms mulaw frames at real-time pace, silence
   unless `say(ms)`, `wait_for_agent_speech(n)`, `closed`, `hang_up()`,
-  `finish()` (the `completed` status callback).
+  `finish()` (the `completed` status callback). `answer_outbound_call(carrier,
+  http, dial)` picks up a call the app dialled (a recorded `dial` action).
 - `app.py` — `run_app(script, set_env=, set_attr=)`: the real app under uvicorn
   in the test's loop, a fresh project + admin key via the platform endpoints, a
   `WebhookSink` subscribed to `*` that verifies signatures. Skips when Postgres
@@ -41,7 +42,8 @@ Extending it
   (#201) then runs one `Script` per carrier and compares outcomes.
 - Outbound, limits, suppression, campaigns: `POST /v1/calls` and friends on
   `Harness.api`; assert on `carrier.actions_of("dial")` (an empty list is the
-  suppression proof). A controllable clock is the campaign ticket's to add.
+  suppression proof). Campaigns: drive the worker's own pass,
+  `campaigns.dialer.run_pass(session_factory, clock=...)`, with a fixed clock.
 - Load (#200): in a separate server process, call `install_stub_providers(
   script)` and `FakeCarrier().install()` with the default `setattr`, then run
   the app — no production code path knows the stubs exist — and drive it
@@ -55,7 +57,13 @@ agent speech is the same tone, `Script.tts_ms_per_word` long per word.
 from tests.harness.app import HARNESS_AGENT, Harness, WebhookSink, run_app
 from tests.harness.carrier import CarrierAction, FakeCarrier
 from tests.harness.stubs import Script, ToolCall, install_stub_providers
-from tests.harness.twilio import TwilioCall, place_inbound_call, post_signed, sign
+from tests.harness.twilio import (
+    TwilioCall,
+    answer_outbound_call,
+    place_inbound_call,
+    post_signed,
+    sign,
+)
 
 __all__ = [
     "HARNESS_AGENT",
@@ -66,6 +74,7 @@ __all__ = [
     "ToolCall",
     "TwilioCall",
     "WebhookSink",
+    "answer_outbound_call",
     "install_stub_providers",
     "place_inbound_call",
     "post_signed",

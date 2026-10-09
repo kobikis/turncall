@@ -42,6 +42,7 @@ src/turncall/
   domain/          # Enums, immutable models, call + session state machines
   events/          # Webhook delivery, server events, signing
   orchestrator/    # Pipecat pipeline: serializer, factory, session, tools, VAD, smart turn
+  campaigns/       # Campaign worker: dialler pass, process entrypoint, wake-up list
   services/        # Call control, SMS/chat orchestration, WhatsApp chat, LLM text completion, template rendering, document ingestion, retrieval, weighted routing, post-call analysis
   storage/         # SQLAlchemy models, repositories, database/redis
   adapters/        # Object storage (local filesystem, S3)
@@ -562,6 +563,58 @@ Tests: `tests/integration/test_live_call_limit.py` on the #214 harness, with
 a second server **process** (`tests/harness/second_instance.py`) on the same
 Postgres and Redis — two apps in one interpreter share every global, so they
 cannot show "across servers".
+
+## Campaigns
+
+A set of outbound calls one agent places to a list of targets (#229,
+CONTEXT.md). The API records one; `turncall-campaign-worker` — its own process,
+same image, never the API's event loop (ADR-0018's reason) — dials it.
+
+```
+POST /v1/campaigns                    # {name, agent_id, from_number_id, timezone?, targets: [{number, variables?, timezone?}]}
+GET  /v1/campaigns                    # ?page= ?limit=; each with target counts per status
+GET  /v1/campaigns/{id}
+GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target status, call_id, ended_reason, error
+```
+
+- **Timezone required**, IANA names only (`zoneinfo.available_timezones()`),
+  on each target or as the campaign default — a target with neither is a 422.
+  Never inferred from the number (a ported mobile keeps its area code). Each
+  target stores its resolved zone, for #230's calling window. A number twice in
+  one campaign is a 422; at most 10,000 targets a request.
+- **Variables** go into the call's `metadata.template_variables`, which the
+  media stream renders exactly as it renders call-init's; the metadata also
+  carries `campaign_id` + `campaign_target_id`.
+- **Every dial is `place_outbound_call`**, so suppression and the limits hold
+  as for a single API dial. The worker asks `limits.may_dial` before claiming
+  and stops the campaign's pass on "no"; a `429` from the dial itself unclaims.
+- **Target states** (`domain/enums.CampaignTargetStatus`): `pending` →
+  `dialling` (claimed) → `calling` (dialled; `attempts` +1, `call_id`) →
+  `completed` with the call's `ended_reason` (read through `call_view`, settled
+  at the next pass after the call ends), or `suppressed` / `failed` (`error`
+  says why) straight from `dialling`. Every move is a guarded UPDATE from the
+  state it expects. The claim (`SKIP LOCKED`, so several workers share one
+  campaign) is **committed before the dial**, and the call row and the move to
+  `calling` commit together: a worker that dies mid-dial leaves `dialling`, never
+  a silent redial — reclaiming it is #232's janitor's call. Statuses are
+  strings, not a PG enum, so #231/#232 add states without `ALTER TYPE`.
+- **The clock is injected** (`campaigns.dialer.Clock`); due means
+  `next_attempt_at` null or `<=` now. #230 (windows) and #231 (retry spacing)
+  set `next_attempt_at`; nothing reads wall time directly.
+- **The worker** (`campaigns/worker.serve`) runs a pass, then waits on a Redis
+  list that `POST /v1/campaigns` pushes to, at most `CAMPAIGN_POLL_SECONDS`
+  (default 2). The database is the work; the list only wakes it, so a lost push
+  costs one poll. A stop is honoured between passes.
+
+Not yet: calling windows (#230), retries (#231), pause/resume/cancel and the
+janitor (#232), pacing beyond the limits (#233), weighted agents and
+start/finish events (#234). Until #233, a project with no live-call limit is
+dialled as fast as one pass can go.
+
+Key files: `campaigns/dialer.py`, `campaigns/worker.py`, `campaigns/queue.py`,
+`api/v1/campaigns.py`, `storage/repositories/campaign_repo.py`. Tests:
+`tests/integration/test_campaigns.py` (the worker's pass against the fake
+carrier; `answer_outbound_call` picks up a dialled call).
 
 ## Takeaways (Structured Outputs)
 

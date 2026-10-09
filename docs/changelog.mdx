@@ -7,6 +7,13 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**Campaigns — one agent calls a list.** `POST /v1/campaigns` with JSON
+targets (a number, its own variables for the agent, and a timezone), and the
+new `turncall-campaign-worker` process dials each one once, skipping your
+suppression list and staying inside the project's live-call limit. Each
+target's status is on `GET /v1/campaigns/{id}/targets`. See
+[Campaigns](/guides/campaigns).
+
 **`openai_live` agents with tools work out of the box.** An agent with tools and
 no `s2s.delegation` block now delegates to its own `llm` (`"mode": "client"`),
 with your keys, running your webhook and MCP tools — `end_call`, `do_not_call`

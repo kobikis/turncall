@@ -27,7 +27,7 @@ import httpx
 import websockets
 from twilio.request_validator import RequestValidator
 
-from tests.harness.carrier import FakeCarrier
+from tests.harness.carrier import CarrierAction, FakeCarrier
 from tests.harness.stubs import tone
 
 SAMPLE_RATE = 8000
@@ -70,6 +70,10 @@ class TwilioCall:
     stream_sid: str
     twiml: str
     _ws: websockets.ClientConnection
+    # Where `finish` reports the ending: the dial's own callback for an
+    # outbound call, else the called number's configured one.
+    status_callback_url: str = ""
+    direction: str = "inbound"
     _outgoing: asyncio.Queue[bytes] = field(default_factory=asyncio.Queue)
     _loud_at: list[float] = field(default_factory=list)  # agent audio arrival times
     _tasks: list[asyncio.Task] = field(default_factory=list)
@@ -118,12 +122,15 @@ class TwilioCall:
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
-        number = self.carrier.number(self.to_number)
-        if number.status_callback_url:
+        url = (
+            self.status_callback_url
+            or self.carrier.number(self.to_number).status_callback_url
+        )
+        if url:
             await post_signed(
                 self.http,
                 self.carrier,
-                number.status_callback_url,
+                url,
                 self._params(CallStatus=status, CallDuration="1"),
             )
 
@@ -134,7 +141,7 @@ class TwilioCall:
             "CallSid": self.call_sid,
             "From": self.from_number,
             "To": self.to_number,
-            "Direction": "inbound",
+            "Direction": self.direction,
             **extra,
         }
 
@@ -204,6 +211,43 @@ async def place_inbound_call(
         "From": from_number,
         "To": to_number,
     }
+    return await _connect(carrier, http, voice_url, params)
+
+
+async def answer_outbound_call(
+    carrier: FakeCarrier, http: httpx.AsyncClient, dial: CarrierAction
+) -> TwilioCall:
+    """The callee picks up a call TurnCall dialled: POST the dial's webhook
+    URL, then open the stream its TwiML asks for. `finish` reports to the
+    dial's status callback."""
+    params = {
+        "AccountSid": carrier.account_sid,
+        "ApiVersion": "2010-04-01",
+        "CallSid": dial.params["call_sid"],
+        "CallStatus": "in-progress",
+        "Direction": "outbound-api",
+        "From": dial.params["from_number"],
+        "To": dial.params["to_number"],
+    }
+    return await _connect(
+        carrier,
+        http,
+        dial.params["webhook_url"],
+        params,
+        status_callback_url=dial.params["status_callback_url"] or "",
+    )
+
+
+async def _connect(
+    carrier: FakeCarrier,
+    http: httpx.AsyncClient,
+    voice_url: str,
+    params: dict[str, str],
+    *,
+    status_callback_url: str = "",
+) -> TwilioCall:
+    """POST the voice URL, then open the `<Stream>` and start the media."""
+    call_sid, from_number, to_number = params["CallSid"], params["From"], params["To"]
     response = await post_signed(http, carrier, voice_url, params)
     response.raise_for_status()
     stream = ET.fromstring(response.text).find("./Connect/Stream")
@@ -223,6 +267,8 @@ async def place_inbound_call(
         stream_sid=stream_sid,
         twiml=response.text,
         _ws=ws,
+        status_callback_url=status_callback_url,
+        direction=params["Direction"],
     )
     await ws.send(
         json.dumps({"event": "connected", "protocol": "Call", "version": "1.0.0"})

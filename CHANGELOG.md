@@ -66,6 +66,19 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Campaigns: outbound calls to a list** (#229). `POST /v1/campaigns` takes
+  one agent, a caller-id number and JSON targets — a number, per-target
+  `variables` (rendered into the agent as `{{name}}`, like call-init's) and an
+  IANA `timezone`, on each target or as the campaign default. A target with
+  neither is refused at create: its local time is what a calling window will be
+  read in, and a zone guessed from the number calls people at night. A new
+  process, `turncall-campaign-worker`, dials each target once through the same
+  dial path as `POST /v1/calls/outbound`, so suppressed numbers are skipped
+  (and marked `suppressed`) and the project's live-call limit is never
+  exceeded. `GET /v1/campaigns/{id}/targets` gives each target's status, call
+  and `ended_reason`. Calling windows, retries, pause/cancel, pacing and
+  weighted agents follow (#230-#234).
+
 - **A messages-per-minute limit per text session** (#226).
   `messages_per_minute` on `PUT /v1/projects/{id}/limits`, with
   `LIMIT_MESSAGES_PER_MINUTE` as the platform default — unlimited unless set —

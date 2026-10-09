@@ -96,6 +96,8 @@ dependencies = [
 # run in the API process -- ADR-0004: event-loop jitter becomes dead air on a
 # live call, and an eval run is exactly the load that causes it.
 turncall-eval-worker = "turncall.evals.worker:main"
+# The campaign worker (#229): same image, its own process, for the same reason.
+turncall-campaign-worker = "turncall.campaigns.worker:main"
 # The CLI (#77). An ordinary API client — same key, same endpoints — whose
 # exit code is what lets a pull request be gated on agent behaviour.
 turncall = "turncall.cli.main:run"
