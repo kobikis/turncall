@@ -52,6 +52,45 @@ class AWSCredential(AWSCredentialSetSchema):
         return self
 
 
+class AsteriskCredential(BaseModel):
+    """A project's own Asterisk, reached over ARI (#209).
+
+    The project's Asterisk numbers ride it instead of the platform's. Defaults
+    match the platform's `ASTERISK_*` ones; see CLAUDE.md, "Carriers".
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    ari_url: str = Field(min_length=1, max_length=2048)
+    username: str = Field(min_length=1, max_length=256)
+    password: str = Field(min_length=1, max_length=4096)
+    app: str = Field(default="turncall", pattern=r"^[A-Za-z0-9_.-]{1,64}$")
+    media_connection: str = Field(default="turncall", pattern=r"^[A-Za-z0-9_.-]{1,64}$")
+    transfer_context: str = Field(
+        default="turncall-transfer", pattern=r"^[A-Za-z0-9_.-]{1,80}$"
+    )
+
+    @field_validator("ari_url")
+    @classmethod
+    def reachable_url(cls, value: str) -> str:
+        from turncall.config.settings import get_settings
+        from turncall.services.url_allowlist import check_url_allowed
+
+        value = value.strip().rstrip("/")
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("ari_url must be the http(s) base of Asterisk's ARI")
+        # TurnCall connects out to it: the same SSRF gate as MCP and BYOM URLs.
+        patterns = get_settings().byom.allowed_url_patterns
+        check_url_allowed(value, patterns, label="ari_url")
+        return value
+
+
+_SCHEMAS: dict[str, type[BaseModel]] = {
+    AWS_ACCOUNT: AWSCredential,
+    "asterisk": AsteriskCredential,
+}
+
+
 def _unprocessable(message: str, details: dict[str, Any] | None = None) -> ApiError:
     return ApiError(
         status_code=422,
@@ -72,7 +111,7 @@ def require_known_provider(provider: str) -> None:
 def parse_credential(provider: str, body: dict[str, Any]) -> dict[str, Any]:
     """Validate a write body for this provider into the document to store."""
     require_known_provider(provider)
-    schema = AWSCredential if provider == AWS_ACCOUNT else ApiKeyCredential
+    schema = _SCHEMAS.get(provider, ApiKeyCredential)
     try:
         parsed = schema.model_validate(body)
     except ValidationError as exc:

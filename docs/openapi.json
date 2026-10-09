@@ -7000,7 +7000,10 @@
           },
           "carrier": {
             "type": "string",
-            "const": "twilio",
+            "enum": [
+              "twilio",
+              "asterisk"
+            ],
             "title": "Carrier",
             "description": "The number's carrier. `provider` is accepted as a deprecated alias for it.",
             "default": "twilio"
@@ -9255,7 +9258,10 @@
             "anyOf": [
               {
                 "type": "string",
-                "const": "twilio"
+                "enum": [
+                  "twilio",
+                  "asterisk"
+                ]
               },
               {
                 "type": "null"

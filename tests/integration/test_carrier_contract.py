@@ -35,11 +35,18 @@ class CarrierEdge:
     The call `ring` returns has the harness's call shape (`say`,
     `wait_for_agent_speech`, `closed`, `hang_up`, `finish`, `call_id`,
     `call_sid`, `agent_utterances`).
+
+    `media_is_the_call`: whether the media stream closing ends the caller's
+    call on the carrier's side. True for Twilio — the stream is the call.
+    False for Asterisk, where the media is a channel of its own beside the
+    caller's, so TurnCall hangs the caller's channel up itself: one REST
+    `hang_up`, on the caller.
     """
 
     name: str
     bind: Callable[[Harness, str], Awaitable[str]]
     ring: Callable[[Harness, str, str], Awaitable[Any]]
+    media_is_the_call: bool = True
 
 
 TWILIO = CarrierEdge(
@@ -49,8 +56,14 @@ TWILIO = CarrierEdge(
         app.carrier, app.api, from_number=from_number, to_number=to_number
     ),
 )
+ASTERISK = CarrierEdge(
+    name="asterisk",
+    bind=lambda app, agent_id: app.bind_asterisk_number(agent_id),
+    ring=lambda app, from_number, to_number: app.ring_asterisk(from_number, to_number),
+    media_is_the_call=False,
+)
 
-CARRIERS = [pytest.param(TWILIO, id=TWILIO.name)]
+CARRIERS = [pytest.param(edge, id=edge.name) for edge in (TWILIO, ASTERISK)]
 
 
 class _MemoryRedis:
@@ -115,15 +128,21 @@ async def test_the_agent_ends_the_call(edge: CarrierEdge, monkeypatch) -> None:
 
     assert [n["carrier"] for n in listed if n["e164_number"] == number] == [edge.name]
     assert call.agent_utterances() == 2  # the greeting, the goodbye
-    assert app.carrier.actions_of("hang_up") == []  # the stream closing is the hangup
+    hang_ups = [a.params["call_sid"] for a in app.carrier.actions_of("hang_up")]
+    assert hang_ups == ([] if edge.media_is_the_call else [call.call_sid])
     assert ended["status"] == "completed"
     assert ended["ended_reason"] == "assistant_ended_call"
     assert ended["provider_call_sid"] == call.call_sid
     said = [(t["role"], t["text"]) for t in ended["transcript"]]
     assert ("customer", "Please end the call.") in said
     assert ("agent", "Goodbye!") in said
-    expected = ["call.initializing", "call.started", "tool.result", "call.ended"]
+    # `end_call` records `call.ended` before its own tool result is stored
+    # (that is written off the reply's path), so only presence is the
+    # contract for the tool. A carrier that reports the end itself (Twilio's
+    # status callback) adds a later `call.ended`; one that does not, does not.
+    expected = ["call.initializing", "call.started", "call.ended"]
     assert _in_order(events, expected), events
+    assert "tool.result" in events
 
 
 @pytest.mark.parametrize("edge", CARRIERS)
@@ -153,6 +172,8 @@ async def test_a_cold_transfer(edge: CarrierEdge, monkeypatch) -> None:
         events = await _events(app, call.call_id)
         transferred = app.sink.of("call.transferred")
 
+    # The transferred caller is the operator's now: never hung up.
+    assert app.carrier.actions_of("hang_up") == []
     assert transfer.params["call_sid"] == call.call_sid
     assert transfer.params["target_number"] == OPERATOR
     assert transfer.params["whisper_url"] is None  # cold: no operator briefing
@@ -160,5 +181,56 @@ async def test_a_cold_transfer(edge: CarrierEdge, monkeypatch) -> None:
     assert [e["payload"]["success"] for e in transferred] == [True]
     assert transferred[0]["payload"]["transfer_mode"] == "cold"
     assert ended["ended_reason"] == "transferred"
-    expected = ["call.started", "call.transferred", "call.ended"]
-    assert _in_order(events, expected), events
+    # `call.ended` is the webhook above; only a carrier that reports the end
+    # itself (Twilio's status callback) also leaves one in the event log.
+    assert _in_order(events, ["call.started", "call.transferred"]), events
+
+
+@pytest.mark.parametrize("edge", CARRIERS)
+async def test_the_caller_hangs_up(edge: CarrierEdge, monkeypatch) -> None:
+    script = Script(caller=(), agent=())
+    async with run_app(
+        script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        number = await edge.bind(app, await app.create_agent(AGENT))
+        call = await edge.ring(app, CALLER, number)
+        await call.wait_for_agent_speech(1)
+        await call.hang_up()
+        ended = (await app.sink.wait_for("call.ended"))["payload"]
+
+    assert app.carrier.actions_of("hang_up") == []  # they hung up, not us
+    assert ended["status"] == "completed"
+    assert ended["ended_reason"] == "customer_ended_call"
+    assert ended["provider_call_sid"] == call.call_sid
+
+
+@pytest.mark.parametrize("edge", CARRIERS)
+async def test_the_api_hangs_up_and_sends_dtmf(edge: CarrierEdge, monkeypatch) -> None:
+    """Live call control reaches the carrier's REST side, on the caller."""
+    async with run_app(
+        Script(caller=(), agent=()),
+        set_env=monkeypatch.setenv,
+        set_attr=monkeypatch.setattr,
+    ) as app:
+        number = await edge.bind(app, await app.create_agent(AGENT))
+        call = await edge.ring(app, CALLER, number)
+        await call.wait_for_agent_speech(1)
+        sent = await app.api.post(
+            f"/v1/calls/{call.call_id}/dtmf", json={"digits": "12#"}
+        )
+        dtmf = await app.carrier.wait_for("send_dtmf")
+        ended = await app.api.post(f"/v1/calls/{call.call_id}/end", json={})
+        hang_up = await app.carrier.wait_for("hang_up")
+        # The carrier ends the caller's call; its media stream goes with it.
+        await call.hang_up()
+        webhook = (await app.sink.wait_for("call.ended"))["payload"]
+
+    assert sent.status_code == 200, sent.text
+    assert (dtmf.params["call_sid"], dtmf.params["digits"]) == (call.call_sid, "12#")
+    assert ended.status_code == 200, ended.text
+    assert [a.params["call_sid"] for a in app.carrier.actions_of("hang_up")] == [
+        call.call_sid
+    ]
+    assert hang_up.params["call_sid"] == call.call_sid
+    assert webhook["status"] == "completed"
+    assert webhook["ended_reason"] == "assistant_ended_call"

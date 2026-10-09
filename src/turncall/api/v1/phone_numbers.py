@@ -20,6 +20,7 @@ from turncall.api.v1.schemas.phone_numbers import (
 )
 from turncall.auth import Auth, WriteAuth
 from turncall.config.settings import Settings, get_settings
+from turncall.domain.carriers import ASTERISK, TWILIO
 from turncall.services import twilio_accounts
 from turncall.services.twilio_accounts import TwilioAccount
 from turncall.storage.repositories import credential_repo, phone_number_repo
@@ -44,7 +45,8 @@ async def bind_phone_number(
 
     server_url_secret = secrets_mod.token_urlsafe(32) if body.server_url else None
     settings = get_settings()
-    number_sid = body.external_number_sid
+    # An Asterisk number has no carrier-side id: the number is its own.
+    number_sid = body.external_number_sid or body.e164_number
     own: StoredTwilioAccount | None = None
     if body.has_own_twilio:
         number_sid, own = await _own_twilio(
@@ -71,7 +73,8 @@ async def bind_phone_number(
     data = PhoneNumberResponse.from_row(row).model_dump()
     # False = TurnCall did NOT point the Twilio number at itself (missing
     # PUBLIC_BASE_URL/credentials or a Twilio error) — the number won't receive
-    # calls until its Voice webhook is set. Surfaced so clients can warn.
+    # calls until its Voice webhook is set. Surfaced so clients can warn. Null
+    # on a carrier with no webhooks to configure (Asterisk: its dialplan).
     data["twilio_webhooks_configured"] = configured
     return ok(data)
 
@@ -118,13 +121,16 @@ async def _own_twilio(
     return found, StoredTwilioAccount(account.account_sid, ciphertext)
 
 
-async def _configure_twilio_webhooks(row: Any, sms_enabled: bool) -> bool:
+async def _configure_twilio_webhooks(row: Any, sms_enabled: bool) -> bool | None:
     """Point the Twilio number's voice + status (and SMS, if enabled) webhooks at
     TurnCall, so inbound calls reach us and finalize on hangup. Needs PUBLIC_BASE_URL
     (Twilio must reach us) + Twilio credentials. Best-effort: a Twilio failure logs
     a warning but does not fail the bind — the routing row is already recorded.
     Returns True iff Twilio was actually configured. Uses the number's own
-    Twilio account when it has one, else the platform's."""
+    Twilio account when it has one, else the platform's. None for a number on
+    another carrier: there is nothing of Twilio's to configure."""
+    if row.provider != TWILIO:
+        return None
     settings = get_settings()
     external_number_sid = row.external_number_sid
     base = (settings.server.public_base_url or "").rstrip("/")
@@ -223,6 +229,9 @@ async def update_phone_number(
     if body.server_url and not secret:
         secret = secrets_mod.token_urlsafe(32)
 
+    if row.provider == ASTERISK and (body.has_own_twilio or body.sms_enabled):
+        raise _unprocessable("an Asterisk number takes no Twilio account and no SMS")
+
     # A new account pair replaces the stored one (rotating a token); omitted
     # keeps it. Verified against the number exactly as on bind.
     own: StoredTwilioAccount | None = None
@@ -265,7 +274,12 @@ async def unbind_phone_number(
     if row is None:
         raise NotFoundError("PhoneNumber", str(phone_number_id))
     # Resolved before the delete: the number's own account goes with its row.
-    account = twilio_accounts.account_for_number(row, get_settings())
+    # Only a Twilio number has webhooks pointing at TurnCall to clear.
+    account = (
+        twilio_accounts.account_for_number(row, get_settings())
+        if row.provider == TWILIO
+        else None
+    )
     await phone_number_repo.delete_phone_number(session, phone_number_id)
 
     if account:

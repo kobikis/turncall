@@ -97,15 +97,29 @@ def _function(path: Path, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
     raise AssertionError(f"{path.name}: no function named {name}")
 
 
+# Every function an inbound phone call's agent passes through. The carriers'
+# edges share `admit_inbound_call` (ADR-0022), so it is checked once for all.
+INBOUND_FUNCTIONS = [
+    (_SRC / "webhooks" / "twilio_handlers.py", "inbound_voice_webhook"),
+    (_SRC / "services" / "inbound_call.py", "admit_inbound_call"),
+    (_SRC / "services" / "inbound_call.py", "_emit_started"),
+]
+
+
 @pytest.mark.unit
-def test_the_inbound_webhook_never_dereferences_a_possibly_absent_agent() -> None:
+@pytest.mark.parametrize(
+    "path,name", INBOUND_FUNCTIONS, ids=[n for _, n in INBOUND_FUNCTIONS]
+)
+def test_the_inbound_webhook_never_dereferences_a_possibly_absent_agent(
+    path: Path, name: str
+) -> None:
     """`agent` is None whenever call-init returned an inline config, and the
     handler runs on past that. A bare `agent.id` in a *log line* is what crashed
     every inbound call with integrations attached — the resolved
     `agent_id_for_call` is the safe form, and `agent.name if agent else ...` the
     safe idiom where the object itself is wanted.
     """
-    fn = _function(_SRC / "webhooks" / "twilio_handlers.py", "inbound_voice_webhook")
+    fn = _function(path, name)
     bare = [
         f"agent.{node.attr}"
         for node in ast.walk(fn)
@@ -120,7 +134,7 @@ def test_the_inbound_webhook_never_dereferences_a_possibly_absent_agent() -> Non
         )
     ]
     assert bare == [], (
-        f"inbound_voice_webhook dereferences {bare} unguarded — a call running an "
+        f"{name} dereferences {bare} unguarded — a call running an "
         "inline agent has no agent row and this crashes the webhook"
     )
 
@@ -155,7 +169,8 @@ def _metadata_keys(path: Path) -> set[str]:
 # that creates the call row. Twilio answers the inbound webhook in one request
 # and opens the media stream in another.
 CALL_ROW_PATHS = [
-    ("twilio", _SRC / "webhooks" / "twilio_handlers.py"),
+    # Every carrier's inbound phone call: Twilio, Asterisk (ADR-0022).
+    ("phone", _SRC / "services" / "inbound_call.py"),
     ("whatsapp", _SRC / "webhooks" / "whatsapp_handlers.py"),
     ("webrtc", _SRC / "api" / "v1" / "webrtc.py"),
 ]

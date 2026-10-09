@@ -25,6 +25,9 @@ AVATAR_PROVIDERS = ("heygen", "tavus")
 # Listed so a project can hold the key it runs on; `ollama` is local and needs
 # none. Not an agent config role — no agent validator reads it.
 JUDGE_PROVIDERS = ("openai", "anthropic", "jev")
+# Carriers whose account is a project credential (ADR-0020, ADR-0022). Not
+# Twilio: its own-account option is per number, on the phone number itself.
+CARRIER_PROVIDERS = ("asterisk",)
 
 ROLE_PROVIDERS: dict[str, tuple[str, ...]] = {
     "stt": STT_PROVIDERS,
@@ -33,6 +36,7 @@ ROLE_PROVIDERS: dict[str, tuple[str, ...]] = {
     "s2s": S2S_PROVIDERS,
     "avatar": AVATAR_PROVIDERS,
     "judge": JUDGE_PROVIDERS,
+    "carrier": CARRIER_PROVIDERS,
 }
 
 AWS_ACCOUNT = "aws"

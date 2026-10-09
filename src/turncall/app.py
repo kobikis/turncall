@@ -141,10 +141,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     purge_task = asyncio.create_task(_purge_soft_deleted_projects())
 
+    # Asterisk's inbound edge: an ARI connection to every Asterisk served (#209).
+    from turncall.webhooks.asterisk_edge import EDGES
+
+    asterisk_task = asyncio.create_task(
+        EDGES.run() if settings.asterisk.edge_enabled else asyncio.sleep(0)
+    )
+
     yield
 
     cleanup_task.cancel()
     purge_task.cancel()
+    asterisk_task.cancel()
+    await asyncio.gather(asterisk_task, return_exceptions=True)
 
     # Shutdown
     logger.info("shutting_down_turncall")
@@ -266,6 +275,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(twilio_webhook_router)
     app.include_router(twilio_media_router)
+
+    # Asterisk's media stream (chan_websocket). Its other half, the ARI
+    # client, is started by the lifespan (#209).
+    from turncall.webhooks.asterisk_media_stream import router as asterisk_media_router
+
+    app.include_router(asterisk_media_router)
 
     # WhatsApp webhooks (no /v1 prefix)
     from turncall.webhooks.whatsapp_handlers import router as whatsapp_webhook_router

@@ -48,6 +48,9 @@ def platform_keys(settings: Settings) -> dict[str, str]:
         "heygen": settings.heygen.api_key,
         "tavus": settings.tavus.api_key,
         "typesafe": settings.typesafe.api_key,
+        # Not a key: an Asterisk account is a URL and a login (#209). Present
+        # when the platform has one, which is all `GET /v1/providers` reports.
+        "asterisk": settings.asterisk.ari_url,
     }
 
 

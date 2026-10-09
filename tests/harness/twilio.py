@@ -57,28 +57,17 @@ def mulaw_tone(ms: int) -> list[bytes]:
     return [ulaw[i : i + FRAME_BYTES] for i in range(0, len(ulaw), FRAME_BYTES)]
 
 
-@dataclass
-class TwilioCall:
-    """One live inbound call: the media stream, from the caller's side."""
+class HearsTheAgent:
+    """What a caller hears, for any carrier's call object: it appends the
+    arrival time of each loud agent frame to `_loud_at` and sets `closed`."""
 
-    carrier: FakeCarrier
-    http: httpx.AsyncClient
-    call_sid: str
-    from_number: str
-    to_number: str
-    call_id: str
-    stream_sid: str
-    twiml: str
-    _ws: websockets.ClientConnection
-    _outgoing: asyncio.Queue[bytes] = field(default_factory=asyncio.Queue)
-    _loud_at: list[float] = field(default_factory=list)  # agent audio arrival times
-    _tasks: list[asyncio.Task] = field(default_factory=list)
-    closed: asyncio.Event = field(default_factory=asyncio.Event)
+    _loud_at: list[float]
+    closed: asyncio.Event
 
-    async def say(self, ms: int = 400) -> None:
-        """Speak for `ms`: the stub STT transcribes it as the next caller line."""
-        for frame in mulaw_tone(ms):
-            await self._outgoing.put(frame)
+    def heard(self, pcm: bytes) -> None:
+        """One frame of agent audio (PCM16) arrived."""
+        if audioop.rms(pcm, 2) > 500:
+            self._loud_at.append(time.monotonic())
 
     def agent_utterances(self) -> int:
         """How many separate stretches of agent audio have arrived so far."""
@@ -104,6 +93,30 @@ class TwilioCall:
         raise TimeoutError(
             f"heard {self.agent_utterances()} agent utterances, wanted {count}"
         )
+
+
+@dataclass
+class TwilioCall(HearsTheAgent):
+    """One live inbound call: the media stream, from the caller's side."""
+
+    carrier: FakeCarrier
+    http: httpx.AsyncClient
+    call_sid: str
+    from_number: str
+    to_number: str
+    call_id: str
+    stream_sid: str
+    twiml: str
+    _ws: websockets.ClientConnection
+    _outgoing: asyncio.Queue[bytes] = field(default_factory=asyncio.Queue)
+    _loud_at: list[float] = field(default_factory=list)  # agent audio arrival times
+    _tasks: list[asyncio.Task] = field(default_factory=list)
+    closed: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def say(self, ms: int = 400) -> None:
+        """Speak for `ms`: the stub STT transcribes it as the next caller line."""
+        for frame in mulaw_tone(ms):
+            await self._outgoing.put(frame)
 
     async def hang_up(self) -> None:
         """The caller hangs up: `stop`, close the stream, report `completed`."""
@@ -172,9 +185,9 @@ class TwilioCall:
                 message = json.loads(raw)
                 if message.get("event") != "media":
                     continue
-                pcm = audioop.ulaw2lin(base64.b64decode(message["media"]["payload"]), 2)
-                if audioop.rms(pcm, 2) > 500:
-                    self._loud_at.append(time.monotonic())
+                self.heard(
+                    audioop.ulaw2lin(base64.b64decode(message["media"]["payload"]), 2)
+                )
         except websockets.ConnectionClosed:
             pass
         finally:

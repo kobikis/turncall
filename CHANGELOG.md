@@ -75,6 +75,20 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Asterisk numbers, over ARI** (#209, ADR-0022). A call centre or company
+  PBX reaches an agent with no cloud carrier in between: bind a number with
+  `carrier: "asterisk"`, give the project its Asterisk as an `asterisk`
+  credential (`ari_url`, `username`, `password`) or set `ASTERISK_ARI_*` for
+  the platform, and point the dialplan at `Stasis(turncall)`. TurnCall keeps
+  an ARI connection to it, takes the call's audio over the WebSocket channel
+  driver (Asterisk 20.18 / 22.8 / 23.2 or later) and runs the same pipeline as
+  on Twilio. Hang-up, DTMF and cold transfers (into a dialplan context) go
+  through ARI; a warm transfer, a transfer or fallback message, outbound
+  calls and SMS are refused on Asterisk numbers rather than done differently.
+  A call TurnCall cannot take goes back to the dialplan unanswered. One
+  replica holds the ARI connection (`ASTERISK_EDGE_ENABLED`). See
+  [Phone numbers](docs/guides/phone-numbers.mdx#asterisk-numbers).
+
 - **A test harness that drives the running app like a carrier** (#214,
   `tests/harness/`). Stub STT/LLM/TTS answer instantly from a script (a tool
   call included), a fake carrier records every REST action TurnCall takes, and

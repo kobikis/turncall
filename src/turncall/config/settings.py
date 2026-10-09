@@ -49,6 +49,32 @@ class TwilioSettings(BaseSettings):
     auth_token: str = Field(default="", alias="TWILIO_AUTH_TOKEN")
 
 
+class AsteriskSettings(BaseSettings):
+    """The platform's Asterisk, reached over ARI (#209, ADR-0022).
+
+    A project's own `asterisk` credential (ADR-0020) replaces it for that
+    project's numbers. Unset `ASTERISK_ARI_URL` = no platform Asterisk.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="ASTERISK_")
+
+    ari_url: str = Field(default="", alias="ASTERISK_ARI_URL")
+    ari_username: str = Field(default="", alias="ASTERISK_ARI_USERNAME")
+    ari_password: str = Field(default="", alias="ASTERISK_ARI_PASSWORD")
+    app: str = Field(default="turncall", alias="ASTERISK_ARI_APP")
+    # The websocket_client.conf entry chan_websocket dials TurnCall's media
+    # route through. Its `uri` is TurnCall's, so it lives on the PBX.
+    media_connection: str = Field(default="turncall", alias="ASTERISK_MEDIA_CONNECTION")
+    # Where a cold transfer sends the caller: this context, extension = target.
+    transfer_context: str = Field(
+        default="turncall-transfer", alias="ASTERISK_TRANSFER_CONTEXT"
+    )
+    # Whether this process holds the ARI connections. ARI gives an app's calls
+    # to one connection only (the newest), so with several replicas exactly
+    # one keeps this on; the rest still serve media streams and call control.
+    edge_enabled: bool = Field(default=True, alias="ASTERISK_EDGE_ENABLED")
+
+
 class OpenAISettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OPENAI_")
 
@@ -370,6 +396,7 @@ class Settings(BaseSettings):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     twilio: TwilioSettings = Field(default_factory=TwilioSettings)
+    asterisk: AsteriskSettings = Field(default_factory=AsteriskSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     google: GoogleSettings = Field(default_factory=GoogleSettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)

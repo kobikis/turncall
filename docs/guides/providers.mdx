@@ -388,6 +388,7 @@ curl -X DELETE http://localhost:8090/v1/credentials/deepgram -H "Authorization: 
 | `heygen`, `tavus` | Video avatar |
 | `aws` | Bedrock LLM, Nova Sonic S2S |
 | `typesafe` | Eval judge (`jev`) |
+| `asterisk` | A PBX's Asterisk, over ARI — `{ari_url, username, password}`, see [Asterisk numbers](/guides/phone-numbers#asterisk-numbers) |
 
 Deleting a credential is idempotent and returns the project to the platform key.
 An `aws` project credential is **not** gated by `AWS_AGENT_CREDENTIALS_ENABLED`

@@ -19,6 +19,7 @@ from loguru import logger
 
 from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.config import get_settings
+from turncall.domain.carriers import TWILIO
 from turncall.domain.enums import CallDirection, CallEventType
 from turncall.services.twilio_accounts import account_for_number
 from turncall.storage.repositories import (
@@ -72,6 +73,16 @@ async def place_outbound_call(
     )
     if phone_number is None:
         raise NotFoundError("PhoneNumber", str(from_number_id))
+
+    if phone_number.provider != TWILIO:
+        raise ApiError(
+            status_code=422,
+            code=ErrorCode.VALIDATION_ERROR,
+            message=(
+                f"Outbound calls from a {phone_number.provider} number are not "
+                "supported; place them from a Twilio number"
+            ),
+        )
 
     # The caller-id number's own Twilio account, else the platform's.
     try:

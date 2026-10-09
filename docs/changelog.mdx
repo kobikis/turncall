@@ -7,6 +7,12 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**Asterisk numbers.** A number on your own Asterisk PBX can now reach an agent
+over ARI, with no cloud carrier in between: bind it with `carrier: "asterisk"`
+and give the project its Asterisk as an `asterisk` credential. Hang-up, DTMF
+and cold transfers go through ARI. See
+[Asterisk numbers](/guides/phone-numbers#asterisk-numbers).
+
 **`openai_live` agents with tools work out of the box.** An agent with tools and
 no `s2s.delegation` block now delegates to its own `llm` (`"mode": "client"`),
 with your keys, running your webhook and MCP tools — `end_call`, `do_not_call`

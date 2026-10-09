@@ -14,6 +14,7 @@ from uuid import UUID
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from turncall.adapters.telephony.base import UnsupportedCarrierAction
 from turncall.domain.call_state import is_active_state, is_valid_transition
 from turncall.domain.enums import CallEventType, CallStatus
 
@@ -27,13 +28,22 @@ class ControlResult:
     details: dict[str, Any] | None = None
 
 
-async def _get_twilio_adapter(session: AsyncSession, call: Any) -> Any | None:
-    """A TwilioAdapter on the account of this call's number — its own Twilio
-    account if bound with one, else the platform's. None if neither exists."""
+async def _get_carrier_adapter(session: AsyncSession, call: Any) -> Any | None:
+    """The REST adapter of this call's carrier (ADR-0022), or None if no
+    account exists. Twilio: the number's own account, else the platform's.
+    Asterisk: the project's own Asterisk, else the platform's (#209)."""
     from turncall.config import get_settings
-    from turncall.services.twilio_accounts import account_for_call
+    from turncall.domain.carriers import ASTERISK
 
-    account = await account_for_call(session, call, get_settings())
+    settings = get_settings()
+    if call.provider == ASTERISK:
+        from turncall.services.asterisk_accounts import account_for_project
+
+        account: Any = await account_for_project(session, call.project_id, settings)
+    else:
+        from turncall.services.twilio_accounts import account_for_call
+
+        account = await account_for_call(session, call, settings)
     return account.adapter() if account else None
 
 
@@ -122,7 +132,7 @@ async def end_call(
     # Hang up via Twilio
     sid = call.provider_call_sid
     if sid and sid != "webrtc":
-        adapter = await _get_twilio_adapter(session, call)
+        adapter = await _get_carrier_adapter(session, call)
         if adapter:
             try:
                 await adapter.end_call(sid)
@@ -283,8 +293,9 @@ async def transfer_call(
     # Execute Twilio transfer
     sid = call.provider_call_sid
     transfer_success = False
+    refusal: str | None = None
     if sid and sid != "webrtc":
-        adapter = await _get_twilio_adapter(session, call)
+        adapter = await _get_carrier_adapter(session, call)
         if adapter:
             try:
                 await adapter.transfer_call(
@@ -296,6 +307,8 @@ async def transfer_call(
                     amd_callback_url=amd_url,
                 )
                 transfer_success = True
+            except UnsupportedCarrierAction as exc:
+                refusal = str(exc)
             except Exception:
                 logger.exception(
                     "twilio_transfer_failed", call_sid=sid, target=target_number
@@ -329,7 +342,9 @@ async def transfer_call(
     await call_repo.update_call_status(
         session, call_id, status=CallStatus.IN_PROGRESS.value
     )
-    return ControlResult(success=False, message="Transfer failed at provider level")
+    return ControlResult(
+        success=False, message=refusal or "Transfer failed at provider level"
+    )
 
 
 async def handoff_to_agent(
@@ -437,7 +452,7 @@ async def send_dtmf(
 
     sid = call.provider_call_sid
     if sid and sid != "webrtc":
-        adapter = await _get_twilio_adapter(session, call)
+        adapter = await _get_carrier_adapter(session, call)
         if adapter:
             try:
                 await adapter.send_dtmf(sid, digits)
