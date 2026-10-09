@@ -12,6 +12,7 @@ apply to its target (#227).
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -47,10 +48,16 @@ async def place_outbound_call(
     from_number_id: UUID,
     to_number: str,
     metadata: dict[str, Any],
+    before_carrier: Callable[[], Awaitable[None]] | None = None,
 ) -> CallRow:
     """Dial `to_number` from one of the project's numbers, as `agent_id`.
 
     Returns the call row, `initiated` and carrying the carrier's call SID.
+
+    `before_carrier` runs after every refusal has had its chance and just
+    before the carrier is asked: past it, a phone may ring. A campaign records
+    that point there (#232), so a worker that dies on either side of it is
+    known to have dialled or not; raising from it dials nothing.
     """
     settings = get_settings()
 
@@ -114,6 +121,7 @@ async def place_outbound_call(
             account=account,
             to_number=to_number,
             metadata=metadata,
+            before_carrier=before_carrier,
         )
     except BaseException:
         await release_live_call(project_id, call_id)
@@ -130,6 +138,7 @@ async def _dial(
     account: TwilioAccount,
     to_number: str,
     metadata: dict[str, Any],
+    before_carrier: Callable[[], Awaitable[None]] | None,
 ) -> CallRow:
     """Write the call row, dial, and record the carrier's SID on it."""
     settings = get_settings()
@@ -154,6 +163,8 @@ async def _dial(
             "(Twilio needs a reachable webhook URL)."
         )
 
+    if before_carrier is not None:
+        await before_carrier()
     provider_call_sid = await account.adapter().initiate_outbound_call(
         from_number=phone_number.e164_number,
         to_number=to_number,

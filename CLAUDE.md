@@ -575,6 +575,9 @@ POST /v1/campaigns                    # {name, agent_id, from_number_id, timezon
 GET  /v1/campaigns                    # ?page= ?limit=; each with target counts per status
 GET  /v1/campaigns/{id}
 GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target status, call_id, ended_reason, error
+POST /v1/campaigns/{id}/pause         # stop new dials; live calls stay up (#232)
+POST /v1/campaigns/{id}/resume        # back to running (queued if it never started)
+POST /v1/campaigns/{id}/cancel        # final; pending + dialling targets -> cancelled
 ```
 
 - **Timezone required**, IANA names only (`zoneinfo.available_timezones()`),
@@ -589,15 +592,44 @@ GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target stat
   as for a single API dial. The worker asks `limits.may_dial` before claiming
   and stops the campaign's pass on "no"; a `429` from the dial itself unclaims.
 - **Target states** (`domain/enums.CampaignTargetStatus`): `pending` →
-  `dialling` (claimed) → `calling` (dialled; `attempts` +1, `call_id`) →
-  `completed` with the call's `ended_reason` (read through `call_view`, settled
-  at the next pass after the call ends), or `suppressed` / `failed` (`error`
-  says why) straight from `dialling`. Every move is a guarded UPDATE from the
-  state it expects. The claim (`SKIP LOCKED`, so several workers share one
-  campaign) is **committed before the dial**, and the call row and the move to
-  `calling` commit together: a worker that dies mid-dial leaves `dialling`, never
-  a silent redial — reclaiming it is #232's janitor's call. Statuses are
-  strings, not a PG enum, so #231/#232 add states without `ALTER TYPE`.
+  `dialling` (claimed) → `placing` (the carrier being asked) → `calling`
+  (dialled; `attempts` +1, `call_id`) → `completed` with the call's
+  `ended_reason` (read through `call_view`, settled at the next pass after the
+  call ends), or `suppressed` / `failed` (`error` says why), or `cancelled`.
+  Every move is a guarded UPDATE from the state it expects. Statuses are
+  strings, not a PG enum, so new states need no `ALTER TYPE`.
+- **Three commits per dial, and a crash between any two is recoverable**
+  (#232). The claim (`SKIP LOCKED`, so several workers share one campaign)
+  commits `dialling`; `begin_placing` commits `placing` from
+  `place_outbound_call`'s `before_carrier` hook — after every refusal
+  (suppression, limits, missing number) and immediately before the carrier
+  request; the call row and the move to `calling` commit together after the
+  carrier answers. `begin_placing` is **the only way to the carrier**: it lands
+  only from `dialling` in a `running` campaign, so of two claimants exactly one
+  dials, and a pause/cancel or a janitor reclaim since the claim makes it fail
+  and the worker dials nothing.
+- **The janitor** (`campaign_repo.reclaim_abandoned`, top of every pass, the
+  eval worker's no-heartbeat age cutoff — `CAMPAIGN_CLAIM_TIMEOUT_SECONDS`,
+  default 120). A stale `dialling` never reached the carrier → `pending`,
+  dialled again. A stale `placing` may have rung a phone with no call row to
+  show for it (the row commits only after the carrier answers, and the carrier
+  has no idempotency key or lookup we use) → `failed` with
+  `DIAL_OUTCOME_UNKNOWN`, **never redialled**: a possibly-missed call reported
+  out loud beats a possibly-second one. The timeout bounds only recovery
+  latency, not safety — a live worker slower than it loses `begin_placing` or
+  `record_dial` — but it must outlast a carrier request, or a dial that went
+  through is recorded as unknown (logged `campaign_dial_outlived_its_claim`).
+  Proven with a real worker process SIGKILLed at each moment
+  (`tests/integration/test_campaign_worker_crash.py`, child in
+  `tests/harness/campaign_worker.py`; its carrier writes each dial to a file as
+  the request arrives).
+- **Pause / resume / cancel** (#232) move only the campaign row (cancel also
+  moves `pending` + `dialling` targets to `cancelled`); the worker reads them at
+  the next claim. No call is hung up. A paused campaign, and a cancelled one
+  while it still has a `calling` target, stay in `active_campaigns` so their
+  live calls' endings are settled; neither is claimed from or completed.
+  Asking for the current state answers 200; any other refused move is `409
+  invalid_state_transition`.
 - **The clock is injected** (`campaigns.dialer.Clock`); due means
   `next_attempt_at` null or `<=` now. #230 (windows) and #231 (retry spacing)
   set `next_attempt_at`; nothing reads wall time directly.
@@ -606,15 +638,15 @@ GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target stat
   (default 2). The database is the work; the list only wakes it, so a lost push
   costs one poll. A stop is honoured between passes.
 
-Not yet: calling windows (#230), retries (#231), pause/resume/cancel and the
-janitor (#232), pacing beyond the limits (#233), weighted agents and
+Not yet: calling windows (#230), retries (#231), pacing beyond the limits (#233), weighted agents and
 start/finish events (#234). Until #233, a project with no live-call limit is
 dialled as fast as one pass can go.
 
 Key files: `campaigns/dialer.py`, `campaigns/worker.py`, `campaigns/queue.py`,
 `api/v1/campaigns.py`, `storage/repositories/campaign_repo.py`. Tests:
 `tests/integration/test_campaigns.py` (the worker's pass against the fake
-carrier; `answer_outbound_call` picks up a dialled call).
+carrier; `answer_outbound_call` picks up a dialled call),
+`test_campaign_control.py`, `test_campaign_worker_crash.py`.
 
 ## Takeaways (Structured Outputs)
 

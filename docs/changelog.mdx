@@ -7,6 +7,12 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**Pause, resume or cancel a campaign.** `POST /v1/campaigns/{id}/pause` stops
+new dials without hanging up calls in progress; `/resume` picks up where it
+stopped; `/cancel` ends it, marking undialled targets `cancelled`. A campaign
+worker that crashes mid-dial no longer leaves targets stuck, and never dials a
+target twice to recover. See [Campaigns](/guides/campaigns#pause-resume-cancel).
+
 **Campaigns — one agent calls a list.** `POST /v1/campaigns` with JSON
 targets (a number, its own variables for the agent, and a timezone), and the
 new `turncall-campaign-worker` process dials each one once, skipping your

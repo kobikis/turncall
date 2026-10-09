@@ -235,6 +235,13 @@ class CampaignSettings(BaseSettings):
     # (its id is pushed on a Redis list); this bounds how late it notices
     # everything else — a call ending and freeing a slot, a target coming due.
     poll_seconds: int = Field(default=2, ge=1, alias="CAMPAIGN_POLL_SECONDS")
+    # How old a claim gets before the janitor takes its worker for dead (#232).
+    # Only how soon a crashed worker's targets move on rests on it, never
+    # whether one is dialled twice; it must outlast a slow carrier request, or
+    # a dial that did go through is recorded as `dial_outcome_unknown`.
+    claim_timeout_seconds: int = Field(
+        default=120, ge=1, alias="CAMPAIGN_CLAIM_TIMEOUT_SECONDS"
+    )
 
 
 class ServerSettings(BaseSettings):
