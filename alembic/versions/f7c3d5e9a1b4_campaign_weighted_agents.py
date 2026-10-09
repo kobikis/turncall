@@ -30,9 +30,21 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The revision before this one has no room for a campaign without one
+    # agent. Deleting those campaigns would take every target and its attempt
+    # history with them (ON DELETE CASCADE), on a rollback likely run under
+    # pressure — so refuse, and let the operator decide what they become.
+    weighted = (
+        op.get_bind()
+        .execute(sa.text("SELECT count(*) FROM campaigns WHERE agent_id IS NULL"))
+        .scalar_one()
+    )
+    if weighted:
+        raise RuntimeError(
+            f"{weighted} weighted campaign(s) exist (campaigns.agent_id IS NULL), "
+            "which the previous revision cannot hold. Give each one an agent_id "
+            "or delete it yourself, then downgrade again."
+        )
     op.drop_column("campaign_targets", "agent_id")
     op.drop_column("campaigns", "agent_weights")
-    # A weighted campaign has no agent to restore; it is dropped with its
-    # targets rather than given one it never had.
-    op.execute("DELETE FROM campaigns WHERE agent_id IS NULL")
     op.alter_column("campaigns", "agent_id", nullable=False)

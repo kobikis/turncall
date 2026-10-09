@@ -395,6 +395,12 @@ and is not part of this repository's history.
   across every campaign on every pass, has its own partial index instead of a
   table scan. Migration `a8e4c2f6d0b1`.
 
+- **Downgrading past weighted campaigns refuses instead of deleting them**
+  (#234). Revision `f7c3d5e9a1b4`'s downgrade deleted every campaign with no
+  single agent — and, by cascade, its targets and their attempt history — to
+  restore the `NOT NULL`. It now stops with an error naming how many exist;
+  give each an `agent_id` or delete it, then downgrade again.
+
 - **A request's writes are committed before its response is sent.** The
   request session committed in a yield dependency, which FastAPI runs *after*
   the response by default — so Twilio could open the media stream named in the
