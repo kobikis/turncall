@@ -502,6 +502,30 @@ DELETE /v1/phone-numbers/{id}/routing    # Clear test, revert to single agent
 - `webhooks/twilio_handlers.py` — Inbound routing checks `routing_weights`
 - `api/v1/phone_numbers.py` — Routing CRUD endpoints
 
+## Live Call Control
+
+`POST /v1/calls/{id}/end|transfer|dtmf` act through the carrier's REST API.
+`messages` (and #216's `handoff`) change the call's pipeline, which only the
+task running the call can do — so they go through the call (#215, tracker
+#198), over a per-call Redis pub/sub channel, `call:{id}:control`
+(`services/live_call_channel.py`):
+
+- `CallSession.start()` subscribes before the call reads as live and drops it
+  when the call stops running, so every voice transport has it (Twilio,
+  WebRTC, WhatsApp all end there; `test_live_control_wiring.py` fails on an
+  entry point that does not). None in an eval. Its connection is its own,
+  outside the shared pool — a subscription holds it for the whole call. A
+  Redis that cannot be reached costs the call its channel, never the call.
+- The API publishes `{kind, body, id}`. `PUBLISH`'s receiver count of **0 is a
+  409 `call_not_live`**, never a success; the call answers on a list keyed by
+  the request id, and **none within `ACK_TIMEOUT_SECONDS` (2s) is a 504
+  `call_did_not_acknowledge`**. A handler that raises `ControlRefused` is a 409
+  with its reason. Handlers run one at a time per call, in arrival order.
+- `message`: appended to the context (`run_llm=False`), read on the agent's
+  next turn. Cascade only — a realtime model reads no context added after it
+  starts, so S2S refuses it rather than answer 200 for a message nothing reads.
+- Also the cross-replica path: whichever replica holds the call answers.
+
 ## Suppression List
 
 A project's numbers that must never be dialled (#227). Checked in
@@ -1023,7 +1047,7 @@ All Pipecat imports isolated in `orchestrator/`. No other module imports Pipecat
 - `turn_metrics.py` — one `metrics.turn` call event per turn (STT/LLM/TTS TTFB + user-to-bot latency, and `turn_end_ms` — the caller's silence to the turn's release, which Smart Turn or Flux decides; absent when unmeasured, #204), from pipecat's latency observer; stored, never dispatched, none in an eval (#176). Read them with `GET /v1/calls/{id}/events?event_type=metrics.turn`
 - `delegation_events.py` — one `delegation.completed` call event per gpt-live-1 delegation (#247), `{mode, duration_ms, outcome}`, outcome `answered`\|`timed_out`\|`failed`\|`declined`. Stored, never dispatched, none in an eval — like `metrics.turn`. A request gpt-live-1 acknowledged with no event beside it is the one it never delegated. `timed_out` is client mode only (responses mode has no delegation timeout; #243 bounds each function call and the delegate answers past it); a client delegate that returned no text is `failed` — unless it had just ended the call, which is what it was asked, and reads `answered` (#262). `declined` (no delegate configured, e.g. no tools) is recorded with `mode: client`, the target gpt-live-1 asked for. Reads pipecat's private delegation run, pinned by `test_delegation_completed.py`. The same subclass arms the hangup gate for a client delegation that ended the call (#262, see the S2S row), and voices the idle check-in and reports a delegation in flight to the idle guard (#257)
 - `telemetry.py` — OpenTelemetry tracing setup + Pipecat observers (latency/turn/LLM/transcription/startup). See ADR-0010
-- `session_manager.py` — Active session registry
+- `live_control.py` — the call's half of the control channel (#215): the request kinds a live call answers and what each does to its pipeline; `CallSession.start()` holds the channel for the call's lifetime
 
 ## Webhook Events
 

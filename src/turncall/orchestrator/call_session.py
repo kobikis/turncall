@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID
 
 from loguru import logger
-from pipecat.frames.frames import ErrorFrame, LLMRunFrame
+from pipecat.frames.frames import ErrorFrame, Frame, LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import (
     PipelineParams,
@@ -22,6 +22,7 @@ from pipecat.workers.runner import WorkerRunner
 
 from turncall.config import get_settings
 from turncall.domain.enums import CallEventType, CallStatus
+from turncall.orchestrator.live_control import call_handlers, control_channel
 from turncall.orchestrator.pipeline_factory import CallContext
 from turncall.orchestrator.telemetry import (
     build_observers,
@@ -29,6 +30,7 @@ from turncall.orchestrator.telemetry import (
     is_tracing_active,
 )
 from turncall.services.credentials import MissingProviderKeyError
+from turncall.services.live_call_channel import ControlRefused
 
 
 def s2s_greeting_frame() -> LLMRunFrame:
@@ -228,12 +230,20 @@ class CallSession:
         self._watch_failover()
 
         try:
-            await self._update_call_status(CallStatus.IN_PROGRESS)
-            # Note: call.started event is fired by the inbound handler
-            # (twilio_handlers / whatsapp_handlers) before the pipeline starts.
+            # Open before the call reads as live, closed when it stops running:
+            # the API reaches the call through it (#215).
+            async with control_channel(
+                self._call_context,
+                call_handlers(
+                    self._queue_control_frame, pipeline_mode=self._pipeline_mode
+                ),
+            ):
+                await self._update_call_status(CallStatus.IN_PROGRESS)
+                # Note: call.started event is fired by the inbound handler
+                # (twilio_handlers / whatsapp_handlers) before the pipeline starts.
 
-            await self._trigger_first_response(self._task)
-            await run_until_pipeline_done(self._runner, self._task)
+                await self._trigger_first_response(self._task)
+                await run_until_pipeline_done(self._runner, self._task)
         except asyncio.CancelledError:
             logger.info("call_session_cancelled", call_id=str(self.call_id))
         except Exception as exc:
@@ -263,6 +273,11 @@ class CallSession:
             # on_client_disconnected guarantees we reach here promptly instead of
             # hanging in the runner.
             logger.info("call_session_ended", call_id=str(self.call_id))
+
+    async def _queue_control_frame(self, frame: Frame) -> None:
+        if self._task is None:
+            raise ControlRefused("The call is not running")
+        await self._task.queue_frame(frame)
 
     async def _trigger_first_response(self, task: PipelineWorker) -> None:
         """Queue what makes the agent speak first."""
