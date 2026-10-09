@@ -22,6 +22,7 @@ from turncall.auth.context import AuthContext
 from turncall.auth.dependencies import resolve_auth_context
 from turncall.domain.enums import CallEventType, ProjectRole
 from turncall.services.limits import ProjectLimits
+from turncall.services.media_token import media_token
 
 pytestmark = pytest.mark.unit
 
@@ -229,7 +230,10 @@ class TestRoute:
             "to_number": "+15550000002",
             "webhook_url": "https://tc.example/webhooks/telnyx/voice",
             "connection_id": "app-1",
-            "stream_url": f"wss://tc.example/ws/telnyx/media-stream/{call_id}",
+            "stream_url": (
+                f"wss://tc.example/ws/telnyx/media-stream/{call_id}/"
+                f"{media_token(call_id)}"
+            ),
         }
         dial.carrier.assert_not_awaited()
 

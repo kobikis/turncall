@@ -27,6 +27,7 @@ from turncall.domain.carriers import CARRIERS
 from turncall.domain.enums import ProjectRole
 from turncall.orchestrator import transport_factory as tf
 from turncall.orchestrator.serializer import TwilioFrameSerializer
+from turncall.services.media_token import media_token
 from turncall.webhooks import media_stream
 
 pytestmark = pytest.mark.unit
@@ -96,6 +97,10 @@ async def _run_media_stream(carrier: str) -> MagicMock:
             AsyncMock(return_value=call_row),
         ),
         patch(
+            "turncall.storage.repositories.call_repo.attach_media",
+            AsyncMock(return_value=True),
+        ),
+        patch(
             "turncall.storage.repositories.agent_repo.get_agent_by_id",
             AsyncMock(return_value=agent),
         ),
@@ -104,8 +109,13 @@ async def _run_media_stream(carrier: str) -> MagicMock:
             media_stream, "build_call_pipeline", AsyncMock(return_value=session)
         ),
     ):
+        call_id = uuid.uuid4()
         await media_stream.run_media_stream(
-            MagicMock(), uuid.uuid4(), tf.CarrierStream("MZ1", "CA1")
+            MagicMock(),
+            call_id,
+            tf.CarrierStream("MZ1", "CA1"),
+            carrier=carrier,
+            token=media_token(call_id),
         )
     return create
 

@@ -241,6 +241,11 @@ class CallRow(Base):
     recording_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     analysis_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # When a carrier media stream was attached to the call: one per call, ever
+    # (`call_repo.attach_media`). Internal — on no read and in no webhook.
+    media_attached_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )

@@ -382,6 +382,24 @@ and is not part of this repository's history.
   `AMBIENCE_CACHE_DIR`. See `adr/0021`. Checked on a real PSTN call: no
   spurious interruptions and no empty turns at the default volume (#171).
 
+### Security
+
+- **A carrier media stream must prove it is the call's.** Every media route —
+  Twilio's `/ws/media-stream`, and Telnyx's and Asterisk's added in this
+  release — built the call's real pipeline on any socket that named its call
+  id, on any carrier's route, as many times as asked. A call id is not a
+  secret (it rides in webhooks, call-init, the API and logs), so whoever held
+  one could talk to the caller's agent, hear its replies and drive its tools.
+  Each call's stream setup now carries a **media token** (an HMAC of the call
+  id keyed by `API_KEY_HASH_SECRET` — set it; the default is public), and a
+  stream without it, on another carrier's route than the call's, or for a call
+  that already has one is refused before anything is built. Telnyx's stream
+  path gains a segment (`/ws/telnyx/media-stream/{call_id}/{token}`) and
+  Asterisk's external-media channel id the token; both are minted by TurnCall,
+  so no carrier configuration changes. Migration `b9f5d3a7e1c2`
+  (`calls.media_attached_at`). A call answered before the upgrade and not yet
+  streaming when it lands has no token and is refused.
+
 ### Fixed
 
 - **A campaign's claim and janitor are index lookups** (#229, #232). The claim

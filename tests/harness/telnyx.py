@@ -382,8 +382,9 @@ async def _open_stream(
         call_sid=call_control_id,
         from_number=call["from"],
         to_number=call["to"],
-        # The app names the call in the stream URL it gave Telnyx.
-        call_id=stream_url.rstrip("/").rsplit("/", 1)[-1],
+        # The app names the call in the stream URL it gave Telnyx, ahead of
+        # the call's media token.
+        call_id=stream_url.rstrip("/").rsplit("/", 2)[-2],
         stream_id=str(uuid.uuid4()).upper(),
         call_session_id=call["call_session_id"],
         direction=call["direction"],

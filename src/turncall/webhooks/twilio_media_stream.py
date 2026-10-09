@@ -1,9 +1,10 @@
 """Twilio's media stream edge: the `<Stream>` WebSocket the TwiML opens.
 
 Twilio sends `connected`, then `start` with the `<Parameter>`s the TwiML set
-(only `callId`; everything else is resolved from the call record). This
-module reads that handshake and hands the stream to the shared media entry
-point (ADR-0022), which is where the serializer is chosen.
+(`callId` and its `mediaToken`; everything else is resolved from the call
+record). This module reads that handshake and hands the stream to the shared
+media entry point (ADR-0022), which checks the token and chooses the
+serializer.
 """
 
 import json
@@ -12,8 +13,9 @@ from uuid import UUID
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from loguru import logger
 
+from turncall.domain.carriers import TWILIO
 from turncall.orchestrator.transport_factory import CarrierStream
-from turncall.webhooks.media_stream import run_media_stream
+from turncall.webhooks.media_stream import MediaStreamRefused, run_media_stream
 
 router = APIRouter()
 
@@ -51,8 +53,16 @@ async def media_stream_websocket(websocket: WebSocket) -> None:
             logger.error("media_stream_missing_call_id")
             return
 
-        await run_media_stream(websocket, UUID(call_id), stream)
+        await run_media_stream(
+            websocket,
+            UUID(call_id),
+            stream,
+            carrier=TWILIO,
+            token=str(custom_params.get("mediaToken") or ""),
+        )
 
+    except MediaStreamRefused:
+        pass  # logged where refused; the socket closes with nothing built
     except WebSocketDisconnect:
         logger.info("media_stream_disconnected")
     except Exception:

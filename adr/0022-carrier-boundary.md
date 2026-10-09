@@ -94,7 +94,9 @@ The case this ADR was cut for. What the ticket left to refine, decided:
   serializer for none of the three. It needs Asterisk 20.18 / 22.8 / 23.2:
   JSON control messages (`transport_data=f(json)`), and a `MEDIA_START` that
   names the channel id — the call id travels in it (`turncall-media-<id>`),
-  since `v()` URI parameters leaked between calls (asterisk#2194). ulaw at
+  since `v()` URI parameters leaked between calls (asterisk#2194). (Since
+  the review of #212, the call's media token travels there too:
+  `turncall-media-<id>-<token>`; see the addendum below.) ulaw at
   8 kHz, a rate `VOICE_OUTPUT_RATES` already renders ambience at.
 - **Two channels, one call.** The caller's channel and the media channel are
   bridged, and ARI ties neither's end to the other's: the edge hangs up the
@@ -118,3 +120,16 @@ The case this ADR was cut for. What the ticket left to refine, decided:
   REST actions reach the PBX that rang it; the platform edge refuses numbers
   of a project with its own. The URL passes the BYOM SSRF gate, since TurnCall
   connects out to it.
+
+## Addendum: a media stream proves it is the call's
+
+The shared media entry point first trusted the call id each edge handed it.
+A call id is not a secret, so any socket naming one — on any carrier's route,
+any number of times — got the call's real pipeline. Each call's stream setup
+now also hands its carrier a **media token**, an HMAC of the call id keyed by
+`API_KEY_HASH_SECRET` (stateless, so any replica checks a token another
+minted), and the entry point refuses before building anything: a stream
+without the token, one on a route whose carrier is not the call's, and a
+second stream for one call (`calls.media_attached_at`, a guarded UPDATE).
+Where the token rides is each carrier's own: Twilio's TwiML `<Parameter>`,
+Telnyx's `stream_url` path, Asterisk's external-media channel id.

@@ -196,7 +196,7 @@ async def test_a_stream_that_is_not_the_calls_is_refused(monkeypatch) -> None:
             )
             with pytest.raises(websockets.ConnectionClosed):
                 await ws.recv()
-        call_id = stream_url.rsplit("/", 1)[-1]
+        call_id = stream_url.rsplit("/", 2)[-2]
         status = (await app.api.get(f"/v1/calls/{call_id}")).json()["data"]["status"]
 
     assert app.carrier.actions_of("hang_up") == []
@@ -307,3 +307,63 @@ async def test_an_answer_that_fails_hangs_the_leg_up(monkeypatch) -> None:
         a for a in app.carrier.actions_of("hang_up") if a.params["call_sid"] == cc
     ]
     assert len(hang_ups) == 1
+
+
+async def test_a_failed_telnyx_transfer_leaves_the_ended_call_ended(
+    monkeypatch,
+) -> None:
+    """A Telnyx transfer stops the agent's stream first; when a later step
+    fails, the caller is hung up and the call finalizes while call control is
+    still waiting on the failing command, which then puts the record back to
+    `in_progress`. That revert must not land over the finalize. It does not:
+    the transfer's `transferring` write holds the call row until its session
+    commits, revert included, so the finalize's write queues behind it and
+    wins. This pins that; a commit added mid-transfer would break it."""
+    import asyncio
+
+    import turncall.storage.redis as redis_module
+    from tests.harness import ToolCall
+    from tests.harness.carrier import FakeTelnyxAdapter
+    from tests.integration.test_carrier_contract import _MemoryRedis
+
+    monkeypatch.setattr(redis_module, "get_redis", lambda: _MemoryRedis())
+
+    async def slow_failure(self: Any, call_control_id: str, text: str, **kw: Any):
+        await self._record("speak", call_sid=call_control_id, text=text, **kw)
+        await asyncio.sleep(1.5)
+        raise TimeoutError("Telnyx did not answer the speak command")
+
+    transfer = {"target_number": "+15559990000", "transfer_message": "One moment."}
+    script = Script(
+        caller=("Put me through.",),
+        agent=(ToolCall("transfer_call", transfer), "Sorry, that did not work."),
+    )
+    agent = {
+        **AGENT,
+        "tools": [
+            {
+                "name": "transfer_call",
+                "description": "transfer",
+                "parameters_schema": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+    async with run_app(
+        script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        monkeypatch.setattr(FakeTelnyxAdapter, "speak", slow_failure)
+        number = await telnyx.bind_number(
+            app.api, app.carrier, await app.create_agent(agent)
+        )
+        call = await telnyx.place_inbound_call(
+            app.carrier, app.api, from_number=CALLER, to_number=number
+        )
+        await call.wait_for_agent_speech(1)
+        await call.say(400)
+        await app.carrier.wait_for("stop_streaming", timeout=10)
+        await call.close_stream()  # Telnyx stops the stream it was told to
+        await app.sink.wait_for("call.ended")
+        await asyncio.sleep(2.0)  # the slow speak fails, the caller is hung up
+        status = (await app.api.get(f"/v1/calls/{call.call_id}")).json()["data"]
+
+    assert status["status"] == "completed", status

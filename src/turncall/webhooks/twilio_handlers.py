@@ -21,6 +21,7 @@ from turncall.domain.call_state import (
 from turncall.domain.carriers import TWILIO
 from turncall.domain.enums import CallEventType, CallStatus
 from turncall.services.limits import release_live_call
+from turncall.services.media_token import media_token
 from turncall.storage.repositories import (
     agent_repo,
     call_repo,
@@ -90,9 +91,10 @@ def generate_media_stream_twiml(request: Request, call_id: UUID) -> str:
     """TwiML answering a call with a bidirectional media stream (ADR-0022).
 
     Twilio's answer format, so it lives at Twilio's edge rather than on the
-    carrier adapter. Only the call id is passed; the media entry point resolves
-    everything else from the call record. wss:// when behind HTTPS (ngrok,
-    production) — detected via X-Forwarded-Proto.
+    carrier adapter. The call id and its media token are passed — the token
+    is what proves the stream that opens is this call's — and the media entry
+    point resolves everything else from the call record. wss:// when behind
+    HTTPS (ngrok, production) — detected via X-Forwarded-Proto.
     """
     host = request.headers.get("host", "localhost:8000")
     forwarded_proto = request.headers.get("x-forwarded-proto", "")
@@ -106,6 +108,7 @@ def generate_media_stream_twiml(request: Request, call_id: UUID) -> str:
         "<Connect>"
         f'<Stream url="{ws_url}" statusCallback="{status_cb}">'
         f'<Parameter name="callId" value="{call_id}" />'
+        f'<Parameter name="mediaToken" value="{media_token(call_id)}" />'
         "</Stream>"
         "</Connect>"
         "</Response>"

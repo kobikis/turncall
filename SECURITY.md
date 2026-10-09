@@ -55,7 +55,10 @@ production, which the docs explicitly warn against.
 If you run TurnCall yourself, the two settings that matter most:
 
 - Set `API_KEY_HASH_SECRET` to a strong unique value. The default gives no real
-  protection, and rotating it later invalidates existing keys.
+  protection, and rotating it later invalidates existing keys. It also keys
+  each call's media token, which a carrier's media stream must present before
+  the call's agent is attached to it: with the public default, anyone who
+  learns a call id can forge one.
 - Set `PLATFORM_API_KEY`. It gates project and first-API-key creation. It fails
   closed when empty, but the shipped dev value (`dev-platform-key`) is public
   knowledge — change it.

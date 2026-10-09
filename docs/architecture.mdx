@@ -57,7 +57,7 @@ sequenceDiagram
     C->>T: Dials number
     T->>W: POST /webhooks/twilio/voice/inbound
     W->>DB: Resolve phone → agent, create Call record
-    W-->>T: TwiML Stream directive + callId
+    W-->>T: TwiML Stream directive + callId + mediaToken
     T->>P: WebSocket /ws/media-stream (8kHz μ-law)
     P->>DB: Stream transcripts, events, tool calls
     loop Conversation

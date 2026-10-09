@@ -7,8 +7,16 @@ open stream to `run_media_stream`, which resolves the call's agent from the
 call record and builds the pipeline. The serializer is chosen here from the
 call's own carrier, in `create_carrier_transport`; past it, nothing learns
 which carrier the call is on.
+
+Before any of that, the stream has to prove it is the call's (a call id is
+not a secret, and the socket gets the call's agent): it must carry the call's
+media token (`services/media_token.py`), arrive on the route of the call's own
+carrier, and be the call's first stream. Anything else is `MediaStreamRefused`
+with nothing built and the call's live-call slot untouched — the slot is the
+real stream's.
 """
 
+from typing import Any
 from uuid import UUID
 
 from fastapi import WebSocket
@@ -25,21 +33,73 @@ from turncall.orchestrator.transport_factory import (
 )
 from turncall.services import drain
 from turncall.services.limits import hold_live_call, release_live_call
+from turncall.services.media_token import media_token_valid
 from turncall.storage.database import create_session_factory, get_engine
 
 
+class MediaStreamRefused(Exception):
+    """A stream that is not the call's own: nothing was built for it, and the
+    edge closes it without touching the call (it belongs to the real one)."""
+
+
+async def _claim(session_factory: Any, call_id: UUID, carrier: str, token: str) -> None:
+    """Refuse a stream that is not this call's first, on its own carrier, with
+    its token; claim the call's one stream for this one otherwise."""
+    from turncall.storage.repositories import call_repo
+
+    if not media_token_valid(call_id, token):
+        logger.warning(
+            "media_stream_refused: bad media token",
+            call_id=str(call_id),
+            carrier=carrier,
+        )
+        raise MediaStreamRefused("no valid media token")
+    async with session_factory() as session:
+        attached = await call_repo.attach_media(session, call_id, carrier=carrier)
+        await session.commit()
+        if attached:
+            return
+        row = await call_repo.get_call_by_id(session, call_id)
+    reason = (
+        "no such call"
+        if row is None
+        else f"the call is on {row.provider}"
+        if row.provider != carrier
+        else "the call already has a media stream"
+        if row.media_attached_at is not None
+        else f"the call is {row.status}"
+    )
+    logger.warning(
+        "media_stream_refused: {reason}",
+        reason=reason,
+        call_id=str(call_id),
+        carrier=carrier,
+    )
+    raise MediaStreamRefused(reason)
+
+
 async def run_media_stream(
-    websocket: WebSocket, call_id: UUID, stream: CarrierStream
+    websocket: WebSocket,
+    call_id: UUID,
+    stream: CarrierStream,
+    *,
+    carrier: str,
+    token: str,
 ) -> None:
     """Run one call's pipeline on an accepted, started carrier media stream.
 
-    Returns when the call ends. Raises what the pipeline raises; the carrier's
-    edge owns the socket and decides what a failure means to it.
+    `carrier` is the edge's own — the route the stream arrived on — and
+    `token` the media token its handshake carried. Raises `MediaStreamRefused`
+    before anything is built for a stream that is not the call's (see the
+    module docstring). Returns when the call ends. Raises what the pipeline
+    raises; the carrier's edge owns the socket and decides what a failure
+    means to it.
     """
     call_id_str = str(call_id)
     settings = get_settings()
     engine = get_engine()
     session_factory = create_session_factory(engine)
+    await _claim(session_factory, call_id, carrier, token)
 
     # Resolve everything from the call record (project_id, agent_id, config)
     async with session_factory() as session:
@@ -50,7 +110,6 @@ async def run_media_stream(
             logger.error("media_stream_call_not_found: {id}", id=call_id_str)
             return
 
-        carrier = call_row.provider
         if carrier not in CARRIER_MEDIA:
             # A call reaching a media stream this deployment has no serializer
             # for: decoding it as some other carrier's would be noise.
@@ -151,8 +210,8 @@ async def run_media_stream(
                 session_factory=session_factory,
                 settings=settings,
             )
-            # The serializer comes from the call's carrier, not from which edge
-            # handed the stream over (ADR-0022).
+            # The serializer comes from the call's carrier (ADR-0022) — which
+            # the claim has made sure is also the edge's.
             transport = create_carrier_transport(
                 carrier, websocket, stream, mixer=mixer
             )

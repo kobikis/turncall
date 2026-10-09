@@ -4,8 +4,8 @@ A Telnyx number's Call Control application posts every call event to one URL,
 `/webhooks/telnyx/voice`, as JSON `{"data": {"event_type", "payload"}}` signed
 with the account's Ed25519 key. An incoming `call.initiated` is answered the
 Call Control way — a REST `answer` command whose `stream_url` points the call's
-media at `/ws/telnyx/media-stream/{call_id}` (`telnyx_media_stream.py`), where
-the shared media entry point takes over. An outgoing call (#218) needs nothing
+media at `/ws/telnyx/media-stream/{call_id}/{media token}`
+(`telnyx_media_stream.py`), where the shared media entry point takes over. An outgoing call (#218) needs nothing
 here until it ends: its dial already named that stream. `call.hangup` closes a
 call no pipeline ever ran for — including a dial nobody answered — and one
 that ran closes itself. A transfer's webhooks, on the caller's leg and the
@@ -74,7 +74,9 @@ def _stream_url(request: Request, call_id: UUID) -> str:
     host = request.headers.get("host", "localhost:8000")
     forwarded_proto = request.headers.get("x-forwarded-proto", "")
     is_https = forwarded_proto == "https" or get_settings().is_production
-    return f"{'wss' if is_https else 'ws'}://{host}/ws/telnyx/media-stream/{call_id}"
+    from turncall.webhooks.telnyx_media_stream import media_stream_path
+
+    return f"{'wss' if is_https else 'ws'}://{host}{media_stream_path(call_id)}"
 
 
 async def _whose(

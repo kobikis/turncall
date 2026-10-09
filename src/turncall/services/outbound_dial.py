@@ -339,6 +339,7 @@ async def _dial_telnyx(
     callee's media straight to the call's stream once they answer (Telnyx
     opens it; there is no answer step on an outbound call)."""
     from turncall.adapters.telephony.telnyx_adapter import TelnyxApiError
+    from turncall.webhooks.telnyx_media_stream import media_stream_path
 
     ws_base = base_url.replace("http", "ws", 1)  # https -> wss, http -> ws
     try:
@@ -348,7 +349,7 @@ async def _dial_telnyx(
                 to_number=to_number,
                 webhook_url=f"{base_url}/webhooks/telnyx/voice",
                 connection_id=connection_id,
-                stream_url=f"{ws_base}/ws/telnyx/media-stream/{call_id}",
+                stream_url=f"{ws_base}{media_stream_path(call_id)}",
             )
         )
     except TelnyxApiError as exc:

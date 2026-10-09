@@ -3,7 +3,8 @@
 Telnyx sends `connected`, then `start` — the stream's `stream_id`, the call's
 `call_control_id` and the caller's `media_format` — then `media` frames, and
 `stop` when the call ends. This module reads that handshake, checks the stream
-belongs to the call in its URL, and hands it to the shared media entry point
+belongs to the call in its URL — the call's media token in the URL, its
+`call_control_id` in `start` — and hands it to the shared media entry point
 (ADR-0022), which picks pipecat's Telnyx serializer.
 
 On Telnyx, unlike Twilio's `<Connect><Stream>`, a stream closing does not end
@@ -16,6 +17,7 @@ purpose and keeps the caller on the line.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from typing import Any
 from uuid import UUID
@@ -25,7 +27,8 @@ from loguru import logger
 
 from turncall.domain.carriers import TELNYX
 from turncall.orchestrator.transport_factory import CarrierStream
-from turncall.webhooks.media_stream import run_media_stream
+from turncall.services.media_token import media_token, media_token_valid
+from turncall.webhooks.media_stream import MediaStreamRefused, run_media_stream
 
 router = APIRouter()
 
@@ -43,13 +46,22 @@ async def _wait_for_start(websocket: WebSocket) -> dict[str, Any]:
             logger.warning("telnyx_unexpected_pre_start_event", event=data.get("event"))
 
 
-async def _belongs_to(call_id: UUID, stream: CarrierStream) -> bool:
-    """Whether the stream is the one Telnyx opened for this call: a Telnyx call
-    whose `call_control_id` is the stream's. A URL's call id alone is a guess
-    away from someone else's call."""
+def media_stream_path(call_id: UUID) -> str:
+    """The path of a call's stream, as the `answer` or dial names it to
+    Telnyx: the call id, and the media token only that setup hands out."""
+    return f"/ws/telnyx/media-stream/{call_id}/{media_token(call_id)}"
+
+
+async def _belongs_to(call_id: UUID, token: str, stream: CarrierStream) -> bool:
+    """Whether the stream is the one Telnyx opened for this call: its URL
+    carries the call's media token, and it is a Telnyx call whose
+    `call_control_id` is the stream's. A URL's call id alone is a guess away
+    from someone else's call. Checked before the edge may hang anything up."""
     from turncall.storage.database import get_session_factory
     from turncall.storage.repositories import call_repo
 
+    if not media_token_valid(call_id, token):
+        return False
     async with get_session_factory()() as session:
         call = await call_repo.get_call_by_id(session, call_id)
     return (
@@ -97,8 +109,8 @@ async def _transferring(call_id: UUID) -> bool:
         return False
 
 
-@router.websocket("/ws/telnyx/media-stream/{call_id}")
-async def telnyx_media_stream(websocket: WebSocket, call_id: UUID) -> None:
+@router.websocket("/ws/telnyx/media-stream/{call_id}/{token}")
+async def telnyx_media_stream(websocket: WebSocket, call_id: UUID, token: str) -> None:
     """Telnyx media stream: handshake, the shared entry point, then hang up."""
     await websocket.accept()
     verified = False
@@ -110,7 +122,7 @@ async def telnyx_media_stream(websocket: WebSocket, call_id: UUID) -> None:
             call_sid=str(start.get("call_control_id") or ""),
             encoding=str((start.get("media_format") or {}).get("encoding") or ""),
         )
-        if not await _belongs_to(call_id, stream):
+        if not await _belongs_to(call_id, token, stream):
             logger.warning("telnyx_media_stream_not_this_call", call_id=str(call_id))
             await websocket.close()
             return
@@ -128,7 +140,13 @@ async def telnyx_media_stream(websocket: WebSocket, call_id: UUID) -> None:
             call_id=str(call_id),
             stream_id=stream.stream_id,
         )
-        await run_media_stream(websocket, call_id, stream)
+        await run_media_stream(websocket, call_id, stream, carrier=TELNYX, token=token)
+    except MediaStreamRefused:
+        # The call's own credentials, but not its stream (it has one, or it
+        # is over): the call belongs to that stream, which hangs it up itself.
+        verified = False
+        with contextlib.suppress(Exception):
+            await websocket.close()
     except WebSocketDisconnect:
         logger.info("telnyx_media_stream_disconnected", call_id=str(call_id))
     except Exception:

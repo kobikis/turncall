@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from turncall.adapters.telephony.twilio_adapter import TwilioAdapter
+from turncall.services.media_token import media_token
 
 
 @pytest.mark.unit
@@ -42,6 +43,8 @@ class TestTwiMLGeneration:
         params = stream.findall("Parameter")
         param_dict = {p.get("name"): p.get("value") for p in params}
         assert param_dict["callId"] == str(call_id)
+        # What proves the stream that opens is this call's (the takeover fix).
+        assert param_dict["mediaToken"] == media_token(call_id)
 
     def test_transfer_twiml_basic(self) -> None:
         # Cold, no extras → bare <Dial>target</Dial>.

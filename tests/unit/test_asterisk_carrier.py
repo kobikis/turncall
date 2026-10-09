@@ -31,8 +31,12 @@ from turncall.api.v1.schemas.phone_numbers import BindPhoneNumberRequest
 from turncall.orchestrator import transport_factory as tf
 from turncall.orchestrator.asterisk_serializer import AsteriskFrameSerializer
 from turncall.services.inbound_call import InboundRefusal
+from turncall.services.media_token import media_token
 from turncall.webhooks import asterisk_edge
-from turncall.webhooks.asterisk_media_stream import call_id_of, media_channel_id
+from turncall.webhooks.asterisk_media_stream import (
+    media_channel_id,
+    media_channel_parts,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -82,11 +86,15 @@ class TestTheMediaWireFormat:
         assert isinstance(transport._params.serializer, AsteriskFrameSerializer)
         assert transport._params.audio_out_sample_rate == 8000
 
-    def test_the_media_channel_id_carries_the_call_id(self) -> None:
+    def test_the_media_channel_id_carries_the_call_id_and_its_token(self) -> None:
         call_id = uuid.uuid4()
-        assert call_id_of(media_channel_id(call_id)) == call_id
-        assert call_id_of("PJSIP/trunk-0001") is None
-        assert call_id_of("turncall-media-not-a-uuid") is None
+        channel = media_channel_id(call_id)
+        assert media_channel_parts(channel) == (call_id, media_token(call_id))
+        # Asterisk's channel ids are at most 150 characters (AST_MAX_UNIQUEID).
+        assert len(channel) <= 150
+        assert media_channel_parts(f"turncall-media-{call_id}") == (call_id, "")
+        assert media_channel_parts("PJSIP/trunk-0001") is None
+        assert media_channel_parts("turncall-media-not-a-uuid") is None
 
 
 ACCOUNT = AriAccount(url="http://pbx:8088", username="u", password="p")

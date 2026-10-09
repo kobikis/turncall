@@ -102,6 +102,30 @@ async def update_call_status(
     return result.scalar_one_or_none()
 
 
+# A call in one of these is over: no stream may start one again.
+_ENDED = ("completed", "failed", "no_answer", "busy")
+
+
+async def attach_media(session: AsyncSession, call_id: UUID, *, carrier: str) -> bool:
+    """Claim the call's one media stream; whether this caller got it.
+
+    A guarded UPDATE, so of two streams racing for one call exactly one wins,
+    whichever replica each landed on. Lands only on a call on `carrier`, not
+    yet attached and not over. The caller commits.
+    """
+    result = await session.execute(
+        update(CallRow)
+        .where(
+            CallRow.id == call_id,
+            CallRow.provider == carrier,
+            CallRow.media_attached_at.is_(None),
+            CallRow.status.not_in(_ENDED),
+        )
+        .values(media_attached_at=func.now())
+    )
+    return bool(result.rowcount)
+
+
 async def update_call_recording_url(
     session: AsyncSession,
     call_id: UUID,

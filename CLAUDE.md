@@ -103,7 +103,7 @@ make load-test        # concurrent calls per pod on stub providers (#200; docs/g
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OTLP collector endpoint for OpenTelemetry traces (e.g. `http://localhost:4318`). Required for tracing in production (it self-disables without one). `OTEL_EXPORTER_OTLP_PROTOCOL` (`http/protobuf`\|`grpc`), `OTEL_EXPORTER_OTLP_HEADERS` also honored. See `adr/0010` |
 | `PIPECAT_VAD_CONFIDENCE_THRESHOLD` | No | Silero VAD confidence (default `0.6`). Pairs with the agent's `silence_timeout_ms`, which sets the VAD stop window when Smart Turn is off (with it on, the model decides the turn and VAD uses Pipecat's 0.2s — the two waits are serial, so charging both cost 1.8s a turn) |
 | `PIPECAT_ENABLE_OBSERVERS` / `PIPECAT_ENABLE_TRACING` / `PIPECAT_TRACE_INCLUDE_PII` | No | Observability toggles (all default `true`). PII = caller phone numbers on spans. See `adr/0010` |
-| `API_KEY_HASH_SECRET` | Prod | Pepper for the HMAC-SHA256 hashing of API keys — a DB leak alone can't brute-force keys without it. **Set a strong value once and don't rotate** (rotating invalidates peppered keys; pre-pepper keys keep working via dual-read + upgrade-on-use). Default `change-me-in-production` gives no real protection until set |
+| `API_KEY_HASH_SECRET` | Prod | Pepper for the HMAC-SHA256 hashing of API keys — a DB leak alone can't brute-force keys without it. **Set a strong value once and don't rotate** (rotating invalidates peppered keys; pre-pepper keys keep working via dual-read + upgrade-on-use). Default `change-me-in-production` gives no real protection until set. Also keys each call's **media token** (an HMAC of the call id under its own label) — what a carrier's media stream must present before a pipeline is built on it; rotating it refuses the stream of any call answered under the old value and not yet streaming |
 | `EVAL_TTS_CACHE_DIR` | No | Where the caller's synthesized turns are cached in audio runs (default `./storage/eval-tts-cache`). Pipecat's own default lives under `$HOME`, which a container loses on recreate — every repeat run would then re-synthesize every caller turn. Mount it |
 | `EVAL_MAX_CONCURRENT_RUNS` | No | Scenario-iterations the eval worker runs at once (default `4`). The worker runs the bot pipeline **and** the harness — which itself runs a persona LLM, a TTS, an STT and the judge — so in audio mode one run is roughly double a real call's service load in one event loop. A starting point, not a measurement. `EVAL_MAX_RUN_DURATION_SECONDS` (default `900`) is the janitor's cutoff for reclaiming a run a crashed worker left claimed, as `errored`; `EVAL_MAX_QUEUED_SECONDS` (`3600`) is the same cutoff for a run **nothing ever claimed** — the API committed the row then died before the queue push — and is longer, because waiting behind a backlog is normal where running for 15 minutes is not. `EVAL_JANITOR_INTERVAL_SECONDS` (`60`) bounds the sweep. One request's paid LLM work has **two** axes and needs both: `EVAL_MAX_ITERATIONS` (`50`) per run, and `EVAL_MAX_SCENARIOS_PER_REQUEST` (`50`) on a `tag`'s fan-out — a tag matching more than that is refused naming the count, never truncated, because a batch that ran 50 of 200 scenarios reports a verdict for a suite that never ran. See `adr/0018` |
 | `EVAL_JUDGE_PROVIDER` | No | What decides every verdict, set once for the platform (#119) — one of `ollama` (pipecat's own, the default when nothing is set), `openai`, `anthropic`, `jev` (#141: TypeSafe's classifier — a few hundred ms per verdict with a *calibrated* probability, judge-only, needs `TYPESAFE_API_KEY` + the `evals-jev` extra, and supplies no prose so the **explainer** comes from this same setting). With `EVAL_JUDGE_MODEL` (that provider's own default when empty) and `EVAL_JUDGE_TEMPERATURE` (unset by default — a verdict that varies run to run is not a verdict; dropped entirely for Anthropic and the OpenAI reasoning families, as on the call path). `EVAL_SIMULATOR_PROVIDER` / `_MODEL` / `_TEMPERATURE` are the same three for the LLM that plays the caller in a simulation. A **scenario's** own `judge:`/`simulator:` block wins, taken whole; a `judge` on a **run** request is a 422, since a run is what it was queued as |
@@ -188,6 +188,23 @@ them:
   `transport_factory.CARRIER_MEDIA`. A call whose carrier has no entry there is
   refused before anything is built. Past the serializer nothing learns the
   carrier.
+- **A media stream must prove it is the call's** (the takeover fix). A call
+  id is not a secret — it rides in webhooks, call-init, the API, logs — and
+  every route used to build the real pipeline on any socket that named one,
+  on any carrier's route, as many times as asked. `run_media_stream(...,
+  carrier=, token=)` now refuses, before anything is built and without
+  touching the call's live-call slot (`MediaStreamRefused`): a stream without
+  the call's **media token** (`services/media_token.py`, HMAC-SHA256 of the
+  call id keyed by `API_KEY_HASH_SECRET`, `hmac.compare_digest`), one on a
+  route whose carrier is not `calls.provider`, and a second stream for a call
+  (`calls.media_attached_at`, claimed by a guarded UPDATE that also refuses a
+  call already over — `call_repo.attach_media`). The token reaches only the
+  carrier, in the call's own stream setup: Twilio's TwiML `<Parameter
+  name="mediaToken">`, Telnyx's `stream_url` path
+  (`/ws/telnyx/media-stream/{call_id}/{token}`), Asterisk's external-media
+  channel id (`turncall-media-<call_id>-<token>`, 116 characters — not `v()`
+  URI params, which leak across calls). Proven per carrier, forged and real
+  side by side, in `tests/integration/test_media_stream_takeover.py`.
 - **The API says `carrier`.** Phone-number reads carry `carrier` (and the same
   value as `provider`, deprecated); writes take `carrier`, or `provider` as a
   deprecated alias — both at once must agree. The columns keep the name
@@ -223,7 +240,7 @@ them:
 Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
   → verify with the key of the project the call/number belongs to
   → open_inbound_call (carrier "telnyx") → REST `answer` with stream_url
-  → Telnyx opens /ws/telnyx/media-stream/{call_id} → run_media_stream
+  → Telnyx opens /ws/telnyx/media-stream/{call_id}/{token} → run_media_stream
      (pipecat TelnyxFrameSerializer, PCMU both ways)
   → stream ends → REST `hangup`; call.hangup is recorded on the event log
 ```
@@ -247,8 +264,11 @@ Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
   per-leg advisory lock (`pg_advisory_xact_lock` on the `call_control_id`)
   and re-reads, so the retry waits and then finds the row — one slot, one
   row, one `answer`.
-- **The stream must be the call's**: its `start.call_control_id` has to be the
-  call's `provider_call_sid`, or it is closed — no pipeline, no hang-up.
+- **The stream must be the call's**: its URL has to carry the call's media
+  token and its `start.call_control_id` has to be the call's
+  `provider_call_sid`, or it is closed — no pipeline, no hang-up. A second
+  stream with both is refused by the entry point the same way, and does not
+  hang the call up either: the call is the first stream's.
 - **`call.hangup`** is stored as a `call.ended` event (as Twilio's `completed`
   status callback is) and finalizes only a call no media stream ever opened
   for; one that has a pipeline is finalized by it, recording complete.
@@ -372,9 +392,10 @@ the channel id. Verified against a real 23.4.1 by `tests/live/test_live_asterisk
 - **The media route** is `/ws/asterisk-media` (`webhooks/asterisk_media_stream.py`):
   the PBX's `websocket_client.conf` entry (`ASTERISK_MEDIA_CONNECTION`,
   default `turncall`, `connection_type=per_call_config`) points its `uri` here.
-  It reads `MEDIA_START`, takes the call id from `channel_id` (not `v()` URI
-  params, which leaked across calls — asterisk#2194), refuses anything but
-  `ulaw`, and hands over to the shared entry point. Media is raw ulaw at
+  It reads `MEDIA_START`, takes the call id **and its media token** from
+  `channel_id` (`turncall-media-<call_id>-<token>`; not `v()` URI params,
+  which leaked across calls — asterisk#2194), refuses anything but `ulaw`,
+  and hands over to the shared entry point, which checks the token. Media is raw ulaw at
   8 kHz, 160 bytes a frame; `orchestrator/asterisk_serializer.py` pads output
   to whole frames, sends `FLUSH_MEDIA` on a barge-in (chan_websocket queues up
   to ~20 s), and turns `DTMF_END` into DTMF input. pipecat 1.12 ships nothing
