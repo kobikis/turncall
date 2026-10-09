@@ -157,11 +157,15 @@ async def serve(
         await asyncio.wait_for(
             _subscribed(pubsub, channel(call_id)), _SUBSCRIBE_TIMEOUT_SECONDS
         )
-    except Exception as exc:
+    except BaseException as exc:
+        # Closed on every way out, cancellation included: the client is the
+        # call's own, and nothing else will close it.
+        await _close(pubsub, subscriber, call_id)
+        if not isinstance(exc, Exception):
+            raise
         logger.warning(
             "control_channel_unavailable", call_id=str(call_id), error=repr(exc)
         )
-        await _close(pubsub, subscriber, call_id)
         yield False
         return
 

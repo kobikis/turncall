@@ -414,6 +414,11 @@ and is not part of this repository's history.
   nothing was dialled; a campaign target in that case ends `failed` with
   `dial_not_recorded` and keeps its reservation.
 
+- **A call cancelled while its control channel subscribes closes the
+  channel's Redis client** (#215). The subscribe step cleaned up only on an
+  error, and cancellation is not one, so a call torn down in that window — a
+  forced shutdown, a caller gone at once — left its dedicated connection open.
+
 - **A request's writes are committed before its response is sent.** The
   request session committed in a yield dependency, which FastAPI runs *after*
   the response by default — so Twilio could open the media stream named in the
