@@ -19,14 +19,19 @@ Pieces
   them off (`HARNESS_AGENT` does).
 - `carrier.py` — `FakeCarrier`: owns numbers, records every REST action in
   `actions` (`dial`, `hang_up`, `transfer`, `send_dtmf`, `configure_number`,
-  `configure_sms`, `send_sms`, and Telnyx's `answer`), and `wait_for(kind)`.
+  `configure_sms`, `send_sms`, and Telnyx's `answer`, `stop_streaming`,
+  `speak`, `start_playback`, `stop_playback`, `bridge`), `wait_for(kind)` and
+  `action_at(index)`.
   `install(set_attr)` replaces the adapters `services/twilio_accounts
   .TwilioAccount` and `services/telnyx_accounts.TelnyxAccount` hand out, which
   is every carrier REST call the app makes. It also holds the Telnyx account's
   API key and an Ed25519 keypair whose public half the app is given.
 - `media_call.py` — `CarrierCall`, a live call's media stream from the
   caller's side: 20ms mulaw frames at real-time pace, silence unless
-  `say(ms)`, `wait_for_agent_speech(n)`, `closed`, `hang_up()`, `finish()`.
+  `say(ms)`, `wait_for_agent_speech(n)`, `closed`, `hang_up()`, `finish()`,
+  and `complete_transfer(answered_by=)` — the carrier's side of a transfer the
+  app asked for, played to the end of the call, returning `TransferHeard`
+  (what the caller and the operator heard, ringing, bridged).
 - `twilio.py` — Twilio's edge: `sign`/`post_signed` for webhooks,
   `place_inbound_call` (POST the number's configured voice URL, open the
   `<Stream>`), and `TwilioCall` (`finish()` posts the `completed` status

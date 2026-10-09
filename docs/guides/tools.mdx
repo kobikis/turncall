@@ -50,7 +50,8 @@ outside hangs up at once.
 
 ### Call transfer (cold / warm)
 
-`transfer_call` moves a live Twilio call to a human:
+`transfer_call` moves a live phone call to a human, on a Twilio or a Telnyx
+number alike:
 
 - `transfer_mode`: `cold` (blind — bridge immediately) or `warm` (brief the operator first).
 - `transfer_message`: spoken to the **caller** before the dial ("Connecting you…").
@@ -65,8 +66,8 @@ event reports `answered_by` (`human`/`machine`). See the
 the `examples/call-transfer` example.
 
 <Note>
-  Transfers redirect the call's PSTN leg, so they work on Twilio calls — a
-  WebRTC or WhatsApp session has no phone leg to bridge.
+  Transfers redirect the call's PSTN leg, so they work on Twilio and Telnyx
+  calls — a WebRTC or WhatsApp session has no phone leg to bridge.
 </Note>
 
 ### Choosing the transfer target

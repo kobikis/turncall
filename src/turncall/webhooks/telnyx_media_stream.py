@@ -9,7 +9,9 @@ belongs to the call in its URL, and hands it to the shared media entry point
 On Telnyx, unlike Twilio's `<Connect><Stream>`, a stream closing does not end
 the call: the call stays up, silent, until something hangs it up. So when the
 stream ends this edge hangs the call up through the Telnyx adapter — a call the
-caller already hung up answers "already ended", which counts as done.
+caller already hung up answers "already ended", which counts as done — unless
+the stream ended because the call is being transferred, which stops it on
+purpose and keeps the caller on the line.
 """
 
 from __future__ import annotations
@@ -81,6 +83,20 @@ async def _hang_up(call_id: UUID) -> None:
         logger.exception("telnyx_hangup_failed", call_id=str(call_id))
 
 
+async def _transferring(call_id: UUID) -> bool:
+    """Whether the stream ended because the call is being transferred: the
+    transfer stopped it, and the caller is now on with the operator, or about
+    to be (`services/telnyx_transfer.py`). Call control parks the intent
+    before stopping the stream and drops it if the transfer did not start."""
+    from turncall.services.transfer import load_transfer_intent
+
+    try:
+        return await load_transfer_intent(call_id) is not None
+    except Exception:
+        logger.exception("telnyx_transfer_state_unreadable", call_id=str(call_id))
+        return False
+
+
 @router.websocket("/ws/telnyx/media-stream/{call_id}")
 async def telnyx_media_stream(websocket: WebSocket, call_id: UUID) -> None:
     """Telnyx media stream: handshake, the shared entry point, then hang up."""
@@ -118,5 +134,5 @@ async def telnyx_media_stream(websocket: WebSocket, call_id: UUID) -> None:
     except Exception:
         logger.exception("telnyx_media_stream_error", call_id=str(call_id))
     finally:
-        if verified:
+        if verified and not await _transferring(call_id):
             await _hang_up(call_id)

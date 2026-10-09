@@ -29,8 +29,8 @@ import httpx
 import websockets
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from tests.harness.carrier import FakeCarrier
-from tests.harness.media_call import FRAME_MS, SAMPLE_RATE, CarrierCall
+from tests.harness.carrier import CarrierAction, FakeCarrier
+from tests.harness.media_call import FRAME_MS, SAMPLE_RATE, CarrierCall, TransferHeard
 
 WEBHOOK_PATH = "/webhooks/telnyx/voice"
 
@@ -106,15 +106,96 @@ class TelnyxCall(CarrierCall):
 
     async def hang_up(self) -> None:
         """The caller hangs up: `stop`, close the stream, post `call.hangup`."""
-        if not self.closed.is_set():
-            await self._send(
-                {
-                    "event": "stop",
-                    "stop": {"user_id": "harness", "call_control_id": self.call_sid},
-                }
-            )
-            await self._ws.close()
+        await self.close_stream()
         await self.finish(source="caller")
+
+    def _stop_message(self) -> dict[str, Any]:
+        return {
+            "event": "stop",
+            "stop": {"user_id": "harness", "call_control_id": self.call_sid},
+        }
+
+    async def complete_transfer(self, *, answered_by: str | None) -> TransferHeard:
+        """Play Telnyx's side of a transfer, command by command, to the end of
+        the call: each command the app sends gets the webhook Telnyx would send
+        back, carrying the `client_state` the leg was last given. The operator's
+        leg answers (`call.answered`, then the machine-detection result after
+        the bridge, which it never holds up) or times out (`call.hangup`)."""
+        start = await self.carrier.wait_for("stop_streaming", timeout=10)
+        index = self.carrier.actions.index(start)
+        await self.close_stream()  # what `streaming_stop` does to the socket
+        heard = TransferHeard()
+        states = {self.call_sid: start.params["client_state"]}
+        operator: CarrierAction | None = None
+        while True:
+            index += 1
+            action = await self.carrier.action_at(index)
+            leg = action.params.get("call_sid", "")
+            if action.params.get("client_state"):
+                states[leg] = action.params["client_state"]
+            if action.kind == "speak":
+                said = heard.caller if leg == self.call_sid else heard.operator
+                said.append(action.params["text"])
+                await self._leg_event(
+                    leg, operator, states, "call.speak.ended", status="completed"
+                )
+            elif action.kind == "start_playback" and leg == self.call_sid:
+                heard.ringing = True
+            elif action.kind == "dial":
+                operator, heard.target = action, action.params["to_number"]
+                if answered_by is None:
+                    await self._leg_event(
+                        leg, operator, states, "call.hangup", hangup_cause="timeout"
+                    )
+                else:
+                    await self._leg_event(leg, operator, states, "call.answered")
+            elif action.kind == "bridge":
+                heard.bridged = True
+                if operator is not None and operator.params["detect_machine"]:
+                    result = "human" if answered_by == "human" else "machine"
+                    await self._leg_event(
+                        operator.params["call_sid"],
+                        operator,
+                        states,
+                        "call.machine.detection.ended",
+                        result=result,
+                    )
+                # The two talk, then hang up: Telnyx ends both legs.
+                await self._leg_event(
+                    operator.params["call_sid"], operator, states, "call.hangup"
+                )
+                break
+            elif action.kind == "hang_up" and leg == self.call_sid:
+                break
+        await self._leg_event(self.call_sid, operator, states, "call.hangup")
+        return heard
+
+    async def _leg_event(
+        self,
+        leg: str,
+        operator: CarrierAction | None,
+        states: dict[str, str],
+        event_type: str,
+        **extra: Any,
+    ) -> None:
+        """Post a Call Control webhook for the caller's leg or the operator's."""
+        if leg == self.call_sid:
+            payload = self.payload(**extra)
+        else:
+            assert operator is not None
+            payload = {
+                **self.payload(**extra),
+                "call_control_id": leg,
+                "call_leg_id": leg.removeprefix("v3:"),
+                "from": operator.params["from_number"],
+                "to": operator.params["to_number"],
+                "direction": "outgoing",
+            }
+        payload["client_state"] = states.get(leg)
+        response = await post_signed(
+            self.http, self.carrier, event(event_type, payload)
+        )
+        response.raise_for_status()
 
     async def finish(self, status: str = "completed", source: str = "callee") -> None:
         """What Telnyx does once the call is over: stop the line and post

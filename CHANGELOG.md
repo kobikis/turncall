@@ -13,6 +13,15 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Cold transfer and DTMF on Telnyx numbers** (#220, ADR-0009, ADR-0022).
+  `transfer_call` and `POST /v1/calls/{id}/transfer` behave on a Telnyx call as
+  on Twilio: the caller hears the `transfer_message`, then ringing, then the
+  operator, whose caller ID shows the caller's number; if nobody answers, the
+  call ends. On Call Control that is a sequence of commands driven by Telnyx's
+  webhooks (stop the agent's stream, speak, ringback, dial a linked leg,
+  bridge). `send_dtmf` sends its digits with Telnyx's `send_dtmf` command.
+  The carrier contract test runs the cold transfer and DTMF on both carriers.
+
 - **Telnyx numbers answer inbound calls** (#217, ADR-0022). Bind a number with
   `"carrier": "telnyx"` and point its Call Control application at
   `/webhooks/telnyx/voice`: the call is answered through Call Control, its
@@ -22,8 +31,8 @@ and is not part of this repository's history.
   without a valid signature; there is no unsigned mode. The account is a
   `telnyx` project credential (`api_key` + `public_key`) over the platform's
   `TELNYX_API_KEY` / `TELNYX_PUBLIC_KEY`; with no key at any level the call
-  fails with `missing_keys: ["telnyx"]`. Outbound calls, number configuration,
-  transfer and DTMF on Telnyx come next.
+  fails with `missing_keys: ["telnyx"]`. Outbound calls and number
+  configuration on Telnyx come next.
 
 ### Changed
 
@@ -183,6 +192,12 @@ and is not part of this repository's history.
   spurious interruptions and no empty turns at the default volume (#171).
 
 ### Fixed
+
+- **A transfer's own record could be lost with the call** (#220). Every
+  carrier ends the agent's media stream as part of a transfer, which cancels
+  the pipeline — and the `transfer_call` tool still recording
+  `call.transferred` and the call's status with it, so the call could read as
+  the caller hanging up. The tool now runs shielded, as `end_call` does.
 
 - **Knowledge bases never reached an inline agent** (#260). Links live on an
   agent row, and a call-init `agent` or an eval `inline` target has none, so

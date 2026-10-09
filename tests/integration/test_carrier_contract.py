@@ -21,6 +21,7 @@ import pytest
 
 from tests.harness import HARNESS_AGENT, Harness, Script, ToolCall, run_app, telnyx
 from tests.harness import place_inbound_call as place_twilio_call
+from tests.harness.media_call import TransferHeard
 
 pytestmark = pytest.mark.integration
 
@@ -34,7 +35,9 @@ class CarrierEdge:
 
     The call `ring` returns has the harness's call shape (`say`,
     `wait_for_agent_speech`, `closed`, `hang_up`, `finish`, `call_id`,
-    `call_sid`, `agent_utterances`).
+    `call_sid`, `agent_utterances`), and plays the carrier's side of a
+    transfer (`complete_transfer`) so a transfer is compared by what each end
+    heard, not by the carrier's wire format.
 
     `hangs_up_by_command`: whether ending the call takes a REST hang-up. On
     Twilio the media stream closing ends the call; on Telnyx it does not, and
@@ -65,8 +68,6 @@ TELNYX = CarrierEdge(
 )
 
 CARRIERS = [pytest.param(edge, id=edge.name) for edge in (TWILIO, TELNYX)]
-# Telnyx transfers arrive with #220.
-TRANSFER_CARRIERS = [pytest.param(TWILIO, id=TWILIO.name)]
 
 
 class _MemoryRedis:
@@ -82,6 +83,9 @@ class _MemoryRedis:
     async def get(self, key: str) -> str | None:
         return self.values.get(key)
 
+    async def delete(self, key: str) -> None:
+        self.values.pop(key, None)
+
 
 def _tool(name: str) -> dict[str, Any]:
     return {
@@ -94,7 +98,7 @@ def _tool(name: str) -> dict[str, Any]:
 AGENT = {
     **HARNESS_AGENT,
     "first_message": "Hello from the contract.",
-    "tools": [_tool("end_call"), _tool("transfer_call")],
+    "tools": [_tool("end_call"), _tool("transfer_call"), _tool("send_dtmf")],
 }
 
 
@@ -149,15 +153,22 @@ async def test_the_agent_ends_the_call(edge: CarrierEdge, monkeypatch) -> None:
     assert _in_order(events, expected), events
 
 
-@pytest.mark.parametrize("edge", TRANSFER_CARRIERS)
+@pytest.mark.parametrize("edge", CARRIERS)
 async def test_a_cold_transfer(edge: CarrierEdge, monkeypatch) -> None:
+    """The caller hears the transfer message, then ringing, then the operator:
+    no briefing on a cold transfer, and the agent's stream ending is not the
+    call ending."""
     import turncall.storage.redis as redis_module
 
-    monkeypatch.setattr(redis_module, "get_redis", lambda: _MemoryRedis())
+    redis = _MemoryRedis()
+    monkeypatch.setattr(redis_module, "get_redis", lambda: redis)
     script = Script(
         caller=("Put me through to a person.",),
         agent=(
-            ToolCall("transfer_call", {"target_number": OPERATOR}),
+            ToolCall(
+                "transfer_call",
+                {"target_number": OPERATOR, "transfer_message": "Transferring you."},
+            ),
             "Connecting you now.",
         ),
     )
@@ -168,20 +179,41 @@ async def test_a_cold_transfer(edge: CarrierEdge, monkeypatch) -> None:
         call = await edge.ring(app, CALLER, number)
         await call.wait_for_agent_speech(1)
         await call.say(400)
-        transfer = await app.carrier.wait_for("transfer", timeout=10)
-        # The carrier bridges the caller to the operator: the media stream
-        # ends, and the call is over as far as the agent is concerned.
-        await call.hang_up()
+        heard = await call.complete_transfer(answered_by="human")
         ended = (await app.sink.wait_for("call.ended"))["payload"]
         events = await _events(app, call.call_id)
         transferred = app.sink.of("call.transferred")
 
-    assert transfer.params["call_sid"] == call.call_sid
-    assert transfer.params["target_number"] == OPERATOR
-    assert transfer.params["whisper_url"] is None  # cold: no operator briefing
-    assert transfer.params["transfer_message"] is None
+    assert heard == TransferHeard(
+        target=OPERATOR, caller=["Transferring you."], ringing=True, bridged=True
+    )
+    # The caller is with the operator: nothing of ours hung their leg up.
+    hung_up = [a.params["call_sid"] for a in app.carrier.actions_of("hang_up")]
+    assert call.call_sid not in hung_up
     assert [e["payload"]["success"] for e in transferred] == [True]
     assert transferred[0]["payload"]["transfer_mode"] == "cold"
     assert ended["ended_reason"] == "transferred"
     expected = ["call.started", "call.transferred"]  # call.ended: see above
     assert _in_order(events, expected), events
+
+
+@pytest.mark.parametrize("edge", CARRIERS)
+async def test_the_agent_sends_dtmf(edge: CarrierEdge, monkeypatch) -> None:
+    script = Script(
+        caller=("Press one and pound for me.",),
+        agent=(ToolCall("send_dtmf", {"digits": "1w#"}), "Done."),
+    )
+    async with run_app(
+        script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        number = await edge.bind(app, await app.create_agent(AGENT))
+        call = await edge.ring(app, CALLER, number)
+        await call.wait_for_agent_speech(1)
+        await call.say(400)
+        dtmf = await app.carrier.wait_for("send_dtmf", timeout=10)
+        await call.hang_up()
+        await app.sink.wait_for("call.ended")
+        events = await _events(app, call.call_id)
+
+    assert dtmf.params == {"call_sid": call.call_sid, "digits": "1w#"}
+    assert "dtmf.sent" in events

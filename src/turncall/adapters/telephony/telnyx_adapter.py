@@ -6,12 +6,18 @@ is what a test's fake carrier replaces. A command addresses a call by its
 `call_control_id` (stored as the call's `provider_call_sid`).
 
 The actions later tickets bring (outbound dial #218, number configuration
-#219, transfer and DTMF #220) land here as well; until then they raise, naming
-the ticket, rather than pretend to have done something.
+#219) land here as well; until then they raise, naming the ticket, rather than
+pretend to have done something.
+
+A transfer is not one command on Telnyx: it is a sequence (stop the agent's
+stream, speak, ring the operator on a second leg, whisper, bridge) driven by
+the webhooks each step produces, which `services/telnyx_transfer.py` runs. The
+steps are this adapter's.
 """
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 from urllib.parse import quote
 
@@ -27,6 +33,10 @@ STREAM_CODEC = "PCMU"
 # Telnyx's answer to a command on a call that has already hung up.
 CALL_ALREADY_ENDED = "90018"
 _TIMEOUT_SECONDS = 10.0
+# Telnyx's own TTS, as Twilio's <Say> is Twilio's (ADR-0009: the carrier voices
+# the transfer message, the briefing and the fallback, not the agent's TTS).
+SPEAK_VOICE = "AWS.Polly.Joanna"
+SPEAK_MAX_CHARS = 3000  # Telnyx refuses a longer `payload`
 
 
 class TelnyxApiError(RuntimeError):
@@ -56,7 +66,13 @@ class TelnyxAdapter(TelephonyAdapter):
         self, call_control_id: str, action: str, body: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """POST /calls/{id}/actions/{action}; the response's `data`."""
-        url = f"{TELNYX_API_BASE}/calls/{quote(call_control_id, safe=':')}/actions/{action}"
+        return await self._post(
+            f"/calls/{quote(call_control_id, safe=':')}/actions/{action}", body
+        )
+
+    async def _post(self, path: str, body: dict[str, Any] | None) -> dict[str, Any]:
+        """POST to the v2 API; the response's `data`, or `TelnyxApiError`."""
+        url = f"{TELNYX_API_BASE}{path}"
         async with httpx.AsyncClient(
             transport=self._transport, timeout=_TIMEOUT_SECONDS
         ) as client:
@@ -127,10 +143,93 @@ class TelnyxAdapter(TelephonyAdapter):
         action_url: str | None = None,
         amd_callback_url: str | None = None,
     ) -> str:
-        raise _not_yet("A transfer", "#220")
+        raise NotImplementedError(
+            "A Telnyx transfer is a sequence of commands driven by its webhooks: "
+            "services/telnyx_transfer.start"
+        )
 
     async def send_dtmf(self, provider_call_sid: str, digits: str) -> None:
-        raise _not_yet("Sending DTMF", "#220")
+        """Play DTMF on the call (0-9, A-D, *, #; w/W pause half/one second)."""
+        await self._command(provider_call_sid, "send_dtmf", {"digits": digits})
+        logger.info("telnyx_dtmf_sent", call_control_id=provider_call_sid)
+
+    # -- transfer steps (services/telnyx_transfer.py) ----------------------
+
+    async def stop_streaming(self, call_control_id: str, *, client_state: str) -> None:
+        """Stop the call's media stream. The call stays up; the agent leaves it."""
+        await self._command(
+            call_control_id, "streaming_stop", {"client_state": client_state}
+        )
+
+    async def speak(
+        self, call_control_id: str, text: str, *, client_state: str
+    ) -> None:
+        """Say `text` on this leg in Telnyx's voice. `call.speak.ended` follows,
+        carrying `client_state`."""
+        await self._command(
+            call_control_id,
+            "speak",
+            {
+                "payload": text[:SPEAK_MAX_CHARS],
+                "voice": SPEAK_VOICE,
+                "client_state": client_state,
+            },
+        )
+
+    async def start_playback(self, call_control_id: str, wav: bytes) -> None:
+        """Play a WAV on this leg, looped until stopped."""
+        await self._command(
+            call_control_id,
+            "playback_start",
+            {
+                "playback_content": base64.b64encode(wav).decode(),
+                "audio_type": "wav",
+                "loop": "infinity",
+            },
+        )
+
+    async def stop_playback(self, call_control_id: str) -> None:
+        await self._command(call_control_id, "playback_stop", {"stop": "all"})
+
+    async def dial(
+        self,
+        *,
+        connection_id: str,
+        to: str,
+        from_number: str,
+        link_to: str,
+        client_state: str,
+        detect_machine: bool,
+    ) -> str:
+        """Ring `to` on a new leg of `link_to`'s call; its `call_control_id`.
+
+        `bridge_intent` presents the linked call's caller ID to `to`, as
+        Twilio's `<Dial>` does. Machine detection only reports — the leg is
+        bridged by whoever handles `call.answered`, never held for it.
+        """
+        data = await self._post(
+            "/calls",
+            {
+                "connection_id": connection_id,
+                "to": to,
+                "from": from_number,
+                "link_to": link_to,
+                "bridge_intent": True,
+                "client_state": client_state,
+                **({"answering_machine_detection": "detect"} if detect_machine else {}),
+            },
+        )
+        return str(data["call_control_id"])
+
+    async def bridge(
+        self, call_control_id: str, other: str, *, client_state: str
+    ) -> None:
+        """Connect this leg's audio to `other`'s."""
+        await self._command(
+            call_control_id,
+            "bridge",
+            {"call_control_id": other, "client_state": client_state},
+        )
 
     async def get_recording_url(self, recording_sid: str) -> str:
         # Recording is app-side (ADR-0005); Telnyx records nothing for us.
