@@ -54,7 +54,7 @@ def test_the_shared_analyzer_sets_everything_pipecats_does() -> None:
         LocalSmartTurnAnalyzerV3,
     )
 
-    from turncall.orchestrator.smart_turn import SharedSmartTurnAnalyzer
+    from turncall.orchestrator.turn_detection import SharedSmartTurnAnalyzer
 
     assert set(vars(SharedSmartTurnAnalyzer())) == set(vars(LocalSmartTurnAnalyzerV3()))
 
@@ -79,3 +79,32 @@ async def test_what_one_call_heard_never_reaches_another() -> None:
     state, _ = await first.analyze_end_of_turn()
     assert not second.speech_triggered
     assert state is not None
+
+
+def test_s2s_calls_on_server_vad_share_the_model_too(mocker) -> None:
+    """S2S on server VAD passes no turn strategies — any it passed would
+    override the ones an OpenAI realtime service recommends — so pipecat builds
+    its default stop strategy there, and that default is Smart Turn. It must be
+    the shared model, not one per call."""
+    from tests.conftest import creds
+    from turncall.config.settings import PipecatSettings
+    from turncall.domain.models import S2SConfig
+    from turncall.orchestrator import pipeline_factory
+
+    mocker.patch.object(pipeline_factory, "Pipeline", mocker.MagicMock())
+    built = _sessions_built(mocker)
+
+    for _ in range(3):
+        pipeline_factory._create_s2s_pipeline(
+            config=AgentConfig(
+                pipeline_mode="s2s",
+                s2s=S2SConfig(provider="openai", turn_detection="server_vad"),
+            ),
+            transport=mocker.MagicMock(),
+            call_context=mocker.MagicMock(),
+            pipecat_settings=PipecatSettings(),
+            credentials=creds("sk-test"),
+            audio_sample_rate=16000,
+        )
+
+    assert len(built) <= 1

@@ -34,8 +34,8 @@ class _Marker(DataFrame):
     pass
 
 
-def _built_user_aggregator(mocker, config: AgentConfig) -> tuple[object, list]:
-    """The user aggregator `create_pipeline` builds, and every Smart Turn
+def _user_aggregator(mocker, build, **kwargs) -> tuple[object, list]:
+    """The user aggregator a pipeline builder builds, and every Smart Turn
     analyzer built along the way — pipecat's default or TurnCall's."""
     from pipecat.audio.turn.smart_turn import base_smart_turn
 
@@ -55,18 +55,26 @@ def _built_user_aggregator(mocker, config: AgentConfig) -> tuple[object, list]:
         "Pipeline",
         lambda processors: captured.extend(processors) or mocker.MagicMock(),
     )
-    pipeline_factory.create_pipeline(
-        config=config,
+    getattr(pipeline_factory, build)(
         transport=mocker.MagicMock(),
+        pipecat_settings=PipecatSettings(),
+        audio_sample_rate=16000,
+        **kwargs,
+    )
+    user = next(p for p in captured if isinstance(p, LLMUserAggregator))
+    return user, models
+
+
+def _built_user_aggregator(mocker, config: AgentConfig) -> tuple[object, list]:
+    return _user_aggregator(
+        mocker,
+        "create_pipeline",
+        config=config,
         call_context=SimpleNamespace(
             is_eval=False, call_id=uuid4(), session_factory=None
         ),
         credentials=creds("sk-test", deepgram="dg-test"),
-        pipecat_settings=PipecatSettings(),
-        audio_sample_rate=16000,
     )
-    user = next(p for p in captured if isinstance(p, LLMUserAggregator))
-    return user, models
 
 
 def _a_turn(stop_secs: float) -> list:
@@ -108,35 +116,13 @@ async def test_smart_turn_off_ends_the_turn_on_vads_silence(mocker, barge_in) ->
 
 
 def _s2s_user_aggregator(mocker, config: AgentConfig) -> tuple[object, list]:
-    """The S2S pipeline's user aggregator, and every Smart Turn model built."""
-    from pipecat.audio.turn.smart_turn import base_smart_turn
-
-    from turncall.orchestrator import pipeline_factory
-
-    models: list = []
-    real_init = base_smart_turn.BaseSmartTurn.__init__
-
-    def spy(self, *args, **kwargs):
-        models.append(self)
-        real_init(self, *args, **kwargs)
-
-    mocker.patch.object(base_smart_turn.BaseSmartTurn, "__init__", spy)
-    captured: list = []
-    mocker.patch.object(
-        pipeline_factory,
-        "Pipeline",
-        lambda processors: captured.extend(processors) or mocker.MagicMock(),
-    )
-    pipeline_factory._create_s2s_pipeline(
+    return _user_aggregator(
+        mocker,
+        "_create_s2s_pipeline",
         config=config,
-        transport=mocker.MagicMock(),
         call_context=mocker.MagicMock(),
-        pipecat_settings=PipecatSettings(),
         credentials=creds("sk-test"),
-        audio_sample_rate=16000,
     )
-    user = next(p for p in captured if isinstance(p, LLMUserAggregator))
-    return user, models
 
 
 async def test_s2s_on_pipecat_vad_builds_no_smart_turn_model(mocker) -> None:
@@ -153,7 +139,12 @@ async def test_s2s_on_pipecat_vad_builds_no_smart_turn_model(mocker) -> None:
     assert models == []
 
 
-async def test_smart_turn_on_still_builds_one_model(mocker) -> None:
+async def test_smart_turn_on_still_builds_one_analyzer_per_call(mocker) -> None:
+    """One per call — on top of the process's one model owner (#271), built
+    the first time any call needs Smart Turn, so warmed here first."""
+    from turncall.orchestrator.turn_detection import _model_owner
+
+    _model_owner()
     _, models = _built_user_aggregator(mocker, AgentConfig(smart_turn_detection=True))
 
     assert len(models) == 1

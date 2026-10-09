@@ -408,7 +408,15 @@ and is not part of this repository's history.
   `silence_timeout_ms` window — the two waits stacked on exactly the agents
   that asked to avoid it. The turn now ends when VAD reports silence. An S2S
   agent on `turn_detection: "pipecat_vad"` had the same stacked wait and is
-  VAD-only too, as documented; server-side VAD is unchanged.
+  VAD-only too, as documented. On server-side VAD the turn handling stays
+  pipecat's (an OpenAI realtime service recommends its own), on the shared
+  model below.
+
+- **One Smart Turn model per process** (#271). Every call loaded its own ONNX
+  session of the same Smart Turn weights — about 36 MiB of the ~115 MiB a call
+  cost. The session is now loaded once and shared; each call keeps its own
+  audio buffer and speech state. That covers S2S on server-side VAD too, where
+  pipecat builds its default Smart Turn analyzer on every call.
 
 - **A campaign's claim and janitor are index lookups** (#229, #232). The claim
   ordered every pending target by position and filtered out the ones not yet
