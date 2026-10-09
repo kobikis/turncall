@@ -249,7 +249,7 @@ class _Adapter:
 
 
 def _edge(admitted) -> tuple[asterisk_edge.AriEdge, _Adapter]:
-    edge = asterisk_edge.AriEdge(ACCOUNT, project_id=None)
+    edge = asterisk_edge.AriEdge(ACCOUNT, frozenset({None}))
     adapter = _Adapter()
     edge._adapter = adapter  # type: ignore[assignment]
     edge._admit_call = AsyncMock(return_value=admitted)  # type: ignore[method-assign]

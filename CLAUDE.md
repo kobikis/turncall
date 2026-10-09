@@ -376,7 +376,11 @@ the channel id. Verified against a real 23.4.1 by `tests/live/test_live_asterisk
 - **The edge is an ARI client** (`webhooks/asterisk_edge.py`): TurnCall keeps
   `/ari/events?app=<app>` open to every Asterisk it serves — the platform's
   (`ASTERISK_*`) and each project's own `asterisk` credential — reconciled at
-  start, every minute, and at once after a credential write. A dialplan
+  start, every minute, and at once after a credential write. **One connection
+  per account** (ARI URL + username + app), however many projects hold it
+  (#274): ARI gives an app to its newest socket only, so a socket per project
+  answered only the last project's numbers. A project joining or leaving an
+  account changes whom its socket answers for, without reconnecting. A dialplan
   `Stasis(turncall[,<number>])` reaches it as `StasisStart`; the number is the
   first Stasis argument, else the channel's extension, and bare digits get a
   `+`. The edge admits the call, sets `TURNCALL_CALL_ID` on the caller's

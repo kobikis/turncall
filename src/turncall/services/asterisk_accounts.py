@@ -57,18 +57,39 @@ async def account_for_project(
     return from_credential(own) if own else platform_account(settings)
 
 
+AccountKey = tuple[str, str, str]
+
+
 async def all_accounts(
     session: AsyncSession, settings: Settings
-) -> dict[UUID | None, AriAccount]:
-    """Every Asterisk this deployment serves: project -> its own, None -> the
-    platform's. What the inbound edge keeps an ARI connection open to."""
+) -> dict[AccountKey, tuple[AriAccount, frozenset[UUID | None]]]:
+    """Every Asterisk this deployment serves, once, with the projects it
+    serves (None: every project with no Asterisk of its own). What the inbound
+    edge keeps an ARI connection open to.
+
+    Keyed by URL + username + app, not by project (#274): ARI gives an app's
+    events to its newest socket only, so projects holding one PBX's credential
+    (the builder's, a project per agent) must share one connection.
+    """
     stored = await credential_repo.documents_for_provider(
         session, ASTERISK_ACCOUNT, settings
     )
-    accounts: dict[UUID | None, AriAccount] = {
-        project_id: from_credential(doc) for project_id, doc in stored.items()
-    }
     platform = platform_account(settings)
-    if platform is not None:
-        accounts[None] = platform
-    return accounts
+    members: list[tuple[UUID | None, AriAccount]] = (
+        [(None, platform)] if platform else []
+    )
+    members += sorted(
+        ((project_id, from_credential(doc)) for project_id, doc in stored.items()),
+        key=lambda member: str(member[0]),
+    )
+    # ponytail: members of one key that disagree on password or
+    # media_connection get the first one's (platform, then lowest project id);
+    # per-call accounts on a shared socket if that ever matters.
+    groups: dict[AccountKey, tuple[AriAccount, set[UUID | None]]] = {}
+    for project_id, account in members:
+        key = (account.url, account.username, account.app)
+        groups.setdefault(key, (account, set()))[1].add(project_id)
+    return {
+        key: (account, frozenset(projects))
+        for key, (account, projects) in groups.items()
+    }
