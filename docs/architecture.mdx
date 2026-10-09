@@ -233,7 +233,7 @@ stateDiagram-v2
 | `storage/` | SQLAlchemy async models, repository pattern, PostgreSQL + Redis |
 | `adapters/` | Object storage (local filesystem, S3) |
 | `events/` | Webhook delivery, server events, signing |
-| `webhooks/` | Twilio + WhatsApp handlers, media stream WebSocket |
+| `webhooks/` | Each carrier's inbound edge (Twilio), WhatsApp handlers, and the shared media entry point that picks a serializer by the call's carrier |
 
 ## Data Model
 

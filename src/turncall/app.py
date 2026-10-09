@@ -259,12 +259,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(webrtc_router, prefix="/v1")
 
-    # Twilio webhooks (no /v1 prefix)
-    from turncall.webhooks.media_stream import router as media_stream_router
+    # Twilio's inbound edge (no /v1 prefix): webhooks + its media stream
+    # WebSocket, which hands over to the shared media entry point (ADR-0022).
     from turncall.webhooks.twilio_handlers import router as twilio_webhook_router
+    from turncall.webhooks.twilio_media_stream import router as twilio_media_router
 
     app.include_router(twilio_webhook_router)
-    app.include_router(media_stream_router)
+    app.include_router(twilio_media_router)
 
     # WhatsApp webhooks (no /v1 prefix)
     from turncall.webhooks.whatsapp_handlers import router as whatsapp_webhook_router

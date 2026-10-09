@@ -259,7 +259,8 @@ without ambience.
 
 **Carrier**:
 The telephony company a [[phone number]] belongs to, which connects its calls to the
-phone network — Twilio, Telnyx. Recorded as the number's `provider`.
+phone network — Twilio, Telnyx. Stored as the number's `provider` column, exposed by
+the API as `carrier`.
 _Avoid_: "provider" for this (a [[provider]] is an STT/LLM/TTS backend), "telephony
 provider", "transport" (the media path a call's audio takes — a carrier's media
 stream, WebRTC, WhatsApp).

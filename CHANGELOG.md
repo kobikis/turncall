@@ -13,6 +13,15 @@ and is not part of this repository's history.
 
 ### Changed
 
+- **A phone number's carrier is `carrier` in the API** (#201, ADR-0022).
+  Reads carry `carrier`; `provider` is still there with the same value and
+  still accepted on a write, both deprecated — "provider" means an STT, LLM or
+  TTS backend everywhere else. Sending both with different values is a 422, as
+  is a `PUT` that would move a number to another carrier. Behind it the
+  carrier boundary is cut for Telnyx and Asterisk: the telephony adapter is
+  REST actions only, and one media entry point picks the serializer from the
+  call's own carrier. Twilio calls behave exactly as before.
+
 - **An `openai_live` agent with tools now delegates to its own `llm`** (#244).
   With no `s2s.delegation` block its tools were never offered; it now gets
   client delegation, so the `llm` provider needs a key (`missing_keys`

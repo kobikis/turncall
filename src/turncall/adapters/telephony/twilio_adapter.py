@@ -2,7 +2,6 @@
 
 import xml.etree.ElementTree as ET
 from typing import Any
-from uuid import UUID
 
 from loguru import logger
 from twilio.request_validator import RequestValidator
@@ -101,7 +100,8 @@ class TwilioAdapter(TelephonyAdapter):
         url: str,
         params: dict[str, str],
     ) -> bool:
-        """Validate a Twilio webhook signature."""
+        """Validate a Twilio webhook signature. Not a `TelephonyAdapter`
+        method: a signature check is the inbound edge's (ADR-0022)."""
         return self._validator.validate(url, params, signature)
 
     async def get_recording_url(self, recording_sid: str) -> str:
@@ -146,18 +146,6 @@ class TwilioAdapter(TelephonyAdapter):
             phone_number=e164_number, limit=1
         )
         return numbers[0].sid if numbers else None
-
-    def generate_media_stream_twiml(
-        self,
-        websocket_url: str,
-        call_id: UUID,
-    ) -> str:
-        """Generate TwiML to start a bidirectional media stream."""
-        response = ET.Element("Response")
-        connect = ET.SubElement(response, "Connect")
-        stream = ET.SubElement(connect, "Stream", url=websocket_url)
-        ET.SubElement(stream, "Parameter", name="call_id", value=str(call_id))
-        return ET.tostring(response, encoding="unicode")
 
     async def send_sms(
         self,

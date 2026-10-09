@@ -75,6 +75,32 @@ async def _validate_twilio_request(
     return validate_twilio_signature(token, signature, url, params)
 
 
+def generate_media_stream_twiml(request: Request, call_id: UUID) -> str:
+    """TwiML answering a call with a bidirectional media stream (ADR-0022).
+
+    Twilio's answer format, so it lives at Twilio's edge rather than on the
+    carrier adapter. Only the call id is passed; the media entry point resolves
+    everything else from the call record. wss:// when behind HTTPS (ngrok,
+    production) — detected via X-Forwarded-Proto.
+    """
+    host = request.headers.get("host", "localhost:8000")
+    forwarded_proto = request.headers.get("x-forwarded-proto", "")
+    is_https = forwarded_proto == "https" or get_settings().is_production
+    ws_url = f"{'wss' if is_https else 'ws'}://{host}/ws/media-stream"
+    status_cb = (
+        f"{'https' if is_https else 'http'}://{host}/webhooks/twilio/stream-status"
+    )
+    return (
+        "<Response>"
+        "<Connect>"
+        f'<Stream url="{ws_url}" statusCallback="{status_cb}">'
+        f'<Parameter name="callId" value="{call_id}" />'
+        "</Stream>"
+        "</Connect>"
+        "</Response>"
+    )
+
+
 @router.post("/sms/inbound")
 async def inbound_sms_webhook(
     request: Request,
@@ -341,28 +367,7 @@ async def inbound_voice_webhook(
         },
     )
 
-    # Generate TwiML to start Media Stream
-    settings = get_settings()
-    host = request.headers.get("host", "localhost:8000")
-    # Use wss:// when behind HTTPS (ngrok, production) — detect via X-Forwarded-Proto
-    forwarded_proto = request.headers.get("x-forwarded-proto", "")
-    is_https = forwarded_proto == "https" or settings.is_production
-    scheme = "wss" if is_https else "ws"
-    ws_url = f"{scheme}://{host}/ws/media-stream"
-
-    # Simplified TwiML — only pass call_id.
-    # Everything else resolved server-side from the call record.
-    http_scheme = "https" if is_https else "http"
-    status_cb = f"{http_scheme}://{host}/webhooks/twilio/stream-status"
-    twiml = (
-        "<Response>"
-        "<Connect>"
-        f'<Stream url="{ws_url}" statusCallback="{status_cb}">'
-        f'<Parameter name="callId" value="{call.id}" />'
-        "</Stream>"
-        "</Connect>"
-        "</Response>"
-    )
+    twiml = generate_media_stream_twiml(request, call.id)
 
     logger.info(
         "twilio_inbound_connected",
@@ -416,25 +421,7 @@ async def outbound_voice_webhook(
             media_type=TWIML_CONTENT_TYPE,
         )
 
-    # Generate TwiML to start Media Stream
-    settings = get_settings()
-    host = request.headers.get("host", "localhost:8000")
-    forwarded_proto = request.headers.get("x-forwarded-proto", "")
-    is_https = forwarded_proto == "https" or settings.is_production
-    scheme = "wss" if is_https else "ws"
-    ws_url = f"{scheme}://{host}/ws/media-stream"
-
-    http_scheme = "https" if is_https else "http"
-    status_cb = f"{http_scheme}://{host}/webhooks/twilio/stream-status"
-    twiml = (
-        "<Response>"
-        "<Connect>"
-        f'<Stream url="{ws_url}" statusCallback="{status_cb}">'
-        f'<Parameter name="callId" value="{call.id}" />'
-        "</Stream>"
-        "</Connect>"
-        "</Response>"
-    )
+    twiml = generate_media_stream_twiml(request, call.id)
 
     logger.info(
         "twilio_outbound_connected",

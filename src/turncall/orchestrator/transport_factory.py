@@ -1,15 +1,19 @@
 """Transport factory — creates the appropriate Pipecat transport.
 
 Supports:
-  - "twilio": FastAPIWebsocketTransport + TwilioFrameSerializer (phone calls)
+  - a carrier's media stream: FastAPIWebsocketTransport + that carrier's
+    serializer (phone calls; ADR-0022)
   - "webrtc": SmallWebRTCTransport (browser-based calls)
   - "eval": EvalTransport, a loopback WS server the eval harness connects to
 """
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import WebSocket
 
+from turncall.domain.carriers import TWILIO
 from turncall.orchestrator.serializer import TwilioFrameSerializer
 
 STUN_SERVERS = ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]
@@ -20,24 +24,60 @@ TWILIO_SAMPLE_RATE = 8000
 # and TTS services want natively, and the peer connection resamples to Opus.
 WEBRTC_SAMPLE_RATE = 16000
 
+
+@dataclass(frozen=True)
+class CarrierStream:
+    """What a carrier's media stream said about itself when it started.
+
+    Read by the carrier's own edge from its handshake; consumed only by that
+    carrier's serializer and, as the call's REST handle, by call control.
+    """
+
+    stream_id: str
+    call_sid: str = ""
+
+
+@dataclass(frozen=True)
+class CarrierMedia:
+    """A carrier's media stream: its audio rate and its wire format."""
+
+    sample_rate: int
+    serializer: Callable[[CarrierStream], Any]
+
+
+# The one place a call's carrier is read past its inbound edge (ADR-0022):
+# everything downstream of the serializer — pipeline, recording, ambience,
+# tools — never learns which carrier it is on.
+CARRIER_MEDIA: dict[str, CarrierMedia] = {
+    TWILIO: CarrierMedia(
+        TWILIO_SAMPLE_RATE,
+        lambda stream: TwilioFrameSerializer(stream_sid=stream.stream_id),
+    ),
+}
+
 # Every rate a voice transport sends audio at. Ambience renditions are made for
 # exactly these (ADR-0021): the mixer silently plays nothing at any other rate,
 # so a transport added with a new rate must land here or its calls go quiet.
-VOICE_OUTPUT_RATES = frozenset({TWILIO_SAMPLE_RATE, WEBRTC_SAMPLE_RATE})
+VOICE_OUTPUT_RATES = frozenset(
+    {*(m.sample_rate for m in CARRIER_MEDIA.values()), WEBRTC_SAMPLE_RATE}
+)
 
 # Evals run over loopback, so there is no carrier to match: 16kHz is what the
 # STT and TTS services want natively, and avoids a resample on both ends.
 EVAL_SAMPLE_RATE = 16000
 
 
-def create_twilio_transport(
+def create_carrier_transport(
+    carrier: str,
     websocket: WebSocket,
-    stream_sid: str,
+    stream: CarrierStream,
     *,
     mixer: Any = None,
 ) -> Any:
-    """Create a Twilio Media Stream transport.
+    """A carrier media-stream transport, its serializer chosen by `carrier`.
 
+    `carrier` is the call's own (`calls.provider`) and must be a key of
+    `CARRIER_MEDIA` (KeyError otherwise; the media entry point checks first).
     `mixer` is the call's ambience (ADR-0021), or None for none. Every voice
     transport takes one; the eval transport deliberately does not.
     """
@@ -46,19 +86,20 @@ def create_twilio_transport(
         FastAPIWebsocketTransport,
     )
 
-    serializer = TwilioFrameSerializer(stream_sid=stream_sid)
+    media = CARRIER_MEDIA[carrier]
+    rate = media.sample_rate
 
     return FastAPIWebsocketTransport(
         websocket=websocket,
         params=FastAPIWebsocketParams(
             audio_in_enabled=True,
-            audio_in_sample_rate=TWILIO_SAMPLE_RATE,
+            audio_in_sample_rate=rate,
             audio_in_channels=1,
             audio_out_enabled=True,
-            audio_out_sample_rate=TWILIO_SAMPLE_RATE,
+            audio_out_sample_rate=rate,
             audio_out_channels=1,
             audio_out_mixer=mixer,
-            serializer=serializer,
+            serializer=media.serializer(stream),
         ),
     )
 

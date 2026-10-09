@@ -26,8 +26,8 @@ from turncall.orchestrator.ambience import build_ambience_mixer
 pytestmark = pytest.mark.unit
 
 VOICE_FACTORIES = {
-    "create_twilio_transport": lambda mixer: tf.create_twilio_transport(
-        MagicMock(), "MZ1", mixer=mixer
+    "create_carrier_transport": lambda mixer: tf.create_carrier_transport(
+        "twilio", MagicMock(), tf.CarrierStream("MZ1"), mixer=mixer
     ),
     "create_webrtc_transport": lambda mixer: tf.create_webrtc_transport(mixer=mixer)[0],
     "create_whatsapp_transport": lambda mixer: tf.create_whatsapp_transport(
