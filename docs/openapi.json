@@ -7833,6 +7833,27 @@
               }
             ]
           },
+          "retry_policy": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/RetryRule"
+                },
+                "propertyNames": {
+                  "enum": [
+                    "customer_did_not_answer",
+                    "customer_busy",
+                    "voicemail"
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Policy"
+          },
           "targets": {
             "items": {
               "$ref": "#/components/schemas/CampaignTargetRequest"
@@ -8988,6 +9009,29 @@
           "description"
         ],
         "title": "RegisterToolRequest"
+      },
+      "RetryRule": {
+        "properties": {
+          "max_attempts": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Max Attempts"
+          },
+          "spacing_seconds": {
+            "type": "integer",
+            "maximum": 604800.0,
+            "minimum": 60.0,
+            "title": "Spacing Seconds"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "max_attempts",
+          "spacing_seconds"
+        ],
+        "title": "RetryRule"
       },
       "RoutingWeightEntry": {
         "properties": {

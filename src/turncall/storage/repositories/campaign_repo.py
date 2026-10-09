@@ -38,6 +38,7 @@ async def create_campaign(
     from_number_id: UUID,
     timezone: str | None,
     calling_window: dict[str, Any] | None,
+    retry_policy: dict[str, Any] | None,
     targets: list[dict[str, Any]],
 ) -> CampaignRow:
     """A campaign and all of its targets, in one flush.
@@ -51,6 +52,7 @@ async def create_campaign(
         from_number_id=from_number_id,
         timezone=timezone,
         calling_window=calling_window,
+        retry_policy=retry_policy,
         status=CampaignStatus.QUEUED.value,
     )
     session.add(row)
@@ -229,6 +231,8 @@ async def record_dial(session: AsyncSession, target_id: UUID, call_id: UUID) -> 
         status=CampaignTargetStatus.CALLING,
         call_id=call_id,
         attempts=CampaignTargetRow.attempts + 1,
+        # The previous attempt's; this one's arrives when its call ends.
+        ended_reason=None,
         claimed_at=None,
     )
 
@@ -253,6 +257,21 @@ async def unclaim(session: AsyncSession, target_id: UUID) -> bool:
         frm=[CampaignTargetStatus.DIALLING],
         status=CampaignTargetStatus.PENDING,
         claimed_at=None,
+    )
+
+
+async def retry_target(
+    session: AsyncSession, target_id: UUID, *, ended_reason: str, at: datetime
+) -> bool:
+    """`calling` -> `pending` at `at`: the call ended in a way the retry
+    policy dials again."""
+    return await _move(
+        session,
+        target_id,
+        frm=[CampaignTargetStatus.CALLING],
+        status=CampaignTargetStatus.PENDING,
+        ended_reason=ended_reason,
+        next_attempt_at=at,
     )
 
 

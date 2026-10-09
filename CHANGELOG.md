@@ -88,6 +88,15 @@ and is not part of this repository's history.
   carrier outside it. `days` defaults to every day; an overnight window or a
   time with an offset is a 422. No window, no restriction — as before.
 
+- **Campaign retries by `ended_reason`** (#231). `retry_policy` on
+  `POST /v1/campaigns` maps `customer_did_not_answer`, `customer_busy` and
+  `voicemail` each to `{max_attempts, spacing_seconds}`. A call ending that way
+  puts its target back to `pending`, due after the spacing — moved to the next
+  opening of its calling window when it lands outside — until the target's
+  `attempts` (dials placed, the first included) reach that ending's
+  `max_attempts`. Every other ending is final: a person who answered is not
+  called back. No policy, no retries — as before.
+
 - **A messages-per-minute limit per text session** (#226).
   `messages_per_minute` on `PUT /v1/projects/{id}/limits`, with
   `LIMIT_MESSAGES_PER_MINUTE` as the platform default — unlimited unless set —

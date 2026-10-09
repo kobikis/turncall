@@ -1,13 +1,14 @@
-"""When a campaign target may be dialled (#230): the window, read in the
-target's own zone on the day in question — never a fixed offset."""
+"""When a campaign target is next due: the window (#230), read in the target's
+own zone on the day in question — never a fixed offset — and a retry (#231),
+whose spacing the window then has the last word on."""
 
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 
 import pytest
 from pydantic import ValidationError
 
 from turncall.api.v1.schemas.campaigns import CreateCampaignRequest
-from turncall.campaigns.schedule import CallingWindow, next_open
+from turncall.campaigns.schedule import CallingWindow, next_open, retry_at
 
 WEEKDAYS_9_TO_5 = CallingWindow(
     start=time(9), end=time(17), days=frozenset({1, 2, 3, 4, 5})
@@ -110,6 +111,98 @@ def test_the_stored_form_round_trips_from_the_request():
 def test_create_refuses_a_window_that_is_not_one(window, message):
     with pytest.raises(ValidationError, match=message):
         _body(calling_window=window)
+
+
+POLICY = {
+    "customer_did_not_answer": {"max_attempts": 3, "spacing_seconds": 3600},
+    "customer_busy": {"max_attempts": 2, "spacing_seconds": 600},
+    "voicemail": {"max_attempts": 2, "spacing_seconds": 7200},
+}
+
+
+def _retry(reason: str | None, attempts: int, now: datetime, **kw: object):
+    return retry_at(
+        kw.get("policy", POLICY),
+        ended_reason=reason,
+        attempts=attempts,
+        now=now,
+        timezone="America/New_York",
+        window=kw.get("window"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "attempts", "after"),
+    [
+        ("customer_did_not_answer", 1, 3600),
+        ("customer_did_not_answer", 2, 3600),
+        ("customer_busy", 1, 600),
+        ("voicemail", 1, 7200),
+    ],
+)
+def test_a_retryable_ending_is_due_again_after_its_spacing(reason, attempts, after):
+    now = _utc(2026, 11, 2, 15)
+    assert _retry(reason, attempts, now) == now + timedelta(seconds=after)
+
+
+@pytest.mark.parametrize(
+    ("reason", "attempts", "policy"),
+    [
+        ("customer_did_not_answer", 3, POLICY),  # its attempts are spent
+        ("voicemail", 2, POLICY),
+        # The latest ending's rule counts every dial: after a no-answer, a busy
+        # second attempt has spent busy's two.
+        ("customer_busy", 2, POLICY),
+        ("customer_ended_call", 1, POLICY),  # reached: never again
+        ("transferred", 1, POLICY),
+        ("telephony_failed", 1, POLICY),
+        (None, 1, POLICY),
+        ("customer_did_not_answer", 1, None),  # no policy, no retries
+        ("customer_did_not_answer", 1, {}),
+    ],
+)
+def test_any_other_ending_is_final(reason, attempts, policy):
+    assert _retry(reason, attempts, _utc(2026, 11, 2, 15), policy=policy) is None
+
+
+def test_a_retry_that_lands_outside_the_window_waits_for_it():
+    # 16:30 EST on Monday; an hour on is 17:30, past the window: Tuesday 09:00.
+    now = _utc(2026, 11, 2, 21, 30)
+    assert _retry("customer_did_not_answer", 1, now, window=WEEKDAYS_9_TO_5) == _utc(
+        2026, 11, 3, 14
+    )
+    # Busy's ten minutes still fall inside it.
+    assert _retry("customer_busy", 1, now, window=WEEKDAYS_9_TO_5) == now + (
+        timedelta(minutes=10)
+    )
+
+
+@pytest.mark.parametrize(
+    ("policy", "message"),
+    [
+        (
+            {"customer_ended_call": {"max_attempts": 2, "spacing_seconds": 60}},
+            "'voicemail'",
+        ),
+        (
+            {"voicemail": {"max_attempts": 0, "spacing_seconds": 60}},
+            "greater than or equal to 1",
+        ),
+        (
+            {"voicemail": {"max_attempts": 11, "spacing_seconds": 60}},
+            "less than or equal to 10",
+        ),
+        (
+            {"voicemail": {"max_attempts": 2, "spacing_seconds": 5}},
+            "greater than or equal to 60",
+        ),
+        ({"voicemail": {"max_attempts": 2}}, "spacing_seconds"),
+        ({"voicemail": {"max_attempts": 2, "spacing_seconds": 60, "x": 1}}, "Extra"),
+    ],
+)
+def test_create_refuses_a_policy_that_is_not_one(policy, message):
+    with pytest.raises(ValidationError, match=message):
+        _body(retry_policy=policy)
 
 
 def _body(**fields: object) -> CreateCampaignRequest:

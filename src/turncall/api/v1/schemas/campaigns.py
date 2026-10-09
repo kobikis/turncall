@@ -75,6 +75,22 @@ class CallingWindowRequest(BaseModel):
         return self
 
 
+# The outcomes that leave a person unreached. Anything else is terminal: a
+# call someone answered is not repeated, and a carrier or pipeline failure is
+# not hammered on a schedule.
+RetryableReason = Literal["customer_did_not_answer", "customer_busy", "voicemail"]
+
+
+class RetryRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Dials to the target in all, the first one included.
+    max_attempts: int = Field(..., ge=1, le=10)
+    # From the moment the call's ending is seen; a minute at least, so a
+    # person who just declined is not rung straight back.
+    spacing_seconds: int = Field(..., ge=60, le=7 * 24 * 3600)
+
+
 class CreateCampaignRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -85,6 +101,8 @@ class CreateCampaignRequest(BaseModel):
     timezone: str | None = None
     # No window: a target may be called at any hour of its day.
     calling_window: CallingWindowRequest | None = None
+    # Per `ended_reason`; no rule (or no policy) means that outcome is final.
+    retry_policy: dict[RetryableReason, RetryRule] | None = None
     targets: list[CampaignTargetRequest] = Field(
         ..., min_length=1, max_length=MAX_TARGETS
     )
@@ -133,6 +151,7 @@ class CampaignResponse(BaseModel):
     from_number_id: UUID
     timezone: str | None
     calling_window: dict[str, Any] | None
+    retry_policy: dict[str, Any] | None
     status: str
     # Targets per status, every status present.
     targets: dict[str, int]
@@ -149,6 +168,7 @@ class CampaignResponse(BaseModel):
             from_number_id=row.from_number_id,
             timezone=row.timezone,
             calling_window=row.calling_window,
+            retry_policy=row.retry_policy,
             status=row.status,
             targets=counts,
             created_at=row.created_at,

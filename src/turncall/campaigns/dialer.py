@@ -30,7 +30,7 @@ from typing import Any
 from loguru import logger
 
 from turncall.api.errors import ApiError, ErrorCode, RateLimitedError
-from turncall.campaigns.schedule import CallingWindow, next_open
+from turncall.campaigns.schedule import CallingWindow, next_open, retry_at
 from turncall.domain.enums import CampaignStatus, CampaignTargetStatus
 from turncall.services import limits
 from turncall.services.call_view import call_view_fields
@@ -62,7 +62,7 @@ async def advance(
     session_factory: SessionFactory, campaign: CampaignRow, *, clock: Clock
 ) -> None:
     """Settle, dial what the limits admit, and close the campaign when done."""
-    await _settle(session_factory, campaign)
+    await _settle(session_factory, campaign, clock)
     async with session_factory() as session:
         if campaign.status == CampaignStatus.QUEUED.value:
             await campaign_repo.start_campaign(session, campaign.id, clock())
@@ -80,20 +80,42 @@ async def advance(
         await session.commit()
 
 
-async def _settle(session_factory: SessionFactory, campaign: CampaignRow) -> None:
-    """Close every `calling` target whose call has ended, with its reason.
+async def _settle(
+    session_factory: SessionFactory, campaign: CampaignRow, clock: Clock
+) -> None:
+    """Settle every `calling` target whose call has ended: back to `pending`
+    when the retry policy dials that ending again, else `completed`.
 
-    Read off the call itself (`call_view`, the function the call read and
-    `call.ended` share), so a target reports the ending the call does.
+    The reason is read off the call itself (`call_view`, the function the call
+    read and `call.ended` share), so a target reports the ending the call does.
+    A retry's spacing runs from now, the pass that saw the ending, and its
+    instant is moved into the calling window here so `next_attempt_at` reads
+    true; the window is still checked again at the dial.
     """
     async with session_factory() as session:
         calling = await campaign_repo.calling_targets(session, campaign.id)
         if not calling:
             return
         fields = await call_view_fields(session, [call for _, call in calling])
+        window = CallingWindow.from_json(campaign.calling_window)
+        now = clock()
         for target, call in calling:
             reason = fields[call.id]["ended_reason"]
-            if reason is not None:
+            if reason is None:
+                continue
+            at = retry_at(
+                campaign.retry_policy,
+                ended_reason=reason,
+                attempts=target.attempts,
+                now=now,
+                timezone=target.timezone,
+                window=window,
+            )
+            if at is not None:
+                await campaign_repo.retry_target(
+                    session, target.id, ended_reason=reason, at=at
+                )
+            else:
                 await campaign_repo.finish_target(
                     session,
                     target.id,

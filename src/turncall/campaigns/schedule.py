@@ -1,8 +1,9 @@
-"""When a campaign target may be dialled: its calling window (#230).
+"""When a campaign target is next due: calling windows (#230) and retries (#231).
 
-The window is the last word on the earliest instant a target may be dialled:
-whatever made a target due, a target outside its window waits for the next
-opening.
+Both answer one question — the earliest instant a target may be dialled — so
+they compose by construction: a retry's spacing gives the earliest instant,
+and the window moves it to the next opening when it lands outside. A retry
+due at 17:30 against a 09:00-17:00 window waits for 09:00 the next allowed day.
 
 A window is wall-clock time in the **target's own** IANA zone, resolved per
 day, never a fixed offset: "09:00 in New York" is 13:00 UTC in October and
@@ -63,6 +64,29 @@ def next_open(now: datetime, timezone: str, window: CallingWindow | None) -> dat
         if now < _instant(day, window.end, zone):
             return now
     raise AssertionError("a calling window with no allowed day")  # pragma: no cover
+
+
+def retry_at(
+    policy: Mapping[str, Any] | None,
+    *,
+    ended_reason: str | None,
+    attempts: int,
+    now: datetime,
+    timezone: str,
+    window: CallingWindow | None,
+) -> datetime | None:
+    """When to dial a target again after a call ended this way, or None.
+
+    `attempts` counts the dials placed so far, the one that just ended
+    included; a rule's `max_attempts` counts them the same way. An outcome the
+    policy names no rule for is terminal — a person who answered is not
+    called back because some earlier attempt went unanswered.
+    """
+    rule = (policy or {}).get(ended_reason or "")
+    if rule is None or attempts >= rule["max_attempts"]:
+        return None
+    earliest = now + timedelta(seconds=rule["spacing_seconds"])
+    return next_open(earliest, timezone, window)
 
 
 def _instant(day: date, at: time, zone: ZoneInfo) -> datetime:

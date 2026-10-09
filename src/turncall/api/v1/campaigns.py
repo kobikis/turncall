@@ -61,6 +61,11 @@ async def create_campaign(
             if body.calling_window is not None
             else None
         ),
+        retry_policy=(
+            {k: v.model_dump() for k, v in body.retry_policy.items()}
+            if body.retry_policy
+            else None
+        ),
         targets=body.resolved_targets(),
     )
     counts = await campaign_repo.target_counts(session, [row.id])

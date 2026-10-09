@@ -571,7 +571,7 @@ CONTEXT.md). The API records one; `turncall-campaign-worker` — its own process
 same image, never the API's event loop (ADR-0018's reason) — dials it.
 
 ```
-POST /v1/campaigns                    # {name, agent_id, from_number_id, timezone?, calling_window?, targets: [{number, variables?, timezone?}]}
+POST /v1/campaigns                    # {name, agent_id, from_number_id, timezone?, calling_window?, retry_policy?, targets: [{number, variables?, timezone?}]}
 GET  /v1/campaigns                    # ?page= ?limit=; each with target counts per status
 GET  /v1/campaigns/{id}
 GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target status, call_id, ended_reason, error
@@ -612,14 +612,23 @@ GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target stat
   claim's own transaction. A start in a spring-forward gap opens just after
   the gap. Overnight windows (`start >= end`) and times with an offset are a
   422. Null = any hour.
+- **Retries** (#231): `retry_policy: {ended_reason: {max_attempts,
+  spacing_seconds}}`, keys `customer_did_not_answer` / `customer_busy` /
+  `voicemail` only (any other is a 422); every other ending is final. Settling
+  an ended call asks `schedule.retry_at`: while `attempts` (dials placed, this
+  one included) is below the **latest** ending's `max_attempts`, the target goes
+  `calling` → `pending` (`retry_target`) keeping that `ended_reason`, due at
+  clock + spacing passed through `next_open` — so a retry landing after hours
+  waits for the window, and the gate at the dial checks it again. Spacing runs
+  from the pass that saw the ending, never the call's wall-clock `ended_at`,
+  so the injected clock is the only time. `record_dial` clears `ended_reason`.
 - **The worker** (`campaigns/worker.serve`) runs a pass, then waits on a Redis
   list that `POST /v1/campaigns` pushes to, at most `CAMPAIGN_POLL_SECONDS`
   (default 2). The database is the work; the list only wakes it, so a lost push
   costs one poll. A stop is honoured between passes.
 
-Not yet: retries (#231), pause/resume/cancel and the
-janitor (#232), pacing beyond the limits (#233), weighted agents and
-start/finish events (#234). Until #233, a project with no live-call limit is
+Not yet: pause/resume/cancel and the janitor (#232), pacing beyond the limits
+(#233), weighted agents and start/finish events (#234). Until #233, a project with no live-call limit is
 dialled as fast as one pass can go.
 
 Key files: `campaigns/dialer.py`, `campaigns/worker.py`, `campaigns/queue.py`,
@@ -628,7 +637,8 @@ Key files: `campaigns/dialer.py`, `campaigns/worker.py`, `campaigns/queue.py`,
 `tests/integration/test_campaigns.py` (the worker's pass against the fake
 carrier; `answer_outbound_call` picks up a dialled call),
 `tests/integration/test_campaign_schedule.py` (a clock stepped across a DST
-change, four zones), `tests/unit/test_campaign_schedule.py`.
+change, four zones; each retryable ending's spacing and attempts, `voicemail`
+by recording the detector's event), `tests/unit/test_campaign_schedule.py`.
 
 ## Takeaways (Structured Outputs)
 
