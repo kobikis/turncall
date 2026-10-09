@@ -1,0 +1,290 @@
+"""STT and TTS failover over the eval loopback (#223, PRD #212 Seam B).
+
+The real pipeline — `build_call_pipeline`, `CallSession`, the eval transport and
+pipecat's harness on the other end of the socket — with only the providers
+stubbed: each role's primary is refused with an error that leaves it unusable,
+and the call has to carry on through the backup. Hermetic: no key, no model
+download, no network.
+
+- STT: the caller's audio reaches a primary that refuses it; the backup
+  transcribes, and the agent answers what the caller said.
+- TTS: the primary is refused on the first sentence of the reply; the backup
+  speaks that sentence — the replay — and the rest.
+
+Either way the iteration's agent errors carry the failover, which is what the
+call's `provider.failover` event says on a live call (an eval has no event log).
+"""
+
+import wave
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
+
+import pytest
+from pipecat.frames.frames import (
+    Frame,
+    InputAudioRawFrame,
+    LLMConfigureOutputFrame,
+    LLMContextFrame,
+    LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
+    LLMTextFrame,
+    TranscriptionFrame,
+    TTSAudioRawFrame,
+    TTSSpeakFrame,
+    TTSStartedFrame,
+    TTSStoppedFrame,
+    TTSTextFrame,
+)
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.utils.errors import ErrorCategory
+
+from turncall.config.settings import Settings
+from turncall.domain.enums import EvalKind, EvalModality
+from turncall.domain.models import AgentConfig
+from turncall.evals import scenario as scenario_mod
+from turncall.evals.harness import run_iteration
+from turncall.evals.runner import ResolvedTarget
+from turncall.orchestrator import pipeline_builder, pipeline_factory
+from turncall.orchestrator.transport_factory import EVAL_SAMPLE_RATE
+from turncall.services.credentials import Credentials
+
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+
+QUESTION = "What is the capital of France?"
+REFUSED = "refused-primary"
+
+
+class _StubLLM(FrameProcessor):
+    """Repeats the caller's last words back, in two sentences."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._skip_tts = False
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if isinstance(frame, LLMConfigureOutputFrame):
+            self._skip_tts = frame.skip_tts
+            return
+        if not isinstance(frame, LLMContextFrame):
+            await self.push_frame(frame, direction)
+            return
+        said = str(frame.context.get_messages()[-1].get("content", ""))
+        if said == "Start the conversation.":
+            return  # the call's own opener: stay quiet until the caller speaks
+        for out in (
+            LLMFullResponseStartFrame(),
+            LLMTextFrame(f"You said: {said.rstrip('?.')}."),
+            LLMTextFrame(" Goodbye for now."),
+            LLMFullResponseEndFrame(),
+        ):
+            out.skip_tts = self._skip_tts
+            await self.push_frame(out)
+
+
+class _StubSTT(FrameProcessor):
+    """Streaming STT. Refused on the first audio when `refused`; otherwise the
+    question, once, after half a second of the caller's audio."""
+
+    def __init__(self, refused: bool) -> None:
+        super().__init__()
+        self._refused = refused
+        self._chunks = 0
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        await self.push_frame(frame, direction)
+        if not isinstance(frame, InputAudioRawFrame):
+            return
+        if self._refused:
+            if self.is_usable:
+                await self.push_error(
+                    "401 invalid key", category=ErrorCategory.AUTHENTICATION
+                )
+            return
+        self._chunks += 1
+        if self._chunks == 25:
+            await self.push_frame(TranscriptionFrame(QUESTION, "", "t", finalized=True))
+
+
+class _StubTTS(FrameProcessor):
+    """Says each sentence as it completes. Refused on the first when `refused`."""
+
+    def __init__(self, refused: bool) -> None:
+        super().__init__()
+        self._refused = refused
+        self._text: list[str] = []
+
+    async def _say(self, text: str) -> None:
+        if self._refused:
+            await self.push_error(
+                "401 invalid key", category=ErrorCategory.AUTHENTICATION
+            )
+            return
+        silence = b"\x00\x00" * (EVAL_SAMPLE_RATE // 50)
+        await self.push_frame(TTSStartedFrame())
+        await self.push_frame(
+            TTSAudioRawFrame(
+                audio=silence, sample_rate=EVAL_SAMPLE_RATE, num_channels=1
+            )
+        )
+        await self.push_frame(TTSTextFrame(text, aggregated_by="sentence"))
+        await self.push_frame(TTSStoppedFrame())
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if isinstance(frame, LLMTextFrame):
+            if not frame.skip_tts:
+                self._text.append(frame.text)
+                if frame.text.endswith("."):
+                    await self._say("".join(self._text).strip())
+                    self._text = []
+            return
+        if isinstance(frame, TTSSpeakFrame):
+            await self._say(frame.text)
+            return
+        await self.push_frame(frame, direction)
+
+
+@pytest.fixture
+def stub_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every provider stubbed where the factory builds it, so the group, the
+    pipeline and the session around them are the real ones."""
+    monkeypatch.setattr(
+        pipeline_factory,
+        "_create_stt_service",
+        lambda config, _c, **_k: _StubSTT(config.stt.model == REFUSED),
+    )
+    monkeypatch.setattr(
+        pipeline_factory,
+        "_create_tts_service",
+        lambda config, _c: _StubTTS(config.tts.model == REFUSED),
+    )
+    monkeypatch.setattr(
+        pipeline_factory, "_create_llm_stage", lambda *_a, **_k: _StubLLM()
+    )
+    monkeypatch.setattr(
+        pipeline_builder, "load_call_credentials", AsyncMock(return_value=Credentials())
+    )
+
+
+def _target(**blocks: Any) -> ResolvedTarget:
+    blob = {"system_prompt": "Echo.", "first_message": None, **blocks}
+    return ResolvedTarget(
+        project_id=uuid4(),
+        config=AgentConfig.model_validate(blob),
+        config_blob=blob,
+        agent_id=None,
+    )
+
+
+async def _run(
+    definition: dict, target: ResolvedTarget, modality: EvalModality
+) -> tuple:
+    parsed = scenario_mod.parse(definition, name="speech-failover")
+    agent_errors: list[str] = []
+    result = await run_iteration(
+        parsed=parsed,
+        kind=EvalKind.SCRIPTED,
+        target=target,
+        modality=modality,
+        settings=Settings(),
+        session_factory=MagicMock(),
+        run_id=uuid4(),
+        tool_mocks=None,
+        timeout_s=60,
+        agent_errors=agent_errors,
+    )
+    return result, agent_errors
+
+
+def _noise_wav(path: Path) -> str:
+    """A second of the caller's 'audio': the stub STT counts it, never reads it."""
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(EVAL_SAMPLE_RATE)
+        wav.writeframes(bytes(range(256)) * (EVAL_SAMPLE_RATE * 2 // 256))
+    return str(path)
+
+
+async def test_a_refused_stt_fails_over_and_the_caller_is_heard(
+    stub_providers: None, tmp_path: Path
+) -> None:
+    target = _target(
+        stt={
+            "model": REFUSED,
+            "failover": [{"provider": "deepgram", "model": "backup"}],
+        },
+    )
+    definition = {
+        "user": {"modality": "audio"},
+        "turns": [
+            {
+                "user": QUESTION,
+                "audio": _noise_wav(tmp_path / "caller.wav"),
+                "expect": [
+                    {
+                        "event": "llm_response",
+                        "text_contains": "capital of France",
+                        "within_ms": 30000,
+                    }
+                ],
+            }
+        ],
+    }
+
+    result, agent_errors = await _run(definition, target, EvalModality.TEXT)
+
+    assert result.passed, ([str(f) for f in result.failures], agent_errors)
+    assert any(
+        e.startswith(f"stt failed over from deepgram/{REFUSED} to deepgram/backup")
+        for e in agent_errors
+    ), agent_errors
+
+
+async def test_a_refused_tts_fails_over_and_the_reply_is_spoken(
+    stub_providers: None,
+) -> None:
+    target = _target(
+        tts={
+            "model": REFUSED,
+            "failover": [
+                {"provider": "deepgram", "model": "backup", "voice": "backup"}
+            ],
+        },
+    )
+    definition = {
+        # The bot speaks; nothing asserts on `response`, so no transcriber is
+        # ever built from this block.
+        "judge": {"modality": "audio", "transcription": {"service": "moonshine"}},
+        "turns": [
+            {
+                "user": "hello",
+                "expect": [
+                    # The first sentence is the one the primary was refused on:
+                    # only the replay can have said it.
+                    {
+                        "event": "tts_response",
+                        "text_contains": "You said: hello",
+                        "within_ms": 30000,
+                    },
+                    {
+                        "event": "tts_response",
+                        "text_contains": "Goodbye for now",
+                        "within_ms": 30000,
+                    },
+                ],
+            }
+        ],
+    }
+
+    result, agent_errors = await _run(definition, target, EvalModality.AUDIO)
+
+    assert result.passed, ([str(f) for f in result.failures], agent_errors)
+    assert any(
+        e.startswith(f"tts failed over from deepgram/{REFUSED} to deepgram/backup")
+        for e in agent_errors
+    ), agent_errors

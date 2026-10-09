@@ -260,6 +260,42 @@ back as [warnings on an agent read](/guides/agents#warnings-on-a-read).
   field is ignored and the agent read says so.
 </Warning>
 
+## Failover
+
+`stt.failover`, `llm.failover` and `tts.failover` each list backup providers,
+in order, for a voice call. Every entry is a whole config of that role,
+validated the same way — its own model, voice, language, keyterms or
+pronunciations; nothing is inherited from the primary.
+
+```json
+{
+  "stt": {"provider": "deepgram", "failover": [{"provider": "openai"}]},
+  "tts": {
+    "provider": "elevenlabs",
+    "voice": "Rachel",
+    "failover": [{"provider": "deepgram", "voice": "aura-2-helena-en"}]
+  }
+}
+```
+
+When the active provider reports an error that leaves it unusable — a refused
+key, an unknown model or voice — the call moves to the next entry and carries
+on. The backup STT is handed what the caller had just said and nobody
+transcribed; the backup TTS speaks the reply that was cut off, from its start.
+A recoverable error (a rate limit, a timeout) does not switch, and a call never
+switches back, so the caller hears the voice change at most once per backup.
+
+Each switch is a `provider.failover` call event `{role, from, to, error}` and an
+entry in `failovers` on `call.ended` and the call read. Backups need keys like
+any provider: a missing one is reported before the call starts.
+
+<Note>
+  Cascade only — a speech-to-speech agent hears and speaks for itself, so
+  `stt.failover` and `tts.failover` are refused (422). An STT group cannot mix
+  Deepgram Flux (`flux-*`) with other models: Flux decides when the caller's
+  turn ends and the others do not.
+</Note>
+
 ## AWS Bedrock
 
 Bedrock is a *gateway*, not a vendor: `provider: "bedrock"` with

@@ -323,10 +323,11 @@ class CallSession:
         await self._record_error(str(processor), error)
 
     def _watch_failover(self) -> None:
-        """Record each LLM failover (#222): a `provider.failover` event on a
-        call, and among the iteration's agent errors on an eval, which has no
-        event log. The switch absorbs the error, so nothing else would."""
-        from turncall.orchestrator.llm_failover import FailoverLLM
+        """Record each provider failover (#222, #223): a `provider.failover`
+        event on a call, and among the iteration's agent errors on an eval,
+        which has no event log. The switch absorbs the error, so nothing else
+        would."""
+        from turncall.orchestrator.failover import FailoverGroup
 
         processors = self._pipeline.processors
         # A client delegate's group (#246) sits outside the pipeline, behind
@@ -335,9 +336,12 @@ class CallSession:
             *processors,
             *(getattr(p, "delegate_llm", None) for p in processors),
         ]
-        group = next((p for p in candidates if isinstance(p, FailoverLLM)), None)
-        if group is None:
-            return
+        for group in candidates:
+            if isinstance(group, FailoverGroup):
+                self._record_failovers(group)
+
+    def _record_failovers(self, group: Any) -> None:
+        role = group.role
 
         @group.event_handler("on_failover")  # type: ignore[untyped-decorator]
         async def _on_failover(
@@ -347,19 +351,19 @@ class CallSession:
             logger.warning(
                 "provider_failover",
                 call_id=str(self.call_id),
-                role="llm",
+                role=role,
                 src=src,
                 dst=dst,
                 error=error,
             )
             if len(self.pipeline_errors) < _MAX_PIPELINE_ERRORS:
                 self.pipeline_errors.append(
-                    f"llm failed over from {src} to {dst}: {error}"
+                    f"{role} failed over from {src} to {dst}: {error}"
                 )
             if not self._call_context.is_eval:
                 await self._log_event(
                     CallEventType.PROVIDER_FAILOVER,
-                    {"role": "llm", "from": src, "to": dst, "error": error},
+                    {"role": role, "from": src, "to": dst, "error": error},
                 )
 
     def _arm_idle_guard(self) -> None:

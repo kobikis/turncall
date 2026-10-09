@@ -27,6 +27,13 @@ from turncall.domain.providers import (
     STT_PROVIDERS,
     TTS_PROVIDERS,
 )
+from turncall.orchestrator.deepgram_flux import is_flux
+
+
+def _refuse_nested_failover(entries: list[Any]) -> None:
+    if any(entry.failover for entry in entries):
+        msg = "a failover entry cannot nest its own failover list"
+        raise ValueError(msg)
 
 
 class STTConfigSchema(BaseModel):
@@ -38,6 +45,29 @@ class STTConfigSchema(BaseModel):
     language: str | None = "en"
     keyterms: list[str] = Field(default_factory=list)
     extra: dict[str, Any] = Field(default_factory=dict)
+    # Backup STTs for a voice call (#223), each a whole STT config of its own.
+    failover: list["STTConfigSchema"] = Field(default_factory=list, max_length=5)
+
+    @model_validator(mode="after")
+    def validate_failover_flat(self) -> "STTConfigSchema":
+        _refuse_nested_failover(self.failover)
+        flux = {
+            s.provider == "deepgram" and is_flux(s.model)
+            for s in (self, *self.failover)
+        }
+        if len(flux) > 1:
+            # Turn handling is chosen once, at build, from the primary (#204):
+            # Flux ends turns itself, the others need VAD + Smart Turn. After
+            # a switch across the line nothing would end the caller's turns
+            # but pipecat's 5s timeout.
+            msg = (
+                "stt.failover cannot mix Deepgram Flux (flux-*) with other "
+                "STT models: Flux decides when the caller's turn ends and the "
+                "others do not, so a switch between them would leave every "
+                "turn waiting on a 5s timeout"
+            )
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def validate_provider(self) -> "STTConfigSchema":
@@ -89,9 +119,7 @@ class LLMConfigSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_failover_flat(self) -> "LLMConfigSchema":
-        if any(entry.failover for entry in self.failover):
-            msg = "a failover entry cannot nest its own failover list"
-            raise ValueError(msg)
+        _refuse_nested_failover(self.failover)
         return self
 
     @model_validator(mode="after")
@@ -160,6 +188,13 @@ class TTSConfigSchema(BaseModel):
     # markup is generated from it in the pipeline factory.
     pronunciations: dict[str, str] = Field(default_factory=dict)
     extra: dict[str, Any] = Field(default_factory=dict)
+    # Backup TTSs for a voice call (#223), each a whole TTS config of its own.
+    failover: list["TTSConfigSchema"] = Field(default_factory=list, max_length=5)
+
+    @model_validator(mode="after")
+    def validate_failover_flat(self) -> "TTSConfigSchema":
+        _refuse_nested_failover(self.failover)
+        return self
 
     @model_validator(mode="after")
     def clean_pronunciations(self) -> "TTSConfigSchema":
@@ -686,6 +721,13 @@ class AgentConfigSchema(BaseModel):
     def validate_s2s_constraints(self) -> "AgentConfigSchema":
         if self.pipeline_mode == "s2s" and self.voicemail_detection.enabled:
             msg = "Voicemail detection is not supported in S2S pipeline mode"
+            raise ValueError(msg)
+        if self.pipeline_mode == "s2s" and (self.stt.failover or self.tts.failover):
+            msg = (
+                "stt.failover and tts.failover are not supported in S2S pipeline "
+                "mode: a realtime model hears and speaks for itself, so there is "
+                "no STT or TTS stage to fail over"
+            )
             raise ValueError(msg)
         if self.pipeline_mode == "s2s" and self.llm.failover:
             # A client delegate is an ordinary LLM, so it can fail over (#246).

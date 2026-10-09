@@ -15,44 +15,28 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from pipecat.frames.frames import ErrorFrame, Frame, LLMContextFrame
+from pipecat.frames.frames import Frame, LLMContextFrame
 from pipecat.pipeline.llm_switcher import LLMSwitcher
 from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyFailover
 from pipecat.processors.frame_processor import FrameDirection
 
-# Set on each member so a handler that only holds the member (a tool call's
-# `params.llm`) can reach the whole group.
-_GROUP_ATTR = "_turncall_failover_group"
+from turncall.orchestrator.failover import _GROUP_ATTR, FailoverGroup
 
 
-class FailoverLLM(LLMSwitcher[ServiceSwitcherStrategyFailover]):
+class FailoverLLM(FailoverGroup, LLMSwitcher[ServiceSwitcherStrategyFailover]):
     """An agent's LLM and its backups, in order. `llms` are `(label, service)`.
 
     Event handlers: ``on_failover(switcher, from_label, to_label, error_frame)``.
     """
 
+    role = "llm"
+
     def __init__(self, llms: list[tuple[str, Any]]) -> None:
-        services = [service for _, service in llms]
-        super().__init__(services, ServiceSwitcherStrategyFailover)
-        self._labels = {id(service): label for label, service in llms}
+        super().__init__(
+            [service for _, service in llms], ServiceSwitcherStrategyFailover
+        )
+        self._init_group(llms)
         self._last_context: LLMContextFrame | None = None
-        # Members this call has given up on. pipecat makes a service usable
-        # again on any settings change, and a handoff's prompt update reaches
-        # every member — without this, the next failover could wrap round to
-        # the dead primary.
-        self._failed: set[int] = set()
-        for service in services:
-            setattr(service, _GROUP_ATTR, self)
-            service.add_event_handler("on_usable_changed", self._keep_failed_down)
-        self._register_event_handler("on_failover")
-
-    async def _keep_failed_down(self, service: Any, is_usable: bool) -> None:
-        if is_usable and id(service) in self._failed:
-            await service.set_usable(False)
-
-    def label(self, service: Any) -> str:
-        """`provider/model` of a member, as the call's event log names it."""
-        return self._labels[id(service)]
 
     def get_full_model_name(self) -> str | None:
         """The model answering now, for the transcript (observability.py)."""
@@ -70,18 +54,7 @@ class FailoverLLM(LLMSwitcher[ServiceSwitcherStrategyFailover]):
             self._last_context = frame
         await super().process_frame(frame, direction)
 
-    async def push_frame(
-        self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM
-    ) -> None:
-        before = self.active_llm
-        await super().push_frame(frame, direction)
-        after = self.active_llm
-        if after is before or not isinstance(frame, ErrorFrame):
-            return
-        self._failed.add(id(before))
-        await self._call_event_handler(
-            "on_failover", self.label(before), self.label(after), frame
-        )
+    async def _replay(self, service: Any) -> None:
         if self._last_context is not None:
             # ponytail: a provider that streamed half a reply before dying gets
             # it said again in full; the failures this is for (401, unknown

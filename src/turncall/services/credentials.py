@@ -143,6 +143,8 @@ class Credentials:
                 (config.tts.provider, None),
                 # A backup with no key would only be found out mid-outage.
                 *((e.provider, e.api_key) for e in config.llm.failover),
+                *((e.provider, None) for e in config.stt.failover),
+                *((e.provider, None) for e in config.tts.failover),
             ]
             if config.avatar.enabled:
                 needed.append((config.avatar.provider, None))

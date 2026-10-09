@@ -343,6 +343,28 @@ def _create_assemblyai_stt(
     )
 
 
+def _create_stt_stage(
+    config: AgentConfig, credentials: Credentials, *, sample_rate: int
+) -> Any:
+    """The call's STT: the service itself, or it and its backups (#223). Each
+    entry is built as `stt` would be, so its model resolves on its own terms."""
+    stt = _create_stt_service(config, credentials, sample_rate=sample_rate)
+    if not config.stt.failover:
+        return stt
+    from turncall.orchestrator.failover import FailoverSTT
+
+    members = [(_stt_label(config.stt), stt)]
+    for entry in config.stt.failover:
+        backup = config.model_copy(update={"stt": entry})
+        service = _create_stt_service(backup, credentials, sample_rate=sample_rate)
+        members.append((_stt_label(entry), service))
+    return FailoverSTT(members)
+
+
+def _stt_label(stt: Any) -> str:
+    return f"{stt.provider}/{_stt_model(stt.provider, stt.model, stt.language)}"
+
+
 def _validate_byom_url(base_url: str, byom_settings: BYOMSettings) -> None:
     """Validate base_url against BYOM allowlist settings."""
     if not byom_settings.enabled:
@@ -811,6 +833,28 @@ def _create_tts_service(config: AgentConfig, credentials: Credentials) -> Any:
         )
 
     raise ValueError(f"Unsupported TTS provider: {provider}")
+
+
+def _create_tts_stage(config: AgentConfig, credentials: Credentials) -> Any:
+    """The call's TTS: the service itself, or it and its backups (#223). Each
+    entry is a whole TTS config, its pronunciations included."""
+    tts = _create_tts_service(config, credentials)
+    _warn_unusable_pronunciations(config, tts)
+    if not config.tts.failover:
+        return tts
+    from turncall.orchestrator.failover import FailoverTTS
+
+    members = [(_tts_label(config), tts)]
+    for entry in config.tts.failover:
+        backup = config.model_copy(update={"tts": entry})
+        service = _create_tts_service(backup, credentials)
+        _warn_unusable_pronunciations(backup, service)
+        members.append((_tts_label(backup), service))
+    return FailoverTTS(members)
+
+
+def _tts_label(config: AgentConfig) -> str:
+    return f"{config.tts.provider}/{_tts_model_voice(config)[0]}"
 
 
 def _build_tools_prompt_section(config: AgentConfig) -> str:
@@ -1287,7 +1331,7 @@ def create_pipeline(
 
     # --- Cascade pipeline (STT → LLM → TTS) ---
     # Create AI services
-    stt = _create_stt_service(config, credentials, sample_rate=audio_sample_rate)
+    stt = _create_stt_stage(config, credentials, sample_rate=audio_sample_rate)
 
     # BYOM providers describe their tools in the prompt rather than advertising
     # them through the API: many local models (Gemma and friends) only do
@@ -1311,8 +1355,7 @@ def create_pipeline(
         byom_settings=byom_settings,
         system_instruction=system_instruction,
     )
-    tts = _create_tts_service(config, credentials)
-    _warn_unusable_pronunciations(config, tts)
+    tts = _create_tts_stage(config, credentials)
 
     # query_knowledge (tool mode) is registered here, before pipeline_builder
     # registers static + MCP tools — so on a name clash the agent's tool wins,
