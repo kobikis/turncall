@@ -64,7 +64,8 @@
                   "guides/post-call-analysis",
                   "guides/takeaways",
                   "guides/evals",
-                  "guides/observability"
+                  "guides/observability",
+                  "guides/capacity"
                 ]
               }
             ]

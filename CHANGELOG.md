@@ -66,6 +66,14 @@ and is not part of this repository's history.
 
 ### Added
 
+- **`make load-test`: how many concurrent calls one pod carries** (#200,
+  `scripts/calls_per_pod/`). Runs the app in the API image under a pod's CPU
+  and memory budget, on the harness's stub providers, and ramps N real-time
+  Twilio media streams playing recorded speech. Per step: CPU (process and
+  event-loop thread), CFS throttling, RSS, loop lag, full-GC pauses, audio
+  underruns as a caller's playout buffer hears them, and turn latency. The
+  measured figure and its conditions are in `docs/guides/capacity.mdx`.
+
 - **A test harness that drives the running app like a carrier** (#214,
   `tests/harness/`). Stub STT/LLM/TTS answer instantly from a script (a tool
   call included), a fake carrier records every REST action TurnCall takes, and

@@ -1,0 +1,175 @@
+---
+title: Capacity
+description: "How many concurrent calls one TurnCall pod carries, and how that was measured"
+icon: "gauge"
+---
+
+A pod runs every one of its calls on **one Python event loop**. Each call's
+audio is paced off that loop in 20–40 ms frames, so whatever stalls the loop —
+CPU saturation, a CPU-quota throttle, a garbage collection — stalls the audio
+of **every** call at once. The caller hears that as a gap. The per-pod limit is
+therefore set by audio underruns and turn latency, not by average CPU.
+
+## The figure
+
+For the **default cascade agent** (Silero VAD, Smart Turn V3, barge-in, idle
+guard, recording; providers elsewhere):
+
+| Pod CPU | Clean (no underruns, latency flat) | Degrades from | Unusable |
+|---|---|---|---|
+| `limits.cpu: 1` (CFS quota) | **1** | 2 (1.4 underruns/min), 4 (8/min, p95 turn latency 1.2 s) | 8+ (unanswered turns) |
+| 1 dedicated core, no quota | **2** | 4–8 (0.6–2.9 underruns/min), 10 (8.9/min, p95 1.5 s) | 12 (unanswered turns, earlier 60 s run) |
+| `limits.cpu: 2` (CFS quota) | **1** | 4 (7.5/min); p95 latency holds to 8 | 16 (calls fail) |
+
+**Per-pod target: 2 concurrent calls on `requests.cpu: 1`, no CPU limit, 1 GiB
+of memory.** 2 is the largest N that stayed clean on a dedicated core; 4 is
+where the first gaps appeared there (2 per minute of agent speech, ≤ 52 ms).
+Under a CPU quota only 1 call stayed clean. The measuring
+machine was noisy (below) and aarch64, so this is a floor: rerun `make
+load-test` on your node type before raising the target, and raise it to the
+largest step that comes back ok.
+
+Why those settings:
+
+- **No CPU limit.** A CFS quota freezes the whole process for the rest of a
+  100 ms period whenever its threads (ONNX inference, the logging thread) burst
+  past it, even at 30–45 % average CPU: 8–17 % of periods were throttled at 2–4
+  calls, and each throttle is a loop stall of up to ~100 ms. The same core
+  without a quota held p95 turn latency flat to 8 calls (vs 2) and cut
+  underruns 4–50x at every step. A second CPU of quota did not help either:
+  the event loop is single-threaded.
+- **Scale out, not up.** Past ~1.3 CPUs a pod has nothing to spend the extra
+  on: the loop thread alone is ~5 % of a core per call, and turn latency held
+  flat to 8 calls on 2 CPUs while underruns did not.
+- **Memory: ~205 MiB idle + ~115 MiB per call** (310 MiB at 1 call, 1.4 GiB at
+  10) — 1 GiB covers the target with headroom. Each call loads its own Smart
+  Turn ONNX session (~36 MiB) and Silero model (~5 MiB); the rest is the
+  pipeline and the recording buffer.
+
+Scale on the active-call gauge with this per-pod target.
+
+## What was measured
+
+`make load-test` (`scripts/calls_per_pod/run.sh`) runs the real app in the
+API image under a pod's CPU/memory budget, with the [test harness's](https://github.com/kobikis/turncall/tree/main/tests/harness)
+stub STT/LLM/TTS and fake carrier, and a load generator in a second container.
+Each step opens N Twilio Media Streams; every caller plays **recorded speech**
+(macOS `say`, 8 kHz — the harness's test tone is not speech to Silero, and VAD
+plus Smart Turn are most of a turn's work) in real time, waits for the agent's
+answer (a 12-word reply at 400 ms a word), pauses 0.5–1.5 s, and speaks again.
+Stubs answer instantly, so the measurement is TurnCall's own per-call work —
+VAD, Smart Turn, resampling, serialization, recording, database writes — and
+not a provider's rate limit.
+
+Per step (2 minutes measured, after a 10 s ramp and 8 s warm-up) it reports:
+
+| Column | Meaning |
+|---|---|
+| `cpu%`, `loop%` | Process CPU, and the event-loop thread alone, as % of one core |
+| `thr%` | Share of CFS periods in which the cgroup was throttled |
+| `rssMB` | Peak resident memory |
+| `lag p99/max` | How late a 50 ms timer fires on the pod's loop |
+| `gc2 n/max` | Full (generation 2) garbage collections and the longest pause |
+| `lat p50/p95` | End of the caller's speech to the first agent audio |
+| `undr/min` | Underruns per minute of agent audio: the caller's 60 ms playout buffer running dry mid-utterance |
+| `cli` | The load generator's own loop lag — above 20 ms the step is the client's limit, not the pod's |
+
+A step is **ok** while every call connects and is answered, underruns stay at or
+below 1 per minute of agent audio, and p95 turn latency stays within 300 ms of
+the first step's median. `capacity` is the largest N with every step up to it ok.
+
+### Machine and conditions
+
+- **Host:** Apple M1 Pro (8 cores, 6 performance + 2 efficiency), 16 GB RAM,
+  macOS 26.5.2.
+- **Docker Desktop VM:** Linux 6.12 aarch64, 8 vCPU, 7.75 GiB. Image
+  `python:3.12-slim`, pipecat 1.12.0, onnxruntime 1.24.4, torch 2.14.1+cpu,
+  uvloop. Pod `--memory 2g`; load generator `--cpus 3`, one process per 20 calls.
+- **Noisy.** Other agents were running test suites on the host throughout:
+  load average 5–19 on 8 cores, host CPU idle often 3–50 %, plus two dev
+  containers using ~0.4 CPU in the VM. An idle pod's loop lag was p99 10 ms /
+  max 39 ms here (about 1 ms on a quiet machine), which is why even 1–2 call
+  steps show 10–50 ms p99 lag. The figures are a floor for an x86 node with
+  nothing else on its core.
+- **aarch64, not x86.** ONNX inference speed differs per architecture; rerun on
+  your node type before relying on the number.
+- **Not included:** OpenTelemetry span export (tracing was off; it costs CPU
+  per turn), ambience mixing, knowledge-base retrieval, MCP, post-call analysis
+  (runs after the call, on a provider).
+
+### Raw results
+
+`--cpus 1` (quota):
+
+```
+   N   cpu%  loop%  thr%  rssMB  lag p99/max turns  lat p50/p95 undr/min maxstall
+   1   16.3   10.7   5.2    330  34.7/80.8      12   574/816         0.0        0
+   2   26.8   16.4   8.3    446  50.9/76.6      22   613/855        1.44        5
+   4   45.2   26.3  17.2    684  65.6/249.4     48   657/1200       7.96      169
+   6   63.9   36.7  31.2   1007  86.8/502.4     68   764/1410      29.76      191
+   8   79.1   44.1  49.8   1189  89.6/331.0     87   895/3260      41.97      320   3 unanswered
+  10   91.1   51.0  70.3   1427 132.2/422.8     50  1113/3350       56.0      396   44 unanswered
+```
+
+One dedicated core (`--cpuset-cpus`, no quota):
+
+```
+   N   cpu%  loop%  thr%  rssMB  lag p99/max  gc2 n/max turns  lat p50/p95 undr/min maxstall
+   1   15.2   11.1   0.0    312  10.7/87.4      0/0        12   429/570         0.0        0
+   2   23.2   16.1   0.0    430   7.6/89.9      0/0        24   403/498         0.0        0
+   4   38.3   26.2   0.0    667  30.2/144.5     0/0        50   428/610        2.15       52
+   6   44.1   30.0   0.0    976  25.6/378.1     1/413.7    73   386/451        0.62      309
+   8   60.1   40.3   0.0   1143  33.3/318.6     1/346.9    98   458/724        2.86      287
+  10   74.8   49.7   0.0   1382  64.8/394.8     1/423.4   118   583/1491       8.91      332
+```
+
+`--cpus 2` (quota):
+
+```
+   N   cpu%  loop%  thr%  rssMB  lag p99/max turns  lat p50/p95 undr/min maxstall
+   1   18.5   11.5   1.6    320  27.4/176.4     12   546/644        0.96       22
+   4   52.6   28.5   6.3    566  56.6/326.3     48   510/745        7.46      258
+   8   90.9   46.4  14.6    991  61.1/383.9     96   525/807       11.29      349
+  12  121.1   57.8  22.0   1299  74.0/297.0    139   582/1113      28.19      271
+  16  138.7   68.2  23.5   1559 118.4/345.3     86  1435/3347      54.79      261   calls failed
+```
+
+### Full garbage collections
+
+From 6 calls up, a full collection runs about once in two minutes and pauses
+the process for **350–420 ms** — every call's audio at once, which is the
+longest single gap in each of those steps. It scans every object alive in the
+process, and most of those (pipecat, torch, onnxruntime) were allocated at
+import and never die.
+
+Moving everything alive after startup out of the collector's reach
+(`gc.freeze()`, `LOAD_GC_FREEZE=1` on the load pod — the app does not do this)
+shrank that pause to 43 ms at 8 calls (255 ms at 10), but the run was otherwise
+worse on a busier VM (2.2–2.5 busy CPUs against 1.0–1.7), so its effect on
+capacity is not established here. It is the first thing to try on a quiet
+machine:
+
+```
+   N   cpu%  loop%  thr%  rssMB  lag p99/max  gc2 n/max turns  lat p50/p95 undr/min maxstall
+   1   16.1   11.8   0.0    312  10.7/67.6      0/0        12   445/522         0.0        0
+   6   50.6   34.4   0.0    681  37.4/113.0     0/0        72   424/669        2.37       63
+   8   76.0   51.1   0.0    859  88.8/273.5     1/43.4     76   652/3184      12.68      268   13 unanswered
+  10   86.8   58.6   0.0   1277  93.2/363.1     1/255.4    85  1087/3592      27.31      173   20 unanswered
+```
+
+Run-to-run spread is large on this machine: 6 calls on a dedicated core gave
+0.62 underruns/min in one run and 2.37 in the next.
+
+## Run it yourself
+
+```bash
+make docker-up-local                       # Postgres + the API image
+make load-test                             # 1 CPU quota, steps 1..20
+POD_CPUSET=3 make load-test                # one core, no quota
+POD_CPUS=2 POD_MEMORY=4g make load-test ARGS="--steps 4,8,12,16 --stop-on-degrade"
+```
+
+Results land in `scripts/calls_per_pod/results/` (a JSON per run plus the pod's
+log). `IMAGE`, `NETWORK` and `PG_CONTAINER` point it at another stack; the
+script makes and migrates its own database (`LOAD_DB`, default `turncall_load`),
+since calls write real rows.

@@ -187,10 +187,13 @@ async def place_inbound_call(
     *,
     from_number: str,
     to_number: str,
+    call_type: type[TwilioCall] = TwilioCall,
 ) -> TwilioCall:
     """Ring `to_number`: POST its configured voice URL, then open the stream
     the TwiML asks for. The number must have been configured by the app
-    (binding it through the API does that)."""
+    (binding it through the API does that). `call_type` is the caller to hand
+    the stream to — a `TwilioCall` subclass that measures, for #200's load
+    generator."""
     voice_url = carrier.number(to_number).voice_url
     if not voice_url:
         raise AssertionError(f"{to_number} has no voice URL; bind it through the API")
@@ -213,7 +216,7 @@ async def place_inbound_call(
     stream_sid = "MZ" + secrets.token_hex(16)
 
     ws = await websockets.connect(stream.get("url"))
-    call = TwilioCall(
+    call = call_type(
         carrier=carrier,
         http=http,
         call_sid=call_sid,
