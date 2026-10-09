@@ -37,6 +37,17 @@ class CallFacts:
     failovers: tuple[dict[str, Any], ...] = ()
 
 
+# Call-init's inline agent, stored raw on the call (ADR-0017). It carries the
+# call's credentials — MCP headers, an inline `llm.api_key` — so it is read by
+# the pipeline and `config_for_call()` and never shown (#276).
+DYNAMIC_CONFIG = "dynamic_config"
+
+
+def public_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """A call's metadata as the read and `call.ended` show it."""
+    return {k: v for k, v in (metadata or {}).items() if k != DYNAMIC_CONFIG}
+
+
 _STAGES = ("stt", "llm", "tts")
 
 

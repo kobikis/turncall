@@ -4,9 +4,10 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from turncall.api.v1.schemas import E164_PATTERN
+from turncall.services.call_view import DYNAMIC_CONFIG, public_metadata
 
 
 class CreateOutboundCallRequest(BaseModel):
@@ -14,6 +15,17 @@ class CreateOutboundCallRequest(BaseModel):
     from_number_id: UUID
     agent_id: UUID
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata")
+    @classmethod
+    def _no_inline_agent(cls, value: dict[str, Any]) -> dict[str, Any]:
+        # The media stream runs `metadata.dynamic_config` as the call's
+        # config; only call-init may put one there (#276).
+        if DYNAMIC_CONFIG in value:
+            raise ValueError(
+                f"metadata.{DYNAMIC_CONFIG} is reserved: the call runs agent_id"
+            )
+        return value
 
 
 class CallResponse(BaseModel):
@@ -65,7 +77,7 @@ class CallResponse(BaseModel):
             duration_ms=row.duration_ms,
             recording_status=row.recording_status,
             recording_url=row.recording_url,
-            metadata=row.metadata_json,
+            metadata=public_metadata(row.metadata_json),
             analysis=row.analysis_json,
             created_at=row.created_at,
         )

@@ -649,7 +649,11 @@ transport obeys both (`adr/0017`):
 
 Dropping either is silent: the first ends the call before the pipeline starts,
 the second skips post-call processing, and since that trigger dispatches
-`call.ended`, it skips the webhook too. `tests/unit/test_inline_agent_context.py`
+`call.ended`, it skips the webhook too. The stored config carries the call's
+credentials (MCP headers, an inline `llm.api_key`), so it is never shown: the
+call read and `call.ended`'s `metadata` drop it (`call_view.public_metadata`,
+#276), and `POST /v1/calls/outbound` refuses a `metadata.dynamic_config` with
+a 422 — only call-init puts one there. `tests/unit/test_inline_agent_context.py`
 guards both structurally.
 
 Knowledge bases are links on an agent row, so an inline config names its own in

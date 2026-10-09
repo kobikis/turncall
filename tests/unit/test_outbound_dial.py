@@ -282,6 +282,16 @@ class TestRoute:
         dial.create.assert_not_awaited()
         dial.carrier.assert_not_awaited()
 
+    def test_a_client_cannot_hand_in_the_calls_config(self, dial) -> None:
+        """#276: `metadata.dynamic_config` is where call-init's inline agent
+        lives, and the media stream runs it — never something a dial supplies."""
+        dial.body["metadata"] = {"dynamic_config": {"llm": {"provider": "openai"}}}
+        r = dial.post()
+        assert r.status_code == 422
+        assert "dynamic_config" in r.text
+        dial.create.assert_not_awaited()
+        dial.carrier.assert_not_awaited()
+
     def test_a_suppressed_number_is_refused_and_never_dialled(self, dial) -> None:
         dial.suppressed = True
         r = dial.post()

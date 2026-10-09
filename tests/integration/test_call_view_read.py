@@ -160,3 +160,51 @@ async def test_call_ended_payload_matches_the_read(factory, client, seeded):
     read = (await client.get(f"/v1/calls/{stored_id}")).json()["data"]
     for field in ("ended_reason", "agent_name", "agent_version", "latency_summary"):
         assert payload[field] == read[field], field
+
+
+async def test_an_inline_agents_config_never_leaves_the_call(factory, client, seeded):
+    """#276: the inline config carries the call's credentials (MCP headers, an
+    inline `llm.api_key`). The pipeline and post-call work read it; nothing
+    outbound carries it — not the read, not `call.ended`."""
+    from unittest.mock import AsyncMock, patch
+
+    from turncall.domain.models import AnalysisConfig, LLMConfig
+    from turncall.services import call_analysis_trigger
+
+    project_id = seeded[0]
+    inline_config = {
+        "llm": {"provider": "openai", "api_key": "sk-secret"},
+        "mcp_servers": [{"name": "pd", "headers": {"Authorization": "Bearer t"}}],
+    }
+    async with factory() as session:
+        call = await call_repo.create_call(
+            session,
+            project_id=project_id,
+            direction="inbound",
+            metadata_json={"crm_id": "C-123", "dynamic_config": inline_config},
+        )
+        await call_repo.update_call_status(
+            session, call.id, status="completed", ended_at=ENDED
+        )
+        await session.commit()
+
+    one = (await client.get(f"/v1/calls/{call.id}")).json()["data"]
+    listed = {c["id"]: c for c in (await client.get("/v1/calls")).json()["data"]}
+    dispatch = AsyncMock()
+    with patch("turncall.events.dispatcher.dispatch_event", dispatch):
+        await call_analysis_trigger._run_post_call(
+            factory, call.id, project_id, AnalysisConfig(enabled=False), LLMConfig(), ""
+        )
+    ended = dispatch.await_args.kwargs["payload"]
+
+    for metadata in (
+        one["metadata"],
+        listed[str(call.id)]["metadata"],
+        ended["metadata"],
+    ):
+        assert metadata == {"crm_id": "C-123"}
+    async with factory() as session:  # still there for whoever runs the call
+        row = await call_repo.get_call_by_id(session, call.id)
+        assert (
+            await call_analysis_trigger.config_for_call(session, row) == inline_config
+        )
