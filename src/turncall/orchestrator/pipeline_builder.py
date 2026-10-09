@@ -28,6 +28,7 @@ from turncall.orchestrator.pipeline_factory import (
     create_pipeline,
 )
 from turncall.orchestrator.tool_bridge import register_tools
+from turncall.services import drain
 from turncall.services.credentials import (
     Credentials,
     MissingProviderKeyError,
@@ -251,7 +252,12 @@ async def start_call_pipeline(
             if session is None and mcp_manager is not None:
                 await mcp_manager.close()
 
-    task = asyncio.create_task(_run())
+    async def _run_live() -> None:
+        # Live until the session has finalized: a SIGTERM waits for it (#199).
+        with drain.live_call(call_context.call_id, config.max_call_duration_seconds):
+            await _run()
+
+    task = asyncio.create_task(_run_live())
     _RUNNING.add(task)
     task.add_done_callback(_RUNNING.discard)
 

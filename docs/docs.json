@@ -64,7 +64,8 @@
                   "guides/post-call-analysis",
                   "guides/takeaways",
                   "guides/evals",
-                  "guides/observability"
+                  "guides/observability",
+                  "guides/graceful-shutdown"
                 ]
               }
             ]
@@ -268,7 +269,8 @@
             "pages": [
               "GET /health",
               "GET /ready",
-              "GET /live"
+              "GET /live",
+              "GET /metrics"
             ]
           }
         ]

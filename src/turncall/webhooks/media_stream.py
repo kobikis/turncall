@@ -23,6 +23,7 @@ from turncall.orchestrator.transport_factory import (
     CarrierStream,
     create_carrier_transport,
 )
+from turncall.services import drain
 from turncall.storage.database import create_session_factory, get_engine
 
 
@@ -108,49 +109,51 @@ async def run_media_stream(
             config = prepend_knowledge_context(config, knowledge_context)
             logger.info("Knowledge context applied to system prompt")
 
-    # Connect MCP servers and discover tools (if configured)
-    mcp_manager = None
-    mcp_tools: list = []
-    if config.mcp_servers:
-        from turncall.services.mcp_client import MCPSessionManager
+    # Live from here until the session has finalized: a SIGTERM waits (#199).
+    with drain.live_call(call_id, config.max_call_duration_seconds):
+        # Connect MCP servers and discover tools (if configured)
+        mcp_manager = None
+        mcp_tools: list = []
+        if config.mcp_servers:
+            from turncall.services.mcp_client import MCPSessionManager
 
-        mcp_manager = MCPSessionManager(
+            mcp_manager = MCPSessionManager(
+                call_id=UUID(call_id_str),
+                project_id=UUID(project_id_str),
+            )
+            mcp_tools = await mcp_manager.connect_servers(config.mcp_servers)
+
+        # Build call context
+        call_context = CallContext(
             call_id=UUID(call_id_str),
             project_id=UUID(project_id_str),
+            agent_id=call_row.active_agent_id or DYNAMIC_AGENT_ID,
+            call_sid=stream.call_sid,
+            stream_sid=stream.stream_id,
+            session_factory=session_factory,
+            mcp_manager=mcp_manager,
         )
-        mcp_tools = await mcp_manager.connect_servers(config.mcp_servers)
 
-    # Build call context
-    call_context = CallContext(
-        call_id=UUID(call_id_str),
-        project_id=UUID(project_id_str),
-        agent_id=call_row.active_agent_id or DYNAMIC_AGENT_ID,
-        call_sid=stream.call_sid,
-        stream_sid=stream.stream_id,
-        session_factory=session_factory,
-        mcp_manager=mcp_manager,
-    )
+        from turncall.orchestrator.ambience import build_ambience_mixer
 
-    from turncall.orchestrator.ambience import build_ambience_mixer
+        mixer = await build_ambience_mixer(
+            config,
+            project_id=call_context.project_id,
+            sample_rate=CARRIER_MEDIA[carrier].sample_rate,
+            session_factory=session_factory,
+            settings=settings,
+        )
+        # The serializer comes from the call's carrier, not from which edge
+        # handed the stream over (ADR-0022).
+        transport = create_carrier_transport(carrier, websocket, stream, mixer=mixer)
 
-    mixer = await build_ambience_mixer(
-        config,
-        project_id=call_context.project_id,
-        sample_rate=CARRIER_MEDIA[carrier].sample_rate,
-        session_factory=session_factory,
-        settings=settings,
-    )
-    # The serializer comes from the call's carrier, not from which edge
-    # handed the stream over (ADR-0022).
-    transport = create_carrier_transport(carrier, websocket, stream, mixer=mixer)
-
-    call_session = await build_call_pipeline(
-        config=config,
-        transport=transport,
-        call_context=call_context,
-        settings=settings,
-        session_factory=session_factory,
-        mcp_tools=mcp_tools,
-    )
-    # WS handler stays open for the call — await (don't fire-and-forget).
-    await call_session.start()
+        call_session = await build_call_pipeline(
+            config=config,
+            transport=transport,
+            call_context=call_context,
+            settings=settings,
+            session_factory=session_factory,
+            mcp_tools=mcp_tools,
+        )
+        # WS handler stays open for the call — await (don't fire-and-forget).
+        await call_session.start()
