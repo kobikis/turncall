@@ -7,6 +7,12 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**Deepgram Flux STT.** Set `stt.model` to `flux-general-en` (or
+`flux-general-multi`) on the `deepgram` provider and Flux decides when the
+caller has finished speaking — Smart Turn is not run for that agent. Each
+turn's `metrics.turn` event now carries `turn_end_ms`, the time it took to call
+the turn over. See [Deepgram Flux](/guides/agents#deepgram-flux).
+
 **`openai_live` agents with tools work out of the box.** An agent with tools and
 no `s2s.delegation` block now delegates to its own `llm` (`"mode": "client"`),
 with your keys, running your webhook and MCP tools — `end_call`, `do_not_call`

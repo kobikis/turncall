@@ -642,7 +642,9 @@ class AgentConfigSchema(BaseModel):
     )
     interruption_enabled: bool = True
     smart_turn_detection: bool = Field(
-        default=True, description="Use ML-based turn detection (SmartTurnV3)"
+        default=True,
+        description="Use ML-based turn detection (SmartTurnV3). Not used with a "
+        "Deepgram Flux STT model, which detects the end of the turn itself.",
     )
     smart_turn_stop_secs: float = Field(
         default=1.0,

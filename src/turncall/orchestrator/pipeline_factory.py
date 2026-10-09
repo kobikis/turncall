@@ -24,6 +24,11 @@ from turncall.domain.models import (
     LLMConfig,
     resolve_delegation,
 )
+from turncall.orchestrator.deepgram_flux import (
+    create_flux_stt,
+    flux_turn_strategies,
+    is_flux,
+)
 from turncall.orchestrator.knowledge_processor import KnowledgeTool, knowledge_tool
 from turncall.orchestrator.observability import ObservabilityProcessor
 from turncall.services.credentials import Credentials
@@ -171,6 +176,13 @@ def _stt_model(provider: str, configured: str, language: str | None = "en") -> s
     return _STT_DEFAULTS.get(provider, configured)
 
 
+def _flux_owns_turn(config: AgentConfig) -> bool:
+    """Whether the agent's STT decides when the caller's turn is over (#204)."""
+    return config.stt.provider == "deepgram" and is_flux(
+        _stt_model("deepgram", config.stt.model)
+    )
+
+
 def _create_stt_service(
     config: AgentConfig, credentials: Credentials, *, sample_rate: int = 8000
 ) -> Any:
@@ -190,6 +202,18 @@ def _create_stt_service(
     provider = config.stt.provider
     model = _stt_model(provider, config.stt.model, config.stt.language)
     keyterm_kwargs = _keyterm_kwargs(provider, model, config.stt.keyterms)
+
+    if provider == "deepgram" and is_flux(model):
+        return create_flux_stt(
+            api_key=credentials.api_key("deepgram"),
+            settings={
+                **_overflow(config.stt.extra, "model", *keyterm_kwargs),
+                "model": model,
+                **keyterm_kwargs,
+            },
+            sample_rate=sample_rate,
+            interruptions=config.interruption_enabled,
+        )
 
     if provider == "deepgram":
         from pipecat.services.deepgram.stt import DeepgramSTTService
@@ -884,16 +908,17 @@ def _build_vad_analyzer(
     turns.
 
     Without Smart Turn nothing else decides the turn, so `silence_timeout_ms`
-    keeps driving VAD there — including on S2S.
+    keeps driving VAD there — including on S2S. Unless the STT is Deepgram
+    Flux, which decides the turn itself (#204): VAD stays at 0.2 then, deciding
+    nothing, as the point the latency observer measures from.
     """
     from pipecat.audio.vad.silero import SileroVADAnalyzer
     from pipecat.audio.vad.vad_analyzer import VAD_STOP_SECS, VADParams
 
-    stop_secs = (
-        VAD_STOP_SECS
-        if smart_turn and config.smart_turn_detection
-        else config.silence_timeout_ms / 1000
+    decided_elsewhere = smart_turn and (
+        config.smart_turn_detection or _flux_owns_turn(config)
     )
+    stop_secs = VAD_STOP_SECS if decided_elsewhere else config.silence_timeout_ms / 1000
     params: dict[str, Any] = {"stop_secs": stop_secs}
     confidence = getattr(pipecat_settings, "vad_confidence_threshold", None)
     if confidence is not None:
@@ -912,7 +937,14 @@ def _build_turn_strategies(config: AgentConfig, *, smart_turn: bool) -> Any | No
 
     Returns None when the agent asked for neither, leaving Pipecat's defaults
     alone. `smart_turn=False` for S2S, which has no cascade turn analyzer.
+
+    A Deepgram Flux agent gets Flux's strategies instead, whatever
+    `smart_turn_detection` says: Flux decides the turn, and a Smart Turn stop
+    strategy beside it would only add a second wait after Flux's (#204).
     """
+    if smart_turn and _flux_owns_turn(config):
+        return flux_turn_strategies(interruptions=config.interruption_enabled)
+
     strategies: dict[str, Any] = {}
 
     # Barge-in. `interruption_enabled: false` was accepted, validated and read
