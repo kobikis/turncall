@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from turncall.api.v1.schemas import E164_PATTERN
-from turncall.domain.carriers import CARRIERS, DEFAULT_CARRIER
+from turncall.domain.carriers import CARRIERS, DEFAULT_CARRIER, TWILIO
 
 Carrier = Literal[CARRIERS]  # type: ignore[valid-type]
 
@@ -55,6 +55,21 @@ class TwilioAccountFields(BaseModel):
         return bool(self.twilio_account_sid and self.twilio_auth_token)
 
 
+def only_on_twilio(body: TwilioAccountFields, carrier: str) -> None:
+    """A number's own Twilio account and SMS are Twilio features (ADR-0022:
+    SMS on Telnyx numbers is out of scope); on another carrier they would be
+    stored and never used."""
+    if body.has_own_twilio:
+        msg = (
+            "twilio_account_sid/twilio_auth_token apply to Twilio numbers, "
+            f"not {carrier}"
+        )
+        raise ValueError(msg)
+    if getattr(body, "sms_enabled", False):
+        msg = f"sms_enabled is not supported on {carrier} numbers"
+        raise ValueError(msg)
+
+
 class BindPhoneNumberRequest(TwilioAccountFields, CarrierField):
     carrier: Carrier = Field(
         default=DEFAULT_CARRIER,
@@ -73,6 +88,8 @@ class BindPhoneNumberRequest(TwilioAccountFields, CarrierField):
 
     @model_validator(mode="after")
     def validate_routing(self) -> "BindPhoneNumberRequest":
+        if self.carrier != TWILIO:
+            only_on_twilio(self, self.carrier)
         if not self.external_number_sid and not self.has_own_twilio:
             msg = (
                 "external_number_sid is required unless the number brings its own "

@@ -27,7 +27,7 @@ An admin key, and only for its own project. The `PUT` replaces every limit: a fi
 
 What happens to a call over the limit depends on who started it:
 
-- **Inbound (Twilio, WhatsApp voice)**: refused at the carrier before it is answered — busy on Twilio (`<Reject reason="busy"/>`), a rejection on WhatsApp. Answering only to say no would bill minutes, and so would queueing. Your webhook subscribers get `call.rejected`:
+- **Inbound (Twilio, Telnyx, WhatsApp voice)**: refused at the carrier before it is answered — busy on Twilio (`<Reject reason="busy"/>`) and Telnyx (a `reject` command, cause `USER_BUSY`), a rejection on WhatsApp. Answering only to say no would bill minutes, and so would queueing. Your webhook subscribers get `call.rejected`:
 
   ```json
   {

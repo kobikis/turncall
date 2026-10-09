@@ -1,13 +1,13 @@
 # TurnCall
 
-Production voice agent platform. API-only backend for real-time AI voice agents over Twilio PSTN, WebRTC browser calls, WhatsApp Business (voice + text), and SMS/chat text conversations.
+Production voice agent platform. API-only backend for real-time AI voice agents over Twilio and Telnyx PSTN, WebRTC browser calls, WhatsApp Business (voice + text), and SMS/chat text conversations.
 
 ## Stack
 
 - **Runtime**: Python 3.12, FastAPI, Pipecat 1.12
 - **Database**: PostgreSQL (asyncpg + SQLAlchemy async + Alembic)
 - **Cache**: Redis
-- **Telephony**: Twilio Voice + Media Streams (WebSocket)
+- **Telephony**: Twilio Voice + Media Streams (WebSocket) · Telnyx Call Control + media streaming (WebSocket)
 - **WhatsApp**: WhatsApp Cloud API + Pipecat WhatsAppClient (voice calls + text messages)
 - **SMS/Chat**: Twilio SMS + Chat API (text conversations with session management)
 - **WebRTC**: Pipecat SmallWebRTCTransport (browser calls)
@@ -67,6 +67,8 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 |----------|----------|-------------|
 | `TWILIO_ACCOUNT_SID` | Yes* | Twilio account SID — the platform account. *A number bound with its own `twilio_account_sid` + `twilio_auth_token` uses those instead |
 | `TWILIO_AUTH_TOKEN` | Yes* | Twilio auth token (platform account; see above) |
+| `TELNYX_API_KEY` | No | Telnyx API key, the platform account for Telnyx numbers (ADR-0022). A project's `telnyx` credential replaces it **and** `TELNYX_PUBLIC_KEY` whole. Without one at any level a Telnyx call cannot be answered: it fails with `missing_keys: ["telnyx"]` |
+| `TELNYX_PUBLIC_KEY` | With Telnyx | The platform Telnyx account's webhook public key (base64 Ed25519, Mission Control > Keys & Credentials > Public Key). Not a secret, but required: a Telnyx webhook nothing can verify is refused — there is no unsigned dev mode on Telnyx |
 | `OPENAI_API_KEY` | Yes* | OpenAI API key (LLM + optional STT/TTS). *Not required if using Ollama/custom LLM |
 | `DEEPGRAM_API_KEY` | Yes | Deepgram API key (streaming STT/TTS) |
 | `ELEVENLABS_API_KEY` | No | ElevenLabs API key (optional STT/TTS) |
@@ -123,7 +125,10 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 
 A project's own provider keys (ADR-0020), one per provider **account** — the
 namespace is `domain/providers.py` (`openai_live`→`openai`, `bedrock` and S2S
-`aws`→`aws`; `ollama`/`custom_openai` have none).
+`aws`→`aws`; `ollama`/`custom_openai` have none). Carriers are the `carrier`
+role: `telnyx` is an account (`{"api_key", "public_key"}`, both required — the
+public key verifies that account's webhooks); `twilio` is not, its account
+rides on the number.
 
 ```
 PUT    /v1/credentials/{provider}   # {"api_key": "..."}, or the AWS block's shape for `aws`
@@ -165,9 +170,8 @@ inbound message → session lookup/create → message history → [KB retrieval]
 
 ## Carriers
 
-A **carrier** is the telephony company a number belongs to (ADR-0022). Twilio is
-the only one today; Telnyx and Asterisk ARI come next, and the boundary is cut
-for them:
+A **carrier** is the telephony company a number belongs to (ADR-0022): Twilio
+or Telnyx, with Asterisk ARI next. The boundary is cut for them:
 
 - **`TelephonyAdapter` is REST actions only** — dial, hang up, transfer, DTMF,
   configure a number, SMS. How a carrier answers a call (TwiML) and signs its
@@ -190,7 +194,58 @@ for them:
   one agent and one caller script per carrier (Seam A) and holds each to the
   same outcome, events and transfer request. A new carrier adds its edge to
   `CARRIERS` there; `tests/unit/test_carrier_boundary.py` fails until it has a
-  `CARRIER_MEDIA` entry.
+  `CARRIER_MEDIA` entry. Telnyx runs the inbound case; its transfers join with
+  #220.
+- **The shared middle of an inbound call** — resolve the agent (call-init, A/B
+  weights, the bound agent), create the call row on its carrier, record
+  `call.initializing` + `call.started` — is `services/inbound_call
+  .open_inbound_call`, for every carrier's edge. An edge only answers numbers
+  bound on its own carrier.
+- **Call control acts on the call's carrier**: `services/call_control
+  ._carrier_adapter` picks the adapter (and account) by `calls.provider`.
+  `services/twilio_accounts.TwilioAccount.adapter` and
+  `services/telnyx_accounts.TelnyxAccount.adapter` are the only places each
+  carrier's adapter is built — the harness's `FakeCarrier` replaces both.
+
+### Telnyx (Call Control, #217)
+
+```
+Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
+  → verify with the key of the project the call/number belongs to
+  → open_inbound_call (carrier "telnyx") → REST `answer` with stream_url
+  → Telnyx opens /ws/telnyx/media-stream/{call_id} → run_media_stream
+     (pipecat TelnyxFrameSerializer, PCMU both ways)
+  → stream ends → REST `hangup`; call.hangup is recorded on the event log
+```
+
+- **Signature**: `telnyx-signature-ed25519` over `{telnyx-timestamp}|{raw
+  body}`, five-minute window (Telnyx's SDK scheme), in
+  `webhooks/telnyx_signature.py`. The key is the project's `telnyx`
+  credential's `public_key` when the call or number belongs to a project that
+  holds one, else `TELNYX_PUBLIC_KEY`. No key, bad signature, stale timestamp:
+  403, nothing created.
+- **The edge hangs up.** On Twilio the stream closing ends the call; on Telnyx
+  it does not — the line would stay up, silent and billed. So the media stream
+  edge sends `hangup` when the stream ends (pipecat's serializer hang-up is off:
+  REST commands are the adapter's). A call the caller already ended answers
+  `90018`, which counts as hung up. #220 must skip this for a transferred call.
+- **The stream must be the call's**: its `start.call_control_id` has to be the
+  call's `provider_call_sid`, or it is closed — no pipeline, no hang-up.
+- **`call.hangup`** is stored as a `call.ended` event (as Twilio's `completed`
+  status callback is) and finalizes only a call no media stream ever opened
+  for; one that has a pipeline is finalized by it, recording complete.
+- **A missing key** (no `telnyx` credential, no `TELNYX_API_KEY`) fails the call
+  before answering: `error.raised {stage: "carrier_answer", missing_keys:
+  ["telnyx"]}`, `call.ended` failed. A key Telnyx refuses (401/403) carries
+  `provider: "telnyx", key_rejected: true`.
+- **Binding**: `carrier: "telnyx"` on `POST /v1/phone-numbers`; until #219 the
+  number's Call Control application is pointed at `/webhooks/telnyx/voice` by
+  hand (`twilio_webhooks_configured` is false). `sms_enabled` and a Twilio
+  account on a Telnyx number are a 422 (SMS on Telnyx is out of scope).
+- **Not yet**: outbound (#218), number configuration (#219), transfer + DTMF
+  (#220) raise `NotImplementedError` on `TelnyxAdapter`, naming the ticket.
+  The live-call limit (#224) admits a call in `open_inbound_call`, ahead of
+  call-init, for every carrier.
 
 ## SMS / Chat
 
@@ -624,14 +679,17 @@ a guardrail must not take the phone line down.
 
 - **Live calls per project** (#224). Every voice call takes a slot under its
   call id *before* its row is written (`call_repo.create_call(call_id=)`):
-  inbound Twilio and WhatsApp voice in their webhooks — over the limit, refused
-  unanswered at the carrier (`<Reject reason="busy"/>` / WhatsApp `reject`) and
-  dispatched as `call.rejected` with **no** `call_id` (there is no row) —
+  inbound phone calls in `services/inbound_call.open_inbound_call` (every
+  carrier, #217) and WhatsApp voice in its webhook — over the limit, refused
+  unanswered at the carrier (Twilio `<Reject reason="busy"/>`, Telnyx's
+  `reject` command with cause `USER_BUSY`, WhatsApp `reject`) and dispatched as
+  `call.rejected` with **no** `call_id` (there is no row) —
   outbound in `place_outbound_call` and WebRTC in `/connect`, both `429`.
   A slot is a **lease** (`LIVE_CALL_LEASE_MS`, 2 min) that whoever runs the call
   renews (`hold_live_call`, in `media_stream` and `start_call_pipeline`) and
   frees on any exit; the Twilio status callback frees it on any terminal status
-  (an unanswered outbound call's only ending), and a failed dial frees it at
+  (an unanswered outbound call's only ending), as Telnyx's `call.hangup` does,
+  and a failed dial frees it at
   once. A server that dies frees nothing — its leases lapse, so a crash costs a
   project slots for two minutes, never for good. Every call is counted even
   unlimited, so a limit set mid-day counts what is already live.

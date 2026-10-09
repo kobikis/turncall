@@ -11,9 +11,15 @@ import uuid
 
 import pytest
 
-from tests.harness import place_inbound_call, post_signed, run_app
+from tests.harness import place_inbound_call, post_signed, run_app, telnyx
 from tests.harness.second_instance import second_instance
-from tests.integration.limits_support import SCRIPT, dial_body, limited_project, ring
+from tests.integration.limits_support import (
+    AGENT,
+    SCRIPT,
+    dial_body,
+    limited_project,
+    ring,
+)
 from turncall.services import limits
 
 pytestmark = pytest.mark.integration
@@ -77,6 +83,59 @@ async def test_over_the_limit_inbound_is_busy_and_outbound_is_429(
     assert over.json()["details"] == {"limit": "live_calls", "max": 1}
     # The one dial the carrier saw is the one made after the call ended.
     assert len(app.carrier.actions_of("dial")) == 1
+
+
+async def test_over_the_limit_telnyx_inbound_is_rejected_busy(monkeypatch, redis_env):
+    """The limit is checked where both carriers' inbound calls are opened
+    (#217): Telnyx refuses with a `reject` command, cause busy, never `answer`."""
+
+    def _call(call_control_id: str, to_number: str, kind: str) -> dict:
+        return telnyx.event(
+            kind,
+            {
+                "call_control_id": call_control_id,
+                "from": "+15550009999",
+                "to": to_number,
+                "direction": "incoming",
+                "hangup_cause": "normal_clearing",
+            },
+        )
+
+    first, over, later = (f"v3:{uuid.uuid4().hex}" for _ in range(3))
+    async with run_app(
+        SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        number = await telnyx.bind_number(
+            app.api, app.carrier, await app.create_agent(AGENT)
+        )
+        r = await app.api.put(
+            f"/v1/projects/{app.project_id}/limits", json={"live_calls": 1}
+        )
+        assert r.status_code == 200, r.text
+
+        for cc_id, kind in ((first, "call.initiated"), (over, "call.initiated")):
+            sent = await telnyx.post_signed(
+                app.api, app.carrier, _call(cc_id, number, kind)
+            )
+            assert sent.status_code == 200, sent.text
+        rejected = await app.sink.wait_for("call.rejected")
+        calls = (await app.api.get("/v1/calls")).json()["data"]
+
+        # The first call ends before its stream opened: Telnyx's `call.hangup`
+        # gives its slot back, and the next call is answered.
+        for cc_id, kind in ((first, "call.hangup"), (later, "call.initiated")):
+            await telnyx.post_signed(app.api, app.carrier, _call(cc_id, number, kind))
+
+    answered = [a.params["call_sid"] for a in app.carrier.actions_of("answer")]
+    refused = app.carrier.actions_of("reject")
+    assert answered == [first, later]
+    assert [(a.params["call_sid"], a.params["cause"]) for a in refused] == [
+        (over, "USER_BUSY")
+    ]
+    assert rejected["call_id"] is None
+    assert rejected["payload"]["transport"] == "telnyx"
+    assert rejected["payload"]["provider_call_id"] == over
+    assert [c["provider_call_sid"] for c in calls] == [first]
 
 
 async def test_the_limit_is_one_count_across_two_servers(monkeypatch, redis_env):

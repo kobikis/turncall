@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from tests.harness import HARNESS_AGENT, Harness, Script, ToolCall, run_app
+from tests.harness import HARNESS_AGENT, Harness, Script, ToolCall, run_app, telnyx
 from tests.harness import place_inbound_call as place_twilio_call
 
 pytestmark = pytest.mark.integration
@@ -35,11 +35,16 @@ class CarrierEdge:
     The call `ring` returns has the harness's call shape (`say`,
     `wait_for_agent_speech`, `closed`, `hang_up`, `finish`, `call_id`,
     `call_sid`, `agent_utterances`).
+
+    `hangs_up_by_command`: whether ending the call takes a REST hang-up. On
+    Twilio the media stream closing ends the call; on Telnyx it does not, and
+    a stream left behind is a silent, billed line.
     """
 
     name: str
     bind: Callable[[Harness, str], Awaitable[str]]
     ring: Callable[[Harness, str, str], Awaitable[Any]]
+    hangs_up_by_command: bool = False
 
 
 TWILIO = CarrierEdge(
@@ -50,7 +55,18 @@ TWILIO = CarrierEdge(
     ),
 )
 
-CARRIERS = [pytest.param(TWILIO, id=TWILIO.name)]
+TELNYX = CarrierEdge(
+    name="telnyx",
+    bind=lambda app, agent_id: telnyx.bind_number(app.api, app.carrier, agent_id),
+    ring=lambda app, from_number, to_number: telnyx.place_inbound_call(
+        app.carrier, app.api, from_number=from_number, to_number=to_number
+    ),
+    hangs_up_by_command=True,
+)
+
+CARRIERS = [pytest.param(edge, id=edge.name) for edge in (TWILIO, TELNYX)]
+# Telnyx transfers arrive with #220.
+TRANSFER_CARRIERS = [pytest.param(TWILIO, id=TWILIO.name)]
 
 
 class _MemoryRedis:
@@ -115,18 +131,25 @@ async def test_the_agent_ends_the_call(edge: CarrierEdge, monkeypatch) -> None:
 
     assert [n["carrier"] for n in listed if n["e164_number"] == number] == [edge.name]
     assert call.agent_utterances() == 2  # the greeting, the goodbye
-    assert app.carrier.actions_of("hang_up") == []  # the stream closing is the hangup
+    hung_up = [a.params["call_sid"] for a in app.carrier.actions_of("hang_up")]
+    assert hung_up == ([call.call_sid] if edge.hangs_up_by_command else [])
     assert ended["status"] == "completed"
+    # App-side recording (ADR-0005) never learns the carrier either.
+    assert ended["recording_status"] == "completed"
+    assert ended["recording_url"]
     assert ended["ended_reason"] == "assistant_ended_call"
     assert ended["provider_call_sid"] == call.call_sid
     said = [(t["role"], t["text"]) for t in ended["transcript"]]
     assert ("customer", "Please end the call.") in said
     assert ("agent", "Goodbye!") in said
-    expected = ["call.initializing", "call.started", "tool.result", "call.ended"]
+    # `call.ended` is the delivered webhook above. The event log's own
+    # `call.ended` row is the carrier's end-of-call report, stored only when it
+    # beats the pipeline's finalize — a race, so not part of the contract.
+    expected = ["call.initializing", "call.started", "tool.result"]
     assert _in_order(events, expected), events
 
 
-@pytest.mark.parametrize("edge", CARRIERS)
+@pytest.mark.parametrize("edge", TRANSFER_CARRIERS)
 async def test_a_cold_transfer(edge: CarrierEdge, monkeypatch) -> None:
     import turncall.storage.redis as redis_module
 
@@ -160,5 +183,5 @@ async def test_a_cold_transfer(edge: CarrierEdge, monkeypatch) -> None:
     assert [e["payload"]["success"] for e in transferred] == [True]
     assert transferred[0]["payload"]["transfer_mode"] == "cold"
     assert ended["ended_reason"] == "transferred"
-    expected = ["call.started", "call.transferred", "call.ended"]
+    expected = ["call.started", "call.transferred"]  # call.ended: see above
     assert _in_order(events, expected), events

@@ -1,13 +1,14 @@
 ---
 title: Phone Numbers
-description: "Bind Twilio numbers to agents"
+description: "Bind Twilio and Telnyx numbers to agents"
 icon: "phone"
 ---
 
-Phone numbers connect your Twilio numbers to TurnCall agents. Each number can route to a specific agent or to a webhook for dynamic routing.
+Phone numbers connect your Twilio and Telnyx numbers to TurnCall agents. Each number can route to a specific agent or to a webhook for dynamic routing.
 
 A number's `carrier` — the telephony company it belongs to — is `twilio`, the
-default, and is fixed once bound: a `PUT` naming a different carrier is a
+default, or `telnyx` (see [Telnyx numbers](#telnyx-numbers)), and is fixed once
+bound: a `PUT` naming a different carrier is a
 `422`. `provider` is accepted for it as a deprecated alias, and reads still
 carry `provider` beside `carrier`; prefer `carrier`, since "provider" means an
 STT, LLM or TTS backend everywhere else in the API.
@@ -45,6 +46,50 @@ curl -X POST http://localhost:8090/v1/phone-numbers \
 ```
 
 See [Call Init](/guides/call-init) for details on how dynamic routing works.
+
+### Telnyx numbers
+
+A Telnyx number answers inbound calls through Telnyx Call Control. Bind it with
+`"carrier": "telnyx"`; `external_number_sid` is its Telnyx phone number id:
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "carrier": "telnyx",
+    "external_number_sid": "1293384261075731499",
+    "e164_number": "+15551234567",
+    "routing_target_type": "agent",
+    "routing_target_id": "AGENT_UUID"
+  }'
+```
+
+Then, in Telnyx Mission Control, set the webhook URL of the number's Call
+Control application to `https://<your host>/webhooks/telnyx/voice` (TurnCall
+does not configure it for you yet, so `twilio_webhooks_configured` reads
+`false`). The agent, its tools, recording, ambience and voicemail detection
+behave exactly as on a Twilio number.
+
+The Telnyx account is the platform's `TELNYX_API_KEY` and `TELNYX_PUBLIC_KEY`,
+or the project's own:
+
+```bash
+curl -X PUT http://localhost:8090/v1/credentials/telnyx \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"api_key": "KEY...", "public_key": "<base64 public key>"}'
+```
+
+The public key (Mission Control > Keys & Credentials > Public Key) is how
+TurnCall knows a webhook came from your Telnyx account: every webhook is
+checked against it, and one that is unsigned, signed by another key, or more
+than five minutes old is refused. With no API key anywhere, a call to the
+number fails before it is answered, and the call's `error.raised` event carries
+`missing_keys: ["telnyx"]`.
+
+Not yet on Telnyx: outbound calls, transfers and sending DTMF. SMS on Telnyx
+numbers is not supported, so `sms_enabled` is refused on one.
 
 ### Bring your own Twilio account
 

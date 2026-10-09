@@ -13,13 +13,15 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from turncall.domain.carriers import TWILIO
+from turncall.domain.carriers import TELNYX, TWILIO
 from turncall.orchestrator.serializer import TwilioFrameSerializer
 
 STUN_SERVERS = ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]
 
 # Twilio Media Streams carry 8kHz mulaw — the carrier's rate, not a choice.
 TWILIO_SAMPLE_RATE = 8000
+# Telnyx media streams: 8kHz PCMU, which the answer command asks for both ways.
+TELNYX_SAMPLE_RATE = 8000
 # Browser WebRTC and WhatsApp voice (both SmallWebRTC): 16kHz is what the STT
 # and TTS services want natively, and the peer connection resamples to Opus.
 WEBRTC_SAMPLE_RATE = 16000
@@ -31,10 +33,35 @@ class CarrierStream:
 
     Read by the carrier's own edge from its handshake; consumed only by that
     carrier's serializer and, as the call's REST handle, by call control.
+    `encoding` is the caller's audio as the stream declared it, for a carrier
+    whose stream says (Telnyx's `media_format.encoding`).
     """
 
     stream_id: str
     call_sid: str = ""
+    encoding: str = ""
+
+
+def _telnyx_serializer(stream: CarrierStream) -> Any:
+    """Pipecat's Telnyx serializer, which keeps resampler state (ADR-0022).
+
+    Its own hang-up is off: hanging up is a Telnyx REST command, and those
+    belong to the Telnyx adapter (`webhooks/telnyx_media_stream.py` sends it
+    when the stream ends). Pipecat names encodings from Telnyx's side:
+    `outbound_encoding` is what Telnyx sends us, `inbound_encoding` what we
+    send it — the codec the answer command asked for.
+    """
+    from pipecat.serializers.telnyx import TelnyxFrameSerializer
+
+    from turncall.adapters.telephony.telnyx_adapter import STREAM_CODEC
+
+    return TelnyxFrameSerializer(
+        stream_id=stream.stream_id,
+        outbound_encoding=stream.encoding or STREAM_CODEC,
+        inbound_encoding=STREAM_CODEC,
+        call_control_id=stream.call_sid,
+        params=TelnyxFrameSerializer.InputParams(auto_hang_up=False),
+    )
 
 
 @dataclass(frozen=True)
@@ -53,6 +80,7 @@ CARRIER_MEDIA: dict[str, CarrierMedia] = {
         TWILIO_SAMPLE_RATE,
         lambda stream: TwilioFrameSerializer(stream_sid=stream.stream_id),
     ),
+    TELNYX: CarrierMedia(TELNYX_SAMPLE_RATE, _telnyx_serializer),
 }
 
 # Every rate a voice transport sends audio at. Ambience renditions are made for

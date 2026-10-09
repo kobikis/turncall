@@ -33,6 +33,14 @@ suppression list and staying inside the project's live-call limit. Each
 target's status is on `GET /v1/campaigns/{id}/targets`. See
 [Campaigns](/guides/campaigns).
 
+**Telnyx numbers answer inbound calls.** Bind a number with
+`"carrier": "telnyx"` and point its Call Control application at
+`/webhooks/telnyx/voice`. The call runs the same agent as on Twilio, with
+recording, ambience and voicemail detection unchanged. Webhooks are verified
+with your Telnyx account's public key, and a call over your live-call limit is
+refused busy, as on Twilio. See
+[Telnyx numbers](/guides/phone-numbers#telnyx-numbers).
+
 **`openai_live` agents with tools work out of the box.** An agent with tools and
 no `s2s.delegation` block now delegates to its own `llm` (`"mode": "client"`),
 with your keys, running your webhook and MCP tools — `end_call`, `do_not_call`

@@ -17,9 +17,11 @@ from turncall.api.v1.schemas.phone_numbers import (
     SetRoutingWeightsRequest,
     TwilioAccountFields,
     UpdatePhoneNumberRequest,
+    only_on_twilio,
 )
 from turncall.auth import Auth, WriteAuth
 from turncall.config.settings import Settings, get_settings
+from turncall.domain.carriers import TWILIO
 from turncall.services import twilio_accounts
 from turncall.services.twilio_accounts import TwilioAccount
 from turncall.storage.repositories import credential_repo, phone_number_repo
@@ -125,6 +127,10 @@ async def _configure_twilio_webhooks(row: Any, sms_enabled: bool) -> bool:
     a warning but does not fail the bind — the routing row is already recorded.
     Returns True iff Twilio was actually configured. Uses the number's own
     Twilio account when it has one, else the platform's."""
+    if row.provider != TWILIO:
+        # Configuring a Telnyx number's Call Control application is #219's;
+        # until then it is pointed at /webhooks/telnyx/voice by hand.
+        return False
     settings = get_settings()
     external_number_sid = row.external_number_sid
     base = (settings.server.public_base_url or "").rstrip("/")
@@ -218,6 +224,12 @@ async def update_phone_number(
             "in place — unbind the number and bind it again"
         )
 
+    if row.provider != TWILIO:
+        try:
+            only_on_twilio(body, row.provider)
+        except ValueError as exc:
+            raise _unprocessable(str(exc)) from exc
+
     # Mint a secret only when webhook routing appears for the first time.
     secret = row.server_url_secret
     if body.server_url and not secret:
@@ -265,7 +277,11 @@ async def unbind_phone_number(
     if row is None:
         raise NotFoundError("PhoneNumber", str(phone_number_id))
     # Resolved before the delete: the number's own account goes with its row.
-    account = twilio_accounts.account_for_number(row, get_settings())
+    account = (
+        twilio_accounts.account_for_number(row, get_settings())
+        if row.provider == TWILIO
+        else None
+    )
     await phone_number_repo.delete_phone_number(session, phone_number_id)
 
     if account:

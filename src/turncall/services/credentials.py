@@ -49,6 +49,7 @@ def platform_keys(settings: Settings) -> dict[str, str]:
         "heygen": settings.heygen.api_key,
         "tavus": settings.tavus.api_key,
         "typesafe": settings.typesafe.api_key,
+        "telnyx": settings.telnyx.api_key,
     }
 
 

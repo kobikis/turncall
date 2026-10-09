@@ -6920,6 +6920,26 @@
         }
       }
     },
+    "/webhooks/telnyx/voice": {
+      "post": {
+        "tags": [
+          "telnyx-webhooks"
+        ],
+        "summary": "Call Control Webhook",
+        "description": "Every Call Control event for a Telnyx number. 200 for anything verified,\nhandled or not \u2014 Telnyx retries a webhook that is not acknowledged.",
+        "operationId": "call_control_webhook_webhooks_telnyx_voice_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/webhooks/whatsapp": {
       "get": {
         "tags": [
@@ -7406,7 +7426,10 @@
           },
           "carrier": {
             "type": "string",
-            "const": "twilio",
+            "enum": [
+              "twilio",
+              "telnyx"
+            ],
             "title": "Carrier",
             "description": "The number's carrier. `provider` is accepted as a deprecated alias for it.",
             "default": "twilio"
@@ -9832,7 +9855,10 @@
             "anyOf": [
               {
                 "type": "string",
-                "const": "twilio"
+                "enum": [
+                  "twilio",
+                  "telnyx"
+                ]
               },
               {
                 "type": "null"

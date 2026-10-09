@@ -6,15 +6,23 @@ TurnCall talks to a carrier in two directions. Outbound it makes REST calls
 stream. `FakeCarrier` is the first half — every REST action lands in
 `actions` instead of on the network — plus the state the second half needs:
 the numbers it owns and the URLs TurnCall configured on them. The inbound
-edge is per carrier format (`twilio.py`).
+edge is per carrier format (`twilio.py`, `telnyx.py`).
+
+One fake stands in for every carrier: a Telnyx command lands in the same
+`actions` list as a Twilio one, under the same kind (`hang_up` is a hang-up on
+either), so a contract test reads one list whatever carrier it ran on.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import secrets
 from dataclasses import dataclass, field
 from typing import Any
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from tests.harness.stubs import Setter
 from turncall.adapters.telephony.base import TelephonyAdapter
@@ -41,15 +49,24 @@ class FakeNumber:
 
 
 class FakeCarrier:
-    """One fake Twilio-shaped carrier account (and any per-number accounts).
+    """The platform's carrier accounts (and any per-number Twilio accounts).
 
-    `account_sid`/`auth_token` are the platform account the harness gives the
-    app; webhooks are signed with that token.
+    `account_sid`/`auth_token` are the Twilio account the harness gives the
+    app; Twilio webhooks are signed with that token. `telnyx_api_key` and
+    `telnyx_public_key` are the Telnyx account's; Telnyx webhooks are signed
+    with `telnyx_signing_key`, the private half, as Telnyx signs them.
     """
 
     def __init__(self) -> None:
         self.account_sid = "AC" + secrets.token_hex(16)
         self.auth_token = secrets.token_hex(16)
+        self.telnyx_api_key = "KEY" + secrets.token_hex(16)
+        self.telnyx_signing_key = Ed25519PrivateKey.generate()
+        self.telnyx_public_key = base64.b64encode(
+            self.telnyx_signing_key.public_key().public_bytes(
+                Encoding.Raw, PublicFormat.Raw
+            )
+        ).decode()
         self.actions: list[CarrierAction] = []
         self._numbers: dict[str, FakeNumber] = {}
         self._recorded = asyncio.Condition()
@@ -92,12 +109,14 @@ class FakeCarrier:
         return FakeTelephonyAdapter(self, account_sid)
 
     def install(self, set_attr: Setter = setattr) -> None:
-        """Route every adapter `services/twilio_accounts.py` hands out here.
+        """Route every adapter the app constructs here.
 
-        That module is the one place a Twilio adapter is constructed, for the
-        platform account and per-number accounts alike, so this covers every
-        REST call the app makes. Pass `monkeypatch.setattr` in tests.
+        `services/twilio_accounts.py` and `services/telnyx_accounts.py` are the
+        one place each carrier's adapter is built, for every account, so this
+        covers every REST call the app makes. Pass `monkeypatch.setattr` in
+        tests.
         """
+        from turncall.services.telnyx_accounts import TelnyxAccount
         from turncall.services.twilio_accounts import TwilioAccount
 
         carrier = self
@@ -105,7 +124,11 @@ class FakeCarrier:
         def adapter(account: TwilioAccount) -> FakeTelephonyAdapter:
             return carrier.adapter(account.account_sid)
 
+        def telnyx_adapter(account: TelnyxAccount) -> FakeTelnyxAdapter:
+            return FakeTelnyxAdapter(carrier, account.api_key)
+
         set_attr(TwilioAccount, "adapter", adapter)
+        set_attr(TelnyxAccount, "adapter", telnyx_adapter)
 
 
 class FakeTelephonyAdapter(TelephonyAdapter):
@@ -214,3 +237,17 @@ class FakeTelephonyAdapter(TelephonyAdapter):
         number = self._carrier._by_sid(number_sid)
         if number is not None:
             number.sms_url = sms_url
+
+
+class FakeTelnyxAdapter(FakeTelephonyAdapter):
+    """Telnyx's commands, recorded. `account_sid` on its actions is the API key
+    the app used. `answer` and `reject` are Telnyx's own: Call Control answers
+    or refuses a call with a REST command where Twilio reads TwiML."""
+
+    async def answer_call(self, call_control_id: str, *, stream_url: str) -> None:
+        await self._record("answer", call_sid=call_control_id, stream_url=stream_url)
+
+    async def reject_call(
+        self, call_control_id: str, *, cause: str = "USER_BUSY"
+    ) -> None:
+        await self._record("reject", call_sid=call_control_id, cause=cause)

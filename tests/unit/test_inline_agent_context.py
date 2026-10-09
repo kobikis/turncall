@@ -28,7 +28,8 @@ _SRC = Path(turncall.__file__).parent
 
 # (label, file) for every entry point that builds a CallContext for a voice call.
 VOICE_PATHS = [
-    ("twilio", _SRC / "webhooks" / "media_stream.py"),
+    # Every carrier's media stream (Twilio, Telnyx) builds it here (ADR-0022).
+    ("carrier", _SRC / "webhooks" / "media_stream.py"),
     ("whatsapp", _SRC / "webhooks" / "whatsapp_handlers.py"),
     ("webrtc", _SRC / "api" / "v1" / "webrtc.py"),
 ]
@@ -105,7 +106,7 @@ def test_the_inbound_webhook_never_dereferences_a_possibly_absent_agent() -> Non
     `agent_id_for_call` is the safe form, and `agent.name if agent else ...` the
     safe idiom where the object itself is wanted.
     """
-    fn = _function(_SRC / "webhooks" / "twilio_handlers.py", "inbound_voice_webhook")
+    fn = _function(_SRC / "services" / "inbound_call.py", "open_inbound_call")
     bare = [
         f"agent.{node.attr}"
         for node in ast.walk(fn)
@@ -120,7 +121,7 @@ def test_the_inbound_webhook_never_dereferences_a_possibly_absent_agent() -> Non
         )
     ]
     assert bare == [], (
-        f"inbound_voice_webhook dereferences {bare} unguarded — a call running an "
+        f"open_inbound_call dereferences {bare} unguarded — a call running an "
         "inline agent has no agent row and this crashes the webhook"
     )
 
@@ -152,10 +153,11 @@ def _metadata_keys(path: Path) -> set[str]:
 
 
 # Not VOICE_PATHS: the file that builds the CallContext is not always the one
-# that creates the call row. Twilio answers the inbound webhook in one request
-# and opens the media stream in another.
+# that creates the call row. A carrier answers the inbound webhook in one
+# request and opens the media stream in another; every carrier's inbound edge
+# creates its row through the shared `services/inbound_call.py`.
 CALL_ROW_PATHS = [
-    ("twilio", _SRC / "webhooks" / "twilio_handlers.py"),
+    ("carrier inbound", _SRC / "services" / "inbound_call.py"),
     ("whatsapp", _SRC / "webhooks" / "whatsapp_handlers.py"),
     ("webrtc", _SRC / "api" / "v1" / "webrtc.py"),
 ]
