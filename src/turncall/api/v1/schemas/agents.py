@@ -108,6 +108,10 @@ class LLMConfigSchema(BaseModel):
                 "(see adr/0016). Set config.aws.region instead."
             )
             raise ValueError(msg)
+        if self.provider == "google" and self.base_url:
+            # Same reason: both routes call Google's own endpoint.
+            msg = "base_url is not supported for the google provider"
+            raise ValueError(msg)
         return self
 
     @model_validator(mode="after")

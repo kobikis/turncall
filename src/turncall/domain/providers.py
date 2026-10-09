@@ -5,8 +5,9 @@ the two cannot drift (#163).
 
 A role provider is what an agent's config names (`openai_live`, `bedrock`); an
 **account** is what a [[Project credential]] is keyed by (ADR-0020). Deepgram is
-one account serving STT and TTS, OpenAI one account serving four roles, and AWS
-one account behind both `bedrock` and the `aws` S2S provider.
+one account serving STT and TTS, OpenAI one account serving four roles, Google one
+account behind both its LLM and Gemini Live, and AWS one account behind both
+`bedrock` and the `aws` S2S provider.
 """
 
 STT_PROVIDERS = ("deepgram", "openai", "elevenlabs", "cartesia", "assemblyai")
@@ -15,6 +16,7 @@ LLM_PROVIDERS = (
     "anthropic",
     "openrouter",
     "bedrock",
+    "google",
     "ollama",
     "custom_openai",
 )

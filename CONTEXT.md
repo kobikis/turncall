@@ -7,7 +7,7 @@ Definitions only; implementation lives in code and ADRs.
 
 **Provider**:
 The named LLM (or STT/TTS) backend selected per agent — e.g. `openai`, `anthropic`,
-`ollama`, `custom_openai`, `openrouter`, `bedrock`. A provider determines which service
+`google`, `ollama`, `custom_openai`, `openrouter`, `bedrock`. A provider determines which service
 the orchestrator instantiates and how its credentials are resolved — a single API key
 for all but [[Bedrock]], which resolves an AWS credential triple plus a region.
 A provider names a *vendor* in every case except [[Bedrock]], which names a gateway

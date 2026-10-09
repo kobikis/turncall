@@ -1,6 +1,6 @@
 ---
 title: Providers
-description: "Per-agent STT, LLM and TTS — OpenAI, Anthropic, AWS Bedrock, Deepgram, ElevenLabs, Cartesia, AssemblyAI, Ollama, OpenRouter"
+description: "Per-agent STT, LLM and TTS — OpenAI, Anthropic, Google Gemini, AWS Bedrock, Deepgram, ElevenLabs, Cartesia, AssemblyAI, Ollama, OpenRouter"
 icon: "shuffle"
 ---
 
@@ -11,7 +11,7 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 | Role | Providers |
 |------|-----------|
 | **STT** | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming), `assemblyai` (Universal-Streaming) |
-| **LLM** | `openai` (default), `anthropic` (Claude), `ollama` (local), `custom_openai` (any OpenAI-compatible), `openrouter` (multi-model + fallback routing, voice only), `bedrock` (AWS-hosted Anthropic / Meta / Mistral / Amazon models) |
+| **LLM** | `openai` (default), `anthropic` (Claude), `google` (Gemini), `ollama` (local), `custom_openai` (any OpenAI-compatible), `openrouter` (multi-model + fallback routing, voice only), `bedrock` (AWS-hosted Anthropic / Meta / Mistral / Amazon models) |
 | **TTS** | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3.6, streaming, 60+ emotions) |
 | **S2S** | `openai` (Realtime API — optional `base_url` targets an OpenAI-Realtime gateway like Vercel AI Gateway / LiteLLM / xAI, e.g. Grok), `openai_live` (GPT-Live-1, full duplex), `google` (Gemini Live), `aws` (Amazon Nova Sonic 2) |
 
@@ -111,6 +111,10 @@ Set `"extra": {"profanity_filter": true}` if you want it on.
 "llm": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
 ```
 
+```json Google Gemini
+"llm": {"provider": "google", "model": "gemini-3.6-flash"}
+```
+
 ```json Ollama (local)
 "llm": {"provider": "ollama", "model": "gemma3:12b"}
 ```
@@ -149,14 +153,14 @@ Set `"extra": {"profanity_filter": true}` if you want it on.
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | Yes | `openai`, `anthropic`, `ollama`, `custom_openai`, `openrouter`, or `bedrock` |
-| `model` | Depends | Optional on `openai` (`gpt-4o-mini`) and `anthropic` (`claude-sonnet-5`), which have a house model. **Required** on `ollama`, `custom_openai`, `bedrock` and `openrouter` — see below |
+| `provider` | Yes | `openai`, `anthropic`, `google`, `ollama`, `custom_openai`, `openrouter`, or `bedrock` |
+| `model` | Depends | Optional on `openai` (`gpt-4o-mini`), `anthropic` (`claude-sonnet-5`) and `google` (`gemini-3.6-flash`), which have a house model. **Required** on `ollama`, `custom_openai`, `bedrock` and `openrouter` — see below |
 | `base_url` | For `custom_openai` | OpenAI-compatible API base URL |
 | `api_key` | No | API key for `custom_openai` (masked in responses) |
 | `fallback_models` | For `openrouter` | Ordered list of fallback models (voice only) |
-| `temperature` | No | 0.0–2.0 (default: 0.7). **Not sent to `anthropic`** — current Claude models reject it and the call fails; set one via `llm.extra` if your model still accepts it |
+| `temperature` | No | 0.0–2.0 (default: 0.7). **Not sent to `anthropic`** — current Claude models reject it and the call fails; set one via `llm.extra` if your model still accepts it. **Not sent to Gemini 3 models on `google`** — Google warns they loop below their own default of 1.0; older Gemini models still get it, and `llm.extra` sets one anyway |
 | `max_tokens` | No | 1–128000 (default: 1024) |
-| `extra` | No | Provider passthrough. On `bedrock` it becomes `additionalModelRequestFields` — how Anthropic extended thinking is reached |
+| `extra` | No | Provider passthrough. On `bedrock` it becomes `additionalModelRequestFields` — how Anthropic extended thinking is reached. On `google` it merges into the generation config, e.g. `{"thinkingConfig": {"thinkingLevel": "low"}}` |
 
 <Warning>
   **`ollama`, `custom_openai`, `bedrock` and `openrouter` reject an agent with
@@ -403,7 +407,7 @@ curl -X DELETE http://localhost:8090/v1/credentials/deepgram -H "Authorization: 
 | `openai` | STT, LLM, TTS, S2S (`openai`, `openai_live`), eval judge |
 | `anthropic` | LLM, eval judge |
 | `openrouter` | LLM |
-| `google` | S2S (Gemini Live) |
+| `google` | LLM, S2S (Gemini Live) |
 | `deepgram`, `elevenlabs`, `cartesia` | STT, TTS |
 | `assemblyai` | STT |
 | `heygen`, `tavus` | Video avatar |
