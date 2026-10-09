@@ -11,7 +11,8 @@ Pieces
 - `stubs.py` — `StubSTT`, `StubLLM`, `StubTTS`: real pipecat services with no
   network hop, scripted by a `Script`. The caller's n-th burst of audio
   transcribes as `Script.caller[n]`; the LLM's n-th inference answers
-  `Script.agent[n]` (text, a `ToolCall`, or a tuple of both). A tool result is
+  `Script.agent[n]` (text, a `ToolCall`, a tuple of both, or a function of
+  `Given` — the prompt, messages and tools it was given). A tool result is
   its own inference, so "call a tool, then say goodbye" is two entries.
   `install_stub_providers(script, set_attr)` swaps the three factories in
   `orchestrator/pipeline_factory` — cascade only; S2S, post-call analysis, the
@@ -59,13 +60,14 @@ agent speech is the same tone, `Script.tts_ms_per_word` long per word.
 
 from tests.harness.app import HARNESS_AGENT, Harness, WebhookSink, run_app
 from tests.harness.carrier import CarrierAction, FakeCarrier
-from tests.harness.stubs import Script, ToolCall, install_stub_providers
+from tests.harness.stubs import Given, Script, ToolCall, install_stub_providers
 from tests.harness.twilio import TwilioCall, place_inbound_call, post_signed, sign
 
 __all__ = [
     "HARNESS_AGENT",
     "CarrierAction",
     "FakeCarrier",
+    "Given",
     "Harness",
     "Script",
     "ToolCall",

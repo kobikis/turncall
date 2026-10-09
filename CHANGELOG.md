@@ -245,6 +245,21 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **`POST /v1/calls/{id}/handoff` switches the live call** (#216). It used to
+  move the call record to the target agent from the API process and change
+  nothing in the call: the caller kept talking to the previous agent's prompt
+  and tools while every event named the new one. The call now applies it
+  itself, over the control channel, through the same prepare / commit / apply
+  path as the model's `handoff_to_agent` (#144) — so the record moves only
+  when the pipeline does, and a caller talking over it cannot leave it half
+  done. Same contract as `/messages`: 200 with what the call applied (the
+  agent and the `tools` it now advertises), **409 `call_not_live`**, **504
+  `call_did_not_acknowledge`**, 409 with the call's reason (`openai_live`,
+  which refuses the tool too; a call not in progress). A target agent outside
+  the call's project is now a 404 — the endpoint and the tool used to accept
+  any agent id. A handoff whose target cannot be loaded is no longer committed
+  to the record either, on either path.
+
 - **`POST /v1/calls/{id}/messages` reaches the live call** (#215). It used to
   record `context.injected` and answer 200 while the call's model never saw
   the message: nothing in the call read that event. The request now travels

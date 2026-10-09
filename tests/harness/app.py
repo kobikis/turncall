@@ -91,9 +91,9 @@ class Harness:
     sink: WebhookSink
     project_id: str
 
-    async def create_agent(self, config: dict[str, Any]) -> str:
+    async def create_agent(self, config: dict[str, Any], name: str = "harness") -> str:
         response = await self.api.post(
-            "/v1/agents", json={"name": "harness", "config": config}
+            "/v1/agents", json={"name": name, "config": config}
         )
         assert response.status_code == 201, response.text
         return str(response.json()["data"]["id"])

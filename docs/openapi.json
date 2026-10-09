@@ -1868,7 +1868,7 @@
           "call-control"
         ],
         "summary": "Handoff Call",
-        "description": "Hand off an active call to another agent.",
+        "description": "Switch a live call to another agent: its prompt and its tools.\n\nApplied by the call itself, through the same path as the model's\n`handoff_to_agent` tool, and answered only once it has: `details` names the\nagent and the tools the call now runs. Refused (409) where that tool is \u2014\nan `openai_live` agent \u2014 and when the call is not in progress.",
         "operationId": "handoff_call_v1_calls__call_id__handoff_post",
         "parameters": [
           {
@@ -1920,6 +1920,15 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No such call, or no such agent in this project"
+          },
+          "409": {
+            "description": "The call is not live, or refused the handoff"
+          },
+          "504": {
+            "description": "The call did not acknowledge the handoff in time"
           },
           "422": {
             "description": "Validation Error",

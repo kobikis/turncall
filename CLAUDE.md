@@ -538,7 +538,7 @@ DELETE /v1/phone-numbers/{id}/routing    # Clear test, revert to single agent
 ## Live Call Control
 
 `POST /v1/calls/{id}/end|transfer|dtmf` act through the carrier's REST API.
-`messages` (and #216's `handoff`) change the call's pipeline, which only the
+`messages` and `handoff` change the call's pipeline, which only the
 task running the call can do — so they go through the call (#215, tracker
 #198), over a per-call Redis pub/sub channel, `call:{id}:control`
 (`services/live_call_channel.py`):
@@ -557,6 +557,16 @@ task running the call can do — so they go through the call (#215, tracker
 - `message`: appended to the context (`run_llm=False`), read on the agent's
   next turn. Cascade only — a realtime model reads no context added after it
   starts, so S2S refuses it rather than answer 200 for a message nothing reads.
+- `handoff` (#216): the call runs `tool_bridge.run_handoff` — the model's
+  `handoff_to_agent` path, prepare / commit / apply (#144) — on its own LLM,
+  context and worker (`live_control.stages_of`), so the record and the pipeline
+  agree. The 200's `details` is what it applied: `target_agent_id`,
+  `target_assistant_name`, and the `tools` it now advertises. 404 for an agent
+  outside the project; 409 on `openai_live` (refused like the tool), when the
+  call is not `in_progress`, or when the target cannot be loaded. The API never
+  calls `call_control.handoff_to_agent` itself (`test_live_control_wiring.py`).
+  Nothing is said on the switch: the new agent answers the caller's next turn,
+  over the cleared context the tool path leaves too.
 - Also the cross-replica path: whichever replica holds the call answers.
 
 ## Suppression List
@@ -1151,7 +1161,7 @@ All Pipecat imports isolated in `orchestrator/`. No other module imports Pipecat
 - `turn_metrics.py` — one `metrics.turn` call event per turn (STT/LLM/TTS TTFB + user-to-bot latency, and `turn_end_ms` — the caller's silence to the turn's release, which Smart Turn or Flux decides; absent when unmeasured, #204), from pipecat's latency observer; stored, never dispatched, none in an eval (#176). Read them with `GET /v1/calls/{id}/events?event_type=metrics.turn`
 - `delegation_events.py` — one `delegation.completed` call event per gpt-live-1 delegation (#247), `{mode, duration_ms, outcome}`, outcome `answered`\|`timed_out`\|`failed`\|`declined`. Stored, never dispatched, none in an eval — like `metrics.turn`. A request gpt-live-1 acknowledged with no event beside it is the one it never delegated. `timed_out` is client mode only (responses mode has no delegation timeout; #243 bounds each function call and the delegate answers past it); a client delegate that returned no text is `failed` — unless it had just ended the call, which is what it was asked, and reads `answered` (#262). `declined` (no delegate configured, e.g. no tools) is recorded with `mode: client`, the target gpt-live-1 asked for. Reads pipecat's private delegation run, pinned by `test_delegation_completed.py`. The same subclass arms the hangup gate for a client delegation that ended the call (#262, see the S2S row), and voices the idle check-in and reports a delegation in flight to the idle guard (#257)
 - `telemetry.py` — OpenTelemetry tracing setup + Pipecat observers (latency/turn/LLM/transcription/startup). See ADR-0010
-- `live_control.py` — the call's half of the control channel (#215): the request kinds a live call answers and what each does to its pipeline; `CallSession.start()` holds the channel for the call's lifetime
+- `live_control.py` — the call's half of the control channel (#215): the request kinds a live call answers (`message`, `handoff`) and what each does to its pipeline; `CallSession.start()` holds the channel for the call's lifetime
 
 ## Webhook Events
 

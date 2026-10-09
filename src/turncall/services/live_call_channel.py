@@ -44,8 +44,9 @@ ACK_TIMEOUT_SECONDS = 2.0
 _ACK_TTL_SECONDS = 30
 _SUBSCRIBE_TIMEOUT_SECONDS = 2.0
 
-# The request kinds. #216 adds the handoff beside it.
+# The request kinds.
 MESSAGE = "message"  # add a message to the model's context
+HANDOFF = "handoff"  # switch the call to another agent (#216)
 
 # A handler takes the request's body and returns what it applied, which the
 # API hands back to its caller. It raises `ControlRefused` to decline.

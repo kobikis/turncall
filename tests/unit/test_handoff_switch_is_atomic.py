@@ -334,3 +334,144 @@ async def _run_handoff_tool() -> None:
             pipeline_worker=SimpleNamespace(queue_frame=AsyncMock()),
         )
     )
+
+
+# --- The API's handoff (#216) ----------------------------------------------
+# `POST /v1/calls/{id}/handoff` used to commit the record from the API process
+# and touch nothing in the call. It now asks the call, whose control-channel
+# handler runs the same `run_handoff` the tool does — so the same ordering and
+# the same atomicity have to hold there, and are pinned here the same way.
+
+
+def _api_handoff(params, **kw):
+    from turncall.orchestrator.live_control import handoff_handler
+
+    return handoff_handler(
+        _context(),
+        lambda: params,
+        pipeline_mode=kw.get("pipeline_mode", "cascade"),
+        s2s_provider=kw.get("s2s_provider"),
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_api_handoff_is_prepared_before_the_switch_is_committed():
+    from turncall.orchestrator import tool_bridge
+
+    order: list[str] = []
+
+    async def load(*_a, **_k):
+        order.append("load")
+        return _target(AgentConfig(tools=[_tool("refund")]))
+
+    async def execute(*_a, **_k):
+        order.append("commit")
+        return '{"success": true, "details": {"target_agent_id": "t"}}'
+
+    async def apply(*_a, **_k):
+        order.append("apply")
+
+    with (
+        patch.object(tool_bridge, "_prepare_handoff", new=load),
+        patch.object(tool_bridge, "_execute_builtin", new=execute),
+        patch.object(tool_bridge, "_apply_handoff_context", new=apply),
+    ):
+        applied = await _api_handoff(_params([]))({"agent_id": str(uuid4())})
+
+    assert order == ["load", "commit", "apply"], order
+    # What the API answers is what the call applied.
+    assert applied == {"target_agent_id": "t", "tools": []}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancelling_an_api_handoff_once_the_switch_has_begun_is_all_or_nothing():
+    """The API's handoff runs in the call's control-channel task, which the
+    call cancels when it ends. Cancelled at the first mutation, the switch
+    still lands whole or not at all."""
+    from turncall.orchestrator import tool_bridge
+
+    queue: list = []
+    params = _params(queue)
+    holder: list[asyncio.Task] = []
+    cleared: list[bool] = []
+
+    def clear_and_cancel(_messages):
+        cleared.append(True)
+        holder[0].cancel()
+
+    params.context.set_messages = clear_and_cancel
+
+    async def prepare(*_a, **_k):
+        return _target(AgentConfig(tools=[_tool("refund")]))
+
+    async def commit(*_a, **_k):
+        return '{"success": true}'
+
+    with (
+        patch.object(tool_bridge, "_prepare_handoff", new=prepare),
+        patch.object(tool_bridge, "_execute_builtin", new=commit),
+        patch("turncall.orchestrator.tool_bridge.register_tools"),
+    ):
+        holder.append(
+            asyncio.create_task(_api_handoff(params)({"agent_id": str(uuid4())}))
+        )
+        await asyncio.gather(*holder, return_exceptions=True)
+
+    assert (len(queue), bool(cleared)) in {(0, False), (2, True)}, (
+        f"half-applied: {len(queue)} frame(s) queued, context cleared={bool(cleared)}"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_api_handoff_the_database_refused_is_refused_and_not_applied():
+    from turncall.orchestrator import tool_bridge
+    from turncall.services.live_call_channel import ControlRefused
+
+    applied: list[str] = []
+
+    async def prepare(*_a, **_k):
+        return _target(AgentConfig())
+
+    async def refuse(*_a, **_k):
+        return '{"success": false, "message": "Can only handoff from in_progress"}'
+
+    async def apply(*_a, **_k):
+        applied.append("applied")
+
+    with (
+        patch.object(tool_bridge, "_prepare_handoff", new=prepare),
+        patch.object(tool_bridge, "_execute_builtin", new=refuse),
+        patch.object(tool_bridge, "_apply_handoff_context", new=apply),
+        pytest.raises(ControlRefused, match="in_progress"),
+    ):
+        await _api_handoff(_params([]))({"agent_id": str(uuid4())})
+
+    assert applied == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_handoff_that_could_not_be_prepared_is_never_committed():
+    """Either path. Committing it anyway — what the tool did before #216 —
+    left the record handed off to an agent the pipeline never switched to."""
+    from turncall.orchestrator import tool_bridge
+    from turncall.services.live_call_channel import ControlRefused
+
+    committed = AsyncMock()
+
+    async def unprepared(*_a, **_k):
+        return None
+
+    with (
+        patch.object(tool_bridge, "_prepare_handoff", new=unprepared),
+        patch.object(tool_bridge, "_execute_builtin", new=committed),
+        patch.object(tool_bridge, "_log_tool_result", new=AsyncMock()),
+    ):
+        await _run_handoff_tool()
+        with pytest.raises(ControlRefused, match="not found in this project"):
+            await _api_handoff(_params([]))({"agent_id": str(uuid4())})
+
+    committed.assert_not_awaited()

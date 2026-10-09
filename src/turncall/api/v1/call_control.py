@@ -24,7 +24,7 @@ from turncall.api.v1.schemas.call_control import (
 from turncall.auth import WriteAuth
 from turncall.services import call_control, live_call_channel
 from turncall.services.call_control import ControlResult
-from turncall.storage.repositories import call_repo
+from turncall.storage.repositories import agent_repo, call_repo
 
 router = APIRouter(prefix="/calls", tags=["call-control"])
 
@@ -99,24 +99,43 @@ async def transfer_call(
     )
 
 
-@router.post("/{call_id}/handoff")
+@router.post(
+    "/{call_id}/handoff",
+    responses={
+        404: {"description": "No such call, or no such agent in this project"},
+        409: {"description": "The call is not live, or refused the handoff"},
+        504: {"description": "The call did not acknowledge the handoff in time"},
+    },
+)
 async def handoff_call(
     call_id: UUID,
     body: HandoffCallRequest,
     auth: WriteAuth,
     session: DbSession,
 ) -> dict:
-    """Hand off an active call to another agent."""
+    """Switch a live call to another agent: its prompt and its tools.
+
+    Applied by the call itself, through the same path as the model's
+    `handoff_to_agent` tool, and answered only once it has: `details` names the
+    agent and the tools the call now runs. Refused (409) where that tool is —
+    an `openai_live` agent — and when the call is not in progress.
+    """
     call = await call_repo.get_call_by_id(session, call_id, project_id=auth.project_id)
     if call is None:
         raise NotFoundError("Call", str(call_id))
+    target = await agent_repo.get_agent_by_id(
+        session, body.target_agent_id, project_id=auth.project_id
+    )
+    if target is None:
+        raise NotFoundError("Agent", str(body.target_agent_id))
 
-    result = await call_control.handoff_to_agent(
-        session,
-        call_id,
-        target_agent_id=body.target_agent_id,
-        reason=body.reason,
-        context_payload=body.context_payload,
+    result = await _through_the_call(
+        call_control.request_handoff(
+            call_id,
+            target_agent_id=body.target_agent_id,
+            reason=body.reason,
+            context_payload=body.context_payload,
+        )
     )
     _raise_if_failed(result)
     return ok(

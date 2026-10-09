@@ -340,7 +340,15 @@ async def handoff_to_agent(
     reason: str | None = None,
     context_payload: dict[str, Any] | None = None,
 ) -> ControlResult:
-    """Hand off an active call to another agent."""
+    """Commit a handoff to the call record: `HANDED_OFF`, the new active agent,
+    the `call.agent_handoff` event.
+
+    Only the call itself calls this, from `tool_bridge.run_handoff`, between
+    preparing the switch and applying it to the pipeline (#144). The API asks
+    the call to do that (`request_handoff`) instead of writing the record on
+    its own, which left the record handed off while the live pipeline kept the
+    previous agent (#216).
+    """
     from loguru import logger
 
     from turncall.storage.repositories import agent_repo, call_repo
@@ -368,7 +376,9 @@ async def handoff_to_agent(
             message=f"Can only handoff from in_progress (current: {current.value})",
         )
 
-    target = await agent_repo.get_agent_by_id(session, target_agent_id)
+    target = await agent_repo.get_agent_by_id(
+        session, target_agent_id, project_id=call.project_id
+    )
     if target is None:
         logger.error(
             "handoff_to_agent: target agent not found: {id}",
@@ -412,6 +422,43 @@ async def handoff_to_agent(
             "target_agent_id": str(target_agent_id),
             "target_assistant_name": target.name,
         },
+    )
+
+
+async def request_handoff(
+    call_id: UUID,
+    *,
+    target_agent_id: UUID,
+    reason: str | None = None,
+    context_payload: dict[str, Any] | None = None,
+) -> ControlResult:
+    """Ask the live call to hand itself off to another agent, and report what
+    it applied.
+
+    The call runs the same prepare / commit / apply path the model's
+    `handoff_to_agent` tool does, so the record and the pipeline agree. Raises
+    `CallNotLive` / `CallDidNotAcknowledge` like `inject_context`.
+    """
+    from turncall.services import live_call_channel
+    from turncall.storage.redis import get_redis
+
+    ack = await live_call_channel.request(
+        get_redis(),
+        call_id,
+        live_call_channel.HANDOFF,
+        {
+            "agent_id": str(target_agent_id),
+            "reason": reason,
+            "context": context_payload,
+        },
+    )
+    if not ack.ok:
+        return ControlResult(success=False, message=ack.error or "Refused by the call")
+    applied = ack.applied or {}
+    return ControlResult(
+        success=True,
+        message=f"The call is now running agent '{applied.get('target_assistant_name')}'",
+        details=applied,
     )
 
 
