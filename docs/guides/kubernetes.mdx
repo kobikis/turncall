@@ -1,0 +1,151 @@
+---
+title: Kubernetes
+description: "The Helm chart: the API, the workers, migrations, and autoscaling on live calls"
+icon: "dharmachakra"
+---
+
+The chart in [`charts/turncall`](https://github.com/kobikis/turncall/tree/main/charts/turncall) runs TurnCall against a Postgres (with `pgvector`) and a Redis you already have. It is sized for the one thing a voice platform cannot get wrong on Kubernetes: a pod that is scaled down or replaced keeps its calls until they end. See [Graceful shutdown](/guides/graceful-shutdown) for how a process drains.
+
+## What it runs
+
+| Deployment | Process | Replicas |
+|---|---|---|
+| `<release>-api` | the API, Twilio/Telnyx/WhatsApp webhooks and media streams, WebRTC | `api.replicas`, or the autoscaler |
+| `<release>-eval-worker` | `turncall-eval-worker` | `evalWorker.replicas` |
+| `<release>-campaign-worker` | `turncall-campaign-worker` | `campaignWorker.replicas` |
+| `<release>-asterisk-edge` | the API process holding Asterisk's ARI connection | exactly 1, when `asteriskEdge.enabled` |
+
+The workers are the same image with another entrypoint and never run inside the API: their work in the API's event loop would become dead air on a live call.
+
+Migrations (`alembic upgrade head`) run as a Job before any pod of a new version starts, on install and on every upgrade.
+
+## Install
+
+```bash
+kubectl create secret generic turncall-env \
+  --from-literal=DATABASE_URL='postgresql+asyncpg://turncall:...@postgres:5432/turncall' \
+  --from-literal=REDIS_URL='redis://redis:6379/0' \
+  --from-literal=PLATFORM_API_KEY='...' \
+  --from-literal=API_KEY_HASH_SECRET='...' \
+  --from-literal=CREDENTIAL_ENCRYPTION_KEY='...' \
+  --from-literal=TWILIO_ACCOUNT_SID='...' --from-literal=TWILIO_AUTH_TOKEN='...' \
+  --from-literal=OPENAI_API_KEY='...' --from-literal=DEEPGRAM_API_KEY='...'
+
+helm install turncall ./charts/turncall \
+  --set existingSecret=turncall-env \
+  --set image.tag=<release> \
+  --set config.S3_BUCKET_NAME=turncall-recordings \
+  --set config.PUBLIC_BASE_URL=https://turncall.example.com
+```
+
+`existingSecret` holds every secret setting as an environment variable; `config` holds the rest. Both take the variables listed in the project's environment reference. `secretEnv` is the alternative to `existingSecret` when you would rather have the chart own the Secret.
+
+- **Pin `image.tag`** to a release. A release without the drain would drop calls on every scale-down this chart performs.
+- **Use S3 storage** (`STORAGE_BACKEND: s3`, the chart's default). `local` storage is one pod's filesystem, so a recording written on one pod is missing on the next.
+- **Expose the API** with `ingress.enabled` or your own route to the `<release>` Service. Media streams are WebSockets that last a whole call, so raise your ingress controller's proxy timeouts to at least your longest call (the annotations for ingress-nginx are in `values.yaml`).
+
+## Grace periods
+
+Kubernetes sends `SIGKILL` when a pod's `terminationGracePeriodSeconds` runs out, and a killed pod drops its calls. The chart sizes each grace period from the work that process may still be holding:
+
+| Deployment | Grace period | Why |
+|---|---|---|
+| API | `api.preStopSeconds` + `maxCallDurationSeconds` + 90 | The drain waits for the longest call, plus 30s to build and finalize it and 60s for post-call webhooks |
+| eval worker | max(`evals.maxRunDurationSeconds`, 180 × `evals.maxIterations`) + 60 | It finishes the runs it holds; that is the longest one may take. A run killed sooner is marked `errored` by the janitor, not lost |
+| campaign worker | `campaignWorker.terminationGracePeriodSeconds` (60) | It stops between passes, so a dial is recorded before it exits. A worker killed mid-dial leaves the target's outcome unknown, and it is never redialled |
+| Asterisk edge | 90 | It carries no media, so no calls of its own to wait for |
+
+**Set `maxCallDurationSeconds` to the longest `max_call_duration_seconds` among your agents** (default `3600`). It is the one value the chart cannot read for you. Lower it on agents that never need an hour and every scale-down gets shorter.
+
+The API pods also use:
+
+- a `preStop` sleep (`api.preStopSeconds`, 10), during which the terminating pod leaves the Service's endpoints and load balancers catch up;
+- readiness on `/ready`, which fails from the moment the drain starts;
+- liveness and startup on `/live`, which stays green while draining;
+- `maxUnavailable: 0` on rollouts, so a new pod is ready before an old one starts to drain.
+
+## Asterisk
+
+Asterisk's ARI hands an app's calls to the newest connection only, and the connection it replaced never gets them back. Two processes holding it would split calls between a process that knows them and one that does not. So the chart never lets an API replica hold it: every API pod runs with `ASTERISK_EDGE_ENABLED=false`, and `asteriskEdge.enabled: true` adds one Deployment that holds it:
+
+- one replica, never autoscaled;
+- `Recreate` on rollout, so the old edge is gone before the new one connects;
+- not behind the Service. Each call's media stream reaches the API pods through the `websocket_client.conf` URI you gave Asterisk.
+
+Enable it if the platform or any project uses Asterisk. With it off, nothing connects to Asterisk.
+
+Restarting the edge has a cost, so change it in a quiet hour:
+
+- For the seconds between the old pod exiting and the new one connecting, Asterisk has no `turncall` app, and `Stasis()` returns with `STASISSTATUS=FAILED`. Route that to your fallback in the dialplan.
+- Calls already connected keep their agent, but the new edge does not know them. When one of those callers hangs up, nothing ends the agent's side, which runs until its idle guard (or `max_call_duration_seconds`) ends it.
+
+## Autoscaling
+
+Scale the API on live calls per pod, not CPU. A pod runs every call's audio on one event loop, so its limit is set by audio underruns and turn latency, not by average CPU. The chart's `HorizontalPodAutoscaler` targets an average of `autoscaling.activeCallsPerPod` across the API pods, read from the `turncall_active_calls` gauge on each pod's `/metrics`.
+
+The chart's default target is **2 calls per pod**, with `requests.cpu: 1`, `requests.memory: 1Gi` and **no CPU limit**. That is the [measured capacity](/guides/capacity) for the default cascade agent: 2 concurrent calls with no audio gaps on one dedicated core, the first gaps at 4. It was measured on an Apple M1 Pro, in a Docker Desktop VM with 8 vCPU, on a busy host, so treat it as a floor and re-measure on your own node type before raising it.
+
+- **Do not set a CPU limit.** A CPU quota freezes the whole process for the rest of a 100 ms period whenever it bursts past it, and since every call's audio runs on one event loop, each freeze is a gap on every call at once. Under `limits.cpu: 1` a pod carried only 1 call cleanly; a second CPU of quota did not help, because the loop is single-threaded.
+- **Memory** is about 205 MiB idle plus 115 MiB per call. The memory limit (2Gi) sits well above the request: reaching it is an OOM kill, which drops every call on the pod.
+
+Scale-down is deliberately slow (one pod per 5 minutes, after 10 minutes of low load): a removed pod drains its calls before it goes, so quick scale-downs churn pods that are only draining. Kubernetes picks which pod to remove without knowing how many calls each carries.
+
+### With prometheus-adapter
+
+The HPA reads `turncall_active_calls` from the custom metrics API. With Prometheus scraping each API pod (`podMonitor.enabled` for the Prometheus operator, or the `prometheus.io/*` annotations the pods carry), give [prometheus-adapter](https://github.com/kubernetes-sigs/prometheus-adapter) this rule:
+
+```yaml
+rules:
+  custom:
+    - seriesQuery: 'turncall_active_calls{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: namespace}
+          pod: {resource: pod}
+      name: {as: turncall_active_calls}
+      metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+```
+
+Then:
+
+```bash
+helm upgrade turncall ./charts/turncall --reuse-values --set autoscaling.enabled=true
+kubectl get --raw "/apis/custom.metrics.k8s.io/v1beta1/namespaces/default/pods/*/turncall_active_calls"
+```
+
+Scrape each pod, never the Service: the gauge is per process, and a load-balanced scrape reads a random pod's count.
+
+### With KEDA
+
+Leave `autoscaling.enabled` off and give KEDA the same target:
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: turncall-api
+spec:
+  scaleTargetRef:
+    name: turncall-api            # <release>-api
+  minReplicaCount: 2
+  maxReplicaCount: 10
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 600
+          policies: [{type: Pods, value: 1, periodSeconds: 300}]
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring:9090
+        query: sum(turncall_active_calls{namespace="default", pod=~"turncall-api-.*"})
+        threshold: "<autoscaling.activeCallsPerPod>"
+```
+
+KEDA divides the query's total by the threshold to get a replica count, which is the same arithmetic as the HPA's average.
+
+## Not covered
+
+- **WebRTC** media is UDP between the browser and the pod, which an Ingress does not carry. Browser calls need the pods reachable over UDP (or a TURN server), which is outside this chart.
+- **Postgres and Redis** are yours to run. Postgres needs the `vector` extension available; the first migration creates it.

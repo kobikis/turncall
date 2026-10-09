@@ -13,6 +13,16 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Helm chart** (#210, `charts/turncall`). Runs the API, the eval worker and
+  the campaign worker against your own Postgres and Redis, with migrations as a
+  hook Job before each install and upgrade. Each grace period is sized from what
+  that process may still be holding — the API's from your longest
+  `max_call_duration_seconds` (`maxCallDurationSeconds`) — so a scale-down or a
+  rollout lets live calls finish instead of cutting them off. An optional
+  `HorizontalPodAutoscaler` scales the API on live calls per pod
+  (`turncall_active_calls`) rather than CPU. Asterisk's ARI connection runs in
+  one dedicated pod, never in an API replica, since ARI gives an app's calls
+  to one connection only. See the Kubernetes guide.
 - **Deepgram Flux STT** (#204). A `flux-*` model on the `deepgram` provider
   (`flux-general-en`, `flux-general-multi`) uses Deepgram's Flux, which detects
   the end of the caller's turn itself. Flux then owns end-of-turn: Smart Turn

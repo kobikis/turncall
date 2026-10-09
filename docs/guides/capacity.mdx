@@ -46,7 +46,9 @@ Why those settings:
   Turn ONNX session (~36 MiB) and Silero model (~5 MiB); the rest is the
   pipeline and the recording buffer.
 
-Scale on the active-call gauge with this per-pod target.
+Scale on the active-call gauge with this per-pod target. The [Helm chart](/guides/kubernetes)
+ships these requests and this target as its defaults, with the autoscaler on
+`turncall_active_calls` behind `autoscaling.enabled`.
 
 ## What was measured
 

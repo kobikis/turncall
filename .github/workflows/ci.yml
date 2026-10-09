@@ -30,6 +30,21 @@ jobs:
       # they never opened — which is how the 100/88 mismatch went unnoticed.
       - run: ruff format --check src/ tests/ examples/
 
+  # The Helm chart (#210). Lint it, and render it with every optional piece
+  # on, so a template error fails here rather than at someone's `helm install`.
+  # Pinned for ruff's reason.
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v4.3.0
+      - run: helm lint --strict charts/turncall -f charts/turncall/ci/full-values.yaml
+      - run: helm lint --strict charts/turncall -f charts/turncall/ci/existing-secret-values.yaml
+      - run: helm template turncall charts/turncall -f charts/turncall/ci/full-values.yaml
+      - run: helm template turncall charts/turncall -f charts/turncall/ci/existing-secret-values.yaml
+
   # CONTRIBUTING.md requires a DCO sign-off; enforce it rather than just asking.
   # Plain bash so there is no third-party action in the supply chain.
   dco:

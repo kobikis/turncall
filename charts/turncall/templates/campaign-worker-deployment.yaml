@@ -1,0 +1,41 @@
+{{- if .Values.campaignWorker.enabled }}
+# The campaign dialler (#229): its own process for the eval worker's reason.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "turncall.fullname" . }}-campaign-worker
+  labels:
+    {{- include "turncall.labels" . | nindent 4 }}
+    app.kubernetes.io/component: campaign-worker
+spec:
+  replicas: {{ .Values.campaignWorker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "turncall.selectorLabels" (dict "ctx" . "component" "campaign-worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "turncall.selectorLabels" (dict "ctx" . "component" "campaign-worker") | nindent 8 }}
+      annotations:
+        {{- include "turncall.configChecksum" . | nindent 8 }}
+    spec:
+      {{- include "turncall.podSpec" . | trim | nindent 6 }}
+      # SIGTERM is honoured between passes. A worker killed mid-dial leaves its
+      # target `placing`, which the next worker's janitor marks failed with an
+      # unknown outcome rather than dialling it twice.
+      terminationGracePeriodSeconds: {{ .Values.campaignWorker.terminationGracePeriodSeconds }}
+      {{- with include "turncall.scheduling" .Values.campaignWorker | trim }}{{ . | nindent 6 }}{{ end }}
+      containers:
+        - name: campaign-worker
+          image: {{ include "turncall.image" (dict "ctx" .) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["turncall-campaign-worker"]
+          {{- include "turncall.env" . | nindent 10 }}
+          env:
+            - name: TURNCALL_ENV
+              value: production
+          {{- with .Values.campaignWorker.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

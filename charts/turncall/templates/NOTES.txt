@@ -1,0 +1,16 @@
+TurnCall API: service {{ include "turncall.fullname" . }}, port {{ .Values.api.service.port }}.
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "turncall.fullname" . }} 8090:{{ .Values.api.service.port }}
+  curl localhost:8090/health
+
+API pods drain live calls on SIGTERM for up to {{ add .Values.api.preStopSeconds .Values.maxCallDurationSeconds 90 }}s
+(maxCallDurationSeconds={{ .Values.maxCallDurationSeconds }}): keep that at least your agents' longest
+max_call_duration_seconds.
+{{- if not .Values.asteriskEdge.enabled }}
+
+Asterisk's ARI edge is off: no process connects to an Asterisk. Set asteriskEdge.enabled=true if any number uses one.
+{{- end }}
+{{- if eq (index .Values.config "STORAGE_BACKEND" | default "local") "local" }}
+
+STORAGE_BACKEND is local: each pod has its own files. Use s3 with more than one pod.
+{{- end }}

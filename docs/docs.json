@@ -68,7 +68,8 @@
                   "guides/campaigns",
                   "guides/observability",
                   "guides/graceful-shutdown",
-                  "guides/capacity"
+                  "guides/capacity",
+                  "guides/kubernetes"
                 ]
               }
             ]

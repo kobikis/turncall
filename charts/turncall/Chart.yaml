@@ -1,0 +1,12 @@
+apiVersion: v2
+name: turncall
+description: TurnCall voice agent platform - API, eval worker and campaign worker
+type: application
+version: 0.1.0
+# The image tag when `image.tag` is empty. Pin `image.tag` to a release: the
+# drain this chart's grace periods are sized for (#199) is in releases after
+# 2.0.0, and an image without it drops live calls on every scale-down.
+appVersion: "latest"
+home: https://github.com/kobikis/turncall
+sources:
+  - https://github.com/kobikis/turncall

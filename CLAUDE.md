@@ -826,6 +826,21 @@ Orchestrator contract (preStop sleep, `terminationGracePeriodSeconds` ≥ preSto
 Proof against a real process: `tests/integration/test_graceful_shutdown.py`
 (`tests/harness/server.py` boots the app as a child process).
 
+### Helm chart (#210)
+
+`charts/turncall` (guide: `docs/guides/kubernetes.mdx`): API, eval worker and
+campaign worker Deployments against external Postgres/Redis, `alembic upgrade
+head` as a pre-install/pre-upgrade hook Job, optional HPA on
+`turncall_active_calls` (target 2 per pod, `requests.cpu: 1`, **no CPU limit**
+— #200's measurement, `docs/guides/capacity.mdx`), Ingress, PodMonitor. Grace periods are computed, not
+typed: API = `api.preStopSeconds` + `maxCallDurationSeconds` + 90; eval worker
+= max(`evals.maxRunDurationSeconds`, 180 × `evals.maxIterations`) + 60, which is
+why those two env vars come from `evals.*` and are refused in `config`. Every
+API pod gets `ASTERISK_EDGE_ENABLED=false` (set in `env`, which beats
+`envFrom`); `asteriskEdge.enabled` adds the one process that holds ARI — a
+single-replica `Recreate` Deployment outside the Service. CI runs `helm lint
+--strict` + `helm template` on `charts/turncall/ci/*.yaml`.
+
 ## Limits
 
 A **concurrency limit** caps how many are in progress at once, a **rate limit**
