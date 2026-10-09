@@ -1,194 +1,156 @@
-"""Twilio Media Stream WebSocket endpoint.
+"""The shared media entry point (ADR-0022).
 
-Thin entry point that accepts a Twilio WebSocket connection,
-resolves the agent configuration, and delegates to the
-Pipecat-based voice pipeline via CallSession.
+Each carrier owns its inbound edge — its webhook routes, its signature check,
+its answer format, and the handshake its media stream opens with
+(`twilio_media_stream.py` for Twilio). Every one of them ends by handing the
+open stream to `run_media_stream`, which resolves the call's agent from the
+call record and builds the pipeline. The serializer is chosen here from the
+call's own carrier, in `create_carrier_transport`; past it, nothing learns
+which carrier the call is on.
 """
 
-import json
 from uuid import UUID
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import WebSocket
 from loguru import logger
 
 from turncall.config import get_settings
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.pipeline_builder import build_call_pipeline
 from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
+from turncall.orchestrator.transport_factory import (
+    CARRIER_MEDIA,
+    CarrierStream,
+    create_carrier_transport,
+)
 from turncall.storage.database import create_session_factory, get_engine
 
-router = APIRouter()
 
+async def run_media_stream(
+    websocket: WebSocket, call_id: UUID, stream: CarrierStream
+) -> None:
+    """Run one call's pipeline on an accepted, started carrier media stream.
 
-async def _wait_for_start_event(websocket: WebSocket) -> dict | None:
-    """Read WebSocket messages until we get a Twilio 'start' event."""
-    while True:
-        raw = await websocket.receive_text()
-        data = json.loads(raw)
-        if data.get("event") == "start":
-            return data
-        if data.get("event") == "connected":
-            continue
-        logger.warning("unexpected_pre_start_event", event=data.get("event"))
-
-
-@router.websocket("/ws/media-stream")
-async def media_stream_websocket(websocket: WebSocket) -> None:
-    """Twilio Media Stream WebSocket endpoint.
-
-    Flow:
-    1. Accept WebSocket from Twilio
-    2. Wait for 'start' event to get call metadata
-    3. Load agent config from DB
-    4. Create Pipecat pipeline with TwilioFrameSerializer
-    5. Run pipeline until disconnect
+    Returns when the call ends. Raises what the pipeline raises; the carrier's
+    edge owns the socket and decides what a failure means to it.
     """
-    await websocket.accept()
+    call_id_str = str(call_id)
+    settings = get_settings()
+    engine = get_engine()
+    session_factory = create_session_factory(engine)
 
-    try:
-        # Wait for Twilio's start event with call metadata
-        start_data = await _wait_for_start_event(websocket)
-        if start_data is None:
+    # Resolve everything from the call record (project_id, agent_id, config)
+    async with session_factory() as session:
+        from turncall.storage.repositories import agent_repo, call_repo
+
+        call_row = await call_repo.get_call_by_id(session, UUID(call_id_str))
+        if call_row is None:
+            logger.error("media_stream_call_not_found: {id}", id=call_id_str)
             return
 
-        start = start_data.get("start", {})
-        custom_params = start.get("customParameters", {})
-        # Only callId is passed in TwiML. Resolve everything from the call record.
-        call_id_str = custom_params.get("callId", "") or custom_params.get(
-            "call_id", ""
-        )
-        stream_sid = start.get("streamSid", "")
-        call_sid = start.get("callSid", "")
-
-        logger.info(
-            "media_stream_start: call={call_id} stream={stream_sid}",
-            call_id=call_id_str,
-            stream_sid=stream_sid,
-        )
-
-        if not call_id_str:
-            logger.error("media_stream_missing_call_id")
+        carrier = call_row.provider
+        if carrier not in CARRIER_MEDIA:
+            # A call reaching a media stream this deployment has no serializer
+            # for: decoding it as some other carrier's would be noise.
+            logger.error(
+                "media_stream_unknown_carrier", call_id=call_id_str, carrier=carrier
+            )
             return
 
-        settings = get_settings()
-        engine = get_engine()
-        session_factory = create_session_factory(engine)
+        project_id_str = str(call_row.project_id)
+        agent_id_str = (
+            str(call_row.active_agent_id) if call_row.active_agent_id else "dynamic"
+        )
+        config = None
 
-        # Resolve everything from the call record (project_id, agent_id, config)
-        async with session_factory() as session:
-            from turncall.storage.repositories import agent_repo, call_repo
+        # Check for dynamic inline config in call metadata
+        if call_row.metadata_json.get("dynamic_config"):
+            dynamic = call_row.metadata_json["dynamic_config"]
+            config = AgentConfig.model_validate(dynamic)
+            logger.info("Using dynamic inline agent config")
+        elif call_row.active_agent_id:
+            agent = await agent_repo.get_agent_by_id(session, call_row.active_agent_id)
+            if agent is not None:
+                config = AgentConfig.model_validate(agent.config_blob)
 
-            call_row = await call_repo.get_call_by_id(session, UUID(call_id_str))
-            if call_row is None:
-                logger.error("media_stream_call_not_found: {id}", id=call_id_str)
-                return
-
-            project_id_str = str(call_row.project_id)
-            agent_id_str = (
-                str(call_row.active_agent_id) if call_row.active_agent_id else "dynamic"
+        if config is None:
+            logger.error(
+                "media_stream_no_config",
+                agent_id=agent_id_str,
             )
-            config = None
+            return
 
-            # Check for dynamic inline config in call metadata
-            if call_row.metadata_json.get("dynamic_config"):
-                dynamic = call_row.metadata_json["dynamic_config"]
-                config = AgentConfig.model_validate(dynamic)
-                logger.info("Using dynamic inline agent config")
-            elif call_row.active_agent_id:
-                agent = await agent_repo.get_agent_by_id(
-                    session, call_row.active_agent_id
-                )
-                if agent is not None:
-                    config = AgentConfig.model_validate(agent.config_blob)
+        # Apply template variables if stored in call metadata
+        template_variables = {}
+        if call_row and call_row.metadata_json:
+            template_variables = call_row.metadata_json.get("template_variables", {})
 
-            if config is None:
-                logger.error(
-                    "media_stream_no_config",
-                    agent_id=agent_id_str,
-                )
-                return
+        if template_variables:
+            from turncall.services.template_renderer import render_agent_config
 
-            # Apply template variables if stored in call metadata
-            template_variables = {}
-            if call_row and call_row.metadata_json:
-                template_variables = call_row.metadata_json.get(
-                    "template_variables", {}
-                )
-
-            if template_variables:
-                from turncall.services.template_renderer import render_agent_config
-
-                config = render_agent_config(config, template_variables)
-                logger.info(
-                    "Template variables applied: {keys}",
-                    keys=list(template_variables.keys()),
-                )
-
-            # Apply knowledge_context if stored in call metadata
-            knowledge_context = (
-                call_row.metadata_json.get("knowledge_context")
-                if call_row.metadata_json
-                else None
+            config = render_agent_config(config, template_variables)
+            logger.info(
+                "Template variables applied: {keys}",
+                keys=list(template_variables.keys()),
             )
-            if knowledge_context:
-                from turncall.services.template_renderer import (
-                    prepend_knowledge_context,
-                )
 
-                config = prepend_knowledge_context(config, knowledge_context)
-                logger.info("Knowledge context applied to system prompt")
-
-        # Connect MCP servers and discover tools (if configured)
-        mcp_manager = None
-        mcp_tools: list = []
-        if config.mcp_servers:
-            from turncall.services.mcp_client import MCPSessionManager
-
-            mcp_manager = MCPSessionManager(
-                call_id=UUID(call_id_str),
-                project_id=UUID(project_id_str),
+        # Apply knowledge_context if stored in call metadata
+        knowledge_context = (
+            call_row.metadata_json.get("knowledge_context")
+            if call_row.metadata_json
+            else None
+        )
+        if knowledge_context:
+            from turncall.services.template_renderer import (
+                prepend_knowledge_context,
             )
-            mcp_tools = await mcp_manager.connect_servers(config.mcp_servers)
 
-        # Build call context
-        call_context = CallContext(
+            config = prepend_knowledge_context(config, knowledge_context)
+            logger.info("Knowledge context applied to system prompt")
+
+    # Connect MCP servers and discover tools (if configured)
+    mcp_manager = None
+    mcp_tools: list = []
+    if config.mcp_servers:
+        from turncall.services.mcp_client import MCPSessionManager
+
+        mcp_manager = MCPSessionManager(
             call_id=UUID(call_id_str),
             project_id=UUID(project_id_str),
-            agent_id=call_row.active_agent_id or DYNAMIC_AGENT_ID,
-            call_sid=call_sid,
-            stream_sid=stream_sid,
-            session_factory=session_factory,
-            mcp_manager=mcp_manager,
         )
+        mcp_tools = await mcp_manager.connect_servers(config.mcp_servers)
 
-        # Create Twilio transport via factory
-        from turncall.orchestrator.ambience import build_ambience_mixer
-        from turncall.orchestrator.transport_factory import (
-            TWILIO_SAMPLE_RATE,
-            create_twilio_transport,
-        )
+    # Build call context
+    call_context = CallContext(
+        call_id=UUID(call_id_str),
+        project_id=UUID(project_id_str),
+        agent_id=call_row.active_agent_id or DYNAMIC_AGENT_ID,
+        call_sid=stream.call_sid,
+        stream_sid=stream.stream_id,
+        session_factory=session_factory,
+        mcp_manager=mcp_manager,
+    )
 
-        mixer = await build_ambience_mixer(
-            config,
-            project_id=call_context.project_id,
-            sample_rate=TWILIO_SAMPLE_RATE,
-            session_factory=session_factory,
-            settings=settings,
-        )
-        transport = create_twilio_transport(websocket, stream_sid, mixer=mixer)
+    from turncall.orchestrator.ambience import build_ambience_mixer
 
-        call_session = await build_call_pipeline(
-            config=config,
-            transport=transport,
-            call_context=call_context,
-            settings=settings,
-            session_factory=session_factory,
-            mcp_tools=mcp_tools,
-        )
-        # WS handler stays open for the call — await (don't fire-and-forget).
-        await call_session.start()
+    mixer = await build_ambience_mixer(
+        config,
+        project_id=call_context.project_id,
+        sample_rate=CARRIER_MEDIA[carrier].sample_rate,
+        session_factory=session_factory,
+        settings=settings,
+    )
+    # The serializer comes from the call's carrier, not from which edge
+    # handed the stream over (ADR-0022).
+    transport = create_carrier_transport(carrier, websocket, stream, mixer=mixer)
 
-    except WebSocketDisconnect:
-        logger.info("media_stream_disconnected")
-    except Exception:
-        logger.exception("media_stream_error")
+    call_session = await build_call_pipeline(
+        config=config,
+        transport=transport,
+        call_context=call_context,
+        settings=settings,
+        session_factory=session_factory,
+        mcp_tools=mcp_tools,
+    )
+    # WS handler stays open for the call — await (don't fire-and-forget).
+    await call_session.start()

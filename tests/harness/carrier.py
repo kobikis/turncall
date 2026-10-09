@@ -15,7 +15,6 @@ import asyncio
 import secrets
 from dataclasses import dataclass, field
 from typing import Any
-from uuid import UUID
 
 from tests.harness.stubs import Setter
 from turncall.adapters.telephony.base import TelephonyAdapter
@@ -166,15 +165,6 @@ class FakeTelephonyAdapter(TelephonyAdapter):
     async def send_dtmf(self, provider_call_sid: str, digits: str) -> None:
         await self._record("send_dtmf", call_sid=provider_call_sid, digits=digits)
 
-    def validate_webhook_signature(
-        self, signature: str, url: str, params: dict[str, str]
-    ) -> bool:
-        from twilio.request_validator import RequestValidator
-
-        return RequestValidator(self._carrier.auth_token).validate(
-            url, params, signature
-        )
-
     async def get_recording_url(self, recording_sid: str) -> str:
         await self._record("get_recording_url", recording_sid=recording_sid)
         return f"https://fake-carrier.invalid/recordings/{recording_sid}.mp3"
@@ -207,9 +197,6 @@ class FakeTelephonyAdapter(TelephonyAdapter):
     async def find_number_sid(self, e164_number: str) -> str | None:
         number = self._carrier._numbers.get(e164_number)
         return number.sid if number else None
-
-    def generate_media_stream_twiml(self, websocket_url: str, call_id: UUID) -> str:
-        raise NotImplementedError("not a REST action; leaving the adapter (ADR-0022)")
 
     async def send_sms(self, from_number: str, to_number: str, body: str) -> str:
         message_sid = "SM" + secrets.token_hex(16)

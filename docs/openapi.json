@@ -7004,6 +7004,13 @@
             ],
             "title": "Twilio Auth Token"
           },
+          "carrier": {
+            "type": "string",
+            "const": "twilio",
+            "title": "Carrier",
+            "description": "The number's carrier. `provider` is accepted as a deprecated alias for it.",
+            "default": "twilio"
+          },
           "external_number_sid": {
             "anyOf": [
               {
@@ -9266,6 +9273,19 @@
             ],
             "title": "Twilio Auth Token"
           },
+          "carrier": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "twilio"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Carrier",
+            "description": "The number's carrier. `provider` is accepted as a deprecated alias for it."
+          },
           "routing_target_type": {
             "type": "string",
             "pattern": "^(agent|workflow|webhook)$",
@@ -9318,7 +9338,7 @@
           "routing_target_type"
         ],
         "title": "UpdatePhoneNumberRequest",
-        "description": "In-place update of a binding's routing/SMS config.\n\nThe number's identity (SID, E.164) and its server_url_secret are stable \u2014\ncall-init endpoints keep verifying with the same secret across edits."
+        "description": "In-place update of a binding's routing/SMS config.\n\nThe number's identity (carrier, SID, E.164) and its server_url_secret are\nstable \u2014 call-init endpoints keep verifying with the same secret across\nedits. `carrier` may be sent but must be the number's own (null = it)."
       },
       "UpdateTakeawayRequest": {
         "properties": {

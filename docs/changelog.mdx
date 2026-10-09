@@ -62,6 +62,12 @@ phone line is flagged at upload. See [Ambience](/guides/ambience).
 
 ## Changed
 
+**A phone number's carrier is `carrier`.** Phone-number reads carry
+`carrier`; `provider` keeps the same value and is still accepted on a write,
+both deprecated, since "provider" names an STT, LLM or TTS backend everywhere
+else. A number's carrier is fixed once bound. See
+[Phone Numbers](/guides/phone-numbers).
+
 **A call that fails says so, and why.** A provider that stops working mid-call
 (a refused key, an unknown model) used to leave the call reading as
 `customer_ended_call`. It now ends `failed` with an `ended_reason` of

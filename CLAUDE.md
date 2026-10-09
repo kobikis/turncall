@@ -159,6 +159,35 @@ inbound message → session lookup/create → message history → [KB retrieval]
   → [chat_tools: webhook + MCP] → LLM chat completion (tool loop) → store reply → respond
 ```
 
+## Carriers
+
+A **carrier** is the telephony company a number belongs to (ADR-0022). Twilio is
+the only one today; Telnyx and Asterisk ARI come next, and the boundary is cut
+for them:
+
+- **`TelephonyAdapter` is REST actions only** — dial, hang up, transfer, DTMF,
+  configure a number, SMS. How a carrier answers a call (TwiML) and signs its
+  webhooks (Twilio's HMAC) belong to its edge: `generate_media_stream_twiml`
+  lives in `webhooks/twilio_handlers.py`.
+- **Each carrier owns its inbound edge** — routes, signature check, answer
+  format, and its media stream's handshake (`webhooks/twilio_media_stream.py`
+  for Twilio's `/ws/media-stream`). Every edge hands the open stream to **one
+  shared media entry point**, `webhooks/media_stream.run_media_stream`, which
+  picks the serializer from the **call's** carrier (`calls.provider`) through
+  `transport_factory.CARRIER_MEDIA`. A call whose carrier has no entry there is
+  refused before anything is built. Past the serializer nothing learns the
+  carrier.
+- **The API says `carrier`.** Phone-number reads carry `carrier` (and the same
+  value as `provider`, deprecated); writes take `carrier`, or `provider` as a
+  deprecated alias — both at once must agree. The columns keep the name
+  `provider`. A number's carrier is fixed at bind: a `PUT` naming another is a
+  422. `domain/carriers.CARRIERS` is the closed set.
+- **Carrier contract test**: `tests/integration/test_carrier_contract.py` runs
+  one agent and one caller script per carrier (Seam A) and holds each to the
+  same outcome, events and transfer request. A new carrier adds its edge to
+  `CARRIERS` there; `tests/unit/test_carrier_boundary.py` fails until it has a
+  `CARRIER_MEDIA` entry.
+
 ## SMS / Chat
 
 Text-based conversations with agents via SMS or the Chat API.
@@ -1018,7 +1047,7 @@ Connect agents to MCP servers for auto-discovered tools. Tools are fetched at ca
 - `orchestrator/tool_bridge.py` — Routes MCP tool calls through MCP client
 - `orchestrator/pipeline_factory.py` — Merges MCP tools into pipeline at creation
 - `orchestrator/pipeline_builder.py` — `start_call_pipeline()`: MCP discovery for WebRTC + WhatsApp voice (in the task that also runs the call — MCP transports open anyio cancel scopes that must be exited where they were entered)
-- `webhooks/media_stream.py` — MCP discovery before pipeline start (Twilio)
+- `webhooks/media_stream.py` — MCP discovery before pipeline start (every carrier's media stream)
 - `services/chat_tools.py` — webhook + MCP tools for text turns (per-message connect/close)
 - `services/tool_webhook.py` — the shared webhook POST + HMAC signing, used by both paths
 - `services/url_allowlist.py` — `check_url_allowed()`: MCP urls + BYOM/S2S base_urls share one SSRF gate (`BYOM_ALLOWED_URL_PATTERNS`; empty = allow all). Matches the whole URL **and** the host separately, so the trusted name can't be smuggled into a path, query or `user@` prefix
@@ -1040,7 +1069,7 @@ All Pipecat imports isolated in `orchestrator/`. No other module imports Pipecat
 
 - `serializer.py` — Twilio mulaw ↔ PCM16 frames
 - `pipeline_factory.py` — Builds pipeline from AgentConfig (providers, VAD, Smart Turn, voicemail)
-- `transport_factory.py` — Creates Twilio, WebRTC, or WhatsApp transport
+- `transport_factory.py` — Creates a carrier media-stream, WebRTC, or WhatsApp transport. `CARRIER_MEDIA` is the one place a call's carrier picks a serializer and rate (see "Carriers")
 - `call_session.py` — Per-call lifecycle, first message, cleanup
 - `tool_bridge.py` — Registers tools + writes ToolInvocation records
 - `observability.py` — Logs transcripts/events to DB + dispatches webhooks

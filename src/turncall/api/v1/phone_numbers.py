@@ -63,6 +63,7 @@ async def bind_phone_number(
         sms_enabled=body.sms_enabled,
         metadata_json=body.metadata,
         twilio_account=own,
+        carrier=body.carrier,
     )
 
     configured = await _configure_twilio_webhooks(row, body.sms_enabled)
@@ -209,6 +210,13 @@ async def update_phone_number(
     )
     if row is None:
         raise NotFoundError("PhoneNumber", str(phone_number_id))
+    if body.carrier is not None and body.carrier != row.provider:
+        # Its SID, webhooks and calls all live on that carrier: moving it is
+        # unbinding there and binding on the other.
+        raise _unprocessable(
+            f"this number's carrier is {row.provider}; a carrier cannot be changed "
+            "in place — unbind the number and bind it again"
+        )
 
     # Mint a secret only when webhook routing appears for the first time.
     secret = row.server_url_secret

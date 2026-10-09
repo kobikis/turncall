@@ -37,8 +37,9 @@ Extending it
 - Another carrier (Telnyx #217-#221, ARI #209): a sibling of `twilio.py` with
   the same call-object shape (`say`, `wait_for_agent_speech`, `closed`,
   `hang_up`, `finish`), and the carrier's adapter routed to a `FakeCarrier` at
-  whatever single place hands that carrier's adapters out. The contract test
-  (#201) then runs one `Script` per carrier and compares outcomes.
+  whatever single place hands that carrier's adapters out. Then add its edge
+  to `CARRIERS` in `tests/integration/test_carrier_contract.py` (#201), which
+  runs one `Script` per carrier and holds each to the same outcome.
 - Outbound, limits, suppression, campaigns: `POST /v1/calls` and friends on
   `Harness.api`; assert on `carrier.actions_of("dial")` (an empty list is the
   suppression proof). A controllable clock is the campaign ticket's to add.

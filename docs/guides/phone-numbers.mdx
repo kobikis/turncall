@@ -6,6 +6,12 @@ icon: "phone"
 
 Phone numbers connect your Twilio numbers to TurnCall agents. Each number can route to a specific agent or to a webhook for dynamic routing.
 
+A number's `carrier` — the telephony company it belongs to — is `twilio`, the
+default, and is fixed once bound: a `PUT` naming a different carrier is a
+`422`. `provider` is accepted for it as a deprecated alias, and reads still
+carry `provider` beside `carrier`; prefer `carrier`, since "provider" means an
+STT, LLM or TTS backend everywhere else in the API.
+
 ## Bind a Phone Number
 
 ### Static routing (to an agent)

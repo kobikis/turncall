@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from turncall.domain.carriers import DEFAULT_CARRIER
 from turncall.storage.models import PhoneNumberRow
 
 
@@ -31,10 +32,12 @@ async def bind_phone_number(
     sms_enabled: bool = False,
     metadata_json: dict | None = None,
     twilio_account: StoredTwilioAccount | None = None,
+    carrier: str = DEFAULT_CARRIER,
 ) -> PhoneNumberRow:
-    """Bind a Twilio phone number to a routing target."""
+    """Bind a phone number on `carrier` to a routing target."""
     row = PhoneNumberRow(
         project_id=project_id,
+        provider=carrier,
         external_number_sid=external_number_sid,
         e164_number=e164_number,
         routing_target_type=routing_target_type,
