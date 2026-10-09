@@ -1049,14 +1049,14 @@ def _build_turn_strategies(config: AgentConfig, *, smart_turn: bool) -> Any | No
     if smart_turn and config.smart_turn_detection:
         try:
             from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-            from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
-                LocalSmartTurnAnalyzerV3,
-            )
             from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
                 TurnAnalyzerUserTurnStopStrategy,
             )
 
-            turn_analyzer = LocalSmartTurnAnalyzerV3(
+            from turncall.orchestrator.turn_detection import SharedSmartTurnAnalyzer
+
+            # One ONNX session per process; the analyzer itself is the call's.
+            turn_analyzer = SharedSmartTurnAnalyzer(
                 params=SmartTurnParams(stop_secs=config.smart_turn_stop_secs),
             )
             strategies["stop"] = [
@@ -1065,6 +1065,22 @@ def _build_turn_strategies(config: AgentConfig, *, smart_turn: bool) -> Any | No
             logger.info("Smart turn detection enabled (LocalSmartTurnV3)")
         except Exception:
             logger.warning("Smart turn detection unavailable, using VAD-only")
+            # VAD was built at its 0.2s window for the model; make up the rest.
+            from turncall.orchestrator.turn_detection import (
+                VAD_STOP_SECS,
+                vad_turn_stop,
+            )
+
+            strategies["stop"] = [
+                vad_turn_stop(config.silence_timeout_ms / 1000 - VAD_STOP_SECS)
+            ]
+    elif smart_turn:
+        # Explicitly, never left to pipecat: its default stop strategy *is*
+        # Smart Turn V3, so "off" used to mean Smart Turn anyway, waited on
+        # after VAD's own `silence_timeout_ms` window (#269).
+        from turncall.orchestrator.turn_detection import vad_turn_stop
+
+        strategies["stop"] = [vad_turn_stop()]
 
     if not strategies:
         return None
@@ -1837,6 +1853,15 @@ def _create_s2s_pipeline(
         LLMUserAggregatorParams,
     )
 
+    from turncall.orchestrator.turn_detection import (
+        s2s_vad_turn_strategies,
+        share_pipecats_default_model,
+    )
+
+    # On server VAD the aggregator falls back to pipecat's default stop
+    # strategy — Smart Turn — so make that the process's shared model (#271).
+    share_pipecats_default_model()
+
     # Built unconditionally, where it used to be built only for pipecat_vad:
     # the idle guard is carried by these params, and `server_vad` is the
     # default, so leaving them None there would have quietly disabled it on
@@ -1845,7 +1870,12 @@ def _create_s2s_pipeline(
     s2s_user_params = LLMUserAggregatorParams(
         user_idle_timeout=config.user_idle_timeout_ms / 1000,
         **(
-            {"vad_analyzer": _build_vad_analyzer(config, sample_rate=audio_sample_rate)}
+            {
+                "vad_analyzer": _build_vad_analyzer(
+                    config, sample_rate=audio_sample_rate
+                ),
+                "user_turn_strategies": s2s_vad_turn_strategies(),
+            }
             if config.s2s.turn_detection == "pipecat_vad"
             else {}
         ),

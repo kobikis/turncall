@@ -55,7 +55,6 @@ docker run -d --name "$POD" --network "$NETWORK" \
   $cpu_limit --memory "$POD_MEMORY" --memory-swap "$POD_MEMORY" \
   "${mounts[@]}" -e PYTHONPATH=/app/src -e DATABASE_URL="$DATABASE_URL" \
   -e REDIS_URL="$LOAD_REDIS_URL" -e LOAD_PUBLIC_BASE_URL="http://$POD:8090" -e LOG_LEVEL="${LOG_LEVEL:-info}" \
-  -e LOAD_GC_FREEZE="${LOAD_GC_FREEZE:-0}" \
   ${POD_ARGS:-} "$IMAGE" python scripts/calls_per_pod/server.py >/dev/null
 
 echo "pod: $cpu_limit --memory $POD_MEMORY ($IMAGE); client: --cpus $CLIENT_CPUS"

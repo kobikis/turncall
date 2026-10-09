@@ -296,12 +296,6 @@ async def main() -> None:
             raise SystemExit("the app failed to start; see the log")
         await asyncio.sleep(0.05)
     setup.update(await _setup(f"http://127.0.0.1:{PORT}", carrier))
-    if os.environ.get("LOAD_GC_FREEZE") == "1":
-        # Experiment: move everything alive after startup (pipecat, torch,
-        # onnxruntime) out of the collector's reach, so a full collection
-        # scans only what calls allocate. Not what the app does today.
-        gc.collect()
-        gc.freeze()
     print(f"load pod ready: {setup['to_number']} on {public_url}", flush=True)
     await serving
     monitor.cancel()

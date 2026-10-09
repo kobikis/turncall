@@ -402,6 +402,33 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **`smart_turn_detection: false` turns Smart Turn off** (#269). The flag only
+  stopped TurnCall adding Smart Turn; pipecat 1.12's *default* stop strategy is
+  Smart Turn V3, so the model still ran and waited after VAD's
+  `silence_timeout_ms` window — the two waits stacked on exactly the agents
+  that asked to avoid it. The turn now ends when VAD reports silence. An S2S
+  agent on `turn_detection: "pipecat_vad"` had the same stacked wait and is
+  VAD-only too, as documented. On server-side VAD the turn handling stays
+  pipecat's (an OpenAI realtime service recommends its own), on the shared
+  model below.
+
+- **One Smart Turn model per process** (#271). Every call loaded its own ONNX
+  session of the same Smart Turn weights, plus the inference buffers ONNX
+  Runtime keeps per session. The session is now loaded once and shared; each
+  call keeps its own audio buffer and speech state. Measured per call on a pod:
+  ~123 MiB before, ~45 MiB after. That covers S2S on server-side VAD too, where
+  pipecat builds its default Smart Turn analyzer on every call.
+
+- **Shorter full garbage-collection pauses** (#270). From about 6 calls a
+  pod, a full collection ran every couple of minutes and paused the whole
+  process — every call's audio at once — for 300–800 ms, mostly scanning
+  objects (pipecat and its imports) that live as long as the process. The app
+  now freezes its startup heap (`gc.freeze()`) before serving, so a full
+  collection scans only what calls allocate. Full collections still run: in
+  three frozen load runs they paused for 43–255 ms, once 749 ms on a step where
+  the host was overloaded. The longest audio gap at 6 calls was 63–82 ms
+  frozen, against 90–354 ms without.
+
 - **A campaign's claim and janitor are index lookups** (#229, #232). The claim
   ordered every pending target by position and filtered out the ones not yet
   due, so it walked each deferred target ahead of the first due one — on every
