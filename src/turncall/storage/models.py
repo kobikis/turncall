@@ -924,9 +924,7 @@ class CampaignTargetRow(Base):
             "campaign_id",
             "next_attempt_at",
             "position",
-            postgresql_where=text(
-                "status = 'pending' AND next_attempt_at IS NOT NULL"
-            ),
+            postgresql_where=text("status = 'pending' AND next_attempt_at IS NOT NULL"),
         ),
         Index(
             "ix_campaign_targets_claimed",

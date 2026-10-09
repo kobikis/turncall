@@ -303,5 +303,7 @@ async def test_an_answer_that_fails_hangs_the_leg_up(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert ended["status"] == "failed"
-    hang_ups = [a for a in app.carrier.actions_of("hang_up") if a.params["call_sid"] == cc]
+    hang_ups = [
+        a for a in app.carrier.actions_of("hang_up") if a.params["call_sid"] == cc
+    ]
     assert len(hang_ups) == 1

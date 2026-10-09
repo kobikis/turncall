@@ -51,9 +51,7 @@ class CampaignTargetRequest(BaseModel):
     @classmethod
     def _bounded(cls, value: dict[str, Variable]) -> dict[str, Variable]:
         if len(value) > MAX_TARGET_VARIABLES:
-            raise ValueError(
-                f"a target takes at most {MAX_TARGET_VARIABLES} variables"
-            )
+            raise ValueError(f"a target takes at most {MAX_TARGET_VARIABLES} variables")
         size = sum(len(k) + len(str(v)) for k, v in value.items())
         if size > MAX_TARGET_VARIABLES_CHARS:
             raise ValueError(

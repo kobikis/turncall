@@ -34,7 +34,9 @@ async def test_a_failed_bridge_hangs_both_legs_up(monkeypatch) -> None:
         ended = (await app.sink.wait_for("call.ended", timeout=15))["payload"]
 
     hung_up = [
-        a for a in app.carrier.actions_of("hang_up") if a.params["call_sid"] == call.call_sid
+        a
+        for a in app.carrier.actions_of("hang_up")
+        if a.params["call_sid"] == call.call_sid
     ]
     assert hung_up, "the caller's channel was left up"
     assert ended["status"] in {"failed", "completed"}

@@ -50,9 +50,7 @@ async def _plan(session: Any, statement: Any, *, analyze: bool) -> list[dict]:
     values = {**compiled.params, "updated_at": NOW}
     params = tuple(values[name] for name in compiled.positiontup)
     options = "ANALYZE, FORMAT JSON" if analyze else "FORMAT JSON"
-    result = await connection.exec_driver_sql(
-        f"EXPLAIN ({options}) {compiled}", params
-    )
+    result = await connection.exec_driver_sql(f"EXPLAIN ({options}) {compiled}", params)
     plan = result.scalar_one()
     plan = json.loads(plan) if isinstance(plan, str) else plan
     return _nodes(plan[0]["Plan"])

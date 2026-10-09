@@ -38,7 +38,9 @@ def placed(monkeypatch):
     settings = SimpleNamespace(server=SimpleNamespace(public_base_url="https://tc"))
     monkeypatch.setattr(f"{MODULE}.get_settings", lambda: settings)
     with (
-        patch(f"{MODULE}.suppression_repo.is_suppressed", AsyncMock(return_value=False)),
+        patch(
+            f"{MODULE}.suppression_repo.is_suppressed", AsyncMock(return_value=False)
+        ),
         patch(
             f"{MODULE}.agent_repo.get_agent_by_id",
             AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())),
