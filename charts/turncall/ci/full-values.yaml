@@ -4,7 +4,6 @@ secretEnv:
   REDIS_URL: redis://redis:6379/0
 autoscaling:
   enabled: true
-  activeCallsPerPod: 10
 asteriskEdge:
   enabled: true
 evalWorker:

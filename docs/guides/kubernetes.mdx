@@ -83,7 +83,10 @@ Restarting the edge has a cost, so change it in a quiet hour:
 
 Scale the API on live calls per pod, not CPU. A pod runs every call's audio on one event loop, so its limit is set by audio underruns and turn latency, not by average CPU. The chart's `HorizontalPodAutoscaler` targets an average of `autoscaling.activeCallsPerPod` across the API pods, read from the `turncall_active_calls` gauge on each pod's `/metrics`.
 
-{/* PER_POD_FIGURE */}
+The chart's default target is **2 calls per pod**, with `requests.cpu: 1`, `requests.memory: 1Gi` and **no CPU limit**. That is the [measured capacity](/guides/capacity) for the default cascade agent: 2 concurrent calls with no audio gaps on one dedicated core, the first gaps at 4. It was measured on an Apple M1 Pro, in a Docker Desktop VM with 8 vCPU, on a busy host, so treat it as a floor and re-measure on your own node type before raising it.
+
+- **Do not set a CPU limit.** A CPU quota freezes the whole process for the rest of a 100 ms period whenever it bursts past it, and since every call's audio runs on one event loop, each freeze is a gap on every call at once. Under `limits.cpu: 1` a pod carried only 1 call cleanly; a second CPU of quota did not help, because the loop is single-threaded.
+- **Memory** is about 205 MiB idle plus 115 MiB per call. The memory limit (2Gi) sits well above the request: reaching it is an OOM kill, which drops every call on the pod.
 
 Scale-down is deliberately slow (one pod per 5 minutes, after 10 minutes of low load): a removed pod drains its calls before it goes, so quick scale-downs churn pods that are only draining. Kubernetes picks which pod to remove without knowing how many calls each carries.
 

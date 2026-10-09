@@ -830,7 +830,8 @@ Proof against a real process: `tests/integration/test_graceful_shutdown.py`
 `charts/turncall` (guide: `docs/guides/kubernetes.mdx`): API, eval worker and
 campaign worker Deployments against external Postgres/Redis, `alembic upgrade
 head` as a pre-install/pre-upgrade hook Job, optional HPA on
-`turncall_active_calls`, Ingress, PodMonitor. Grace periods are computed, not
+`turncall_active_calls` (target 2 per pod, `requests.cpu: 1`, **no CPU limit**
+— #200's measurement, `docs/guides/capacity.mdx`), Ingress, PodMonitor. Grace periods are computed, not
 typed: API = `api.preStopSeconds` + `maxCallDurationSeconds` + 90; eval worker
 = max(`evals.maxRunDurationSeconds`, 180 × `evals.maxIterations`) + 60, which is
 why those two env vars come from `evals.*` and are refused in `config`. Every

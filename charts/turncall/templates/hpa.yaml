@@ -1,11 +1,8 @@
 {{- if .Values.autoscaling.enabled }}
-{{- if not (gt (int .Values.autoscaling.activeCallsPerPod) 0) }}
-{{- fail "autoscaling.activeCallsPerPod must be set (see values.yaml)" }}
-{{- end }}
 # Scales the API on live calls per pod (#199's gauge), served to the HPA by
 # the custom metrics API (prometheus-adapter; see docs/guides/kubernetes.mdx).
-# CPU is the wrong signal: a call's cost is mostly waiting on providers, and
-# a pod's event loop turns into dead air before its CPU looks busy.
+# Not CPU: a pod runs every call's audio on one event loop, so its limit is
+# set by audio underruns and turn latency, not average CPU (#200).
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
