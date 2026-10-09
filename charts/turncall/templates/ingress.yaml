@@ -22,12 +22,14 @@ spec:
     - host: {{ .host | quote }}
       http:
         paths:
-          - path: /
+          {{- range $.Values.ingress.paths }}
+          - path: {{ . }}
             pathType: Prefix
             backend:
               service:
                 name: {{ include "turncall.fullname" $ }}
                 port:
                   name: http
+          {{- end }}
     {{- end }}
 {{- end }}

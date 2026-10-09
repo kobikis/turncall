@@ -154,6 +154,15 @@ ingress:
   annotations: {}
   hosts:
     - host: turncall.example.com
+  # What the Ingress routes, by prefix: the API, the carriers' webhooks and
+  # their media streams. Never `/`: /metrics, /ready, /live and /health carry
+  # no credential (a probe cannot present one) and say how many calls a pod
+  # is carrying, so they stay in-cluster — the kubelet and the PodMonitor
+  # reach the pod directly. Add `/docs` and `/openapi.json` to publish those.
+  paths:
+    - /v1
+    - /webhooks
+    - /ws
   tls: []
     # - secretName: turncall-tls
     #   hosts: [turncall.example.com]

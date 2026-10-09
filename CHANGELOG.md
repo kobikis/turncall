@@ -444,6 +444,12 @@ and is not part of this repository's history.
   slot held, until `max_call_duration_seconds`. Both channels are hung up now,
   which ends the call as any other ending does.
 
+- **The Helm chart's Ingress no longer publishes `/metrics` and the probes**
+  (#210). It routed `/`, so `/metrics` and `/ready` — no credential, each
+  counting a pod's live calls — were reachable from the internet. It routes
+  `ingress.paths` now (`/v1`, `/webhooks`, `/ws`); the kubelet and the
+  PodMonitor reach the pod directly.
+
 - **A request's writes are committed before its response is sent.** The
   request session committed in a yield dependency, which FastAPI runs *after*
   the response by default — so Twilio could open the media stream named in the

@@ -843,7 +843,7 @@ Proof against a real process: `tests/integration/test_graceful_shutdown.py`
 campaign worker Deployments against external Postgres/Redis, `alembic upgrade
 head` as a pre-install/pre-upgrade hook Job, optional HPA on
 `turncall_active_calls` (target 2 per pod, `requests.cpu: 1`, **no CPU limit**
-— #200's measurement, `docs/guides/capacity.mdx`), Ingress, PodMonitor. Grace periods are computed, not
+— #200's measurement, `docs/guides/capacity.mdx`), Ingress, PodMonitor. The Ingress routes `ingress.paths` (`/v1`, `/webhooks`, `/ws`), never `/`: `/metrics` and the probes carry no credential and `/ready`'s 503 counts live calls, so they stay in-cluster (CI fails a render that routes them). Grace periods are computed, not
 typed: API = `api.preStopSeconds` + `maxCallDurationSeconds` + 90; eval worker
 = max(`evals.maxRunDurationSeconds`, 180 × `evals.maxIterations`) + 60, which is
 why those two env vars come from `evals.*` and are refused in `config`. Every

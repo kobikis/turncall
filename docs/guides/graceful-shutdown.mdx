@@ -94,4 +94,4 @@ It counts voice calls on every transport: Twilio, WebRTC and WhatsApp voice. Tex
 
 The gauge is per process, like the drain, so scrape each pod rather than a load-balanced address: a Prometheus `PodMonitor`, or `ServiceMonitor` endpoints that resolve to pods. It is the input for an autoscaler that scales on load rather than CPU, and it shows a drain's progress: a pod whose readiness is failing and whose gauge reads `0` is about to exit.
 
-`/metrics` is unauthenticated, like the probes. It reveals only how many calls a process is carrying, but keep it off the public internet like the other health endpoints.
+`/metrics` is unauthenticated, like the probes — a probe cannot present a credential. It reveals only how many calls a process is carrying, but keep it off the public internet like the other health endpoints: route only `/v1`, `/webhooks` and `/ws` publicly. The Helm chart's Ingress does exactly that.
