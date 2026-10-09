@@ -67,7 +67,8 @@
                   "guides/limits",
                   "guides/campaigns",
                   "guides/observability",
-                  "guides/graceful-shutdown"
+                  "guides/graceful-shutdown",
+                  "guides/capacity"
                 ]
               }
             ]

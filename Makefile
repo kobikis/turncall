@@ -1,4 +1,4 @@
-.PHONY: help install dev test test-unit test-integration lint format typecheck security run migrate migrate-new docker-up docker-down docker-all docker-up-local docker-down-local migrate-local clean
+.PHONY: help install dev test test-unit test-integration lint format typecheck security run migrate migrate-new docker-up docker-down docker-all docker-up-local docker-down-local migrate-local clean load-test
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -42,6 +42,9 @@ migrate: ## Run database migrations (in docker; needs `make docker-up` first)
 
 migrate-new: ## Create a new migration (usage: make migrate-new msg="description"; needs `make docker-up` first)
 	cd localstack && $(COMPOSE) run --rm --no-deps -v "$(CURDIR)/alembic:/app/alembic" turncall alembic revision --autogenerate -m "$(msg)"
+
+load-test: ## Measure concurrent calls per pod on stub providers (#200; needs `make docker-up-local`; ARGS= go to client.py)
+	scripts/calls_per_pod/run.sh $(ARGS)
 
 gen-openapi: ## Regenerate docs/openapi.json from the app spec
 	python scripts/gen_openapi.py

@@ -59,6 +59,7 @@ make lint             # ruff check
 make format           # ruff format
 make migrate          # alembic upgrade head (runs in docker; make docker-up first)
 make docker-up        # Postgres + Redis + TurnCall API + LocalStack
+make load-test        # concurrent calls per pod on stub providers (#200; docs/guides/capacity.mdx)
 ```
 
 ## Environment Variables
