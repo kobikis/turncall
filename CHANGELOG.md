@@ -66,6 +66,14 @@ and is not part of this repository's history.
 
 ### Added
 
+- **`google` LLM provider: Gemini as a cascade LLM** (#205), on voice and
+  chat/SMS/WhatsApp text, tools included, on the `google` account Gemini Live
+  already uses (`GOOGLE_API_KEY` or a project credential). House model
+  `gemini-3.6-flash`. Gemini 3 models are sent no temperature — Google warns
+  they loop below their own 1.0, and TurnCall's 0.7 is a default nobody chose;
+  `llm.extra` merges into the generation config to set one anyway. Usable as
+  an `llm.failover` entry; `base_url` is refused (422).
+
 - **`llm.failover` on an `openai_live` client delegate** (#246). The delegate
   is an ordinary LLM, so it is built as a failover group like cascade's: an
   unusable error moves the delegation to the next backup, recorded as

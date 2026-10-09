@@ -288,7 +288,8 @@ def _create_llm_service(
     reasoning_effort: str | None = _USE_CONFIG,
     system_instruction: str = "",
 ) -> Any:
-    """Create LLM service. Supports openai, ollama, custom_openai, anthropic, openrouter.
+    """Create LLM service. Supports openai, ollama, custom_openai, anthropic,
+    openrouter, bedrock, google.
 
     temperature/max_tokens default to the agent's llm config; pass explicit
     values to override (e.g. the voicemail classifier pins a low temperature).
@@ -374,6 +375,30 @@ def _create_llm_service(
                 max_tokens=max_tokens,
                 **({"extra": anthropic_extra} if anthropic_extra else {}),
             ),
+        )
+
+    if provider == "google":
+        from pipecat.services.google.llm import GoogleLLMService
+
+        from turncall.services.gemini_models import takes_temperature
+
+        google_settings: dict[str, Any] = {
+            "model": model,
+            **si,
+            "max_tokens": max_tokens,
+        }
+        # No temperature for Gemini 3, which Google says loops below its own
+        # 1.0 — and 0.7 is TurnCall's default, not the agent's choice. That
+        # includes the voicemail classifier's pin. services/gemini_models.py.
+        if takes_temperature(model):
+            google_settings["temperature"] = temperature
+        if config.llm.extra:
+            # Merged into the generation config last, so it can set a
+            # temperature on Gemini 3 anyway, or a thinking level.
+            google_settings["extra"] = dict(config.llm.extra)
+        return GoogleLLMService(
+            api_key=credentials.api_key("google", config.llm.api_key),
+            settings=GoogleLLMService.Settings(**google_settings),
         )
 
     if provider == "ollama":

@@ -2,7 +2,7 @@
 
 Reuses the existing LLMConfig from AgentConfig to generate
 text completions. Supports OpenAI, Ollama, BYOM (custom
-OpenAI-compatible endpoints), Anthropic, OpenRouter and Bedrock.
+OpenAI-compatible endpoints), Anthropic, OpenRouter, Bedrock and Google.
 
 This is a separate dispatch from the voice pipeline: it speaks raw HTTP rather
 than building Pipecat services, so every provider needs an implementation in
@@ -297,6 +297,143 @@ async def _complete_text_bedrock(
     return CompletionResult(text=_text(await _round()), total_tokens=total_tokens)
 
 
+_GEMINI_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+)
+
+
+def _gemini_content(data: dict[str, Any]) -> dict[str, Any]:
+    """The model's turn. A prompt the safety filter blocks has no candidates —
+    an empty reply rather than a KeyError that loses the whole message."""
+    candidates = data.get("candidates") or [{}]
+    if not data.get("candidates"):
+        logger.warning(
+            "gemini_no_candidates",
+            block_reason=(data.get("promptFeedback") or {}).get("blockReason"),
+        )
+    return candidates[0].get("content") or {"role": "model", "parts": []}
+
+
+def _gemini_text(content: dict[str, Any]) -> str:
+    """Join the reply's text parts, leaving out the model's own thoughts."""
+    return "".join(
+        p.get("text", "") for p in content.get("parts", []) if not p.get("thought")
+    )
+
+
+def _gemini_response(call: dict[str, Any], result: str) -> dict[str, Any]:
+    """One `functionResponse` part. The id only when the call carried one."""
+    response: dict[str, Any] = {
+        "name": call.get("name", ""),
+        "response": {"output": result},
+    }
+    if call.get("id"):
+        response["id"] = call["id"]
+    return {"functionResponse": response}
+
+
+async def _complete_text_google(
+    config: LLMConfig,
+    messages: list[dict[str, Any]],
+    api_key: str,
+    tools: list[dict[str, Any]] | None = None,
+    execute_tool: ToolExecutor | None = None,
+) -> CompletionResult:
+    """Generate a text completion via Gemini's generateContent (#205).
+
+    The assistant role is `model` and the system prompt goes out of band.
+    Tools are declared with `parametersJsonSchema` — the JSON Schema the other
+    dialects take — because `parameters` is an OpenAPI subset that rejects
+    `additionalProperties`. The model's turn goes back exactly as it came:
+    Gemini 3 signs its function calls (`thoughtSignature`) and refuses a
+    follow-up that drops the signature.
+    """
+    from turncall.services.gemini_models import takes_temperature
+
+    system_parts = [m["content"] for m in messages if m.get("role") == "system"]
+    generation: dict[str, Any] = {"maxOutputTokens": config.max_tokens}
+    if takes_temperature(config.model):
+        generation["temperature"] = config.temperature
+    # Last, as on the voice path: how a Gemini 3 agent sets a temperature or
+    # a thinking level anyway.
+    generation.update(config.extra)
+    body: dict[str, Any] = {
+        "contents": [
+            {
+                "role": "model" if m["role"] == "assistant" else "user",
+                "parts": [{"text": m["content"]}],
+            }
+            for m in messages
+            if m.get("role") != "system"
+        ],
+        "generationConfig": generation,
+    }
+    if system_parts:
+        body["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
+    if tools:
+        body["tools"] = [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": t["name"],
+                        "description": t.get("description", ""),
+                        "parametersJsonSchema": t.get("parameters")
+                        or {"type": "object", "properties": {}},
+                    }
+                    for t in tools
+                ]
+            }
+        ]
+
+    url = _GEMINI_URL.format(model=config.model.removeprefix("models/"))
+    headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+    client = get_http_client()
+    total_tokens = 0
+
+    async def _round() -> dict[str, Any]:
+        nonlocal total_tokens
+        response = await client.post(url, json=body, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        data = response.json()
+        total_tokens += data.get("usageMetadata", {}).get("totalTokenCount", 0)
+        return _gemini_content(data)
+
+    for _ in range(_MAX_TOOL_ROUNDS):
+        content = await _round()
+        parts = content.get("parts", [])
+        calls = (
+            [p["functionCall"] for p in parts if "functionCall" in p]
+            if execute_tool
+            else []
+        )
+        if not calls:
+            return CompletionResult(
+                text=_gemini_text(content), total_tokens=total_tokens
+            )
+
+        body["contents"].append(content)
+        results = await _run_calls(
+            execute_tool, [(c.get("name", ""), c.get("args") or {}) for c in calls]
+        )
+        body["contents"].append(
+            {
+                "role": "user",
+                "parts": [
+                    _gemini_response(call, result)
+                    for call, result in zip(calls, results, strict=True)
+                ],
+            }
+        )
+
+    logger.warning(
+        "chat_tool_rounds_exhausted", model=config.model, rounds=_MAX_TOOL_ROUNDS
+    )
+    body.pop("tools", None)
+    return CompletionResult(
+        text=_gemini_text(await _round()), total_tokens=total_tokens
+    )
+
+
 async def _run_calls(
     execute_tool: ToolExecutor,
     calls: list[tuple[str, dict[str, Any]]],
@@ -430,7 +567,7 @@ async def complete_text(
     voice call on the same project would. Omitted = the platform's keys.
 
     Supports: openai, ollama, custom_openai (BYOM), anthropic (Claude),
-    openrouter, bedrock.
+    openrouter, bedrock, google (Gemini).
 
     `aws` carries the agent's credential block for the bedrock provider. Callers
     that hold an AgentConfig should pass it; omitting it falls back to the
@@ -470,6 +607,10 @@ async def complete_text(
         )
     elif config.provider == "anthropic":
         result = await _complete_text_anthropic(
+            config, messages, api_key, tools, execute_tool
+        )
+    elif config.provider == "google":
+        result = await _complete_text_google(
             config, messages, api_key, tools, execute_tool
         )
     else:
