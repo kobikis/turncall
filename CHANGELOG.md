@@ -245,6 +245,14 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **A request's writes are committed before its response is sent.** The
+  request session committed in a yield dependency, which FastAPI runs *after*
+  the response by default — so Twilio could open the media stream named in the
+  inbound TwiML before the call row existed, and the caller heard silence
+  (`media_stream_call_not_found`; seen in CI). Binding a number had the same
+  race with the first call to it. The session is now `scope="function"`, which
+  needs FastAPI 0.121 or later.
+
 - **`POST /v1/calls/{id}/handoff` switches the live call** (#216). It used to
   move the call record to the target agent from the API process and change
   nothing in the call: the caller kept talking to the previous agent's prompt
