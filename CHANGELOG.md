@@ -66,6 +66,14 @@ and is not part of this repository's history.
 
 ### Added
 
+- **A test harness that drives the running app like a carrier** (#214,
+  `tests/harness/`). Stub STT/LLM/TTS answer instantly from a script (a tool
+  call included), a fake carrier records every REST action TurnCall takes, and
+  a Twilio client posts signed webhooks and streams real-time mulaw media.
+  `tests/integration/test_harness_inbound_call.py` runs one inbound call from
+  webhook to `call.ended` on it. Later carrier, limit and campaign tests extend
+  it rather than mock their own way in.
+
 - **`llm.failover` on an `openai_live` client delegate** (#246). The delegate
   is an ordinary LLM, so it is built as a failover group like cascade's: an
   unusable error moves the delegation to the next backup, recorded as

@@ -1,0 +1,74 @@
+"""Seam A test harness: the running app, stub providers, a fake carrier (#214).
+
+Drive TurnCall the way a carrier and a customer's backend do, and assert on
+what they would observe — HTTP responses, the media stream, recorded carrier
+REST actions, the call's events, signed webhooks — never on which internal
+function ran. `tests/integration/test_harness_inbound_call.py` is the worked
+example: one inbound Twilio call, webhook to `call.ended`.
+
+Pieces
+------
+- `stubs.py` — `StubSTT`, `StubLLM`, `StubTTS`: real pipecat services with no
+  network hop, scripted by a `Script`. The caller's n-th burst of audio
+  transcribes as `Script.caller[n]`; the LLM's n-th inference answers
+  `Script.agent[n]` (text, a `ToolCall`, or a tuple of both). A tool result is
+  its own inference, so "call a tool, then say goodbye" is two entries.
+  `install_stub_providers(script, set_attr)` swaps the three factories in
+  `orchestrator/pipeline_factory` — cascade only; S2S, post-call analysis, the
+  voicemail classifier and KB embeddings still reach real providers, so keep
+  them off (`HARNESS_AGENT` does).
+- `carrier.py` — `FakeCarrier`: owns numbers, records every REST action in
+  `actions` (`dial`, `hang_up`, `transfer`, `send_dtmf`, `configure_number`,
+  `configure_sms`, `send_sms`), and `wait_for(kind)`. `install(set_attr)`
+  replaces the adapter `services/twilio_accounts.TwilioAccount` hands out,
+  which is every Twilio REST call the app makes, per-number accounts included.
+- `twilio.py` — Twilio's edge: `sign`/`post_signed` for webhooks,
+  `place_inbound_call` (POST the number's configured voice URL, open the
+  `<Stream>`), and `TwilioCall`: 20ms mulaw frames at real-time pace, silence
+  unless `say(ms)`, `wait_for_agent_speech(n)`, `closed`, `hang_up()`,
+  `finish()` (the `completed` status callback).
+- `app.py` — `run_app(script, set_env=, set_attr=)`: the real app under uvicorn
+  in the test's loop, a fresh project + admin key via the platform endpoints, a
+  `WebhookSink` subscribed to `*` that verifies signatures. Skips when Postgres
+  is unreachable or holds credentials this process cannot decrypt.
+
+Extending it
+------------
+- Another carrier (Telnyx #217-#221, ARI #209): a sibling of `twilio.py` with
+  the same call-object shape (`say`, `wait_for_agent_speech`, `closed`,
+  `hang_up`, `finish`), and the carrier's adapter routed to a `FakeCarrier` at
+  whatever single place hands that carrier's adapters out. The contract test
+  (#201) then runs one `Script` per carrier and compares outcomes.
+- Outbound, limits, suppression, campaigns: `POST /v1/calls` and friends on
+  `Harness.api`; assert on `carrier.actions_of("dial")` (an empty list is the
+  suppression proof). A controllable clock is the campaign ticket's to add.
+- Load (#200): in a separate server process, call `install_stub_providers(
+  script)` and `FakeCarrier().install()` with the default `setattr`, then run
+  the app — no production code path knows the stubs exist — and drive it
+  with many `TwilioCall`s. Audio is paced in real time on both sides already.
+
+Determinism notes: the caller speaks a 440 Hz tone, which Silero VAD scores
+below 0.1, so turns start and end on the stub's finalized transcripts alone;
+agent speech is the same tone, `Script.tts_ms_per_word` long per word.
+"""
+
+from tests.harness.app import HARNESS_AGENT, Harness, WebhookSink, run_app
+from tests.harness.carrier import CarrierAction, FakeCarrier
+from tests.harness.stubs import Script, ToolCall, install_stub_providers
+from tests.harness.twilio import TwilioCall, place_inbound_call, post_signed, sign
+
+__all__ = [
+    "HARNESS_AGENT",
+    "CarrierAction",
+    "FakeCarrier",
+    "Harness",
+    "Script",
+    "ToolCall",
+    "TwilioCall",
+    "WebhookSink",
+    "install_stub_providers",
+    "place_inbound_call",
+    "post_signed",
+    "run_app",
+    "sign",
+]
