@@ -7,7 +7,13 @@ A role provider is what an agent's config names (`openai_live`, `bedrock`); an
 **account** is what a [[Project credential]] is keyed by (ADR-0020). Deepgram is
 one account serving STT and TTS, OpenAI one account serving four roles, and AWS
 one account behind both `bedrock` and the `aws` S2S provider.
+
+A [[carrier]] is listed as the `carrier` role: Telnyx's account is a project
+credential (ADR-0022), Twilio's is not — it is per number or the platform's
+TWILIO_* (`services/twilio_accounts.py`).
 """
+
+from turncall.domain.carriers import CARRIERS, TWILIO
 
 STT_PROVIDERS = ("deepgram", "openai", "elevenlabs", "cartesia")
 LLM_PROVIDERS = (
@@ -33,6 +39,7 @@ ROLE_PROVIDERS: dict[str, tuple[str, ...]] = {
     "s2s": S2S_PROVIDERS,
     "avatar": AVATAR_PROVIDERS,
     "judge": JUDGE_PROVIDERS,
+    "carrier": CARRIERS,
 }
 
 AWS_ACCOUNT = "aws"
@@ -41,7 +48,8 @@ AWS_ACCOUNT = "aws"
 # `custom_openai` have none: the key, if any, belongs to whatever endpoint the
 # agent's own base_url names, so only `llm.api_key` can carry it.
 _ACCOUNT_ALIASES = {"openai_live": "openai", "bedrock": AWS_ACCOUNT, "jev": "typesafe"}
-_NO_ACCOUNT = frozenset({"ollama", "custom_openai"})
+# Twilio has no project credential: its account rides on the number.
+_NO_ACCOUNT = frozenset({"ollama", "custom_openai", TWILIO})
 
 
 def account_for(provider: str) -> str | None:

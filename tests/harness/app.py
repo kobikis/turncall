@@ -189,6 +189,8 @@ async def run_app(
     for name, value in {
         "TWILIO_ACCOUNT_SID": carrier.account_sid,
         "TWILIO_AUTH_TOKEN": carrier.auth_token,
+        "TELNYX_API_KEY": carrier.telnyx_api_key,
+        "TELNYX_PUBLIC_KEY": carrier.telnyx_public_key,
         # Present so the missing-key check passes; the stubs never send them.
         "DEEPGRAM_API_KEY": "harness-stub",
         "OPENAI_API_KEY": "harness-stub",

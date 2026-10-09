@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from turncall.domain.carriers import DEFAULT_CARRIER
 from turncall.domain.enums import CallEventType
 from turncall.storage.models import CallEventRow, CallRow
 
@@ -22,10 +23,12 @@ async def create_call(
     workflow_id: UUID | None = None,
     provider_call_sid: str | None = None,
     metadata_json: dict | None = None,
+    carrier: str = DEFAULT_CARRIER,
 ) -> CallRow:
-    """Create a new call record."""
+    """Create a new call record. `carrier` is stored as `calls.provider`."""
     row = CallRow(
         project_id=project_id,
+        provider=carrier,
         direction=direction,
         from_number=from_number,
         to_number=to_number,

@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from turncall.api.deps import DbSession
 from turncall.config import get_settings
 from turncall.domain.call_state import TWILIO_STATUS_MAP, is_valid_transition
-from turncall.domain.enums import CallDirection, CallEventType, CallStatus
+from turncall.domain.carriers import TWILIO
+from turncall.domain.enums import CallEventType, CallStatus
 from turncall.storage.repositories import (
     agent_repo,
     call_repo,
@@ -233,151 +234,30 @@ async def inbound_voice_webhook(
 
     # Resolve phone number to routing target
     phone_number = await phone_number_repo.get_by_e164(session, to_number)
-    if phone_number is None:
+    if phone_number is None or phone_number.provider != TWILIO:
         logger.warning("twilio_inbound_unknown_number", to_number=to_number)
         return Response(
             content="<Response><Say>This number is not configured.</Say><Hangup/></Response>",
             media_type=TWIML_CONTENT_TYPE,
         )
 
-    # Resolve agent — either static or dynamic via server URL
-    agent = None
-    dynamic_config = None
-    template_variables: dict[str, str] = {}
-    request_metadata: dict = {}
-    knowledge_context: str | None = None
+    from turncall.services.inbound_call import InboundRefusal, open_inbound_call
 
-    if phone_number.routing_target_type == "webhook" and phone_number.server_url:
-        # Dynamic agent resolution via call-init server event
-        from uuid import uuid4
-
-        from turncall.events.server_events import send_call_init
-        from turncall.services.call_init_resolver import resolve_call_init
-
-        temp_call_id = str(uuid4())
-        response = await send_call_init(
-            phone_number.server_url,
-            call_id=temp_call_id,
-            from_number=from_number,
-            to_number=to_number,
-            call_sid=call_sid,
-            transport_type="inboundPhoneCall",
-            secret=phone_number.server_url_secret,
-        )
-        if response.success and response.data:
-            result = await resolve_call_init(session, response.data)
-            agent = result.agent
-            dynamic_config = result.dynamic_config
-            template_variables = result.template_variables
-            request_metadata = result.metadata
-            knowledge_context = result.knowledge_context
-
-        if agent is None and dynamic_config is None:
-            logger.warning(
-                "twilio_inbound_server_url_no_agent",
-                server_url=phone_number.server_url,
-            )
-            return Response(
-                content=(
-                    "<Response><Say>Unable to resolve agent.</Say><Hangup/></Response>"
-                ),
-                media_type=TWIML_CONTENT_TYPE,
-            )
-
-    elif phone_number.routing_target_type == "agent" and phone_number.routing_target_id:
-        # A/B weighted routing: pick agent by caller number hash
-        if phone_number.routing_weights:
-            from turncall.services.weighted_routing import pick_agent_by_weight
-
-            selected_id = pick_agent_by_weight(
-                phone_number.routing_weights, from_number
-            )
-            agent = await agent_repo.get_agent_by_id(session, selected_id)
-            logger.info(
-                "ab_routing_selected",
-                phone_number=to_number,
-                caller=from_number,
-                selected_agent_id=str(selected_id),
-            )
-        else:
-            agent = await agent_repo.get_agent_by_id(
-                session, phone_number.routing_target_id
-            )
-
-    if agent is None and dynamic_config is None:
-        logger.warning(
-            "twilio_inbound_no_agent",
-            routing_target_type=phone_number.routing_target_type,
-            routing_target_id=str(phone_number.routing_target_id),
-        )
+    call = await open_inbound_call(
+        session,
+        phone_number,
+        carrier=TWILIO,
+        from_number=from_number,
+        to_number=to_number,
+        provider_call_sid=call_sid,
+    )
+    if isinstance(call, InboundRefusal):
         return Response(
-            content="<Response><Say>This agent is not available.</Say><Hangup/></Response>",
+            content=_say_twiml(call.message, hangup=True),
             media_type=TWIML_CONTENT_TYPE,
         )
 
-    # Determine agent ID for the call record
-    agent_id_for_call = agent.id if agent else None
-
-    # Create internal call record
-    call_metadata: dict = {
-        **({"dynamic_config": dynamic_config} if dynamic_config else {}),
-        **({"template_variables": template_variables} if template_variables else {}),
-        **({"metadata": request_metadata} if request_metadata else {}),
-        **({"knowledge_context": knowledge_context} if knowledge_context else {}),
-    }
-    call = await call_repo.create_call(
-        session,
-        project_id=phone_number.project_id,
-        direction=CallDirection.INBOUND,
-        from_number=from_number,
-        to_number=to_number,
-        active_agent_id=agent_id_for_call,
-        provider_call_sid=call_sid,
-        metadata_json=call_metadata,
-    )
-
-    # Fire call.initializing + call.started events (DB + webhook)
-    from turncall.events.emit import emit_call_event
-
-    await emit_call_event(
-        session,
-        call_id=call.id,
-        project_id=phone_number.project_id,
-        event_type=CallEventType.CALL_INITIALIZING,
-        payload={
-            "from_number": from_number,
-            "to_number": to_number,
-            "direction": "inbound",
-            "transport": "twilio",
-        },
-    )
-
-    await emit_call_event(
-        session,
-        call_id=call.id,
-        project_id=phone_number.project_id,
-        event_type=CallEventType.CALL_STARTED,
-        payload={
-            "provider_call_sid": call_sid,
-            "from_number": from_number,
-            "to_number": to_number,
-            # agent_id is carried in the envelope (ADR-0007), not the payload.
-            "agent_name": agent.name if agent else "dynamic",
-            "dynamic_config": bool(dynamic_config),
-        },
-    )
-
     twiml = generate_media_stream_twiml(request, call.id)
-
-    logger.info(
-        "twilio_inbound_connected",
-        call_id=str(call.id),
-        # Not agent.id: a call whose agent came from call-init as an inline
-        # config has no agent row, and this line used to crash the webhook.
-        agent_id=str(agent_id_for_call) if agent_id_for_call else "dynamic",
-        call_sid=call_sid,
-    )
-
     return Response(content=twiml, media_type=TWIML_CONTENT_TYPE)
 
 

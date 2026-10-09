@@ -1,8 +1,8 @@
 """Shared call control primitives.
 
 Used by both built-in tools (via Pipecat function calling)
-and live call control API endpoints. Always creates a TwilioAdapter
-from env vars — no need to pass one as a parameter.
+and live call control API endpoints. The REST adapter is resolved per call,
+from the call's own carrier and account — never passed in.
 """
 
 from __future__ import annotations
@@ -27,13 +27,26 @@ class ControlResult:
     details: dict[str, Any] | None = None
 
 
-async def _get_twilio_adapter(session: AsyncSession, call: Any) -> Any | None:
-    """A TwilioAdapter on the account of this call's number — its own Twilio
-    account if bound with one, else the platform's. None if neither exists."""
+async def _carrier_adapter(session: AsyncSession, call: Any) -> Any | None:
+    """The REST adapter of this call's own carrier (ADR-0022), on its account.
+
+    Telnyx: the project's `telnyx` credential, else the platform's key.
+    Twilio: the number's own account if bound with one, else the platform's.
+    None when no account exists to act with.
+    """
     from turncall.config import get_settings
+    from turncall.domain.carriers import TELNYX
+
+    settings = get_settings()
+    if call.provider == TELNYX:
+        from turncall.services.telnyx_accounts import account_for_project
+
+        telnyx = await account_for_project(session, call.project_id, settings)
+        return telnyx.adapter() if telnyx.api_key else None
+
     from turncall.services.twilio_accounts import account_for_call
 
-    account = await account_for_call(session, call, get_settings())
+    account = await account_for_call(session, call, settings)
     return account.adapter() if account else None
 
 
@@ -108,7 +121,7 @@ async def end_call(
     *,
     reason: str = "normal",
 ) -> ControlResult:
-    """End an active call now: hang up via Twilio and update internal state.
+    """End an active call now: hang up through its carrier and update internal state.
 
     The live call control API. A tool ending its own call goes through
     `begin_assistant_end` instead, so its goodbye is heard.
@@ -119,15 +132,15 @@ async def end_call(
     if isinstance(call, ControlResult):
         return call
 
-    # Hang up via Twilio
+    # Hang up through the call's carrier
     sid = call.provider_call_sid
     if sid and sid != "webrtc":
-        adapter = await _get_twilio_adapter(session, call)
+        adapter = await _carrier_adapter(session, call)
         if adapter:
             try:
                 await adapter.end_call(sid)
             except Exception:
-                logger.exception("twilio_hangup_failed", call_sid=sid)
+                logger.exception("carrier_hangup_failed", call_sid=sid)
 
     from datetime import UTC, datetime
 
@@ -280,11 +293,11 @@ async def transfer_call(
             ),
         )
 
-    # Execute Twilio transfer
+    # Execute the transfer on the call's carrier
     sid = call.provider_call_sid
     transfer_success = False
     if sid and sid != "webrtc":
-        adapter = await _get_twilio_adapter(session, call)
+        adapter = await _carrier_adapter(session, call)
         if adapter:
             try:
                 await adapter.transfer_call(
@@ -298,7 +311,7 @@ async def transfer_call(
                 transfer_success = True
             except Exception:
                 logger.exception(
-                    "twilio_transfer_failed", call_sid=sid, target=target_number
+                    "carrier_transfer_failed", call_sid=sid, target=target_number
                 )
 
     from turncall.events.emit import emit_call_event
@@ -421,7 +434,7 @@ async def send_dtmf(
     *,
     digits: str,
 ) -> ControlResult:
-    """Send DTMF tones on an active call via Twilio."""
+    """Send DTMF tones on an active call through its carrier."""
     from turncall.storage.repositories import call_repo
 
     call = await call_repo.get_call_by_id(session, call_id)
@@ -437,12 +450,12 @@ async def send_dtmf(
 
     sid = call.provider_call_sid
     if sid and sid != "webrtc":
-        adapter = await _get_twilio_adapter(session, call)
+        adapter = await _carrier_adapter(session, call)
         if adapter:
             try:
                 await adapter.send_dtmf(sid, digits)
             except Exception:
-                logger.exception("twilio_dtmf_failed", call_sid=sid)
+                logger.exception("carrier_dtmf_failed", call_sid=sid)
                 return ControlResult(success=False, message="DTMF send failed")
 
     from turncall.events.emit import emit_call_event

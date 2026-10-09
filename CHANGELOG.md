@@ -11,6 +11,20 @@ and is not part of this repository's history.
 
 ## [Unreleased]
 
+### Added
+
+- **Telnyx numbers answer inbound calls** (#217, ADR-0022). Bind a number with
+  `"carrier": "telnyx"` and point its Call Control application at
+  `/webhooks/telnyx/voice`: the call is answered through Call Control, its
+  audio streamed with pipecat's Telnyx serializer, and it runs the same agent
+  config as on Twilio — recording, ambience and voicemail detection included.
+  Webhooks are verified with the account's Ed25519 public key and refused
+  without a valid signature; there is no unsigned mode. The account is a
+  `telnyx` project credential (`api_key` + `public_key`) over the platform's
+  `TELNYX_API_KEY` / `TELNYX_PUBLIC_KEY`; with no key at any level the call
+  fails with `missing_keys: ["telnyx"]`. Outbound calls, number configuration,
+  transfer and DTMF on Telnyx come next.
+
 ### Changed
 
 - **A phone number's carrier is `carrier` in the API** (#201, ADR-0022).

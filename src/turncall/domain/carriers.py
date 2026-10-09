@@ -11,6 +11,7 @@ point refuses a call whose carrier has no serializer, and
 """
 
 TWILIO = "twilio"
+TELNYX = "telnyx"
 
-CARRIERS: tuple[str, ...] = (TWILIO,)
+CARRIERS: tuple[str, ...] = (TWILIO, TELNYX)
 DEFAULT_CARRIER = TWILIO

@@ -7,6 +7,13 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**Telnyx numbers answer inbound calls.** Bind a number with
+`"carrier": "telnyx"` and point its Call Control application at
+`/webhooks/telnyx/voice`. The call runs the same agent as on Twilio, with
+recording, ambience and voicemail detection unchanged. Webhooks are verified
+with your Telnyx account's public key. See
+[Telnyx numbers](/guides/phone-numbers#telnyx-numbers).
+
 **`openai_live` agents with tools work out of the box.** An agent with tools and
 no `s2s.delegation` block now delegates to its own `llm` (`"mode": "client"`),
 with your keys, running your webhook and MCP tools — `end_call`, `do_not_call`

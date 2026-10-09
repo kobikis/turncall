@@ -19,14 +19,22 @@ Pieces
   them off (`HARNESS_AGENT` does).
 - `carrier.py` — `FakeCarrier`: owns numbers, records every REST action in
   `actions` (`dial`, `hang_up`, `transfer`, `send_dtmf`, `configure_number`,
-  `configure_sms`, `send_sms`), and `wait_for(kind)`. `install(set_attr)`
-  replaces the adapter `services/twilio_accounts.TwilioAccount` hands out,
-  which is every Twilio REST call the app makes, per-number accounts included.
+  `configure_sms`, `send_sms`, and Telnyx's `answer`), and `wait_for(kind)`.
+  `install(set_attr)` replaces the adapters `services/twilio_accounts
+  .TwilioAccount` and `services/telnyx_accounts.TelnyxAccount` hand out, which
+  is every carrier REST call the app makes. It also holds the Telnyx account's
+  API key and an Ed25519 keypair whose public half the app is given.
+- `media_call.py` — `CarrierCall`, a live call's media stream from the
+  caller's side: 20ms mulaw frames at real-time pace, silence unless
+  `say(ms)`, `wait_for_agent_speech(n)`, `closed`, `hang_up()`, `finish()`.
 - `twilio.py` — Twilio's edge: `sign`/`post_signed` for webhooks,
   `place_inbound_call` (POST the number's configured voice URL, open the
-  `<Stream>`), and `TwilioCall`: 20ms mulaw frames at real-time pace, silence
-  unless `say(ms)`, `wait_for_agent_speech(n)`, `closed`, `hang_up()`,
-  `finish()` (the `completed` status callback).
+  `<Stream>`), and `TwilioCall` (`finish()` posts the `completed` status
+  callback).
+- `telnyx.py` — Telnyx's edge: Ed25519-signed Call Control webhooks
+  (`sign`/`post_signed`/`event`), `bind_number`, `place_inbound_call` (post
+  `call.initiated`, open the stream the app's `answer` names), and
+  `TelnyxCall` (`finish()` posts `call.hangup`).
 - `app.py` — `run_app(script, set_env=, set_attr=)`: the real app under uvicorn
   in the test's loop, a fresh project + admin key via the platform endpoints, a
   `WebhookSink` subscribed to `*` that verifies signatures. Skips when Postgres
@@ -34,12 +42,11 @@ Pieces
 
 Extending it
 ------------
-- Another carrier (Telnyx #217-#221, ARI #209): a sibling of `twilio.py` with
-  the same call-object shape (`say`, `wait_for_agent_speech`, `closed`,
-  `hang_up`, `finish`), and the carrier's adapter routed to a `FakeCarrier` at
+- Another carrier (ARI #209): a sibling of `twilio.py`/`telnyx.py` whose call
+  is a `CarrierCall`, and the carrier's adapter routed to a `FakeCarrier` at
   whatever single place hands that carrier's adapters out. Then add its edge
-  to `CARRIERS` in `tests/integration/test_carrier_contract.py` (#201), which
-  runs one `Script` per carrier and holds each to the same outcome.
+  to `tests/integration/test_carrier_contract.py` (#201), which runs one
+  `Script` per carrier and holds each to the same outcome.
 - Outbound, limits, suppression, campaigns: `POST /v1/calls` and friends on
   `Harness.api`; assert on `carrier.actions_of("dial")` (an empty list is the
   suppression proof). A controllable clock is the campaign ticket's to add.

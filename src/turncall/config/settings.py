@@ -49,6 +49,21 @@ class TwilioSettings(BaseSettings):
     auth_token: str = Field(default="", alias="TWILIO_AUTH_TOKEN")
 
 
+class TelnyxSettings(BaseSettings):
+    """The platform's Telnyx account (ADR-0022): a project's `telnyx`
+    credential replaces both values whole (ADR-0020).
+
+    `public_key` is the account's webhook signing key (Mission Control > Keys &
+    Credentials > Public Key), base64. Not a secret — but without it no Telnyx
+    webhook can be verified, so every one is refused.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="TELNYX_")
+
+    api_key: str = Field(default="", alias="TELNYX_API_KEY")
+    public_key: str = Field(default="", alias="TELNYX_PUBLIC_KEY")
+
+
 class OpenAISettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OPENAI_")
 
@@ -370,6 +385,7 @@ class Settings(BaseSettings):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     twilio: TwilioSettings = Field(default_factory=TwilioSettings)
+    telnyx: TelnyxSettings = Field(default_factory=TelnyxSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     google: GoogleSettings = Field(default_factory=GoogleSettings)
     anthropic: AnthropicSettings = Field(default_factory=AnthropicSettings)

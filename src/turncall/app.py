@@ -267,6 +267,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(twilio_webhook_router)
     app.include_router(twilio_media_router)
 
+    # Telnyx's inbound edge: Call Control webhooks + its media stream.
+    from turncall.webhooks.telnyx_handlers import router as telnyx_webhook_router
+    from turncall.webhooks.telnyx_media_stream import router as telnyx_media_router
+
+    app.include_router(telnyx_webhook_router)
+    app.include_router(telnyx_media_router)
+
     # WhatsApp webhooks (no /v1 prefix)
     from turncall.webhooks.whatsapp_handlers import router as whatsapp_webhook_router
 

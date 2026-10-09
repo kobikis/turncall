@@ -388,6 +388,7 @@ curl -X DELETE http://localhost:8090/v1/credentials/deepgram -H "Authorization: 
 | `heygen`, `tavus` | Video avatar |
 | `aws` | Bedrock LLM, Nova Sonic S2S |
 | `typesafe` | Eval judge (`jev`) |
+| `telnyx` | Telnyx numbers (`carrier` role) — takes `{"api_key", "public_key"}`, see [Telnyx numbers](/guides/phone-numbers#telnyx-numbers) |
 
 Deleting a credential is idempotent and returns the project to the platform key.
 An `aws` project credential is **not** gated by `AWS_AGENT_CREDENTIALS_ENABLED`
