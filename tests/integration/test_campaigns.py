@@ -9,8 +9,10 @@ frees their live-call slots.
 
 import asyncio
 import secrets
+import time
 from collections import Counter
 from datetime import UTC, datetime
+from itertools import pairwise
 from typing import Any
 
 import pytest
@@ -92,9 +94,72 @@ def _numbers(count: int) -> list[str]:
     return [f"+1555{secrets.randbelow(10**7):07d}" for _ in range(count)]
 
 
+def _unpaced(monkeypatch: Any) -> None:
+    """No calls-per-second floor: for tests about something other than pace,
+    which want a pass to dial everything the live-call limit admits."""
+    monkeypatch.setenv("CAMPAIGN_DEFAULT_CALLS_PER_SECOND", "0")
+
+
+def _admissions(monkeypatch: Any) -> tuple[list[float], list[Exception]]:
+    """Every dial's admission inside `place_outbound_call`, as (times of the
+    admitted, refusals). A refusal there is the 429 a campaign must never get."""
+    from turncall.services import outbound_dial
+
+    admitted: list[float] = []
+    refused: list[Exception] = []
+    admit = outbound_dial.admit_outbound_call
+
+    async def _spy(*args: Any, **kwargs: Any) -> None:
+        try:
+            await admit(*args, **kwargs)
+        except Exception as exc:
+            refused.append(exc)
+            raise
+        admitted.append(time.monotonic())
+
+    monkeypatch.setattr(outbound_dial, "admit_outbound_call", _spy)
+    return admitted, refused
+
+
+async def _serve(workers: int, until: Any, *, timeout: float) -> None:
+    """The real worker loop — several side by side — on a long poll, until
+    `until()` holds. A long poll means only the limit's own wait paces it."""
+    from turncall.campaigns.worker import serve
+    from turncall.storage.database import get_session_factory
+    from turncall.storage.redis import get_redis
+
+    stop = asyncio.Event()
+    tasks = [
+        asyncio.create_task(
+            serve(
+                get_session_factory(), get_redis(), stop, poll_seconds=60, clock=_clock
+            )
+        )
+        for _ in range(workers)
+    ]
+    try:
+        deadline = time.monotonic() + timeout
+        while not until() and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+    finally:
+        stop.set()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _most_in_a_second(times: list[float], slack: float = 0.1) -> int:
+    """The most admissions inside any one-second span, less `slack` for the
+    gap between the reservation (on Redis's clock) and the admission timed."""
+    return max(
+        (sum(1 for u in times if t <= u < t + 1 - slack) for t in times), default=0
+    )
+
+
 async def test_every_target_is_dialled_once_and_a_suppressed_one_never(
     monkeypatch, redis_env
 ):
+    _unpaced(monkeypatch)
     async with run_app(
         SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
     ) as app:
@@ -146,6 +211,8 @@ async def test_every_target_is_dialled_once_and_a_suppressed_one_never(
 
 
 async def test_never_more_live_calls_than_the_project_limit(monkeypatch, redis_env):
+    _unpaced(monkeypatch)
+    _, refused = _admissions(monkeypatch)
     async with run_app(
         SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
     ) as app:
@@ -168,6 +235,8 @@ async def test_never_more_live_calls_than_the_project_limit(monkeypatch, redis_e
         campaign = (await app.api.get(f"/v1/campaigns/{campaign_id}")).json()["data"]
 
     assert most_live == 2
+    # Two workers racing one full project, and neither was ever refused (#233).
+    assert refused == []
     dialled = Counter(a.params["to_number"] for a in _dials(app, caller_id))
     assert dialled == Counter(numbers)
     assert {t["status"] for t in targets.values()} == {"completed"}
@@ -316,3 +385,51 @@ async def test_a_deleted_projects_campaign_stops_dialling(monkeypatch, redis_env
         await _pass()
 
     assert _dials(app, caller_id) == []
+
+
+async def test_a_campaign_keeps_the_numbers_pace_and_is_never_refused(
+    monkeypatch, redis_env
+):
+    """#233: two workers on one campaign, a number limited to 2 calls a
+    second. Every dial is admitted — no 429 — no second holds more than two,
+    and the list is through in a few seconds although the poll is a minute:
+    the worker comes back when the window frees, not when the poll ends."""
+    admitted, refused = _admissions(monkeypatch)
+    async with run_app(
+        SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        agent_id, caller_id, number_id = await limited_project(
+            app, outbound_calls_per_second=2
+        )
+        numbers = _numbers(6)
+        await _create(app, agent_id, number_id, numbers)
+        started = time.monotonic()
+        await _serve(2, lambda: len(_dials(app, caller_id)) == 6, timeout=10)
+        took = time.monotonic() - started
+
+    assert Counter(a.params["to_number"] for a in _dials(app, caller_id)) == Counter(
+        numbers
+    )
+    assert refused == []
+    assert _most_in_a_second(admitted) == 2
+    assert 2 - 0.2 < took < 6
+
+
+async def test_with_no_rate_set_a_campaign_paces_at_the_default(monkeypatch, redis_env):
+    """No calls-per-second limit on the project and none on the platform: a
+    campaign still dials one a second (`CAMPAIGN_DEFAULT_CALLS_PER_SECOND`),
+    not the whole list in one burst."""
+    admitted, refused = _admissions(monkeypatch)
+    async with run_app(
+        SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        agent_id, caller_id, number_id = await limited_project(app)
+        numbers = _numbers(3)
+        await _create(app, agent_id, number_id, numbers)
+        await _serve(2, lambda: len(_dials(app, caller_id)) == 3, timeout=10)
+
+    assert len(_dials(app, caller_id)) == 3
+    assert refused == []
+    assert _most_in_a_second(admitted) == 1
+    gaps = [b - a for a, b in pairwise(admitted)]
+    assert all(gap > 0.9 for gap in gaps), gaps

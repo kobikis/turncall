@@ -44,8 +44,9 @@ LIVE_CALL_RENEW_SECONDS = 30
 DIAL_WINDOW_MS = 1_000
 MESSAGE_WINDOW_MS = 60_000
 
-# KEYS[1]: the set. ARGV: member, limit (0 = none), ttl ms, peek ("1" = count
-# only). Returns 0 when admitted, else the ms until the oldest member expires.
+# KEYS[1]: the set. ARGV: member, limit (0 = none), ttl ms. A member already in
+# the set is admitted again (its expiry renewed), never counted twice. Returns 0
+# when admitted, else the ms until the oldest member expires.
 _ADMIT = """
 local t = redis.call('TIME')
 local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
@@ -57,7 +58,6 @@ if limit > 0 and not redis.call('ZSCORE', KEYS[1], ARGV[1]) then
     return math.max(1, tonumber(first[2]) - now)
   end
 end
-if ARGV[4] == '1' then return 0 end
 local ttl = tonumber(ARGV[3])
 redis.call('ZADD', KEYS[1], now + ttl, ARGV[1])
 redis.call('PEXPIRE', KEYS[1], ttl)
@@ -76,14 +76,16 @@ class ProjectLimits:
 
 @dataclass(frozen=True)
 class DialCheck:
-    """Whether a dial would be admitted now, without taking anything (#229).
+    """Whether a dial was reserved (#229, #233).
 
-    `limit` names the one that says no; `retry_after_ms` is when a rate limit
-    frees up (0 for the live-call limit, which frees when a call ends).
+    `limit` names the one that said no and `max` its value; `retry_after_ms`
+    is when a rate limit frees up (0 for the live-call limit, which frees when
+    a call ends).
     """
 
     allowed: bool
     limit: str | None = None
+    max: int = 0
     retry_after_ms: int = 0
 
 
@@ -103,13 +105,11 @@ async def limits_for_project(session: AsyncSession, project_id: UUID) -> Project
     )
 
 
-async def _admit(
-    key: str, member: str, limit: int, ttl_ms: int, *, peek: bool = False
-) -> int:
-    """0 when admitted (and counted, unless `peek`), else ms until a slot frees."""
+async def _admit(key: str, member: str, limit: int, ttl_ms: int) -> int:
+    """0 when admitted (and counted), else ms until a slot frees."""
     try:
         script = get_redis().register_script(_ADMIT)
-        return int(await script(keys=[key], args=[member, limit, ttl_ms, int(peek)]))
+        return int(await script(keys=[key], args=[member, limit, ttl_ms]))
     except Exception as exc:
         logger.warning("limit_unchecked_redis_unavailable key={} error={}", key, exc)
         return 0
@@ -169,13 +169,6 @@ async def hold_live_call(project_id: UUID, call_id: UUID) -> AsyncIterator[None]
         await release_live_call(project_id, call_id)
 
 
-def _over_live_calls(limits: ProjectLimits) -> RateLimitedError:
-    return RateLimitedError(
-        f"This project is at its limit of {limits.live_calls} live calls",
-        {"limit": "live_calls", "max": limits.live_calls},
-    )
-
-
 async def admit_live_call(
     session: AsyncSession, *, project_id: UUID, call_id: UUID
 ) -> None:
@@ -183,7 +176,57 @@ async def admit_live_call(
     connect), or raise 429 `rate_limited`."""
     limits = await limits_for_project(session, project_id)
     if not await claim_live_call(project_id, call_id, limits.live_calls):
-        raise _over_live_calls(limits)
+        raise RateLimitedError(
+            f"This project is at its limit of {limits.live_calls} live calls",
+            {"limit": "live_calls", "max": limits.live_calls},
+        )
+
+
+async def reserve_dial(
+    session: AsyncSession,
+    *,
+    project_id: UUID,
+    call_id: UUID,
+    from_number: str,
+    default_calls_per_second: int = 0,
+) -> DialCheck:
+    """Take what a dial from `from_number` takes, under `call_id`, or nothing.
+
+    A live-call slot, then a place in the number's calls-per-second window; a
+    dial the second refuses gives the first back, so a refusal consumes nothing.
+    `default_calls_per_second` paces a number whose project sets no rate
+    (`0` there): a campaign's own floor (#233), never above a set limit.
+
+    Reserving is idempotent per `call_id` — both counts are sets — so the
+    `admit_outbound_call` inside `place_outbound_call` re-admits a reserved
+    call without counting it twice and without asking again. That is what lets
+    a campaign worker dial without ever being refused (#233): it asks *and*
+    takes in one step, where a question that takes nothing leaves the slot to
+    whoever dials first.
+    """
+    limits = await limits_for_project(session, project_id)
+    if not await claim_live_call(project_id, call_id, limits.live_calls):
+        return DialCheck(allowed=False, limit="live_calls", max=limits.live_calls)
+    cps = limits.outbound_calls_per_second or default_calls_per_second
+    wait_ms = await _admit(_dials_key(from_number), str(call_id), cps, DIAL_WINDOW_MS)
+    if wait_ms:
+        await release_live_call(project_id, call_id)
+        return DialCheck(
+            allowed=False,
+            limit="outbound_calls_per_second",
+            max=cps,
+            retry_after_ms=wait_ms,
+        )
+    return DialCheck(allowed=True)
+
+
+async def release_dial(project_id: UUID, from_number: str, call_id: UUID) -> None:
+    """Give back a reservation no dial used. Idempotent; never raises."""
+    await release_live_call(project_id, call_id)
+    try:
+        await get_redis().zrem(_dials_key(from_number), str(call_id))
+    except Exception as exc:
+        logger.warning("dial_release_failed call={} error={}", call_id, exc)
 
 
 async def admit_outbound_call(
@@ -191,49 +234,28 @@ async def admit_outbound_call(
 ) -> None:
     """Admit a dial from `from_number`, or raise 429 `rate_limited`.
 
-    Takes a live-call slot, then a place in the number's calls-per-second
-    window; a dial the second refuses gives the first back. A refused dial
-    consumes nothing, so a caller backing off is not charged for the attempts
-    it was refused — "429 for the excess", and only the excess.
+    `reserve_dial`, as an API answer: a refused dial consumes nothing, so a
+    caller backing off is not charged for the attempts it was refused — "429
+    for the excess", and only the excess.
     """
-    limits = await limits_for_project(session, project_id)
-    if not await claim_live_call(project_id, call_id, limits.live_calls):
-        raise _over_live_calls(limits)
-    cps = limits.outbound_calls_per_second
-    wait_ms = await _admit(_dials_key(from_number), str(call_id), cps, DIAL_WINDOW_MS)
-    if wait_ms:
-        await release_live_call(project_id, call_id)
+    check = await reserve_dial(
+        session, project_id=project_id, call_id=call_id, from_number=from_number
+    )
+    if check.allowed:
+        return
+    if check.limit == "live_calls":
         raise RateLimitedError(
-            f"{from_number} is at its limit of {cps} outbound calls per second",
-            {
-                "limit": "outbound_calls_per_second",
-                "max": cps,
-                "retry_after_ms": wait_ms,
-            },
+            f"This project is at its limit of {check.max} live calls",
+            {"limit": "live_calls", "max": check.max},
         )
-
-
-async def may_dial(
-    session: AsyncSession, *, project_id: UUID, from_number: str
-) -> DialCheck:
-    """Would `place_outbound_call` from `from_number` be admitted right now?
-    Takes nothing.
-
-    For a campaign worker pacing itself (#229, #233): asking first keeps it
-    from tripping the 429. Two dialers can still race between the question and
-    the dial, so a `RateLimitedError` from the dial itself means "not yet" too.
-    """
-    limits = await limits_for_project(session, project_id)
-    live = _live_calls_key(project_id)
-    if await _admit(live, "", limits.live_calls, LIVE_CALL_LEASE_MS, peek=True):
-        return DialCheck(allowed=False, limit="live_calls")
-    cps = limits.outbound_calls_per_second
-    wait_ms = await _admit(_dials_key(from_number), "", cps, DIAL_WINDOW_MS, peek=True)
-    if wait_ms:
-        return DialCheck(
-            allowed=False, limit="outbound_calls_per_second", retry_after_ms=wait_ms
-        )
-    return DialCheck(allowed=True)
+    raise RateLimitedError(
+        f"{from_number} is at its limit of {check.max} outbound calls per second",
+        {
+            "limit": "outbound_calls_per_second",
+            "max": check.max,
+            "retry_after_ms": check.retry_after_ms,
+        },
+    )
 
 
 async def admit_message(

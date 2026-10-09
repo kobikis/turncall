@@ -237,9 +237,11 @@ async def test_a_slot_nobody_renews_frees_itself(monkeypatch, redis_env):
         await close_redis()
 
 
-async def test_may_dial_asks_without_taking(monkeypatch, redis_env):
-    """A campaign worker asks before it dials (#229); asking takes nothing."""
-    N = "+15550000001"
+async def test_reserve_dial_takes_both_or_nothing(monkeypatch, redis_env):
+    """A campaign reserves its dial's slots before dialling (#233): the dial
+    under that id is then admitted without counting twice, another id is
+    refused, and a refusal or a release takes nothing."""
+    N = f"+1555{uuid.uuid4().int % 10**7:07d}"
     from unittest.mock import AsyncMock
 
     from turncall.config.settings import RedisSettings
@@ -252,12 +254,37 @@ async def test_may_dial_asks_without_taking(monkeypatch, redis_env):
     )
     await init_redis(RedisSettings())
     try:
-        project, call = uuid.uuid4(), uuid.uuid4()
-        assert (await limits.may_dial(None, project_id=project, from_number=N)).allowed
-        assert (await limits.may_dial(None, project_id=project, from_number=N)).allowed
-        assert await limits.claim_live_call(project, call, 1)
-        refused = await limits.may_dial(None, project_id=project, from_number=N)
-        assert (refused.allowed, refused.limit) == (False, "live_calls")
-        await limits.release_live_call(project, call)
+        project, first, second = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+
+        async def reserve(call: uuid.UUID, floor: int = 0) -> limits.DialCheck:
+            return await limits.reserve_dial(
+                None,
+                project_id=project,
+                call_id=call,
+                from_number=N,
+                default_calls_per_second=floor,
+            )
+
+        assert (await reserve(first)).allowed
+        # The dial itself, under the reserved id: admitted, not counted again.
+        await limits.admit_outbound_call(
+            None, project_id=project, call_id=first, from_number=N
+        )
+        refused = await reserve(second)
+        assert (refused.allowed, refused.limit, refused.max) == (
+            False,
+            "live_calls",
+            1,
+        )
+        await limits.release_dial(project, N, first)
+        # The project sets no rate: the floor paces the number instead.
+        assert (await reserve(second, floor=1)).allowed
+        await limits.release_live_call(project, second)
+        paced = await reserve(first, floor=1)
+        assert (paced.allowed, paced.limit) == (False, "outbound_calls_per_second")
+        assert 0 < paced.retry_after_ms <= 1000
+        # ...and nothing was taken by the refusal.
+        assert await limits.claim_live_call(project, first, 1)
+        await limits.release_dial(project, N, first)
     finally:
         await close_redis()

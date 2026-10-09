@@ -66,6 +66,16 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Campaigns keep a number's pace and are never refused by a limit** (#233).
+  The worker reserves each dial's live-call slot and calls-per-second place
+  before it claims a target, so two workers — or a worker and an API dial —
+  racing one project no longer end in a `429` for the campaign; and it comes
+  back as soon as the number's one-second window frees, so a campaign dials
+  *at* `outbound_calls_per_second` rather than once per poll. With no rate set
+  on the project, a campaign paces at `CAMPAIGN_DEFAULT_CALLS_PER_SECOND`
+  (default `1`, Twilio's default account rate; `0` turns it off) instead of
+  dialling the whole list in one burst.
+
 - **Campaigns: outbound calls to a list** (#229). `POST /v1/campaigns` takes
   one agent, a caller-id number and JSON targets — a number, per-target
   `variables` (rendered into the agent as `{{name}}`, like call-init's) and an

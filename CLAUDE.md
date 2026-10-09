@@ -555,9 +555,14 @@ a guardrail must not take the phone line down.
   the message is stored or reaches the LLM: the Chat API answers `429`, SMS
   answers an empty `<Response/>` and WhatsApp sends nothing. Per session, so
   one runaway conversation holds back no other.
-- **`may_dial(session, project_id=, from_number=)`** answers "would a dial be admitted now?"
-  without taking anything — for a campaign worker pacing itself (#229, #233);
-  a `RateLimitedError` from the dial itself still means "not yet".
+- **`reserve_dial(session, project_id=, call_id=, from_number=, default_calls_per_second=)`**
+  takes both of a dial's slots under `call_id`, or neither, and answers a
+  `DialCheck` (`allowed`, `limit`, `max`, `retry_after_ms`) instead of raising.
+  Both counts are sets, so `place_outbound_call(call_id=)` re-admits a reserved
+  call without counting it twice: a campaign worker asks *and* takes in one
+  step and is never refused (#233). A question that took nothing could not
+  promise that — two workers both heard "yes". `admit_outbound_call` is the
+  same reservation answering 429; `release_dial` gives back an unused one.
 
 Tests: `tests/integration/test_live_call_limit.py` on the #214 harness, with
 a second server **process** (`tests/harness/second_instance.py`) on the same
@@ -586,8 +591,18 @@ GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target stat
   media stream renders exactly as it renders call-init's; the metadata also
   carries `campaign_id` + `campaign_target_id`.
 - **Every dial is `place_outbound_call`**, so suppression and the limits hold
-  as for a single API dial. The worker asks `limits.may_dial` before claiming
-  and stops the campaign's pass on "no"; a `429` from the dial itself unclaims.
+  as for a single API dial.
+- **Pacing** (#233): before claiming, the worker `reserve_dial`s under the call
+  id it will dial with, so a campaign is never refused by either limit, however
+  many workers race. A "no" ends that campaign's pass; a rate limit's
+  `retry_after_ms` comes back out of `run_pass`, and `serve` sleeps that long
+  instead of the poll, so a campaign dials *at* the number's CPS. A project
+  with no CPS set paces at `CAMPAIGN_DEFAULT_CALLS_PER_SECOND` (default `1`,
+  Twilio's default account rate — past it Twilio queues the dials and they
+  ring late; a set limit always wins, `0` turns the floor off). A suppressed or
+  failed dial gives its reservation back, so it costs no slot. A `429` from the
+  dial itself is left only for a reservation that lapsed (a >1 s stall between
+  reserve and dial): it unclaims and logs `campaign_reservation_lapsed`.
 - **Target states** (`domain/enums.CampaignTargetStatus`): `pending` →
   `dialling` (claimed) → `calling` (dialled; `attempts` +1, `call_id`) →
   `completed` with the call's `ended_reason` (read through `call_view`, settled
@@ -607,9 +622,8 @@ GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target stat
   costs one poll. A stop is honoured between passes.
 
 Not yet: calling windows (#230), retries (#231), pause/resume/cancel and the
-janitor (#232), pacing beyond the limits (#233), weighted agents and
-start/finish events (#234). Until #233, a project with no live-call limit is
-dialled as fast as one pass can go.
+janitor (#232), weighted agents and start/finish events (#234). Concurrency
+with no `live_calls` limit is the pace times the calls' length.
 
 Key files: `campaigns/dialer.py`, `campaigns/worker.py`, `campaigns/queue.py`,
 `api/v1/campaigns.py`, `storage/repositories/campaign_repo.py`. Tests:

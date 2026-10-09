@@ -14,6 +14,11 @@ suppression list and staying inside the project's live-call limit. Each
 target's status is on `GET /v1/campaigns/{id}/targets`. See
 [Campaigns](/guides/campaigns).
 
+**Campaigns pace themselves.** A campaign dials at your number's
+`outbound_calls_per_second` — never past it, and never past `live_calls`, even
+with several workers — and at one call a second when you set no rate. See
+[How it paces](/guides/campaigns#how-it-paces).
+
 **`openai_live` agents with tools work out of the box.** An agent with tools and
 no `s2s.delegation` block now delegates to its own `llm` (`"mode": "client"`),
 with your keys, running your webhook and MCP tools — `end_call`, `do_not_call`

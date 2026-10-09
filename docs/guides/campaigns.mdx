@@ -54,4 +54,10 @@ Each call also carries `campaign_id` and `campaign_target_id` in its `metadata`,
 
 ## How it paces
 
-Each target is dialled once, through the same path as `POST /v1/calls/outbound`. The worker asks your project's limits before every dial and waits while you are at `live_calls`; it picks up again as calls end. Set `outbound_calls_per_second` too if your carrier caps how fast a number may dial — without a live-call limit, a campaign dials as fast as it can.
+Each target is dialled once, through the same path as `POST /v1/calls/outbound`, and a campaign is never refused by your [limits](/guides/limits): before each dial the worker *reserves* the call's live-call slot and its place in the number's calls-per-second window, so several workers — or a worker and your own API dials — never race each other into a `429`.
+
+- **At `live_calls`**, the campaign waits and picks up again as calls end.
+- **At `outbound_calls_per_second`**, it comes back the moment the number's one-second window frees: a number limited to 5 dials five a second, not one per poll.
+- **With no rate set**, a campaign dials one call a second from each number (`CAMPAIGN_DEFAULT_CALLS_PER_SECOND`, default `1` — Twilio's default rate for an account, past which Twilio queues your calls and they ring late). Set `outbound_calls_per_second` to go faster, or `0` on that variable to turn the floor off.
+
+With no `live_calls` limit, how many calls run at once is the pace times how long your calls last — set one if your agent's backends have a ceiling.

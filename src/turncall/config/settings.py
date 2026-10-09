@@ -235,6 +235,14 @@ class CampaignSettings(BaseSettings):
     # (its id is pushed on a Redis list); this bounds how late it notices
     # everything else — a call ending and freeing a slot, a target coming due.
     poll_seconds: int = Field(default=2, ge=1, alias="CAMPAIGN_POLL_SECONDS")
+    # A campaign's pace from a number whose project sets no calls-per-second
+    # limit (#233). Unlimited would dial a whole list in one burst: Twilio
+    # queues an account's dials beyond its CPS (1 by default) on its side, so
+    # they ring late and the burst lands on the agent all at once. A set limit
+    # always wins over this; 0 turns the floor off.
+    default_calls_per_second: int = Field(
+        default=1, ge=0, alias="CAMPAIGN_DEFAULT_CALLS_PER_SECOND"
+    )
 
 
 class ServerSettings(BaseSettings):
