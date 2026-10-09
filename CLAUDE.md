@@ -241,6 +241,12 @@ Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
   `90018`, which counts as hung up. Not when the call is being transferred:
   the transfer stopped the stream on purpose, and a parked transfer intent
   (Redis, `transfer:{call_id}`) tells the edge so.
+- **A retried `call.initiated` opens the call once.** Telnyx retries a webhook
+  it has no 200 for, and a retry can land while the first is still resolving
+  the agent (a slow call-init), before its row commits. The handler takes a
+  per-leg advisory lock (`pg_advisory_xact_lock` on the `call_control_id`)
+  and re-reads, so the retry waits and then finds the row — one slot, one
+  row, one `answer`.
 - **The stream must be the call's**: its `start.call_control_id` has to be the
   call's `provider_call_sid`, or it is closed — no pipeline, no hang-up.
 - **`call.hangup`** is stored as a `call.ended` event (as Twilio's `completed`

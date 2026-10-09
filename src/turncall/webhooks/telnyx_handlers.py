@@ -27,6 +27,7 @@ from uuid import UUID
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 from loguru import logger
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.deps import DbSession
@@ -136,7 +137,7 @@ async def call_control_webhook(request: Request, session: DbSession) -> Response
 
     if event_type == "call.initiated" and payload.get("direction") == "incoming":
         # A retried webhook names a call already opened: answer it once.
-        if call is None:
+        if call is None and await _first_to_open(session, payload):
             await _answer_inbound(request, session, account, number, payload)
     elif event_type == "call.hangup" and call is not None:
         await _on_hangup(session, call, payload)
@@ -145,6 +146,22 @@ async def call_control_webhook(request: Request, session: DbSession) -> Response
             session, account.adapter(), transferred, event_type, payload, transfer
         )
     return Response(status_code=200)
+
+
+async def _first_to_open(session: AsyncSession, payload: dict[str, Any]) -> bool:
+    """Whether no call is open for this leg yet, once any other request
+    opening it has finished. Telnyx retries a webhook it has no 200 for, and a
+    retry can land while the first is still resolving the agent (call-init),
+    before its row is committed — so a lookup alone would open the call twice:
+    two slots, two rows, two `answer`s for one leg. A per-leg lock held until
+    this transaction ends serializes them; the retry then finds the row."""
+    call_control_id = str(payload.get("call_control_id") or "")
+    if not call_control_id:
+        return True
+    await session.execute(
+        select(func.pg_advisory_xact_lock(func.hashtext(f"telnyx:{call_control_id}")))
+    )
+    return await call_repo.get_call_by_provider_sid(session, call_control_id) is None
 
 
 async def _answer_inbound(

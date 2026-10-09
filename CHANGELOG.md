@@ -426,6 +426,13 @@ and is not part of this repository's history.
   turn waiting on pipecat's 5s timeout. The build applies the same rule now and
   the call fails with `pipeline_error`, saying why.
 
+- **A retried Telnyx `call.initiated` opens the call once** (#217). A retry
+  arriving while the first delivery was still resolving the agent (a slow
+  call-init) found no call row yet and opened the call again: a second
+  live-call slot, a second row, duplicate `call.initializing`/`call.started`,
+  and a second `answer` for the same leg. The two are now serialized on the
+  leg's `call_control_id`.
+
 - **A request's writes are committed before its response is sent.** The
   request session committed in a yield dependency, which FastAPI runs *after*
   the response by default — so Twilio could open the media stream named in the

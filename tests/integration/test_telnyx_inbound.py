@@ -241,3 +241,38 @@ async def test_a_project_credential_replaces_the_platform_account(monkeypatch) -
     assert by_platform.status_code == 403
     assert by_project.status_code == 200
     assert [a.account_sid for a in answers] == ["KEY-project"]
+
+
+async def test_a_retried_call_initiated_opens_one_call(monkeypatch) -> None:
+    """Telnyx retries a webhook it has no 200 for. A retry that lands while
+    the first is still resolving the agent (a slow call-init) finds no row
+    yet, and used to open the call a second time: a second slot, a second
+    row, a second `answer` for the same leg."""
+    import asyncio
+
+    from turncall.services import inbound_call
+
+    resolve = inbound_call._resolve_agent
+
+    async def slow_resolve(*args: Any, **kwargs: Any) -> Any:
+        await asyncio.sleep(0.5)
+        return await resolve(*args, **kwargs)
+
+    cc = _new_id()
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        number = await telnyx.bind_number(
+            app.api, app.carrier, await app.create_agent(AGENT)
+        )
+        monkeypatch.setattr(inbound_call, "_resolve_agent", slow_resolve)
+        body = _initiated(cc, number)
+        first, retry = await asyncio.gather(
+            telnyx.post_signed(app.api, app.carrier, body),
+            telnyx.post_signed(app.api, app.carrier, body),
+        )
+        calls = (await app.api.get("/v1/calls")).json()
+
+    assert (first.status_code, retry.status_code) == (200, 200)
+    assert len(_answered(app, cc)) == 1
+    assert calls["total"] == 1
