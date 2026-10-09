@@ -1088,14 +1088,14 @@ def _build_turn_strategies(config: AgentConfig, *, smart_turn: bool) -> Any | No
     if smart_turn and config.smart_turn_detection:
         try:
             from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-            from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
-                LocalSmartTurnAnalyzerV3,
-            )
             from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
                 TurnAnalyzerUserTurnStopStrategy,
             )
 
-            turn_analyzer = LocalSmartTurnAnalyzerV3(
+            from turncall.orchestrator.smart_turn import SharedSmartTurnAnalyzer
+
+            # One ONNX session per process; the analyzer itself is the call's.
+            turn_analyzer = SharedSmartTurnAnalyzer(
                 params=SmartTurnParams(stop_secs=config.smart_turn_stop_secs),
             )
             strategies["stop"] = [

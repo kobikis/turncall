@@ -35,20 +35,20 @@ class _Marker(DataFrame):
 
 
 def _built_user_aggregator(mocker, config: AgentConfig) -> tuple[object, list]:
-    """The user aggregator `create_pipeline` builds, and every Smart Turn model
-    built along the way."""
-    from pipecat.audio.turn.smart_turn import local_smart_turn_v3
+    """The user aggregator `create_pipeline` builds, and every Smart Turn
+    analyzer built along the way — pipecat's default or TurnCall's."""
+    from pipecat.audio.turn.smart_turn import base_smart_turn
 
     from turncall.orchestrator import pipeline_factory
 
     models: list = []
-    real_init = local_smart_turn_v3.LocalSmartTurnAnalyzerV3.__init__
+    real_init = base_smart_turn.BaseSmartTurn.__init__
 
     def spy(self, *args, **kwargs):
         models.append(self)
         real_init(self, *args, **kwargs)
 
-    mocker.patch.object(local_smart_turn_v3.LocalSmartTurnAnalyzerV3, "__init__", spy)
+    mocker.patch.object(base_smart_turn.BaseSmartTurn, "__init__", spy)
     captured: list = []
     mocker.patch.object(
         pipeline_factory,
@@ -109,18 +109,18 @@ async def test_smart_turn_off_ends_the_turn_on_vads_silence(mocker, barge_in) ->
 
 def _s2s_user_aggregator(mocker, config: AgentConfig) -> tuple[object, list]:
     """The S2S pipeline's user aggregator, and every Smart Turn model built."""
-    from pipecat.audio.turn.smart_turn import local_smart_turn_v3
+    from pipecat.audio.turn.smart_turn import base_smart_turn
 
     from turncall.orchestrator import pipeline_factory
 
     models: list = []
-    real_init = local_smart_turn_v3.LocalSmartTurnAnalyzerV3.__init__
+    real_init = base_smart_turn.BaseSmartTurn.__init__
 
     def spy(self, *args, **kwargs):
         models.append(self)
         real_init(self, *args, **kwargs)
 
-    mocker.patch.object(local_smart_turn_v3.LocalSmartTurnAnalyzerV3, "__init__", spy)
+    mocker.patch.object(base_smart_turn.BaseSmartTurn, "__init__", spy)
     captured: list = []
     mocker.patch.object(
         pipeline_factory,
