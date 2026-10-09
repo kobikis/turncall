@@ -433,6 +433,11 @@ and is not part of this repository's history.
   and a second `answer` for the same leg. The two are now serialized on the
   leg's `call_control_id`.
 
+- **A Telnyx call whose `answer` fails is hung up** (#217). The call was
+  failed and its slot freed, but nothing told Telnyx to end the leg — and an
+  answer that reached Telnyx with only its reply lost left the caller on a
+  live, silent line until they hung up.
+
 - **A request's writes are committed before its response is sent.** The
   request session committed in a yield dependency, which FastAPI runs *after*
   the response by default — so Twilio could open the media stream named in the

@@ -276,3 +276,32 @@ async def test_a_retried_call_initiated_opens_one_call(monkeypatch) -> None:
     assert (first.status_code, retry.status_code) == (200, 200)
     assert len(_answered(app, cc)) == 1
     assert calls["total"] == 1
+
+
+async def test_an_answer_that_fails_hangs_the_leg_up(monkeypatch) -> None:
+    """An `answer` Telnyx applied but whose reply never came back (a timeout
+    on our side) left the caller on a live, silent leg: the call was failed
+    and its slot freed, but nothing told Telnyx to end it."""
+    from tests.harness.carrier import FakeTelnyxAdapter
+
+    async def answered_then_lost(self: Any, call_control_id: str, **kw: Any) -> None:
+        await self._record("answer", call_sid=call_control_id, **kw)
+        raise TimeoutError("no reply from Telnyx")
+
+    cc = _new_id()
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        number = await telnyx.bind_number(
+            app.api, app.carrier, await app.create_agent(AGENT)
+        )
+        monkeypatch.setattr(FakeTelnyxAdapter, "answer_call", answered_then_lost)
+        response = await telnyx.post_signed(
+            app.api, app.carrier, _initiated(cc, number)
+        )
+        ended = (await app.sink.wait_for("call.ended"))["payload"]
+
+    assert response.status_code == 200
+    assert ended["status"] == "failed"
+    hang_ups = [a for a in app.carrier.actions_of("hang_up") if a.params["call_sid"] == cc]
+    assert len(hang_ups) == 1

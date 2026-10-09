@@ -221,6 +221,9 @@ async def _answer_inbound(
         )
     except Exception as exc:
         logger.exception("telnyx_answer_failed", call_id=str(call.id))
+        # The answer may have reached Telnyx with only its reply lost: a leg
+        # left up would be live and silent, with nothing to end it.
+        await _hang_up(account, call_control_id)
         await _fail(session, call, exc, [])
 
 

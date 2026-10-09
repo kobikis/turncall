@@ -255,7 +255,9 @@ Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
 - **A missing key** (no `telnyx` credential, no `TELNYX_API_KEY`) fails the call
   before answering: `error.raised {stage: "carrier_answer", missing_keys:
   ["telnyx"]}`, `call.ended` failed. A key Telnyx refuses (401/403) carries
-  `provider: "telnyx", key_rejected: true`.
+  `provider: "telnyx", key_rejected: true`. An `answer` that raises is
+  followed by a best-effort `hangup`: it may have reached Telnyx with only its
+  reply lost, which would leave the caller on a live, silent leg.
 - **Binding** (#219): `carrier: "telnyx"` on `POST /v1/phone-numbers` looks the
   number up on the project's Telnyx account (`external_number_sid` optional; a
   number it cannot see is a 422, no key at any level a 503
