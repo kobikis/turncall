@@ -41,6 +41,7 @@ from turncall.storage.repositories import project_repo
 # media stream connecting, possibly to another server.
 LIVE_CALL_LEASE_MS = 120_000
 LIVE_CALL_RENEW_SECONDS = 30
+DIAL_WINDOW_MS = 1_000
 
 # KEYS[1]: the set. ARGV: member, limit (0 = none), ttl ms, peek ("1" = count
 # only). Returns 0 when admitted, else the ms until the oldest member expires.
@@ -68,6 +69,7 @@ class ProjectLimits:
     """A project's effective limits; 0 means unlimited."""
 
     live_calls: int = 0
+    outbound_calls_per_second: int = 0
 
 
 @dataclass(frozen=True)
@@ -87,8 +89,15 @@ async def limits_for_project(session: AsyncSession, project_id: UUID) -> Project
     """The project's own value where it set one, else the platform default."""
     row = await project_repo.get_project_by_id(session, project_id)
     defaults = get_settings().limits
-    own = row.limit_live_calls if row is not None else None
-    return ProjectLimits(live_calls=defaults.live_calls if own is None else own)
+
+    def pick(name: str) -> int:
+        own = getattr(row, f"limit_{name}", None) if row is not None else None
+        return getattr(defaults, name) if own is None else own
+
+    return ProjectLimits(
+        live_calls=pick("live_calls"),
+        outbound_calls_per_second=pick("outbound_calls_per_second"),
+    )
 
 
 async def _admit(
@@ -105,6 +114,11 @@ async def _admit(
 
 def _live_calls_key(project_id: UUID) -> str:
     return f"limits:live_calls:{project_id}"
+
+
+def _dials_key(from_number: str) -> str:
+    # Per number, not per project: a carrier's cap is on the number.
+    return f"limits:dials:{from_number}"
 
 
 async def claim_live_call(project_id: UUID, call_id: UUID, limit: int) -> bool:
@@ -152,35 +166,70 @@ async def hold_live_call(project_id: UUID, call_id: UUID) -> AsyncIterator[None]
         await release_live_call(project_id, call_id)
 
 
+def _over_live_calls(limits: ProjectLimits) -> RateLimitedError:
+    return RateLimitedError(
+        f"This project is at its limit of {limits.live_calls} live calls",
+        {"limit": "live_calls", "max": limits.live_calls},
+    )
+
+
 async def admit_live_call(
     session: AsyncSession, *, project_id: UUID, call_id: UUID
 ) -> None:
-    """Take a live-call slot for a call an API request starts (an outbound dial,
-    a WebRTC connect), or raise 429 `rate_limited`."""
+    """Take a live-call slot for a call an API request starts (a WebRTC
+    connect), or raise 429 `rate_limited`."""
     limits = await limits_for_project(session, project_id)
     if not await claim_live_call(project_id, call_id, limits.live_calls):
+        raise _over_live_calls(limits)
+
+
+async def admit_outbound_call(
+    session: AsyncSession, *, project_id: UUID, call_id: UUID, from_number: str
+) -> None:
+    """Admit a dial from `from_number`, or raise 429 `rate_limited`.
+
+    Takes a live-call slot, then a place in the number's calls-per-second
+    window; a dial the second refuses gives the first back. A refused dial
+    consumes nothing, so a caller backing off is not charged for the attempts
+    it was refused — "429 for the excess", and only the excess.
+    """
+    limits = await limits_for_project(session, project_id)
+    if not await claim_live_call(project_id, call_id, limits.live_calls):
+        raise _over_live_calls(limits)
+    cps = limits.outbound_calls_per_second
+    wait_ms = await _admit(_dials_key(from_number), str(call_id), cps, DIAL_WINDOW_MS)
+    if wait_ms:
+        await release_live_call(project_id, call_id)
         raise RateLimitedError(
-            f"This project is at its limit of {limits.live_calls} live calls",
-            {"limit": "live_calls", "max": limits.live_calls},
+            f"{from_number} is at its limit of {cps} outbound calls per second",
+            {
+                "limit": "outbound_calls_per_second",
+                "max": cps,
+                "retry_after_ms": wait_ms,
+            },
         )
 
 
-async def may_dial(session: AsyncSession, *, project_id: UUID) -> DialCheck:
-    """Would `place_outbound_call` be admitted right now? Takes nothing.
+async def may_dial(
+    session: AsyncSession, *, project_id: UUID, from_number: str
+) -> DialCheck:
+    """Would `place_outbound_call` from `from_number` be admitted right now?
+    Takes nothing.
 
     For a campaign worker pacing itself (#229, #233): asking first keeps it
     from tripping the 429. Two dialers can still race between the question and
     the dial, so a `RateLimitedError` from the dial itself means "not yet" too.
     """
     limits = await limits_for_project(session, project_id)
-    if await _admit(
-        _live_calls_key(project_id),
-        "",
-        limits.live_calls,
-        LIVE_CALL_LEASE_MS,
-        peek=True,
-    ):
+    live = _live_calls_key(project_id)
+    if await _admit(live, "", limits.live_calls, LIVE_CALL_LEASE_MS, peek=True):
         return DialCheck(allowed=False, limit="live_calls")
+    cps = limits.outbound_calls_per_second
+    wait_ms = await _admit(_dials_key(from_number), "", cps, DIAL_WINDOW_MS, peek=True)
+    if wait_ms:
+        return DialCheck(
+            allowed=False, limit="outbound_calls_per_second", retry_after_ms=wait_ms
+        )
     return DialCheck(allowed=True)
 
 

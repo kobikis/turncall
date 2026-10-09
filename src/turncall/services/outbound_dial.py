@@ -20,7 +20,7 @@ from loguru import logger
 from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.config import get_settings
 from turncall.domain.enums import CallDirection, CallEventType
-from turncall.services.limits import admit_live_call, release_live_call
+from turncall.services.limits import admit_outbound_call, release_live_call
 from turncall.services.twilio_accounts import account_for_number
 from turncall.storage.repositories import (
     agent_repo,
@@ -98,7 +98,12 @@ async def place_outbound_call(
     # the call's from here: freed when it ends (a status callback, or the media
     # stream's hold), or at once if the dial never happens.
     call_id = uuid4()
-    await admit_live_call(session, project_id=project_id, call_id=call_id)
+    await admit_outbound_call(
+        session,
+        project_id=project_id,
+        call_id=call_id,
+        from_number=phone_number.e164_number,
+    )
     try:
         return await _dial(
             session,

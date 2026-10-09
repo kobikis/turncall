@@ -60,7 +60,10 @@ async def set_project_limits(
     if auth.project_id != project_id:
         raise ForbiddenError("A project can only set its own limits")
     row = await project_repo.set_limits(
-        session, project_id, limit_live_calls=body.live_calls
+        session,
+        project_id,
+        limit_live_calls=body.live_calls,
+        limit_outbound_calls_per_second=body.outbound_calls_per_second,
     )
     if row is None:
         raise NotFoundError("Project", str(project_id))

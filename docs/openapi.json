@@ -8434,6 +8434,19 @@
             ],
             "title": "Live Calls",
             "description": "Live calls this project may hold at once, across every server"
+          },
+          "outbound_calls_per_second": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outbound Calls Per Second",
+            "description": "Outbound calls each of this project's numbers may start per second"
           }
         },
         "additionalProperties": false,

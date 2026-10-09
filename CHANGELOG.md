@@ -66,6 +66,13 @@ and is not part of this repository's history.
 
 ### Added
 
+- **An outbound calls-per-second limit per number** (#225).
+  `outbound_calls_per_second` on `PUT /v1/projects/{id}/limits`, with
+  `LIMIT_OUTBOUND_CALLS_PER_SECOND` as the platform default — unlimited unless
+  set. Each of the project's numbers starts at most that many outbound calls
+  in any one second, across every server; a dial past it is
+  `429 rate_limited` with `retry_after_ms`, and never reaches the carrier.
+
 - **A live-call limit per project** (#224). `PUT /v1/projects/{id}/limits`
   `{"live_calls": n}` (admin key; the project read shows `limits`), with
   `LIMIT_LIVE_CALLS` as the platform default — unlimited unless set. Over it,

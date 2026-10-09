@@ -57,6 +57,7 @@ def test_create_project_succeeds_with_platform_key(app, monkeypatch) -> None:
         created_at=now,
         updated_at=now,
         limit_live_calls=None,
+        limit_outbound_calls_per_second=None,
     )
     monkeypatch.setattr(
         "turncall.storage.repositories.project_repo.create_project",

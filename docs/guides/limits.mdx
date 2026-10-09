@@ -1,6 +1,6 @@
 ---
 title: Limits
-description: "Cap a project's live calls, so a spike cannot exhaust your provider quotas or budget"
+description: "Cap a project's live calls and how fast its numbers dial, across every server"
 icon: "gauge"
 ---
 
@@ -9,6 +9,7 @@ A **concurrency limit** caps how many of something are in progress at once; a **
 | Limit | Kind | Counts |
 |-------|------|--------|
 | `live_calls` | concurrency | live calls in the project, every transport (Twilio, WebRTC, WhatsApp voice), inbound and outbound |
+| `outbound_calls_per_second` | rate | outbound calls started from each of the project's numbers, in any one-second window |
 
 ## Set a project's limits
 
@@ -16,10 +17,10 @@ A **concurrency limit** caps how many of something are in progress at once; a **
 curl -X PUT https://api.example.com/v1/projects/$PROJECT_ID/limits \
   -H "Authorization: Bearer tc_..." \
   -H "Content-Type: application/json" \
-  -d '{"live_calls": 20}'
+  -d '{"live_calls": 20, "outbound_calls_per_second": 1}'
 ```
 
-An admin key, and only for its own project. The `PUT` replaces every limit: a field left out, or `null`, goes back to the platform default (`LIMIT_LIVE_CALLS`), which is unlimited unless the deployment set one. The project read (`GET /v1/projects/{id}`) shows them under `limits`. A new value applies to the next call; calls already live keep going, and count toward it.
+An admin key, and only for its own project. The `PUT` replaces every limit: a field left out, or `null`, goes back to the platform default (`LIMIT_LIVE_CALLS`, `LIMIT_OUTBOUND_CALLS_PER_SECOND`), which is unlimited unless the deployment set one. The project read (`GET /v1/projects/{id}`) shows them under `limits`. A new value applies to the next call; calls already live keep going, and count toward it.
 
 ## Live calls
 
@@ -47,5 +48,20 @@ What happens to a call over the limit depends on who started it:
 - **`POST /v1/calls/outbound` and `POST /v1/webrtc/connect`**: `429 rate_limited`, with `details: {"limit": "live_calls", "max": 20}`. Nothing is dialled and no call record is written, so back off and retry.
 
 A call counts from the moment it is admitted — an outbound call while it rings — until it ends however it ends: a hangup, the agent ending it, an error, a transfer away from the agent. If the server running a call dies, its slot frees itself within two minutes rather than staying taken: a crash costs you capacity briefly, never for good.
+
+## Outbound calls per second
+
+Carriers cap how fast one number may start calls, and flag a number that dials faster. `outbound_calls_per_second` holds each of the project's numbers under its carrier's cap: a dial past it is `429 rate_limited` before anything is dialled, with how long to wait.
+
+```json
+{
+  "success": false,
+  "error": "+15557654321 is at its limit of 1 outbound calls per second",
+  "code": "rate_limited",
+  "details": {"limit": "outbound_calls_per_second", "max": 1, "retry_after_ms": 412}
+}
+```
+
+The window slides: no more than `max` dials from one number in any one second, whichever servers placed them. A refused dial does not count against the window, so a retry after `retry_after_ms` finds room unless another dial took it first.
 
 If Redis is unreachable, calls are admitted and a warning is logged. A limit is a guardrail; it should not be the thing that takes your phone line down.

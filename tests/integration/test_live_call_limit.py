@@ -7,90 +7,18 @@ count lives in Redis, so a second server process sees the same one — and every
 way a call ends gives its slot back, or a project would be locked out for good.
 """
 
-import secrets
 import uuid
 
 import pytest
 
-from tests.harness import (
-    HARNESS_AGENT,
-    Script,
-    ToolCall,
-    place_inbound_call,
-    post_signed,
-    run_app,
-)
+from tests.harness import place_inbound_call, post_signed, run_app
 from tests.harness.second_instance import second_instance
+from tests.integration.limits_support import SCRIPT, dial_body, limited_project, ring
 from turncall.services import limits
 
 pytestmark = pytest.mark.integration
 
-REDIS_URL = "redis://localhost:6379/13"
 BUSY = '<Response><Reject reason="busy"/></Response>'
-SCRIPT = Script(
-    caller=("Please end the call.",),
-    agent=(ToolCall("end_call", {"reason": "caller asked"}), "Goodbye!"),
-)
-AGENT = {
-    **HARNESS_AGENT,
-    "tools": [
-        {
-            "name": "end_call",
-            "description": "End the call",
-            "parameters_schema": {"type": "object", "properties": {}},
-        }
-    ],
-}
-
-
-@pytest.fixture
-async def redis_env(monkeypatch):
-    """The app's Redis, on a database index of its own; skip without one."""
-    from redis.asyncio import Redis
-
-    client = Redis.from_url(REDIS_URL)
-    try:
-        await client.ping()
-    except Exception:
-        pytest.skip("Redis not reachable")
-    finally:
-        await client.aclose()
-    monkeypatch.setenv("REDIS_URL", REDIS_URL)
-
-
-def _ring(carrier, to_number: str) -> dict[str, str]:
-    """The form Twilio posts to a number's voice URL for a new inbound call."""
-    return {
-        "AccountSid": carrier.account_sid,
-        "CallSid": "CA" + secrets.token_hex(16),
-        "CallStatus": "ringing",
-        "Direction": "inbound",
-        "From": "+15550009999",
-        "To": to_number,
-    }
-
-
-async def _setup(app, live_calls: int) -> tuple[str, str, str]:
-    """An agent on a bound number, and the project limited to `live_calls`.
-    Returns (agent_id, number, number_id)."""
-    agent_id = await app.create_agent(AGENT)
-    number = await app.bind_number(agent_id)
-    numbers = (await app.api.get("/v1/phone-numbers")).json()["data"]
-    number_id = next(n["id"] for n in numbers if n["e164_number"] == number)
-    r = await app.api.put(
-        f"/v1/projects/{app.project_id}/limits", json={"live_calls": live_calls}
-    )
-    assert r.status_code == 200, r.text
-    assert r.json()["data"]["limits"]["live_calls"] == live_calls
-    return agent_id, number, number_id
-
-
-def _dial_body(agent_id: str, number_id: str) -> dict:
-    return {
-        "agent_id": agent_id,
-        "from_number_id": number_id,
-        "to_number": "+15550007777",
-    }
 
 
 async def _until_dialled(api, body: dict, *, attempts: int = 50) -> None:
@@ -112,18 +40,18 @@ async def test_over_the_limit_inbound_is_busy_and_outbound_is_429(
     async with run_app(
         SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
     ) as app:
-        agent_id, number, number_id = await _setup(app, live_calls=1)
+        agent_id, number, number_id = await limited_project(app, live_calls=1)
         voice_url = app.carrier.number(number).voice_url
 
         live = await place_inbound_call(
             app.carrier, app.api, from_number="+15550001234", to_number=number
         )
 
-        ring = _ring(app.carrier, number)
-        refused = await post_signed(app.api, app.carrier, voice_url, ring)
+        inbound = ring(app.carrier, number)
+        refused = await post_signed(app.api, app.carrier, voice_url, inbound)
         rejected = await app.sink.wait_for("call.rejected")
         over = await app.api.post(
-            "/v1/calls/outbound", json=_dial_body(agent_id, number_id)
+            "/v1/calls/outbound", json=dial_body(agent_id, number_id)
         )
         calls = (await app.api.get("/v1/calls")).json()
 
@@ -131,7 +59,7 @@ async def test_over_the_limit_inbound_is_busy_and_outbound_is_429(
         # posted, so only the media stream's own hold can give the slot back.
         await live.say(400)
         await live.closed.wait()
-        await _until_dialled(app.api, _dial_body(agent_id, number_id))
+        await _until_dialled(app.api, dial_body(agent_id, number_id))
 
     assert refused.status_code == 200
     assert refused.text == BUSY
@@ -139,7 +67,7 @@ async def test_over_the_limit_inbound_is_busy_and_outbound_is_429(
     assert rejected["call_id"] is None
     assert rejected["payload"]["reason"] == "live_call_limit"
     assert rejected["payload"]["limit"] == 1
-    assert rejected["payload"]["provider_call_id"] == ring["CallSid"]
+    assert rejected["payload"]["provider_call_id"] == inbound["CallSid"]
     assert rejected["payload"]["transport"] == "twilio"
     # Refused before anything was written: only the live call has a row.
     assert [c["id"] for c in calls["data"]] == [live.call_id]
@@ -159,19 +87,22 @@ async def test_the_limit_is_one_count_across_two_servers(monkeypatch, redis_env)
         second_instance() as other,
     ):
         other.headers["Authorization"] = app.api.headers["Authorization"]
-        agent_id, number, number_id = await _setup(app, live_calls=1)
-        dial = _dial_body(agent_id, number_id)
+        agent_id, number, number_id = await limited_project(app, live_calls=1)
+        dial = dial_body(agent_id, number_id)
 
         # The other server answers a call: the project's one slot is taken.
-        ring = _ring(app.carrier, number)
+        inbound = ring(app.carrier, number)
         answered = await post_signed(
-            other, app.carrier, f"{other.base_url}/webhooks/twilio/voice/inbound", ring
+            other,
+            app.carrier,
+            f"{other.base_url}/webhooks/twilio/voice/inbound",
+            inbound,
         )
         here = await post_signed(
             app.api,
             app.carrier,
             app.carrier.number(number).voice_url,
-            _ring(app.carrier, number),
+            ring(app.carrier, number),
         )
         refused_here = await app.api.post("/v1/calls/outbound", json=dial)
         refused_there = await other.post("/v1/calls/outbound", json=dial)
@@ -182,7 +113,7 @@ async def test_the_limit_is_one_count_across_two_servers(monkeypatch, redis_env)
             app.api,
             app.carrier,
             app.carrier.number(number).status_callback_url,
-            {**ring, "CallStatus": "completed", "CallDuration": "3"},
+            {**inbound, "CallStatus": "completed", "CallDuration": "3"},
         )
         admitted_there = await other.post("/v1/calls/outbound", json=dial)
 
@@ -198,12 +129,12 @@ async def test_webrtc_over_the_limit_is_429_and_leaves_no_call(monkeypatch, redi
     async with run_app(
         SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
     ) as app:
-        agent_id, number, _ = await _setup(app, live_calls=1)
+        agent_id, number, _ = await limited_project(app, live_calls=1)
         await post_signed(
             app.api,
             app.carrier,
             app.carrier.number(number).voice_url,
-            _ring(app.carrier, number),
+            ring(app.carrier, number),
         )
         r = await app.api.post(
             "/v1/webrtc/connect",
@@ -234,12 +165,12 @@ async def test_whatsapp_over_the_limit_is_rejected_unanswered(monkeypatch, redis
     async with run_app(
         SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
     ) as app:
-        _, number, _ = await _setup(app, live_calls=1)
+        _, number, _ = await limited_project(app, live_calls=1)
         await post_signed(
             app.api,
             app.carrier,
             app.carrier.number(number).voice_url,
-            _ring(app.carrier, number),
+            ring(app.carrier, number),
         )
         r = await app.api.post("/webhooks/whatsapp", json=_whatsapp_connect(number))
         event = await app.sink.wait_for("call.rejected")
@@ -308,6 +239,7 @@ async def test_a_slot_nobody_renews_frees_itself(monkeypatch, redis_env):
 
 async def test_may_dial_asks_without_taking(monkeypatch, redis_env):
     """A campaign worker asks before it dials (#229); asking takes nothing."""
+    N = "+15550000001"
     from unittest.mock import AsyncMock
 
     from turncall.config.settings import RedisSettings
@@ -321,10 +253,10 @@ async def test_may_dial_asks_without_taking(monkeypatch, redis_env):
     await init_redis(RedisSettings())
     try:
         project, call = uuid.uuid4(), uuid.uuid4()
-        assert (await limits.may_dial(None, project_id=project)).allowed
-        assert (await limits.may_dial(None, project_id=project)).allowed
+        assert (await limits.may_dial(None, project_id=project, from_number=N)).allowed
+        assert (await limits.may_dial(None, project_id=project, from_number=N)).allowed
         assert await limits.claim_live_call(project, call, 1)
-        refused = await limits.may_dial(None, project_id=project)
+        refused = await limits.may_dial(None, project_id=project, from_number=N)
         assert (refused.allowed, refused.limit) == (False, "live_calls")
         await limits.release_live_call(project, call)
     finally:

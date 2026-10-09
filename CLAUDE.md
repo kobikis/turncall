@@ -104,6 +104,7 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 | `PROJECT_PURGE_RETENTION_DAYS` | No | Days a soft-deleted project (ADR-0011) is kept before the hourly purge job hard-deletes it (cascade). Default `30`; `0` disables |
 | `TYPESAFE_API_KEY` | No | Jev, for a `jev` eval judge (#141). A fallback: a project's `typesafe` credential wins (ADR-0020). Evals only — no live call contacts this vendor, which is why the dependency is the optional `evals-jev` extra rather than a base one. Neither the key nor the extra is checked at scenario create: both are properties of a *deployment* and a stored scenario outlives the one it was written against, so the **run** fails, naming which of the two is missing |
 | `LIMIT_LIVE_CALLS` | No | Platform default for a project's live-call concurrency limit (#224), `0` (default) = unlimited. A project's own value (`PUT /v1/projects/{id}/limits`) wins in either direction — a default, not a ceiling. See "Limits" |
+| `LIMIT_OUTBOUND_CALLS_PER_SECOND` | No | Platform default for how many outbound calls each of a project's numbers may start per second (#225), `0` (default) = unlimited; per project the same way |
 | `PLATFORM_API_KEY` | Prod | Privileged credential gating the unauthenticated bootstrap endpoints — project creation + first-API-key creation. Only the builder holds it; presented as the `X-Platform-Key` header. Empty default fails **closed** (rejects all bootstrap calls), so set it wherever those endpoints must work. TurnCall stays identity-free — this is a caller check, not a user |
 
 ## Providers (per-agent config)
@@ -541,7 +542,12 @@ a guardrail must not take the phone line down.
   unlimited, so a limit set mid-day counts what is already live.
   `test_live_call_limit_wiring.py` fails on a call row written without a slot
   or a call run without a hold. Evals take none (not calls).
-- **`may_dial(session, project_id=)`** answers "would a dial be admitted now?"
+- **Outbound calls per second, per number** (#225). A sliding one-second
+  window keyed on the from-number's E.164 (a carrier's cap is on the number),
+  checked in `place_outbound_call` after the live-call slot
+  (`admit_outbound_call`); refused → the slot is given back and `429` with
+  `retry_after_ms`. A refused dial consumes nothing in either count.
+- **`may_dial(session, project_id=, from_number=)`** answers "would a dial be admitted now?"
   without taking anything — for a campaign worker pacing itself (#229, #233);
   a `RateLimitedError` from the dial itself still means "not yet".
 

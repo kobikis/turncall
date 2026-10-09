@@ -23,10 +23,18 @@ class ProjectLimits(BaseModel):
         ge=1,
         description="Live calls this project may hold at once, across every server",
     )
+    outbound_calls_per_second: int | None = Field(
+        default=None,
+        ge=1,
+        description="Outbound calls each of this project's numbers may start per second",
+    )
 
     @classmethod
     def from_row(cls, row: Any) -> "ProjectLimits":
-        return cls(live_calls=row.limit_live_calls)
+        return cls(
+            live_calls=row.limit_live_calls,
+            outbound_calls_per_second=row.limit_outbound_calls_per_second,
+        )
 
 
 class ProjectResponse(BaseModel):

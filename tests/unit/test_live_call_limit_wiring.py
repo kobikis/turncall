@@ -21,7 +21,7 @@ from turncall.orchestrator import pipeline_builder
 pytestmark = pytest.mark.unit
 
 SRC = Path(turncall.__file__).parent
-ADMISSIONS = {"admit_inbound_call", "admit_live_call"}
+ADMISSIONS = {"admit_inbound_call", "admit_live_call", "admit_outbound_call"}
 # An eval is not a call: no row, no slot (ADR-0018).
 NOT_A_CALL = ("evals/",)
 

@@ -218,6 +218,10 @@ class LimitSettings(BaseSettings):
 
     # Live calls one project may hold at once, across every server.
     live_calls: int = Field(default=0, ge=0, alias="LIMIT_LIVE_CALLS")
+    # Outbound calls each of a project's numbers may start per second.
+    outbound_calls_per_second: int = Field(
+        default=0, ge=0, alias="LIMIT_OUTBOUND_CALLS_PER_SECOND"
+    )
 
 
 class ServerSettings(BaseSettings):

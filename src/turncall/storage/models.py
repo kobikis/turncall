@@ -57,6 +57,9 @@ class ProjectRow(Base):
     # Limits (#206), null = the platform default (LIMIT_* env, unlimited
     # unless set). Enforced in Redis by `services/limits`, not here.
     limit_live_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    limit_outbound_calls_per_second: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
 
 
 class ApiKeyRow(Base):
