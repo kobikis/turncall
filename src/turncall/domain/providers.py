@@ -9,7 +9,7 @@ one account serving STT and TTS, OpenAI one account serving four roles, and AWS
 one account behind both `bedrock` and the `aws` S2S provider.
 """
 
-STT_PROVIDERS = ("deepgram", "openai", "elevenlabs", "cartesia")
+STT_PROVIDERS = ("deepgram", "openai", "elevenlabs", "cartesia", "assemblyai")
 LLM_PROVIDERS = (
     "openai",
     "anthropic",

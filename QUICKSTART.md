@@ -290,7 +290,7 @@ Two things to know before you wire it up:
 }
 ```
 
-Supported STT/TTS: `deepgram`, `openai`, `elevenlabs`, `cartesia`
+Supported STT/TTS: `deepgram`, `openai`, `elevenlabs`, `cartesia` (STT also `assemblyai`)
 Supported LLM: `openai`, `anthropic`, `ollama`, `custom_openai`, `openrouter`
 
 ### Sampling

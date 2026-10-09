@@ -54,3 +54,8 @@ def deepgram_key() -> str:
 @pytest.fixture
 def elevenlabs_key() -> str:
     return require("ELEVENLABS_API_KEY")
+
+
+@pytest.fixture
+def assemblyai_key() -> str:
+    return require("ASSEMBLYAI_API_KEY")

@@ -131,6 +131,7 @@ PROJECT = {
         "deepgram",
         "elevenlabs",
         "cartesia",
+        "assemblyai",
         "heygen",
         "tavus",
     )
@@ -152,6 +153,7 @@ class TestCredentialsReachTheServices:
             ("elevenlabs", "pipecat.services.elevenlabs.stt", "ElevenLabsSTTService"),
             ("openai", "pipecat.services.openai.stt", "OpenAISTTService"),
             ("cartesia", "pipecat.services.cartesia.stt", "CartesiaSTTService"),
+            ("assemblyai", "pipecat.services.assemblyai.stt", "AssemblyAISTTService"),
         ],
     )
     def test_stt(self, monkeypatch, provider, module, cls) -> None:

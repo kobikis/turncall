@@ -1,6 +1,6 @@
 ---
 title: Providers
-description: "Per-agent STT, LLM and TTS — OpenAI, Anthropic, AWS Bedrock, Deepgram, ElevenLabs, Cartesia, Ollama, OpenRouter"
+description: "Per-agent STT, LLM and TTS — OpenAI, Anthropic, AWS Bedrock, Deepgram, ElevenLabs, Cartesia, AssemblyAI, Ollama, OpenRouter"
 icon: "shuffle"
 ---
 
@@ -10,7 +10,7 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 
 | Role | Providers |
 |------|-----------|
-| **STT** | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming) |
+| **STT** | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming), `assemblyai` (Universal-Streaming) |
 | **LLM** | `openai` (default), `anthropic` (Claude), `ollama` (local), `custom_openai` (any OpenAI-compatible), `openrouter` (multi-model + fallback routing, voice only), `bedrock` (AWS-hosted Anthropic / Meta / Mistral / Amazon models) |
 | **TTS** | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3.6, streaming, 60+ emotions) |
 | **S2S** | `openai` (Realtime API — optional `base_url` targets an OpenAI-Realtime gateway like Vercel AI Gateway / LiteLLM / xAI, e.g. Grok), `openai_live` (GPT-Live-1, full duplex), `google` (Gemini Live), `aws` (Amazon Nova Sonic 2) |
@@ -33,20 +33,38 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 ```json Cartesia Ink
 "stt": {"provider": "cartesia"}
 ```
+
+```json AssemblyAI Universal-Streaming
+"stt": {"provider": "assemblyai"}
+```
 </CodeGroup>
 
 ### STT Options
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | No | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` |
-| `model` | No | Leave unset for the provider's own default: `nova-3-general` (Deepgram), `gpt-transcribe` (OpenAI — its predecessor `gpt-4o-transcribe` is withdrawn on 2027-02-26), `scribe_v1` (ElevenLabs), `ink-whisper` (Cartesia) |
+| `provider` | No | `deepgram` (default), `openai`, `elevenlabs`, `cartesia`, `assemblyai` |
+| `model` | No | Leave unset for the provider's own default: `nova-3-general` (Deepgram), `gpt-transcribe` (OpenAI — its predecessor `gpt-4o-transcribe` is withdrawn on 2027-02-26), `scribe_v1` (ElevenLabs), `ink-whisper` (Cartesia), `universal-streaming-english` (AssemblyAI — `universal-streaming-multilingual` when `language` is not English) |
 | `language` | No | BCP-47 code (default `en`) |
 | `keyterms` | No | Vocabulary hints — product names, SKUs, surnames. One list, mapped to each provider's own spelling. See [Keyterms](#keyterms) |
 | `extra` | No | Passthrough to the provider. Keys naming a setting TurnCall already manages — `model`, `language`, and Deepgram's `punctuate` / `smart_format` / `interim_results` — are ignored so they cannot silently override your config |
 
 On Deepgram, `extra` reaches the full transcription surface: `profanity_filter`,
 `diarize`, `redact`, `version`, `utterance_end_ms`.
+
+On AssemblyAI, `extra` reaches its streaming settings by name — `domain`
+(`medical-v1`), `min_turn_silence`, `format_turns`, and on Universal-3 Pro
+models `mode`, `voice_focus`, `language_codes`. A key AssemblyAI has no setting
+for is logged as ignored rather than silently dropped.
+
+AssemblyAI splits its streaming models by language rather than taking a
+`language` parameter. With no `model`, an English agent gets
+`universal-streaming-english` and any other gets
+`universal-streaming-multilingual`, which covers English, Spanish, German,
+French, Portuguese and Italian — the English model given Spanish transcribes
+it as English words, with no error to say so. For other languages, name a
+Universal-3 Pro model (`universal-3-6-pro`), which costs about three times as
+much.
 
 ### Keyterms
 
@@ -64,6 +82,7 @@ calls it.
 | OpenAI | `keywords` | |
 | ElevenLabs | `keyterms` | |
 | Cartesia | `keyterm` | Honored on `ink-2*` / `ink-preview*` only; capped at 100 terms / 1200 characters per connection, truncated past that with a warning |
+| AssemblyAI | `keyterms_prompt` | AssemblyAI refuses a session with more than 100, so the first 100 are sent, with a warning. Terms over 50 characters are ignored by AssemblyAI |
 
 Blanks and duplicates are dropped when the agent is created.
 
@@ -341,6 +360,7 @@ with no restart.
 | Anthropic | `ANTHROPIC_API_KEY` |
 | ElevenLabs | `ELEVENLABS_API_KEY` |
 | Cartesia | `CARTESIA_API_KEY` |
+| AssemblyAI | `ASSEMBLYAI_API_KEY` |
 | Google (Gemini) | `GOOGLE_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
 | HeyGen (video avatar) | `HEYGEN_LIVE_AVATAR_API_KEY` |
@@ -385,6 +405,7 @@ curl -X DELETE http://localhost:8090/v1/credentials/deepgram -H "Authorization: 
 | `openrouter` | LLM |
 | `google` | S2S (Gemini Live) |
 | `deepgram`, `elevenlabs`, `cartesia` | STT, TTS |
+| `assemblyai` | STT |
 | `heygen`, `tavus` | Video avatar |
 | `aws` | Bedrock LLM, Nova Sonic S2S |
 | `typesafe` | Eval judge (`jev`) |
