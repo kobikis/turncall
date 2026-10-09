@@ -127,6 +127,7 @@ class FakeAsterisk:
         self.requests: list[tuple[str, str, dict[str, str]]] = []
         self.commands: list[str] = []  # text sent on media sockets
         self.connected = asyncio.Event()
+        self.event_connections = 0  # ARI events sockets ever opened to it
         # False: external media is created but never dials TurnCall — a call
         # admitted whose media stream never comes.
         self.media_dials = True
@@ -208,6 +209,7 @@ class FakeAsterisk:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         self._events = ws
+        self.event_connections += 1
         self.connected.set()
         async for message in ws:
             if message.type == WSMsgType.ERROR:

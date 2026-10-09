@@ -53,6 +53,7 @@ from turncall.webhooks.asterisk_media_stream import media_channel_id
 
 if TYPE_CHECKING:
     from turncall.adapters.telephony.asterisk_adapter import AriAccount
+    from turncall.services.asterisk_accounts import AccountKey
     from turncall.services.inbound_call import InboundRefusal
 
 CALL_ID_VARIABLE = "TURNCALL_CALL_ID"
@@ -82,11 +83,14 @@ def _e164ish(number: str) -> str:
 
 
 class AriEdge:
-    """One ARI connection: one Asterisk, the platform's or one project's."""
+    """One ARI connection: one Asterisk app, and the projects it answers for
+    (None: every project with no Asterisk of its own)."""
 
-    def __init__(self, account: AriAccount, project_id: UUID | None) -> None:
+    def __init__(self, account: AriAccount, projects: frozenset[UUID | None]) -> None:
         self.account = account
-        self.project_id = project_id
+        # Reassigned by `AsteriskEdges.reconcile`: a new edge would mean a new
+        # socket and losing the calls this one ties together.
+        self.projects = projects
         self._adapter = account.adapter()
         self._calls: dict[str, _Call] = {}  # by caller and by media channel id
         self._tasks: set[asyncio.Task[None]] = set()
@@ -198,14 +202,14 @@ class AriEdge:
             number = await phone_number_repo.get_by_e164(session, dialled)
             if number is None or number.provider != ASTERISK:
                 return InboundRefusal("This number is not configured.")
-            if self.project_id is not None and number.project_id != self.project_id:
-                return InboundRefusal(
-                    "This number belongs to another project's Asterisk."
+            if number.project_id not in self.projects and not (
+                None in self.projects
+                and ASTERISK
+                not in await credential_repo.providers_for_project(
+                    session, number.project_id
                 )
-            if self.project_id is None and ASTERISK in (
-                await credential_repo.providers_for_project(session, number.project_id)
             ):
-                return InboundRefusal("This number's project rides its own Asterisk.")
+                return InboundRefusal("This number's project rides another Asterisk.")
             call = await open_inbound_call(
                 session,
                 number,
@@ -326,13 +330,16 @@ class AriEdge:
 
 
 class AsteriskEdges:
-    """One `AriEdge` per Asterisk this deployment serves (ADR-0020): the
-    platform's, and each project's own. Reconciled at start, every minute
+    """One `AriEdge` per Asterisk app this deployment serves (ADR-0020): the
+    platform's and the projects' own, one per account however many projects
+    hold it (#274). Reconciled at start, every minute
     (another process may have written a credential), and at once after a
     credential write on this one (`poke`)."""
 
     def __init__(self) -> None:
-        self._running: dict[UUID | None, tuple[AriAccount, asyncio.Task[None]]] = {}
+        self._running: dict[
+            AccountKey, tuple[AriAccount, AriEdge, asyncio.Task[None]]
+        ] = {}
         self._wake: asyncio.Event | None = None
 
     def poke(self) -> None:
@@ -353,10 +360,10 @@ class AsteriskEdges:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(wake.wait(), interval_s)
         finally:
-            for _, task in self._running.values():
+            for *_, task in self._running.values():
                 task.cancel()
             await asyncio.gather(
-                *(t for _, t in self._running.values()), return_exceptions=True
+                *(t for *_, t in self._running.values()), return_exceptions=True
             )
             self._running.clear()
             self._wake = None
@@ -368,14 +375,18 @@ class AsteriskEdges:
 
         async with get_session_factory()() as session:
             wanted = await all_accounts(session, get_settings())
-        for key, (account, task) in list(self._running.items()):
-            if wanted.get(key) != account or task.done():
+        for key, (account, edge, task) in list(self._running.items()):
+            if key not in wanted or wanted[key][0] != account or task.done():
                 task.cancel()
                 del self._running[key]
-        for key, account in wanted.items():
+            else:
+                # Same socket: a project joining or leaving it must not drop
+                # the calls it is tying together.
+                edge.projects = wanted[key][1]
+        for key, (account, projects) in wanted.items():
             if key not in self._running:
-                edge = AriEdge(account, key)
-                self._running[key] = (account, asyncio.create_task(_run(edge)))
+                edge = AriEdge(account, projects)
+                self._running[key] = (account, edge, asyncio.create_task(_run(edge)))
 
 
 async def _run(edge: AriEdge) -> None:
