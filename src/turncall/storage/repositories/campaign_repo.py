@@ -228,36 +228,59 @@ async def start_campaign(
 async def claim_next_target(
     session: AsyncSession, campaign_id: UUID, now: datetime
 ) -> CampaignTargetRow | None:
-    """Claim the first due `pending` target as `dialling`, or None.
+    """Claim a due `pending` target as `dialling`, or None.
 
     `SKIP LOCKED` lets two workers claim side by side without either waiting
     on, or taking, the other's row. The caller commits the claim before it
     dials, so the claim outlives a crash during the dial. Only a `running`
     campaign's targets are claimed: a pause or cancel stops the next claim.
     """
-    due = (
+    result = await session.execute(claim_statement(campaign_id, now))
+    return result.scalar_one_or_none()
+
+
+def claim_statement(campaign_id: UUID, now: datetime) -> Any:
+    """The claim's UPDATE: a target whose `next_attempt_at` has come (a retry,
+    or one deferred to its calling window), earliest first, else the next
+    never-dialled target in list order.
+
+    Two index lookups rather than one ordered scan: ordering every pending
+    target by position and filtering out the not-yet-due ones walked each
+    deferred target ahead of the first due one, on every claim — quadratic
+    over a campaign whose early targets wait on retries or a closed window.
+    Each half reads the first row of its own partial index.
+    """
+    target = CampaignTargetRow
+    due = _first_pending(
+        campaign_id,
+        target.next_attempt_at <= now,
+        order_by=(target.next_attempt_at, target.position),
+    )
+    fresh = _first_pending(
+        campaign_id, target.next_attempt_at.is_(None), order_by=(target.position,)
+    )
+    return (
+        update(target)
+        .where(target.id == func.coalesce(due, fresh))
+        .values(status=CampaignTargetStatus.DIALLING.value, claimed_at=now)
+        .returning(target)
+    )
+
+
+def _first_pending(campaign_id: UUID, *where: Any, order_by: tuple[Any, ...]) -> Any:
+    return (
         select(CampaignTargetRow.id)
         .where(
             CampaignTargetRow.campaign_id == campaign_id,
             _campaign_running(campaign_id),
             CampaignTargetRow.status == CampaignTargetStatus.PENDING.value,
-            or_(
-                CampaignTargetRow.next_attempt_at.is_(None),
-                CampaignTargetRow.next_attempt_at <= now,
-            ),
+            *where,
         )
-        .order_by(CampaignTargetRow.position)
+        .order_by(*order_by)
         .limit(1)
         .with_for_update(skip_locked=True)
         .scalar_subquery()
     )
-    result = await session.execute(
-        update(CampaignTargetRow)
-        .where(CampaignTargetRow.id == due)
-        .values(status=CampaignTargetStatus.DIALLING.value, claimed_at=now)
-        .returning(CampaignTargetRow)
-    )
-    return result.scalar_one_or_none()
 
 
 def _campaign_running(campaign_id: Any) -> Any:

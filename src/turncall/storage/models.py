@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -910,4 +911,27 @@ class CampaignTargetRow(Base):
             "campaign_id", "e164_number", name="uq_campaign_targets_number"
         ),
         Index("ix_campaign_targets_claim", "campaign_id", "status", "position"),
+        # The claim's two lookups and the janitor's sweep (see
+        # campaign_repo.claim_statement / reclaim_abandoned).
+        Index(
+            "ix_campaign_targets_fresh",
+            "campaign_id",
+            "position",
+            postgresql_where=text("status = 'pending' AND next_attempt_at IS NULL"),
+        ),
+        Index(
+            "ix_campaign_targets_due",
+            "campaign_id",
+            "next_attempt_at",
+            "position",
+            postgresql_where=text(
+                "status = 'pending' AND next_attempt_at IS NOT NULL"
+            ),
+        ),
+        Index(
+            "ix_campaign_targets_claimed",
+            "status",
+            "claimed_at",
+            postgresql_where=text("status IN ('dialling', 'placing')"),
+        ),
     )

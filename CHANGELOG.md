@@ -384,6 +384,17 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **A campaign's claim and janitor are index lookups** (#229, #232). The claim
+  ordered every pending target by position and filtered out the ones not yet
+  due, so it walked each deferred target ahead of the first due one — on every
+  dial, quadratic over a campaign whose early targets wait on a retry or a
+  closed calling window (4,000 rows filtered to find one, measured). It is now
+  two partial-index lookups: a target whose `next_attempt_at` has come — a
+  retry, or one deferred to its window — is claimed first, earliest first,
+  then the never-dialled ones in list order. The janitor, which reads claims
+  across every campaign on every pass, has its own partial index instead of a
+  table scan. Migration `a8e4c2f6d0b1`.
+
 - **A request's writes are committed before its response is sent.** The
   request session committed in a yield dependency, which FastAPI runs *after*
   the response by default — so Twilio could open the media stream named in the

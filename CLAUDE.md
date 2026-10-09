@@ -991,7 +991,11 @@ POST /v1/campaigns/{id}/cancel        # final; pending + dialling targets -> can
   resume announce nothing.
 - **The clock is injected** (`campaigns.dialer.Clock`); due means
   `next_attempt_at` null or `<=` now. #230 (windows) and #231 (retry spacing)
-  set `next_attempt_at`; nothing reads wall time directly.
+  set `next_attempt_at`; nothing reads wall time directly. A target whose
+  `next_attempt_at` has come is claimed before a never-dialled one, earliest
+  first; the never-dialled go in list order. Each half is the first row of its
+  own partial index (`campaign_repo.claim_statement`) — one ordered scan with a
+  filter walked every deferred target ahead of the first due one, per dial.
 - **Calling window** (#230): `calling_window: {start, end, days}` on the
   campaign — wall-clock `[start, end)` on ISO `days` (default all seven), read
   in **each target's own zone on the day in question**

@@ -74,7 +74,7 @@ The response is the campaign, `queued` until the worker reaches it, with its tar
 
 Each takes `max_attempts` — dials to the target in all, the first one included, at most 10 — and `spacing_seconds`, how long after the call ended to try again (at least 60). A call that ends in a listed way puts its target back to `pending` with `next_attempt_at` set, until its `attempts` reach that ending's `max_attempts`. `attempts` counts every dial whatever its ending, so a target that went unanswered once and was then busy has used two of busy's attempts.
 
-A retry respects the calling window: one that comes due after hours waits for the window's next opening. Every other ending — the person answered, the call was transferred, the carrier failed — is final. With no `retry_policy`, each target is dialled once.
+A retry respects the calling window: one that comes due after hours waits for the window's next opening. A retry that has come due is dialled before targets not yet tried, so its spacing is kept even in a long list. Every other ending — the person answered, the call was transferred, the carrier failed — is final. With no `retry_policy`, each target is dialled once.
 
 ## Follow it
 
