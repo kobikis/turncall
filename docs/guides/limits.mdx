@@ -1,0 +1,51 @@
+---
+title: Limits
+description: "Cap a project's live calls, so a spike cannot exhaust your provider quotas or budget"
+icon: "gauge"
+---
+
+A **concurrency limit** caps how many of something are in progress at once; a **rate limit** caps how many start per unit of time. Every limit is counted in Redis, so it holds across all your servers — adding a server does not multiply it. All are off unless you set them, and anything over a limit is refused as `rate_limited`.
+
+| Limit | Kind | Counts |
+|-------|------|--------|
+| `live_calls` | concurrency | live calls in the project, every transport (Twilio, WebRTC, WhatsApp voice), inbound and outbound |
+
+## Set a project's limits
+
+```bash
+curl -X PUT https://api.example.com/v1/projects/$PROJECT_ID/limits \
+  -H "Authorization: Bearer tc_..." \
+  -H "Content-Type: application/json" \
+  -d '{"live_calls": 20}'
+```
+
+An admin key, and only for its own project. The `PUT` replaces every limit: a field left out, or `null`, goes back to the platform default (`LIMIT_LIVE_CALLS`), which is unlimited unless the deployment set one. The project read (`GET /v1/projects/{id}`) shows them under `limits`. A new value applies to the next call; calls already live keep going, and count toward it.
+
+## Live calls
+
+What happens to a call over the limit depends on who started it:
+
+- **Inbound (Twilio, WhatsApp voice)**: refused at the carrier before it is answered — busy on Twilio (`<Reject reason="busy"/>`), a rejection on WhatsApp. Answering only to say no would bill minutes, and so would queueing. Your webhook subscribers get `call.rejected`:
+
+  ```json
+  {
+    "event": "call.rejected",
+    "call_id": null,
+    "payload": {
+      "reason": "live_call_limit",
+      "limit": 20,
+      "transport": "twilio",
+      "from_number": "+15550001234",
+      "to_number": "+15557654321",
+      "provider_call_id": "CA..."
+    }
+  }
+  ```
+
+  The call never started, so it has no call record and `call_id` is null; `provider_call_id` is the carrier's id for it.
+
+- **`POST /v1/calls/outbound` and `POST /v1/webrtc/connect`**: `429 rate_limited`, with `details: {"limit": "live_calls", "max": 20}`. Nothing is dialled and no call record is written, so back off and retry.
+
+A call counts from the moment it is admitted — an outbound call while it rings — until it ends however it ends: a hangup, the agent ending it, an error, a transfer away from the agent. If the server running a call dies, its slot frees itself within two minutes rather than staying taken: a crash costs you capacity briefly, never for good.
+
+If Redis is unreachable, calls are admitted and a warning is logged. A limit is a guardrail; it should not be the thing that takes your phone line down.

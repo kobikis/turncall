@@ -15,6 +15,7 @@ from turncall.config import get_settings
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.pipeline_builder import build_call_pipeline
 from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
+from turncall.services.limits import hold_live_call, release_live_call
 from turncall.storage.database import create_session_factory, get_engine
 
 router = APIRouter()
@@ -106,6 +107,7 @@ async def media_stream_websocket(websocket: WebSocket) -> None:
                     "media_stream_no_config",
                     agent_id=agent_id_str,
                 )
+                await release_live_call(call_row.project_id, call_row.id)
                 return
 
             # Apply template variables if stored in call metadata
@@ -138,55 +140,58 @@ async def media_stream_websocket(websocket: WebSocket) -> None:
                 config = prepend_knowledge_context(config, knowledge_context)
                 logger.info("Knowledge context applied to system prompt")
 
-        # Connect MCP servers and discover tools (if configured)
-        mcp_manager = None
-        mcp_tools: list = []
-        if config.mcp_servers:
-            from turncall.services.mcp_client import MCPSessionManager
+        # The slot taken when the call was admitted (#224) is this task's to
+        # keep while the call runs, and to free however it ends.
+        async with hold_live_call(call_row.project_id, call_row.id):
+            # Connect MCP servers and discover tools (if configured)
+            mcp_manager = None
+            mcp_tools: list = []
+            if config.mcp_servers:
+                from turncall.services.mcp_client import MCPSessionManager
 
-            mcp_manager = MCPSessionManager(
+                mcp_manager = MCPSessionManager(
+                    call_id=UUID(call_id_str),
+                    project_id=UUID(project_id_str),
+                )
+                mcp_tools = await mcp_manager.connect_servers(config.mcp_servers)
+
+            # Build call context
+            call_context = CallContext(
                 call_id=UUID(call_id_str),
                 project_id=UUID(project_id_str),
+                agent_id=call_row.active_agent_id or DYNAMIC_AGENT_ID,
+                call_sid=call_sid,
+                stream_sid=stream_sid,
+                session_factory=session_factory,
+                mcp_manager=mcp_manager,
             )
-            mcp_tools = await mcp_manager.connect_servers(config.mcp_servers)
 
-        # Build call context
-        call_context = CallContext(
-            call_id=UUID(call_id_str),
-            project_id=UUID(project_id_str),
-            agent_id=call_row.active_agent_id or DYNAMIC_AGENT_ID,
-            call_sid=call_sid,
-            stream_sid=stream_sid,
-            session_factory=session_factory,
-            mcp_manager=mcp_manager,
-        )
+            # Create Twilio transport via factory
+            from turncall.orchestrator.ambience import build_ambience_mixer
+            from turncall.orchestrator.transport_factory import (
+                TWILIO_SAMPLE_RATE,
+                create_twilio_transport,
+            )
 
-        # Create Twilio transport via factory
-        from turncall.orchestrator.ambience import build_ambience_mixer
-        from turncall.orchestrator.transport_factory import (
-            TWILIO_SAMPLE_RATE,
-            create_twilio_transport,
-        )
+            mixer = await build_ambience_mixer(
+                config,
+                project_id=call_context.project_id,
+                sample_rate=TWILIO_SAMPLE_RATE,
+                session_factory=session_factory,
+                settings=settings,
+            )
+            transport = create_twilio_transport(websocket, stream_sid, mixer=mixer)
 
-        mixer = await build_ambience_mixer(
-            config,
-            project_id=call_context.project_id,
-            sample_rate=TWILIO_SAMPLE_RATE,
-            session_factory=session_factory,
-            settings=settings,
-        )
-        transport = create_twilio_transport(websocket, stream_sid, mixer=mixer)
-
-        call_session = await build_call_pipeline(
-            config=config,
-            transport=transport,
-            call_context=call_context,
-            settings=settings,
-            session_factory=session_factory,
-            mcp_tools=mcp_tools,
-        )
-        # WS handler stays open for the call — await (don't fire-and-forget).
-        await call_session.start()
+            call_session = await build_call_pipeline(
+                config=config,
+                transport=transport,
+                call_context=call_context,
+                settings=settings,
+                session_factory=session_factory,
+                mcp_tools=mcp_tools,
+            )
+            # WS handler stays open for the call — await (don't fire-and-forget).
+            await call_session.start()
 
     except WebSocketDisconnect:
         logger.info("media_stream_disconnected")

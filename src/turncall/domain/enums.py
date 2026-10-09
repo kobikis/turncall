@@ -88,6 +88,9 @@ class CallEventType(StrEnum):
     CALL_CUSTOMER_SILENT = "call.customer_silent"
     # The caller asked not to be called again, via the do_not_call tool (#228).
     CALL_OPTED_OUT = "call.opted_out"
+    # Refused at the carrier over the project's live-call limit (#224). No call
+    # row exists, so it is dispatched with no call_id and never stored.
+    CALL_REJECTED = "call.rejected"
 
     # Transcripts
     TRANSCRIPT_PARTIAL = "transcript.partial"

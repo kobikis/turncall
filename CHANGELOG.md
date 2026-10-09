@@ -66,6 +66,16 @@ and is not part of this repository's history.
 
 ### Added
 
+- **A live-call limit per project** (#224). `PUT /v1/projects/{id}/limits`
+  `{"live_calls": n}` (admin key; the project read shows `limits`), with
+  `LIMIT_LIVE_CALLS` as the platform default — unlimited unless set. Over it,
+  an inbound Twilio or WhatsApp call is refused unanswered at the carrier
+  (busy) and dispatched as the new `call.rejected` event (no `call_id`: the
+  call never started); `POST /v1/calls/outbound` and `POST /v1/webrtc/connect`
+  answer `429 rate_limited`. Counted in Redis across every server. A call
+  frees its slot however it ends, and one whose server died frees it within
+  two minutes.
+
 - **A test harness that drives the running app like a carrier** (#214,
   `tests/harness/`). Stub STT/LLM/TTS answer instantly from a script (a tool
   call included), a fake carrier records every REST action TurnCall takes, and

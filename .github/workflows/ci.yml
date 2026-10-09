@@ -100,6 +100,15 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      # The limits (#206) are counted in Redis; their tests skip without one.
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       DATABASE_URL: postgresql+asyncpg://turncall:turncall@localhost:5432/turncall
     steps:

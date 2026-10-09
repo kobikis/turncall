@@ -8,7 +8,11 @@ from loguru import logger
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ErrorCode, ForbiddenError, NotFoundError
 from turncall.api.responses import ok
-from turncall.api.v1.schemas.projects import CreateProjectRequest, ProjectResponse
+from turncall.api.v1.schemas.projects import (
+    CreateProjectRequest,
+    ProjectLimits,
+    ProjectResponse,
+)
 from turncall.auth import AdminAuth, Auth, PlatformKey
 from turncall.config import get_settings
 from turncall.storage.repositories import project_repo
@@ -24,7 +28,7 @@ async def create_project(
     """Create a new project. Requires the platform credential (X-Platform-Key) —
     only the builder can provision projects (ADR-0011)."""
     row = await project_repo.create_project(session, name=body.name)
-    return ok(ProjectResponse.model_validate(row))
+    return ok(ProjectResponse.from_row(row))
 
 
 @router.get("/{project_id}")
@@ -39,7 +43,28 @@ async def get_project(
     row = await project_repo.get_project_by_id(session, project_id)
     if row is None:
         raise NotFoundError("Project", str(project_id))
-    return ok(ProjectResponse.model_validate(row))
+    return ok(ProjectResponse.from_row(row))
+
+
+@router.put("/{project_id}/limits")
+async def set_project_limits(
+    project_id: UUID,
+    body: ProjectLimits,
+    auth: AdminAuth,
+    session: DbSession,
+) -> dict:
+    """Set the project's limits (#206), replacing all of them: a field left
+    out or null goes back to the platform default. Applies to the next call or
+    message — calls already live keep their slots, and count toward the new
+    limit. Admin key; a project can only set its own."""
+    if auth.project_id != project_id:
+        raise ForbiddenError("A project can only set its own limits")
+    row = await project_repo.set_limits(
+        session, project_id, limit_live_calls=body.live_calls
+    )
+    if row is None:
+        raise NotFoundError("Project", str(project_id))
+    return ok(ProjectResponse.from_row(row))
 
 
 @router.delete("/{project_id}")

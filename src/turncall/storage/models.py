@@ -54,6 +54,9 @@ class ProjectRow(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Limits (#206), null = the platform default (LIMIT_* env, unlimited
+    # unless set). Enforced in Redis by `services/limits`, not here.
+    limit_live_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class ApiKeyRow(Base):

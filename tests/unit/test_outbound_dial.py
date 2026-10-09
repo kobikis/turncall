@@ -21,6 +21,7 @@ from turncall.api.deps import get_session
 from turncall.auth.context import AuthContext
 from turncall.auth.dependencies import resolve_auth_context
 from turncall.domain.enums import CallEventType, ProjectRole
+from turncall.services.limits import ProjectLimits
 
 pytestmark = pytest.mark.unit
 
@@ -126,6 +127,11 @@ def dial(app, monkeypatch):
             ),
         ) as update,
         patch(f"{CALLS}.get_next_sequence_number", AsyncMock(return_value=1)),
+        # No limits here: those are tests/integration/test_limits.py's.
+        patch(
+            "turncall.services.limits.limits_for_project",
+            AsyncMock(return_value=ProjectLimits()),
+        ),
         patch(f"{CALLS}.create_call_event", AsyncMock()) as event,
         patch(
             f"{ADAPTER}.initiate_outbound_call", AsyncMock(return_value="CA123")

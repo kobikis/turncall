@@ -13,13 +13,14 @@ apply to its target (#227).
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from loguru import logger
 
 from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.config import get_settings
 from turncall.domain.enums import CallDirection, CallEventType
+from turncall.services.limits import admit_live_call, release_live_call
 from turncall.services.twilio_accounts import account_for_number
 from turncall.storage.repositories import (
     agent_repo,
@@ -32,7 +33,8 @@ from turncall.storage.repositories.credential_repo import CredentialKeyError
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from turncall.storage.models import CallRow
+    from turncall.services.twilio_accounts import TwilioAccount
+    from turncall.storage.models import AgentRow, CallRow, PhoneNumberRow
 
 
 # ponytail: raises the API's own errors, which every caller so far answers
@@ -92,9 +94,44 @@ async def place_outbound_call(
             ),
         )
 
+    # Last, so a dial refused for any other reason holds no slot. The slot is
+    # the call's from here: freed when it ends (a status callback, or the media
+    # stream's hold), or at once if the dial never happens.
+    call_id = uuid4()
+    await admit_live_call(session, project_id=project_id, call_id=call_id)
+    try:
+        return await _dial(
+            session,
+            call_id=call_id,
+            project_id=project_id,
+            agent=agent,
+            phone_number=phone_number,
+            account=account,
+            to_number=to_number,
+            metadata=metadata,
+        )
+    except BaseException:
+        await release_live_call(project_id, call_id)
+        raise
+
+
+async def _dial(
+    session: AsyncSession,
+    *,
+    call_id: UUID,
+    project_id: UUID,
+    agent: AgentRow,
+    phone_number: PhoneNumberRow,
+    account: TwilioAccount,
+    to_number: str,
+    metadata: dict[str, Any],
+) -> CallRow:
+    """Write the call row, dial, and record the carrier's SID on it."""
+    settings = get_settings()
     call = await call_repo.create_call(
         session,
         project_id=project_id,
+        call_id=call_id,
         direction=CallDirection.OUTBOUND,
         from_number=phone_number.e164_number,
         to_number=to_number,

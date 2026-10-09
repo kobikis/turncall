@@ -33,6 +33,7 @@ from turncall.services.credentials import (
     MissingProviderKeyError,
     for_project,
 )
+from turncall.services.limits import hold_live_call
 
 
 async def load_call_credentials(
@@ -209,6 +210,12 @@ async def start_call_pipeline(
     failure: BaseException | None = None
 
     async def _run() -> None:
+        # The call's live-call slot (#224) is this task's from here: renewed
+        # while it runs, freed however it ends — a failed build included.
+        async with hold_live_call(call_context.project_id, call_context.call_id):
+            await _build_and_run()
+
+    async def _build_and_run() -> None:
         nonlocal failure
         mcp_manager: Any | None = None
         session: CallSession | None = None

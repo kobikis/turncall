@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from uuid import UUID, uuid4
 
 import aiohttp
 from fastapi import APIRouter, Request
@@ -27,6 +28,7 @@ from turncall.orchestrator.transport_factory import (
     WEBRTC_SAMPLE_RATE,
     create_whatsapp_transport,
 )
+from turncall.services.limits import admit_inbound_call, release_live_call
 from turncall.storage.database import create_session_factory, get_engine
 from turncall.storage.repositories import (
     agent_repo,
@@ -126,7 +128,7 @@ async def handle_webhook(
             field = change.get("field")
 
             if field == "calls":
-                return await _handle_call_event(body, request)
+                return await _handle_call_event(body, request, session)
 
             if field == "messages":
                 return await _handle_message_event(change, session)
@@ -138,6 +140,7 @@ async def handle_webhook(
 async def _handle_call_event(
     body: dict[str, Any],
     request: Request,
+    session: AsyncSession,
 ) -> Response:
     """Handle WhatsApp voice call events using Pipecat WhatsAppClient.
 
@@ -145,7 +148,7 @@ async def _handle_call_event(
     whatsapp_secret=None to avoid double validation inside Pipecat.
     """
     from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
-    from pipecat.transports.whatsapp.api import WhatsAppWebhookRequest
+    from pipecat.transports.whatsapp.api import WhatsAppApi, WhatsAppWebhookRequest
     from pipecat.transports.whatsapp.client import WhatsAppClient
 
     settings = get_settings()
@@ -161,9 +164,36 @@ async def _handle_call_event(
 
     webhook_request = WhatsAppWebhookRequest.model_validate(body)
 
+    # A connect over the project's live-call limit (#224) is rejected before
+    # it is accepted, so the caller is never answered only to be refused.
+    call_id = uuid4()
+    from_number, to_number, whatsapp_call_id = _call_parties(body)
+    phone_row = (
+        await phone_number_repo.get_by_e164(session, to_number)
+        if _is_connect(body)
+        else None
+    )
+    if phone_row is not None and not await admit_inbound_call(
+        session,
+        project_id=phone_row.project_id,
+        call_id=call_id,
+        transport="whatsapp",
+        from_number=from_number,
+        to_number=to_number,
+        provider_call_id=whatsapp_call_id,
+    ):
+        api = WhatsAppApi(
+            settings.whatsapp.token, settings.whatsapp.phone_number_id, http_session
+        )
+        try:
+            await api.reject_call_to_whatsapp(whatsapp_call_id)
+        except Exception:
+            logger.exception("whatsapp_call_reject_error")
+        return JSONResponse({"status": "rejected"})
+
     async def on_connection(connection: SmallWebRTCConnection) -> None:
         """Callback invoked when a WhatsApp call is connected via WebRTC."""
-        await _start_voice_pipeline(connection, body)
+        await _start_voice_pipeline(connection, body, call_id)
 
     try:
         await whatsapp_client.handle_webhook_request(
@@ -172,21 +202,15 @@ async def _handle_call_event(
         )
     except Exception:
         logger.exception("whatsapp_call_event_error")
+        if phone_row is not None:
+            await release_live_call(phone_row.project_id, call_id)
         return JSONResponse({"status": "error"}, status_code=500)
 
     return JSONResponse({"status": "ok"})
 
 
-async def _start_voice_pipeline(
-    connection: object,
-    body: dict[str, Any],
-) -> None:
-    """Build and start a Pipecat voice pipeline for a WhatsApp call."""
-    settings = get_settings()
-    engine = get_engine()
-    session_factory = create_session_factory(engine)
-
-    # Extract caller info from webhook body
+def _call_parties(body: dict[str, Any]) -> tuple[str, str, str]:
+    """(from, to, WhatsApp call id) of a call event, numbers in E.164."""
     from_number = ""
     to_number = ""
     whatsapp_call_id = ""
@@ -201,10 +225,29 @@ async def _start_voice_pipeline(
             metadata = value.get("metadata", {})
             if metadata.get("phone_number_id"):
                 to_number = metadata.get("display_phone_number", to_number)
+    return _normalize_phone(from_number), _normalize_phone(to_number), whatsapp_call_id
 
-    # Normalize phone numbers
-    to_number = _normalize_phone(to_number)
-    from_number = _normalize_phone(from_number)
+
+def _is_connect(body: dict[str, Any]) -> bool:
+    """A call starting — the one event that takes a live-call slot."""
+    return any(
+        call.get("event") == "connect"
+        for entry in body.get("entry", [])
+        for change in entry.get("changes", [])
+        for call in change.get("value", {}).get("calls", [])
+    )
+
+
+async def _start_voice_pipeline(
+    connection: object,
+    body: dict[str, Any],
+    call_id: UUID,
+) -> None:
+    """Build and start a Pipecat voice pipeline for a WhatsApp call."""
+    settings = get_settings()
+    engine = get_engine()
+    session_factory = create_session_factory(engine)
+    from_number, to_number, whatsapp_call_id = _call_parties(body)
 
     # Resolve phone number -> agent
     async with session_factory() as db:
@@ -226,8 +269,6 @@ async def _start_voice_pipeline(
 
         if phone_row.routing_target_type == "webhook" and phone_row.server_url:
             # Dynamic agent resolution via server event
-            from uuid import uuid4
-
             from turncall.events.server_events import send_call_init
             from turncall.services.call_init_resolver import (
                 resolve_call_init,
@@ -261,6 +302,7 @@ async def _start_voice_pipeline(
                 from_number=from_number,
                 whatsapp_call_id=whatsapp_call_id,
             )
+            await release_live_call(phone_row.project_id, call_id)
             return
 
         # Build config from agent or inline dynamic config
@@ -296,6 +338,7 @@ async def _start_voice_pipeline(
         call = await call_repo.create_call(
             db,
             project_id=phone_row.project_id,
+            call_id=call_id,
             direction=CallDirection.INBOUND,
             from_number=from_number,
             to_number=to_number,

@@ -209,6 +209,17 @@ class ToolSettings(BaseSettings):
     max_response_bytes: int = Field(default=1_048_576, alias="TOOL_MAX_RESPONSE_BYTES")
 
 
+class LimitSettings(BaseSettings):
+    """The platform's default limits (#206), 0 = unlimited. A project's own
+    value (`PUT /v1/projects/{id}/limits`) wins over these, in either direction:
+    a default, not a ceiling."""
+
+    model_config = SettingsConfigDict(env_prefix="LIMIT_")
+
+    # Live calls one project may hold at once, across every server.
+    live_calls: int = Field(default=0, ge=0, alias="LIMIT_LIVE_CALLS")
+
+
 class ServerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="")
 
@@ -392,6 +403,7 @@ class Settings(BaseSettings):
     mcp: MCPSettings = Field(default_factory=MCPSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)
     evals: EvalSettings = Field(default_factory=EvalSettings)
+    limits: LimitSettings = Field(default_factory=LimitSettings)
 
     @property
     def is_production(self) -> bool:
