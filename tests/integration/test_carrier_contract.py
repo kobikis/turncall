@@ -13,6 +13,7 @@ carrier. Nothing here names a carrier's URL or wire format.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -172,6 +173,16 @@ async def _events(app: Harness, call_id: str) -> list[str]:
     response = await app.api.get(f"/v1/calls/{call_id}/events")
     assert response.status_code == 200, response.text
     return [e["event_type"] for e in response.json()["data"]]
+
+
+async def _wait_for_event(
+    app: Harness, call_id: str, event_type: str, *, timeout: float = 10.0
+) -> None:
+    """Until the call's event log holds `event_type` — stored and committed,
+    which is later than the carrier seeing the request that caused it."""
+    async with asyncio.timeout(timeout):
+        while event_type not in await _events(app, call_id):
+            await asyncio.sleep(0.05)
 
 
 def _in_order(seen: list[str], expected: list[str]) -> bool:
@@ -526,6 +537,9 @@ async def test_the_agent_sends_dtmf(edge: CarrierEdge, monkeypatch) -> None:
         await call.wait_for_agent_speech(1)
         await call.say(400)
         dtmf = await app.carrier.wait_for("send_dtmf", timeout=10)
+        # The carrier records the request before `call_control.send_dtmf` has
+        # written `dtmf.sent`; hanging up in between ends the call under it.
+        await _wait_for_event(app, call.call_id, "dtmf.sent")
         await call.hang_up()
         await app.sink.wait_for("call.ended")
         events = await _events(app, call.call_id)
