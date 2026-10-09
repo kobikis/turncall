@@ -232,6 +232,17 @@ class LimitSettings(BaseSettings):
     messages_per_minute: int = Field(default=0, ge=0, alias="LIMIT_MESSAGES_PER_MINUTE")
 
 
+class CampaignSettings(BaseSettings):
+    """The campaign worker (#229)."""
+
+    model_config = SettingsConfigDict(env_prefix="CAMPAIGN_")
+
+    # Longest the worker sleeps between passes. A new campaign wakes it at once
+    # (its id is pushed on a Redis list); this bounds how late it notices
+    # everything else — a call ending and freeing a slot, a target coming due.
+    poll_seconds: int = Field(default=2, ge=1, alias="CAMPAIGN_POLL_SECONDS")
+
+
 class ServerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="")
 
@@ -417,6 +428,7 @@ class Settings(BaseSettings):
     tools: ToolSettings = Field(default_factory=ToolSettings)
     evals: EvalSettings = Field(default_factory=EvalSettings)
     limits: LimitSettings = Field(default_factory=LimitSettings)
+    campaigns: CampaignSettings = Field(default_factory=CampaignSettings)
 
     @property
     def is_production(self) -> bool:

@@ -65,6 +65,7 @@
                   "guides/takeaways",
                   "guides/evals",
                   "guides/limits",
+                  "guides/campaigns",
                   "guides/observability",
                   "guides/graceful-shutdown"
                 ]
@@ -169,6 +170,15 @@
               "POST /v1/suppression-list",
               "GET /v1/suppression-list",
               "DELETE /v1/suppression-list/{entry_id}"
+            ]
+          },
+          {
+            "group": "Campaigns",
+            "pages": [
+              "POST /v1/campaigns",
+              "GET /v1/campaigns",
+              "GET /v1/campaigns/{campaign_id}",
+              "GET /v1/campaigns/{campaign_id}/targets"
             ]
           },
           {

@@ -276,3 +276,38 @@ class EvalToolPolicy(StrEnum):
         `mock_only`, and nothing here can raise on a stored row.
         """
         return cls.LIVE if str(value) == cls.LIVE.value else cls.MOCK_ONLY
+
+
+class CampaignStatus(StrEnum):
+    """Where a campaign is (#229). `queued` until the worker first reaches it,
+    `completed` once no target can be dialled again."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+
+
+class CampaignTargetStatus(StrEnum):
+    """One target's place in its campaign (#229).
+
+    `pending` waits to be dialled; `dialling` is claimed by a worker that is
+    dialling it now; `calling` has a call placed; the rest are final. The
+    claim is its own committed step, so a worker that dies mid-dial leaves
+    `dialling` behind as evidence rather than a target silently dialled
+    twice — reclaiming it is a janitor's decision (#232), never a redial.
+    """
+
+    PENDING = "pending"
+    DIALLING = "dialling"
+    CALLING = "calling"
+    COMPLETED = "completed"
+    SUPPRESSED = "suppressed"
+    FAILED = "failed"
+
+    @property
+    def is_final(self) -> bool:
+        return self in (
+            CampaignTargetStatus.COMPLETED,
+            CampaignTargetStatus.SUPPRESSED,
+            CampaignTargetStatus.FAILED,
+        )

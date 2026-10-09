@@ -1,0 +1,57 @@
+---
+title: Campaigns
+description: "One agent calls a list of numbers, each with its own variables, inside your suppression list and limits"
+icon: "list-check"
+---
+
+A **campaign** is a set of outbound calls one agent places to a list of targets. You send the list; TurnCall dials each target once, skips numbers on your suppression list (`POST /v1/suppression-list`), and never holds more live calls than your project's [live-call limit](/guides/limits).
+
+<Note>
+Campaigns are dialled by a separate process, `turncall-campaign-worker` — the same image as the API with a different entrypoint. A campaign runs for hours, and the API's event loop is busy carrying live calls. Run at least one worker wherever campaigns should dial; several can run side by side.
+</Note>
+
+## Create a campaign
+
+```bash
+curl -X POST https://api.example.com/v1/campaigns \
+  -H "Authorization: Bearer tc_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "October renewals",
+    "agent_id": "AGENT_ID",
+    "from_number_id": "PHONE_NUMBER_ID",
+    "timezone": "America/New_York",
+    "targets": [
+      {"number": "+15550001111", "variables": {"name": "Ada", "plan": "Pro"}},
+      {"number": "+447700900123", "variables": {"name": "Alan"}, "timezone": "Europe/London"}
+    ]
+  }'
+```
+
+- **`variables`** reach the agent the way [call-init](/guides/call-init) variables do: `{{name}}` in the system prompt, first message and tool descriptions is replaced with the target's value.
+- **`timezone`** is required for every target — on the target itself, or as the campaign's default. It must be an IANA name such as `America/New_York`. A target with neither is refused (`422`). TurnCall never guesses a zone from the number: a ported mobile keeps its area code wherever its owner lives, and the target's local time is what calling hours are read in.
+- A number listed twice is refused: it would call the same person twice. Up to 10,000 targets per request.
+
+The response is the campaign, `queued` until the worker reaches it, with its targets counted by status.
+
+## Follow it
+
+```bash
+curl https://api.example.com/v1/campaigns/$CAMPAIGN_ID/targets?status=failed \
+  -H "Authorization: Bearer tc_..."
+```
+
+| Target status | Meaning |
+|---------------|---------|
+| `pending` | Waiting to be dialled |
+| `dialling` | A worker is dialling it right now |
+| `calling` | Dialled; `call_id` is the call, still in progress |
+| `completed` | The call ended; `ended_reason` says how (`customer_did_not_answer`, `customer_busy`, `voicemail`, …) |
+| `suppressed` | On the suppression list when its turn came — never dialled |
+| `failed` | Could not be dialled; `error` says why |
+
+Each call also carries `campaign_id` and `campaign_target_id` in its `metadata`, so `call.ended` webhooks tie back to the target. The campaign moves from `running` to `completed` once no target is left to dial.
+
+## How it paces
+
+Each target is dialled once, through the same path as `POST /v1/calls/outbound`. The worker asks your project's limits before every dial and waits while you are at `live_calls`; it picks up again as calls end. Set `outbound_calls_per_second` too if your carrier caps how fast a number may dial — without a live-call limit, a campaign dials as fast as it can.
