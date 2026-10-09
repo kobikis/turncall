@@ -37,6 +37,7 @@ async def create_campaign(
     agent_id: UUID,
     from_number_id: UUID,
     timezone: str | None,
+    calling_window: dict[str, Any] | None,
     targets: list[dict[str, Any]],
 ) -> CampaignRow:
     """A campaign and all of its targets, in one flush.
@@ -49,6 +50,7 @@ async def create_campaign(
         agent_id=agent_id,
         from_number_id=from_number_id,
         timezone=timezone,
+        calling_window=calling_window,
         status=CampaignStatus.QUEUED.value,
     )
     session.add(row)
@@ -227,6 +229,18 @@ async def record_dial(session: AsyncSession, target_id: UUID, call_id: UUID) -> 
         status=CampaignTargetStatus.CALLING,
         call_id=call_id,
         attempts=CampaignTargetRow.attempts + 1,
+        claimed_at=None,
+    )
+
+
+async def defer(session: AsyncSession, target_id: UUID, until: datetime) -> bool:
+    """`dialling` -> `pending` until `until`: claimed outside its calling window."""
+    return await _move(
+        session,
+        target_id,
+        frm=[CampaignTargetStatus.DIALLING],
+        status=CampaignTargetStatus.PENDING,
+        next_attempt_at=until,
         claimed_at=None,
     )
 

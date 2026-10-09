@@ -571,7 +571,7 @@ CONTEXT.md). The API records one; `turncall-campaign-worker` — its own process
 same image, never the API's event loop (ADR-0018's reason) — dials it.
 
 ```
-POST /v1/campaigns                    # {name, agent_id, from_number_id, timezone?, targets: [{number, variables?, timezone?}]}
+POST /v1/campaigns                    # {name, agent_id, from_number_id, timezone?, calling_window?, targets: [{number, variables?, timezone?}]}
 GET  /v1/campaigns                    # ?page= ?limit=; each with target counts per status
 GET  /v1/campaigns/{id}
 GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target status, call_id, ended_reason, error
@@ -601,20 +601,34 @@ GET  /v1/campaigns/{id}/targets       # ?status= ?page= ?limit=; per-target stat
 - **The clock is injected** (`campaigns.dialer.Clock`); due means
   `next_attempt_at` null or `<=` now. #230 (windows) and #231 (retry spacing)
   set `next_attempt_at`; nothing reads wall time directly.
+- **Calling window** (#230): `calling_window: {start, end, days}` on the
+  campaign — wall-clock `[start, end)` on ISO `days` (default all seven), read
+  in **each target's own zone on the day in question**
+  (`campaigns/schedule.next_open`), never an offset computed once: New York's
+  Monday 09:00 is 14:00 UTC after the November fall-back, not Saturday's 13:00.
+  Checked on the **claimed** target right before its dial, so no route to
+  `pending` can reach the carrier outside it; outside, the claim becomes a
+  `defer` to `pending` with `next_attempt_at` = the next opening, in the
+  claim's own transaction. A start in a spring-forward gap opens just after
+  the gap. Overnight windows (`start >= end`) and times with an offset are a
+  422. Null = any hour.
 - **The worker** (`campaigns/worker.serve`) runs a pass, then waits on a Redis
   list that `POST /v1/campaigns` pushes to, at most `CAMPAIGN_POLL_SECONDS`
   (default 2). The database is the work; the list only wakes it, so a lost push
   costs one poll. A stop is honoured between passes.
 
-Not yet: calling windows (#230), retries (#231), pause/resume/cancel and the
+Not yet: retries (#231), pause/resume/cancel and the
 janitor (#232), pacing beyond the limits (#233), weighted agents and
 start/finish events (#234). Until #233, a project with no live-call limit is
 dialled as fast as one pass can go.
 
 Key files: `campaigns/dialer.py`, `campaigns/worker.py`, `campaigns/queue.py`,
-`api/v1/campaigns.py`, `storage/repositories/campaign_repo.py`. Tests:
+`campaigns/schedule.py`, `api/v1/campaigns.py`,
+`storage/repositories/campaign_repo.py`. Tests:
 `tests/integration/test_campaigns.py` (the worker's pass against the fake
-carrier; `answer_outbound_call` picks up a dialled call).
+carrier; `answer_outbound_call` picks up a dialled call),
+`tests/integration/test_campaign_schedule.py` (a clock stepped across a DST
+change, four zones), `tests/unit/test_campaign_schedule.py`.
 
 ## Takeaways (Structured Outputs)
 

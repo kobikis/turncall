@@ -16,7 +16,9 @@ claimed-and-unclaimed every pass.
 
 Time comes from a `Clock`, never `datetime.now()` inline: calling windows
 (#230) and retry spacing (#231) are decided against it, and a test has to be
-able to say what time it is.
+able to say what time it is. The window is checked on the claimed target
+itself, right before its dial, so no route to `pending` — a first attempt, a
+retry, a reclaim — can reach the carrier outside it.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from typing import Any
 from loguru import logger
 
 from turncall.api.errors import ApiError, ErrorCode, RateLimitedError
+from turncall.campaigns.schedule import CallingWindow, next_open
 from turncall.domain.enums import CampaignStatus, CampaignTargetStatus
 from turncall.services import limits
 from turncall.services.call_view import call_view_fields
@@ -113,11 +116,21 @@ async def _dial_next(
         )
         if not check.allowed:
             return False
-        target = await campaign_repo.claim_next_target(session, campaign.id, clock())
+        now = clock()
+        target = await campaign_repo.claim_next_target(session, campaign.id, now)
+        if target is None:
+            return False
+        opens = next_open(
+            now, target.timezone, CallingWindow.from_json(campaign.calling_window)
+        )
+        if opens > now:
+            # Outside its window: back to `pending` until it opens, in the same
+            # transaction as the claim, so the deferral is the only trace.
+            await campaign_repo.defer(session, target.id, opens)
+            await session.commit()
+            return True
         # Committed before the dial: a crash mid-dial leaves `dialling`.
         await session.commit()
-    if target is None:
-        return False
     return await _dial(session_factory, campaign, target)
 
 

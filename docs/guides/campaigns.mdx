@@ -21,6 +21,7 @@ curl -X POST https://api.example.com/v1/campaigns \
     "agent_id": "AGENT_ID",
     "from_number_id": "PHONE_NUMBER_ID",
     "timezone": "America/New_York",
+    "calling_window": {"start": "09:00", "end": "20:00", "days": ["mon", "tue", "wed", "thu", "fri", "sat"]},
     "targets": [
       {"number": "+15550001111", "variables": {"name": "Ada", "plan": "Pro"}},
       {"number": "+447700900123", "variables": {"name": "Alan"}, "timezone": "Europe/London"}
@@ -34,6 +35,15 @@ curl -X POST https://api.example.com/v1/campaigns \
 
 The response is the campaign, `queued` until the worker reaches it, with its targets counted by status.
 
+## Calling windows
+
+`calling_window` is the hours a target may be called, in **that target's own timezone**: with `{"start": "09:00", "end": "20:00"}`, a New York target is called between 09:00 and 20:00 New York time and a London target between 09:00 and 20:00 London time, whatever the clock says where the worker runs. Daylight saving is applied on the day itself, so the window does not drift by an hour when a zone changes.
+
+- `start` is inclusive and `end` exclusive, as `HH:MM`, with no offset — the zone is always the target's. `start` must be before `end`; a window across midnight is refused rather than guessed at.
+- `days` (`mon` … `sun`) limits it to those days of the target's week. Leave it out for every day.
+- A target whose turn comes outside its window goes back to `pending`, and its `next_attempt_at` says when its window next opens.
+- With no `calling_window`, targets are called at any hour.
+
 ## Follow it
 
 ```bash
@@ -43,7 +53,7 @@ curl https://api.example.com/v1/campaigns/$CAMPAIGN_ID/targets?status=failed \
 
 | Target status | Meaning |
 |---------------|---------|
-| `pending` | Waiting to be dialled |
+| `pending` | Waiting to be dialled — at `next_attempt_at` when that is set |
 | `dialling` | A worker is dialling it right now |
 | `calling` | Dialled; `call_id` is the call, still in progress |
 | `completed` | The call ended; `ended_reason` says how (`customer_did_not_answer`, `customer_busy`, `voicemail`, …) |

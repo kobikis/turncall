@@ -14,6 +14,11 @@ suppression list and staying inside the project's live-call limit. Each
 target's status is on `GET /v1/campaigns/{id}/targets`. See
 [Campaigns](/guides/campaigns).
 
+**Campaign calling windows.** `calling_window` sets the hours and days a
+campaign may call, read in each target's own timezone — daylight saving
+included. A target outside its window waits for the next opening. See
+[Campaigns](/guides/campaigns#calling-windows).
+
 **`openai_live` agents with tools work out of the box.** An agent with tools and
 no `s2s.delegation` block now delegates to its own `llm` (`"mode": "client"`),
 with your keys, running your webhook and MCP tools — `end_call`, `do_not_call`

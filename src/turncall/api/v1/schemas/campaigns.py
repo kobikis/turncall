@@ -1,8 +1,8 @@
 """Campaign API schemas (#229)."""
 
-from datetime import datetime
+from datetime import datetime, time
 from functools import cache
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 from zoneinfo import available_timezones
 
@@ -42,6 +42,39 @@ class CampaignTargetRequest(BaseModel):
     _timezone = field_validator("timezone")(_iana)
 
 
+Weekday = Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+class CallingWindowRequest(BaseModel):
+    """Local hours every target may be called in, read in the target's own zone."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: time
+    end: time
+    days: list[Weekday] = Field(
+        default_factory=lambda: list(Weekday.__args__), min_length=1
+    )
+
+    @model_validator(mode="after")
+    def _a_local_span(self) -> "CallingWindowRequest":
+        """Wall-clock times with no zone, start before end.
+
+        A zone on the time would contradict the target's, which is the only
+        one a window is read in. An overnight window (22:00-02:00) is refused
+        rather than guessed at: nobody is called at night by a typo.
+        """
+        if self.start.tzinfo is not None or self.end.tzinfo is not None:
+            raise ValueError(
+                "calling_window times are local to each target: give no offset"
+            )
+        if self.start >= self.end:
+            raise ValueError("calling_window start must be before its end")
+        if len(set(self.days)) != len(self.days):
+            raise ValueError("calling_window days lists a day twice")
+        return self
+
+
 class CreateCampaignRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -50,6 +83,8 @@ class CreateCampaignRequest(BaseModel):
     from_number_id: UUID
     # The timezone of every target that names none.
     timezone: str | None = None
+    # No window: a target may be called at any hour of its day.
+    calling_window: CallingWindowRequest | None = None
     targets: list[CampaignTargetRequest] = Field(
         ..., min_length=1, max_length=MAX_TARGETS
     )
@@ -97,6 +132,7 @@ class CampaignResponse(BaseModel):
     agent_id: UUID
     from_number_id: UUID
     timezone: str | None
+    calling_window: dict[str, Any] | None
     status: str
     # Targets per status, every status present.
     targets: dict[str, int]
@@ -112,6 +148,7 @@ class CampaignResponse(BaseModel):
             agent_id=row.agent_id,
             from_number_id=row.from_number_id,
             timezone=row.timezone,
+            calling_window=row.calling_window,
             status=row.status,
             targets=counts,
             created_at=row.created_at,

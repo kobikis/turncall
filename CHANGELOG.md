@@ -79,6 +79,15 @@ and is not part of this repository's history.
   and `ended_reason`. Calling windows, retries, pause/cancel, pacing and
   weighted agents follow (#230-#234).
 
+- **Campaign calling windows** (#230). `calling_window: {start, end, days}` on
+  `POST /v1/campaigns` — local hours, read in **each target's own** IANA zone
+  on the day in question, so a New York target's 09:00 is 13:00 UTC in October
+  and 14:00 UTC after the November change. A target reached outside its window
+  goes back to `pending` with `next_attempt_at` at its next opening; the check
+  sits on the claimed target right before the dial, so nothing reaches the
+  carrier outside it. `days` defaults to every day; an overnight window or a
+  time with an offset is a 422. No window, no restriction — as before.
+
 - **A messages-per-minute limit per text session** (#226).
   `messages_per_minute` on `PUT /v1/projects/{id}/limits`, with
   `LIMIT_MESSAGES_PER_MINUTE` as the platform default — unlimited unless set —

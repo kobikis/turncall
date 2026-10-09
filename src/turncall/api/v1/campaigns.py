@@ -56,6 +56,11 @@ async def create_campaign(
         agent_id=body.agent_id,
         from_number_id=body.from_number_id,
         timezone=body.timezone,
+        calling_window=(
+            body.calling_window.model_dump(mode="json")
+            if body.calling_window is not None
+            else None
+        ),
         targets=body.resolved_targets(),
     )
     counts = await campaign_repo.target_counts(session, [row.id])

@@ -828,6 +828,8 @@ class CampaignRow(Base):
     )
     # The default for targets that name none; each target stores its own.
     timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # `{start, end, days}` in each target's own zone (#230); null = any hour.
+    calling_window: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # A string, not a PG enum: #232 adds states, and a column of strings takes
     # them without an `ALTER TYPE` that cannot run inside a transaction.
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
