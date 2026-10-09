@@ -7,10 +7,13 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
-**Cold transfer and DTMF on Telnyx numbers.** `transfer_call` and
-`POST /v1/calls/{id}/transfer` work on a Telnyx call as on Twilio: the caller
-hears your `transfer_message`, then ringing, then the operator. `send_dtmf`
-works too.
+**Transfers and DTMF on Telnyx numbers.** `transfer_call` and
+`POST /v1/calls/{id}/transfer` work on a Telnyx call as on Twilio, cold and
+warm: the caller hears your `transfer_message`, then ringing; on a warm
+transfer the operator hears the `briefing` before being connected; a
+voicemail on the operator's line is reported as `transfer.answered`, and an
+operator who doesn't answer gets the caller your `fallback_message`.
+`send_dtmf` works too.
 
 **Telnyx numbers answer inbound calls.** Bind a number with
 `"carrier": "telnyx"` and point its Call Control application at

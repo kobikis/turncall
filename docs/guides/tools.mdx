@@ -60,9 +60,10 @@ number alike:
 
 The same parameters work via the control API: `POST /v1/calls/{call_id}/transfer`. Warm
 transfer and `fallback_message` require `PUBLIC_BASE_URL` to be set (Twilio calls back to
-TurnCall for the operator briefing and the no-answer fallback). If the operator's line goes
-to voicemail, the caller is still connected (and can leave a message); a `transfer.answered`
-event reports `answered_by` (`human`/`machine`). See the
+TurnCall for the operator briefing and the no-answer fallback; the requirement is the same
+on Telnyx numbers, so one transfer config behaves the same on either carrier). If the
+operator's line goes to voicemail, the caller is still connected (and can leave a message);
+a `transfer.answered` event reports `answered_by` (`human`/`machine`/`unknown`). See the
 the `examples/call-transfer` example.
 
 <Note>

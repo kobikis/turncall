@@ -10,10 +10,17 @@ with Telnyx's webhooks:
    transfer message on the caller's leg if there is one (its
    `call.speak.ended` goes on to step 2), else goes straight to step 2.
 2. Ring the operator: ringback to the caller, and the operator dialled on a
-   new leg linked to the call.
-3. The operator's `call.answered` bridges the two legs. The operator's
-   `call.hangup` before that means nobody answered, and the call ends.
-4. If the caller hangs up while the operator still rings, the operator's leg
+   new leg linked to the call — with machine detection where Twilio would run
+   it, whose result (`call.machine.detection.ended`) is reported as
+   `transfer.answered` and never waited for.
+3. The operator's `call.answered`: on a warm transfer the briefing is spoken
+   on the operator's leg (the whisper — the caller still hears ringing), and
+   its `call.speak.ended` bridges the two legs; on a cold one they are bridged
+   at once.
+4. The operator's `call.hangup` before answering (busy, no answer, rejected):
+   the caller hears the `fallback_message`, if there is one, and the call
+   ends. Gone after answering but before the bridge: the call ends.
+5. If the caller hangs up while the operator still rings, the operator's leg
    is hung up too.
 
 Each command carries a `client_state` naming the TurnCall call and the step,
@@ -51,8 +58,13 @@ CONNECTION_KEY = "telnyx_connection_id"
 _STATE_KEY = "transfer"
 STARTED = "started"  # caller's leg: the agent's stream stopped
 MESSAGE = "message"  # caller's leg: the transfer message is playing
+FALLBACK = "fallback"  # caller's leg: the fallback message is playing
 OPERATOR = "operator"  # operator's leg: ringing
+BRIEFING = "briefing"  # operator's leg: answered, hearing the briefing
 BRIDGED = "bridged"  # operator's leg: connected to the caller
+
+# Telnyx's machine-detection result, in the words of Twilio's (ADR-0009).
+_ANSWERED_BY = {"human": "human", "machine": "machine"}
 
 
 class TransferUnavailable(RuntimeError):
@@ -157,7 +169,9 @@ async def on_event(
         if leg == call.provider_call_sid:
             await _on_caller_event(adapter, call, event_type, payload, state)
         else:
-            await _on_operator_event(session, adapter, call, leg, event_type, state)
+            await _on_operator_event(
+                session, adapter, call, leg, event_type, payload, state
+            )
     except Exception:
         logger.exception(
             "telnyx_transfer_step_failed", call_id=str(call.id), event_type=event_type
@@ -179,8 +193,12 @@ async def _on_caller_event(
         if intent is not None and intent.operator_leg:
             await _hang_up(adapter, intent.operator_leg)
         return
-    finished = event_type == "call.speak.ended" and payload.get("status") == "completed"
-    if not finished or state.get("step") != MESSAGE:
+    if event_type != "call.speak.ended":
+        return
+    if state.get("step") == FALLBACK:
+        await _hang_up(adapter, caller)
+        return
+    if state.get("step") != MESSAGE or payload.get("status") != "completed":
         return
     intent = await transfer_svc.load_transfer_intent(call.id)
     if intent is None:
@@ -202,16 +220,88 @@ async def _on_operator_event(
     call: Any,
     leg: str,
     event_type: str,
+    payload: dict[str, Any],
     state: dict[str, Any],
 ) -> None:
-    if event_type == "call.answered" and state.get("step") == OPERATOR:
-        await _bridge(adapter, call, leg)
-    elif event_type == "call.hangup" and state.get("step") != BRIDGED:
-        # Busy, no answer, rejected — or gone before the bridge: nobody took
-        # the caller, so the call ends (ADR-0009: no return to the agent).
-        logger.info("telnyx_transfer_not_answered", call_id=str(call.id))
-        await _stop_ringback(adapter, call.provider_call_sid)
-        await _hang_up(adapter, call.provider_call_sid)
+    step = state.get("step")
+    if event_type == "call.answered" and step == OPERATOR:
+        await _answered(session, adapter, call, leg)
+    elif event_type == "call.speak.ended" and step == BRIEFING:
+        if payload.get("status") == "completed":
+            await _bridge(adapter, call, leg)
+    elif event_type == "call.machine.detection.ended":
+        await _report_answered_by(session, call, payload)
+    elif event_type == "call.hangup" and step != BRIDGED:
+        logger.info("telnyx_transfer_not_connected", call_id=str(call.id), step=step)
+        await _not_connected(adapter, call, answered=step != OPERATOR)
+
+
+async def _answered(
+    session: AsyncSession, adapter: Any, call: Any, operator: str
+) -> None:
+    """Step 3. The briefing is resolved now, not at transfer time, so a
+    summary covers the conversation up to the moment the operator picks up."""
+    intent = await transfer_svc.load_transfer_intent(call.id)
+    briefing = (
+        await transfer_svc.resolve_briefing_text(session, call.id, intent)
+        if intent is not None and intent.transfer_mode == "warm"
+        else None
+    )
+    if briefing:
+        try:
+            await adapter.speak(
+                operator, briefing, client_state=client_state(call.id, BRIEFING)
+            )
+            return
+        except Exception:
+            # An operator left listening to nothing helps no one: connect
+            # them unbriefed, as Twilio does when the whisper has nothing.
+            logger.exception("telnyx_transfer_briefing_failed", call_id=str(call.id))
+    await _bridge(adapter, call, operator)
+
+
+async def _report_answered_by(
+    session: AsyncSession, call: Any, payload: dict[str, Any]
+) -> None:
+    """`transfer.answered`: whether a person or a voicemail took the transfer.
+    Reported, never acted on — the bridge has not waited for it."""
+    from turncall.domain.enums import CallEventType
+    from turncall.events.emit import emit_call_event
+
+    intent = await transfer_svc.load_transfer_intent(call.id)
+    await emit_call_event(
+        session,
+        call_id=call.id,
+        project_id=call.project_id,
+        event_type=CallEventType.TRANSFER_ANSWERED,
+        payload={
+            "target_number": intent.target_number if intent else None,
+            "answered_by": _ANSWERED_BY.get(str(payload.get("result")), "unknown"),
+        },
+    )
+    await session.commit()
+
+
+async def _not_connected(adapter: Any, call: Any, *, answered: bool) -> None:
+    """Step 4. Nobody took the caller, and the call ends (ADR-0009: no return
+    to the agent). The fallback message is for an operator who never answered,
+    as Twilio's `<Dial action>` plays it on a dial status other than
+    `completed`."""
+    caller = call.provider_call_sid
+    await _stop_ringback(adapter, caller)
+    intent = await transfer_svc.load_transfer_intent(call.id)
+    if answered or intent is None or not intent.fallback_message:
+        await _hang_up(adapter, caller)
+        return
+    try:
+        await adapter.speak(
+            caller,
+            intent.fallback_message,
+            client_state=client_state(call.id, FALLBACK),
+        )
+    except Exception:
+        logger.exception("telnyx_transfer_fallback_failed", call_id=str(call.id))
+        await _hang_up(adapter, caller)
 
 
 async def _ring_operator(
@@ -233,7 +323,7 @@ async def _ring_operator(
 
 
 async def _bridge(adapter: Any, call: Any, operator: str) -> None:
-    """Step 3: the caller and the operator, connected."""
+    """The caller and the operator, connected."""
     caller = call.provider_call_sid
     await _stop_ringback(adapter, caller)
     try:

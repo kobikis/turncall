@@ -247,7 +247,7 @@ Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
   call-init, for every carrier.
 - **DTMF** is the `send_dtmf` command; the stream keeps running.
 
-### Telnyx transfers (#220)
+### Telnyx transfers (#220, #221)
 
 ADR-0009's semantics on Call Control, which has no TwiML: each part of a
 transfer is a command on one leg, and the next starts on the webhook that
@@ -258,9 +258,14 @@ call_control.transfer_call → park the intent (always, on Telnyx) → start:
   streaming_stop (caller leg; the agent leaves, the call stays up)
   [speak transfer_message on the caller leg → call.speak.ended]
   ringback playback on the caller leg + dial the operator (link_to the caller,
-    bridge_intent → the caller's caller ID)
-  operator call.answered → stop ringback, bridge
-  operator call.hangup before the bridge → the call ends
+    bridge_intent → the caller's caller ID, AMD where Twilio runs it)
+  operator call.answered → warm: speak the briefing on the operator leg (the
+    whisper; from_summary resolved now) → its call.speak.ended → stop
+    ringback, bridge.  cold (or no briefing): bridge at once
+  operator call.machine.detection.ended → transfer.answered (notify only)
+  operator call.hangup before answering → fallback_message spoken on the
+    caller leg, then hang up (none → hang up); after answering, before the
+    bridge → hang up
   caller call.hangup while the operator rings → hang the operator up
 ```
 
@@ -276,7 +281,13 @@ call_control.transfer_call → park the intent (always, on Telnyx) → start:
   where Twilio's `<Dial>` passes ringback through, so the caller's leg plays a
   generated North American cadence, looped, until the bridge.
 - **Machine detection** on the operator's leg wherever Twilio would run it
-  (`PUBLIC_BASE_URL` set), and it never holds the bridge.
+  (`PUBLIC_BASE_URL` set), and it never holds the bridge: the result
+  (`human`/`machine`/`not_sure` → `unknown`) becomes `transfer.answered`
+  whenever it arrives. So a warm briefing plays into a voicemail before the
+  caller is bridged, the same wart ADR-0009 accepts on Twilio.
+- **The fallback** is for an operator who never answered, as Twilio's
+  `<Dial action>` plays it only on a dial status other than `completed`. An
+  operator who answered and hung up before the bridge ends the call.
 - **Failure**: one that stops the transfer before it started leaves the call
   with the agent; once the stream is stopped, a step that fails hangs the
   caller up rather than leave a silent line. Call control drops the parked

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -153,24 +154,30 @@ async def test_the_agent_ends_the_call(edge: CarrierEdge, monkeypatch) -> None:
     assert _in_order(events, expected), events
 
 
-@pytest.mark.parametrize("edge", CARRIERS)
-async def test_a_cold_transfer(edge: CarrierEdge, monkeypatch) -> None:
-    """The caller hears the transfer message, then ringing, then the operator:
-    no briefing on a cold transfer, and the agent's stream ending is not the
-    call ending."""
+@dataclass(frozen=True)
+class Transferred:
+    """A transfer, as the two ends heard it and as the backend was told."""
+
+    heard: TransferHeard
+    ended: dict[str, Any]  # the call.ended payload
+    events: list[str]  # the call's event log
+    transferred: list[dict[str, Any]]  # call.transferred payloads
+    answered: list[dict[str, Any]]  # transfer.answered payloads
+    caller_hung_up_by_us: bool
+
+
+async def _transfer(
+    edge: CarrierEdge, monkeypatch, args: dict[str, Any], *, answered_by: str | None
+) -> Transferred:
+    """The agent transfers the caller with `args`; the carrier plays the
+    transfer out, with the operator's line answered by `answered_by`."""
     import turncall.storage.redis as redis_module
 
     redis = _MemoryRedis()
     monkeypatch.setattr(redis_module, "get_redis", lambda: redis)
     script = Script(
         caller=("Put me through to a person.",),
-        agent=(
-            ToolCall(
-                "transfer_call",
-                {"target_number": OPERATOR, "transfer_message": "Transferring you."},
-            ),
-            "Connecting you now.",
-        ),
+        agent=(ToolCall("transfer_call", args), "Connecting you now."),
     )
     async with run_app(
         script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
@@ -179,22 +186,135 @@ async def test_a_cold_transfer(edge: CarrierEdge, monkeypatch) -> None:
         call = await edge.ring(app, CALLER, number)
         await call.wait_for_agent_speech(1)
         await call.say(400)
-        heard = await call.complete_transfer(answered_by="human")
+        heard = await call.complete_transfer(answered_by=answered_by)
         ended = (await app.sink.wait_for("call.ended"))["payload"]
         events = await _events(app, call.call_id)
-        transferred = app.sink.of("call.transferred")
+    hung_up = [a.params["call_sid"] for a in app.carrier.actions_of("hang_up")]
+    return Transferred(
+        heard=heard,
+        ended=ended,
+        events=events,
+        transferred=[e["payload"] for e in app.sink.of("call.transferred")],
+        answered=[e["payload"] for e in app.sink.of("transfer.answered")],
+        caller_hung_up_by_us=call.call_sid in hung_up,
+    )
 
-    assert heard == TransferHeard(
+
+def _assert_transferred(result: Transferred, mode: str) -> None:
+    assert [t["success"] for t in result.transferred] == [True]
+    assert result.transferred[0]["transfer_mode"] == mode
+    # Attempted is enough: a transfer nobody answered still reads transferred.
+    assert result.ended["ended_reason"] == "transferred"
+    expected = ["call.started", "call.transferred"]  # call.ended: see above
+    assert _in_order(result.events, expected), result.events
+
+
+@pytest.mark.parametrize("edge", CARRIERS)
+async def test_a_cold_transfer(edge: CarrierEdge, monkeypatch) -> None:
+    """The caller hears the transfer message, then ringing, then the operator:
+    no briefing on a cold transfer, and the agent's stream ending is not the
+    call ending."""
+    result = await _transfer(
+        edge,
+        monkeypatch,
+        {"target_number": OPERATOR, "transfer_message": "Transferring you."},
+        answered_by="human",
+    )
+
+    assert result.heard == TransferHeard(
         target=OPERATOR, caller=["Transferring you."], ringing=True, bridged=True
     )
     # The caller is with the operator: nothing of ours hung their leg up.
-    hung_up = [a.params["call_sid"] for a in app.carrier.actions_of("hang_up")]
-    assert call.call_sid not in hung_up
-    assert [e["payload"]["success"] for e in transferred] == [True]
-    assert transferred[0]["payload"]["transfer_mode"] == "cold"
-    assert ended["ended_reason"] == "transferred"
-    expected = ["call.started", "call.transferred"]  # call.ended: see above
-    assert _in_order(events, expected), events
+    assert not result.caller_hung_up_by_us
+    _assert_transferred(result, "cold")
+
+
+@pytest.mark.parametrize("edge", CARRIERS)
+async def test_a_warm_transfer_briefs_the_operator(edge, monkeypatch) -> None:
+    """The operator hears a summary of the conversation so far before being
+    connected; the caller hears ringing, never the briefing."""
+    import turncall.services.llm_text as llm_text
+
+    async def summarize(_llm: Any, messages: list[dict[str, str]], **_: Any) -> Any:
+        transcript = messages[-1]["content"].removeprefix("Transcript:\n")
+        return SimpleNamespace(text=f"Summary. {transcript}")
+
+    monkeypatch.setattr(llm_text, "complete_text", summarize)
+    result = await _transfer(
+        edge,
+        monkeypatch,
+        {
+            "target_number": OPERATOR,
+            "transfer_mode": "warm",
+            "transfer_message": "Transferring you.",
+            "briefing": {"from_summary": True},
+        },
+        answered_by="human",
+    )
+
+    heard = result.heard
+    assert (heard.target, heard.caller) == (OPERATOR, ["Transferring you."])
+    assert (heard.ringing, heard.bridged) == (True, True)
+    [briefing] = heard.operator
+    assert briefing.startswith("Summary. ")
+    assert "Caller: Put me through to a person." in briefing
+    assert result.answered == [{"target_number": OPERATOR, "answered_by": "human"}]
+    assert not result.caller_hung_up_by_us
+    _assert_transferred(result, "warm")
+
+
+@pytest.mark.parametrize("edge", CARRIERS)
+async def test_a_warm_transfer_to_voicemail_is_reported_not_blocked(
+    edge, monkeypatch
+) -> None:
+    """ADR-0009: machine detection notifies and never holds the bridge, so the
+    caller can leave the operator a message (the briefing plays into the
+    voicemail first — the known wart)."""
+    result = await _transfer(
+        edge,
+        monkeypatch,
+        {
+            "target_number": OPERATOR,
+            "transfer_mode": "warm",
+            "briefing": "Caller wants billing.",
+        },
+        answered_by="machine",
+    )
+
+    assert result.heard == TransferHeard(
+        target=OPERATOR,
+        operator=["Caller wants billing."],
+        ringing=True,
+        bridged=True,
+    )
+    assert result.answered == [{"target_number": OPERATOR, "answered_by": "machine"}]
+    _assert_transferred(result, "warm")
+
+
+@pytest.mark.parametrize("edge", CARRIERS)
+async def test_a_warm_transfer_nobody_answers(edge, monkeypatch) -> None:
+    """No answer: the caller hears the fallback message and the call ends —
+    the agent does not come back (ADR-0009)."""
+    result = await _transfer(
+        edge,
+        monkeypatch,
+        {
+            "target_number": OPERATOR,
+            "transfer_mode": "warm",
+            "transfer_message": "Transferring you.",
+            "briefing": "Caller wants billing.",
+            "fallback_message": "Sorry, nobody is free.",
+        },
+        answered_by=None,
+    )
+
+    assert result.heard == TransferHeard(
+        target=OPERATOR,
+        caller=["Transferring you.", "Sorry, nobody is free."],
+        ringing=True,
+    )
+    assert result.answered == []
+    _assert_transferred(result, "warm")
 
 
 @pytest.mark.parametrize("edge", CARRIERS)

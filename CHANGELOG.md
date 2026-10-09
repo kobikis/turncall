@@ -13,6 +13,14 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Warm transfer on Telnyx numbers** (#221, ADR-0009, ADR-0022). The
+  operator hears the `briefing` — a string or `{"from_summary": true}`,
+  summarized when they pick up — spoken on their own leg before the caller is
+  connected, while the caller hears ringing. Machine detection on the
+  operator's line reports `transfer.answered` (`human`/`machine`/`unknown`) and
+  never holds the bridge; an operator who does not answer gets the caller the
+  `fallback_message` and the call ends. The carrier contract runs the same
+  three warm scenarios — answered, voicemail, no answer — on Twilio and Telnyx.
 - **Cold transfer and DTMF on Telnyx numbers** (#220, ADR-0009, ADR-0022).
   `transfer_call` and `POST /v1/calls/{id}/transfer` behave on a Telnyx call as
   on Twilio: the caller hears the `transfer_message`, then ringing, then the

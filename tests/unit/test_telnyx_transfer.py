@@ -215,3 +215,93 @@ class TestAStartThatFails:
         assert not result.success
         store.assert_awaited_once()
         clear.assert_awaited_once_with(call.id)
+
+
+def _adapter_mock() -> MagicMock:
+    return MagicMock(
+        speak=AsyncMock(),
+        end_call=AsyncMock(),
+        stop_playback=AsyncMock(),
+        bridge=AsyncMock(),
+    )
+
+
+async def _operator_event(
+    event_type: str, step: str, intent: TransferIntent | None, **payload: str
+) -> tuple[MagicMock, AsyncMock]:
+    call = _call(telnyx_connection_id="app-1")
+    adapter, emit = _adapter_mock(), AsyncMock()
+    state = {"transfer": str(call.id), "step": step}
+    with (
+        patch(
+            "turncall.services.transfer.load_transfer_intent",
+            AsyncMock(return_value=intent),
+        ),
+        patch("turncall.events.emit.emit_call_event", emit),
+    ):
+        await telnyx_transfer.on_event(
+            AsyncMock(),
+            adapter,
+            call,
+            event_type,
+            {"call_control_id": "v3:b", **payload},
+            state,
+        )
+    return adapter, emit
+
+
+WITH_FALLBACK = TransferIntent("+1", "warm", fallback_message="Sorry.")
+
+
+class TestTheOperatorsLeg:
+    @pytest.mark.parametrize(
+        "result,answered_by",
+        [("human", "human"), ("machine", "machine"), ("not_sure", "unknown")],
+    )
+    async def test_machine_detection_is_reported_in_twilios_words(
+        self, result, answered_by
+    ) -> None:
+        _, emit = await _operator_event(
+            "call.machine.detection.ended", "bridged", WITH_FALLBACK, result=result
+        )
+        payload = emit.await_args.kwargs["payload"]
+        assert payload == {"target_number": "+1", "answered_by": answered_by}
+
+    async def test_no_answer_plays_the_fallback_to_the_caller(self) -> None:
+        adapter, _ = await _operator_event("call.hangup", "operator", WITH_FALLBACK)
+        adapter.speak.assert_awaited_once()
+        assert adapter.speak.await_args.args[:2] == ("v3:a", "Sorry.")
+        adapter.end_call.assert_not_awaited()  # after the message has played
+
+    async def test_gone_after_answering_ends_the_call_without_it(self) -> None:
+        """Twilio's dial status is `completed` then, which plays no fallback."""
+        adapter, _ = await _operator_event("call.hangup", "briefing", WITH_FALLBACK)
+        adapter.speak.assert_not_awaited()
+        adapter.end_call.assert_awaited_once_with("v3:a")
+
+    async def test_after_the_bridge_a_hangup_is_just_the_end(self) -> None:
+        adapter, _ = await _operator_event("call.hangup", "bridged", WITH_FALLBACK)
+        adapter.speak.assert_not_awaited()
+        adapter.end_call.assert_not_awaited()
+
+    async def test_a_briefing_that_cannot_be_spoken_still_connects(self) -> None:
+        call = _call(telnyx_connection_id="app-1")
+        adapter = _adapter_mock()
+        adapter.speak.side_effect = RuntimeError("refused")
+        with (
+            patch(
+                "turncall.services.transfer.load_transfer_intent",
+                AsyncMock(
+                    return_value=TransferIntent("+1", "warm", briefing_text="Hi")
+                ),
+            ),
+        ):
+            await telnyx_transfer.on_event(
+                AsyncMock(),
+                adapter,
+                call,
+                "call.answered",
+                {"call_control_id": "v3:b"},
+                {"transfer": str(call.id), "step": "operator"},
+            )
+        adapter.bridge.assert_awaited_once()

@@ -88,7 +88,7 @@ than five minutes old is refused. With no API key anywhere, a call to the
 number fails before it is answered, and the call's `error.raised` event carries
 `missing_keys: ["telnyx"]`.
 
-Cold transfers and sending DTMF work on a Telnyx number as on Twilio (see
+Cold and warm transfers and sending DTMF work on a Telnyx number as on Twilio (see
 [Call transfer](/guides/tools#call-transfer-cold-warm)). Not yet on Telnyx:
 outbound calls. SMS on Telnyx numbers is not supported, so `sms_enabled` is
 refused on one.
