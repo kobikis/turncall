@@ -138,6 +138,27 @@ TurnCall uses **Silero VAD** for barge-in (interruption handling) and **Smart Tu
 }
 ```
 
+### Spoken digits
+
+Smart Turn judges a turn by how the caller *sounds* at its end, and a string of
+digits — a phone, order or account number — often ends without the falling
+intonation of a finished sentence. Measured on synthesized speech (8 voices),
+utterances ending in a digit string were judged *incomplete* 14 times in 40;
+plain sentences, 2 in 16 (both one robotic voice). An incomplete verdict is
+not a stuck turn: the turn still ends once the caller has been silent for
+`smart_turn_stop_secs` (default 1.0s), so the cost is that much extra wait
+before the agent answers.
+
+For an agent whose callers mostly read out numbers, any of these removes it:
+
+- `stt.model: "flux-general-en"` — [Deepgram Flux](#deepgram-flux) decides the
+  turn from the transcript as well as the audio.
+- `smart_turn_detection: false` — the turn ends on `silence_timeout_ms` of
+  silence alone. Lower that window with care: callers pause between digit
+  groups.
+- A lower `smart_turn_stop_secs` — keeps Smart Turn for everything else and
+  shortens the wait it adds when it is unsure.
+
 ### Deepgram Flux
 
 Flux is Deepgram streaming STT that detects the end of the caller's turn
