@@ -40,6 +40,7 @@ from tests.harness.app import (
     _delete_project,
     app_env,
 )
+from tests.harness.asterisk import FakeAsterisk
 from tests.harness.carrier import FakeCarrier
 from tests.harness.stubs import Script
 
@@ -139,7 +140,11 @@ async def serve_process(script: Script) -> AsyncIterator[ServerProcess]:
                 "/v1/webhooks", json={"url": sink.url, "events": ["*"]}
             )
             sink.secret = hook.json()["data"]["secret"]
-            harness = Harness(base_url, http, carrier, sink, project_id)
+            # Never started here: the child's ARI edge has no Asterisk to reach.
+            asterisk = FakeAsterisk(
+                carrier, base_url.replace("http", "ws") + "/ws/asterisk-media"
+            )
+            harness = Harness(base_url, http, carrier, sink, project_id, asterisk)
             yield ServerProcess(harness, process, log)
     finally:
         if process.returncode is None:

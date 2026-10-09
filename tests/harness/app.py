@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import tempfile
 import uuid
@@ -23,7 +24,9 @@ import httpx
 import pytest
 import uvicorn
 from aiohttp import web
+from cryptography.fernet import Fernet
 
+from tests.harness.asterisk import AsteriskCall, FakeAsterisk
 from tests.harness.carrier import FakeCarrier
 from tests.harness.stubs import Script, Setter, install_stub_providers
 
@@ -90,6 +93,39 @@ class Harness:
     carrier: FakeCarrier
     sink: WebhookSink
     project_id: str
+    asterisk: FakeAsterisk  # started on first use
+
+    async def bind_asterisk_number(self, agent_id: str) -> str:
+        """A number on the fake Asterisk, bound to the agent — the PBX given
+        to the project as its own `asterisk` credential (ADR-0020), which is
+        what makes TurnCall's ARI edge connect to it."""
+        await self.asterisk.start()
+        stored = await self.api.put(
+            "/v1/credentials/asterisk",
+            json={
+                "ari_url": self.asterisk.url,
+                "username": self.asterisk.username,
+                "password": self.asterisk.password,
+            },
+        )
+        assert stored.status_code == 200, stored.text
+        await asyncio.wait_for(self.asterisk.connected.wait(), 5)
+        e164 = "+1555" + str(uuid.uuid4().int)[:7]
+        response = await self.api.post(
+            "/v1/phone-numbers",
+            json={
+                "carrier": "asterisk",
+                "e164_number": e164,
+                "routing_target_type": "agent",
+                "routing_target_id": agent_id,
+            },
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["data"]["twilio_webhooks_configured"] is None
+        return e164
+
+    async def ring_asterisk(self, from_number: str, to_number: str) -> AsteriskCall:
+        return await self.asterisk.ring(from_number, to_number)
 
     async def create_agent(self, config: dict[str, Any], name: str = "harness") -> str:
         response = await self.api.post(
@@ -140,6 +176,10 @@ def app_env(carrier: FakeCarrier, base_url: str) -> dict[str, str]:
         "PLATFORM_API_KEY": PLATFORM_KEY,
         "LOCAL_STORAGE_PATH": tempfile.mkdtemp(prefix="turncall-harness-"),
         "PIPECAT_ENABLE_TRACING": "false",
+        # A project credential needs one (the Asterisk edge stores its PBX as
+        # one). An operator's own key wins: the database may hold its rows.
+        "CREDENTIAL_ENCRYPTION_KEY": os.environ.get("CREDENTIAL_ENCRYPTION_KEY")
+        or Fernet.generate_key().decode(),
     }
 
 
@@ -218,6 +258,9 @@ async def run_app(
     )
     serving = asyncio.create_task(server.serve(sockets=[sock]))
     sink = WebhookSink()
+    asterisk = FakeAsterisk(
+        carrier, base_url.replace("http", "ws") + "/ws/asterisk-media"
+    )
     project_id = ""
     try:
         while not server.started:
@@ -232,10 +275,11 @@ async def run_app(
                 "/v1/webhooks", json={"url": sink.url, "events": ["*"]}
             )
             sink.secret = hook.json()["data"]["secret"]
-            yield Harness(base_url, http, carrier, sink, project_id)
+            yield Harness(base_url, http, carrier, sink, project_id, asterisk)
     finally:
         server.should_exit = True
-        await serving
+        await serving  # the lifespan closes TurnCall's ARI connections first
+        await asterisk.stop()
         await sink.stop()
         if project_id:
             await _delete_project(project_id)

@@ -30,8 +30,11 @@ async def _clear_twilio_number(settings: Settings, number: Any) -> None:
     """Point a Twilio number away from TurnCall, on its own Twilio account if it
     has one. NOT best-effort — a failure propagates so the delete aborts before
     anything is soft-deleted."""
+    from turncall.domain.carriers import TWILIO
     from turncall.services.twilio_accounts import account_for_number
 
+    if number.provider != TWILIO:
+        return  # only a Twilio number has webhooks pointing at TurnCall
     account = account_for_number(number, settings)
     if account is None:
         return

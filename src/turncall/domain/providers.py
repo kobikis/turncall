@@ -9,8 +9,8 @@ one account serving STT and TTS, OpenAI one account serving four roles, Google o
 account behind both its LLM and Gemini Live, and AWS one account behind both
 `bedrock` and the `aws` S2S provider.
 
-A [[carrier]] is listed as the `carrier` role: Telnyx's account is a project
-credential (ADR-0022), Twilio's is not — it is per number or the platform's
+A [[carrier]] is listed as the `carrier` role: Telnyx's and Asterisk's accounts
+are project credentials (ADR-0022), Twilio's is not — it is per number or the platform's
 TWILIO_* (`services/twilio_accounts.py`).
 """
 

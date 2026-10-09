@@ -99,12 +99,24 @@ async def test_numbers_are_cleared_without_platform_creds():
 @pytest.mark.asyncio
 async def test_a_number_with_no_account_anywhere_is_skipped():
     number = SimpleNamespace(
+        provider="twilio",
         external_number_sid="PN1",
         twilio_account_sid=None,
         twilio_auth_token_ciphertext=None,
     )
     with patch("turncall.adapters.telephony.twilio_adapter.TwilioAdapter") as adapter:
         await pd._clear_twilio_number(_settings(twilio=False), number)
+    adapter.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_asterisk_number_has_no_twilio_webhooks_to_clear():
+    """Its "SID" is its own E.164; asking Twilio to clear it would fail and
+    abort the whole project delete (#209)."""
+    number = SimpleNamespace(provider="asterisk", external_number_sid="+15550001")
+    with patch("turncall.adapters.telephony.twilio_adapter.TwilioAdapter") as adapter:
+        await pd._clear_twilio_number(_settings(), number)
     adapter.assert_not_called()
 
 

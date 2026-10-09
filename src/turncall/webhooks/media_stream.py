@@ -134,7 +134,9 @@ async def run_media_stream(
                 call_id=UUID(call_id_str),
                 project_id=UUID(project_id_str),
                 agent_id=call_row.active_agent_id or DYNAMIC_AGENT_ID,
-                call_sid=stream.call_sid,
+                # A stream that does not name the call's REST handle (Asterisk's)
+                # leaves it to the call record, which always has it.
+                call_sid=stream.call_sid or call_row.provider_call_sid or "",
                 stream_sid=stream.stream_id,
                 session_factory=session_factory,
                 mcp_manager=mcp_manager,

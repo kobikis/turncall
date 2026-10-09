@@ -13,7 +13,11 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from turncall.domain.carriers import TELNYX, TWILIO
+from turncall.domain.carriers import ASTERISK, TELNYX, TWILIO
+from turncall.orchestrator.asterisk_serializer import (
+    ASTERISK_SAMPLE_RATE,
+    AsteriskFrameSerializer,
+)
 from turncall.orchestrator.serializer import TwilioFrameSerializer
 
 STUN_SERVERS = ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]
@@ -81,6 +85,9 @@ CARRIER_MEDIA: dict[str, CarrierMedia] = {
         lambda stream: TwilioFrameSerializer(stream_sid=stream.stream_id),
     ),
     TELNYX: CarrierMedia(TELNYX_SAMPLE_RATE, _telnyx_serializer),
+    # chan_websocket external media, asked for as ulaw (#209): the PBX's own
+    # G.711 rate, and one VOICE_OUTPUT_RATES already renders ambience at.
+    ASTERISK: CarrierMedia(ASTERISK_SAMPLE_RATE, lambda _: AsteriskFrameSerializer()),
 }
 
 # Every rate a voice transport sends audio at. Ambience renditions are made for

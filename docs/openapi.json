@@ -7428,7 +7428,8 @@
             "type": "string",
             "enum": [
               "twilio",
-              "telnyx"
+              "telnyx",
+              "asterisk"
             ],
             "title": "Carrier",
             "description": "The number's carrier. `provider` is accepted as a deprecated alias for it.",
@@ -9857,7 +9858,8 @@
                 "type": "string",
                 "enum": [
                   "twilio",
-                  "telnyx"
+                  "telnyx",
+                  "asterisk"
                 ]
               },
               {

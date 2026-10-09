@@ -138,6 +138,74 @@ async def test_over_the_limit_telnyx_inbound_is_rejected_busy(monkeypatch, redis
     assert [c["provider_call_sid"] for c in calls] == [first]
 
 
+async def test_over_the_limit_asterisk_call_goes_back_to_the_dialplan(
+    monkeypatch, redis_env
+):
+    """The ARI edge admits through the same `open_inbound_call` (#209): over
+    the limit the caller's channel is continued to the dialplan unanswered, as
+    any refused call is, and `call.rejected` names the carrier. A call whose
+    caller leaves before its media stream came gives its slot back — no
+    pipeline ever held it."""
+    import asyncio
+
+    from turncall.storage.redis import get_redis
+
+    async def _slot_freed(project_id: str, call_id: str) -> None:
+        key = limits._live_calls_key(uuid.UUID(project_id))
+        for _ in range(100):
+            if await get_redis().zscore(key, call_id) is None:
+                return
+            await asyncio.sleep(0.05)
+        raise AssertionError("the abandoned call's slot was never freed")
+
+    async with run_app(
+        SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        number = await app.bind_asterisk_number(await app.create_agent(AGENT))
+        r = await app.api.put(
+            f"/v1/projects/{app.project_id}/limits", json={"live_calls": 1}
+        )
+        assert r.status_code == 200, r.text
+        pbx = app.asterisk
+
+        # Admitted, answered, its external media asked for — which never dials.
+        pbx.media_dials = False
+        abandoned = await pbx.ring("+15550001111", number, until_bridged=False)
+        for _ in range(100):
+            if abandoned.media_id:
+                break
+            await asyncio.sleep(0.05)
+        assert abandoned.call_id, "the first call was not admitted"
+
+        over = await pbx.ring("+15550002222", number, until_bridged=False)
+        sent_back = await app.carrier.wait_for("continue")
+        rejected = await app.sink.wait_for("call.rejected")
+
+        # The first caller gives up before any media: the edge frees the slot.
+        await pbx.leave_stasis(abandoned)
+        await _slot_freed(app.project_id, abandoned.call_id)
+        pbx.media_dials = True
+        later = await pbx.ring("+15550003333", number)
+        await later.hang_up()
+        calls = (await app.api.get("/v1/calls")).json()["data"]
+
+    assert sent_back.params["call_sid"] == over.call_sid
+    assert [a.params["call_sid"] for a in app.carrier.actions_of("continue")] == [
+        over.call_sid
+    ]
+    assert not over.call_id  # never admitted: no TURNCALL_CALL_ID, no answer
+    answered = [p for m, p, _ in pbx.requests if m == "POST" and p.endswith("/answer")]
+    assert f"channels/{over.call_sid}/answer" not in answered
+    assert rejected["call_id"] is None
+    assert rejected["payload"]["reason"] == "live_call_limit"
+    assert rejected["payload"]["transport"] == "asterisk"
+    assert rejected["payload"]["provider_call_id"] == over.call_sid
+    status = {c["id"]: c["status"] for c in calls}
+    assert status[abandoned.call_id] == "failed"
+    assert later.call_id in status
+    assert len(status) == 2  # the refused call wrote no row
+
+
 async def test_the_limit_is_one_count_across_two_servers(monkeypatch, redis_env):
     async with (
         run_app(

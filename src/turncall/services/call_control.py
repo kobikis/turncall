@@ -14,6 +14,7 @@ from uuid import UUID
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from turncall.adapters.telephony.base import UnsupportedCarrierAction
 from turncall.domain.call_state import is_active_state, is_valid_transition
 from turncall.domain.enums import CallEventType, CallStatus
 
@@ -31,11 +32,12 @@ async def _carrier_adapter(session: AsyncSession, call: Any) -> Any | None:
     """The REST adapter of this call's own carrier (ADR-0022), on its account.
 
     Telnyx: the project's `telnyx` credential, else the platform's key.
+    Asterisk: the project's own Asterisk, else the platform's (#209).
     Twilio: the number's own account if bound with one, else the platform's.
     None when no account exists to act with.
     """
     from turncall.config import get_settings
-    from turncall.domain.carriers import TELNYX
+    from turncall.domain.carriers import ASTERISK, TELNYX
 
     settings = get_settings()
     if call.provider == TELNYX:
@@ -43,10 +45,16 @@ async def _carrier_adapter(session: AsyncSession, call: Any) -> Any | None:
 
         telnyx = await account_for_project(session, call.project_id, settings)
         return telnyx.adapter() if telnyx.api_key else None
+    if call.provider == ASTERISK:
+        from turncall.services.asterisk_accounts import (
+            account_for_project as asterisk_account,
+        )
 
-    from turncall.services.twilio_accounts import account_for_call
+        account: Any = await asterisk_account(session, call.project_id, settings)
+    else:
+        from turncall.services.twilio_accounts import account_for_call
 
-    account = await account_for_call(session, call, settings)
+        account = await account_for_call(session, call, settings)
     return account.adapter() if account else None
 
 
@@ -296,6 +304,7 @@ async def transfer_call(
     # Execute the transfer on the call's carrier
     sid = call.provider_call_sid
     transfer_success = False
+    refusal: str | None = None
     if sid and sid != "webrtc":
         adapter = await _carrier_adapter(session, call)
         if adapter:
@@ -309,6 +318,8 @@ async def transfer_call(
                     amd_callback_url=amd_url,
                 )
                 transfer_success = True
+            except UnsupportedCarrierAction as exc:
+                refusal = str(exc)
             except Exception:
                 logger.exception(
                     "carrier_transfer_failed", call_sid=sid, target=target_number
@@ -342,7 +353,9 @@ async def transfer_call(
     await call_repo.update_call_status(
         session, call_id, status=CallStatus.IN_PROGRESS.value
     )
-    return ControlResult(success=False, message="Transfer failed at provider level")
+    return ControlResult(
+        success=False, message=refusal or "Transfer failed at provider level"
+    )
 
 
 async def handoff_to_agent(

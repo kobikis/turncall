@@ -97,6 +97,7 @@ make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 | `AWS_REGION` | No | Default AWS region for S3 **and** the `bedrock`/`aws` providers (default: `us-east-1`). Per-agent `config.aws.region` overrides it — Bedrock model availability is region-specific and rarely matches your bucket. See `adr/0016` |
 | `AWS_AGENT_CREDENTIALS_ENABLED` | No | Allow per-agent **static** AWS keys in the agent config (default `false`). They persist in `config_blob`, which is unencrypted JSONB, so agents supplying them are rejected at create unless this is on. The unrestricted path is `config.aws.role_arn`, which stores no durable secret. **Agent config only**: an `aws` project credential is encrypted and not gated by it, so `false` means "no static AWS keys *in agent config*", not "none on this deployment". See `adr/0016`, `adr/0020` |
 | `CREDENTIAL_ENCRYPTION_KEY` | With credentials | Fernet key for project credentials (ADR-0020). Storing one without it is an error, and startup **fails** (API and eval worker) when credentials exist and it is unset or wrong. **Set once, never rotate** — rotating orphans every stored credential |
+| `ASTERISK_ARI_URL` | No | The platform's Asterisk, over ARI (#209): `http(s)://host:8088`. With `ASTERISK_ARI_USERNAME` / `ASTERISK_ARI_PASSWORD` (ari.conf), `ASTERISK_ARI_APP` (`turncall`, the `Stasis()` app), `ASTERISK_MEDIA_CONNECTION` (`turncall`, the websocket_client.conf entry) and `ASTERISK_TRANSFER_CONTEXT` (`turncall-transfer`). A project's own `asterisk` credential replaces it for that project. `ASTERISK_EDGE_ENABLED` (`true`): on in exactly one replica — see "Carriers" |
 | `PUBLIC_BASE_URL` | No | Public https base URL (e.g. `https://abc.ngrok.io`) for Twilio callbacks issued without an inbound request — warm-transfer briefing + no-answer fallback. Cold transfer works without it. See `adr/0009` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OTLP collector endpoint for OpenTelemetry traces (e.g. `http://localhost:4318`). Required for tracing in production (it self-disables without one). `OTEL_EXPORTER_OTLP_PROTOCOL` (`http/protobuf`\|`grpc`), `OTEL_EXPORTER_OTLP_HEADERS` also honored. See `adr/0010` |
 | `PIPECAT_VAD_CONFIDENCE_THRESHOLD` | No | Silero VAD confidence (default `0.6`). Pairs with the agent's `silence_timeout_ms`, which sets the VAD stop window when Smart Turn is off (with it on, the model decides the turn and VAD uses Pipecat's 0.2s — the two waits are serial, so charging both cost 1.8s a turn) |
@@ -170,8 +171,9 @@ inbound message → session lookup/create → message history → [KB retrieval]
 
 ## Carriers
 
-A **carrier** is the telephony company a number belongs to (ADR-0022): Twilio
-or Telnyx, with Asterisk ARI next. The boundary is cut for them:
+A **carrier** is the telephony company a number belongs to (ADR-0022): Twilio,
+Telnyx, or a PBX's Asterisk over ARI (#209, below). The boundary is cut for
+them:
 
 - **`TelephonyAdapter` is REST actions only** — dial, hang up, transfer, DTMF,
   configure a number, SMS. How a carrier answers a call (TwiML) and signs its
@@ -194,8 +196,8 @@ or Telnyx, with Asterisk ARI next. The boundary is cut for them:
   one agent and one caller script per carrier (Seam A) and holds each to the
   same outcome, events and transfer request. A new carrier adds its edge to
   `CARRIERS` there; `tests/unit/test_carrier_boundary.py` fails until it has a
-  `CARRIER_MEDIA` entry. Telnyx runs the inbound case; its transfers join with
-  #220.
+  `CARRIER_MEDIA` entry. Telnyx runs the inbound case; its transfers and DTMF
+  join with #220 (`TRANSFER_CARRIERS` / `DTMF_CARRIERS` there).
 - **The shared middle of an inbound call** — resolve the agent (call-init, A/B
   weights, the bound agent), create the call row on its carrier, record
   `call.initializing` + `call.started` — is `services/inbound_call
@@ -205,7 +207,10 @@ or Telnyx, with Asterisk ARI next. The boundary is cut for them:
   ._carrier_adapter` picks the adapter (and account) by `calls.provider`.
   `services/twilio_accounts.TwilioAccount.adapter` and
   `services/telnyx_accounts.TelnyxAccount.adapter` are the only places each
-  carrier's adapter is built — the harness's `FakeCarrier` replaces both.
+  carrier's adapter is built — the harness's `FakeCarrier` replaces both
+  (Asterisk's is `AriAccount.adapter`, behind the harness's `FakeAsterisk`).
+  An action a carrier cannot do the way TurnCall defines it raises
+  `UnsupportedCarrierAction`, whose message reaches the model.
 
 ### Telnyx (Call Control, #217)
 
@@ -240,12 +245,81 @@ Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
   `provider: "telnyx", key_rejected: true`.
 - **Binding**: `carrier: "telnyx"` on `POST /v1/phone-numbers`; until #219 the
   number's Call Control application is pointed at `/webhooks/telnyx/voice` by
-  hand (`twilio_webhooks_configured` is false). `sms_enabled` and a Twilio
+  hand (`twilio_webhooks_configured` is null). `sms_enabled` and a Twilio
   account on a Telnyx number are a 422 (SMS on Telnyx is out of scope).
 - **Not yet**: outbound (#218), number configuration (#219), transfer + DTMF
   (#220) raise `NotImplementedError` on `TelnyxAdapter`, naming the ticket.
   The live-call limit (#224) admits a call in `open_inbound_call`, ahead of
   call-init, for every carrier.
+
+### Asterisk (ARI)
+
+A PBX — a call centre, a VICIdial box — with no cloud carrier in between
+(#209; decisions in ADR-0022's addendum). **Asterisk 20.18 / 22.8 / 23.2 or
+later**: the media is a chan_websocket external-media channel asked for with
+JSON control messages (`transport_data=f(json)`), whose `MEDIA_START` names
+the channel id. Verified against a real 23.4.1 by `tests/live/test_live_asterisk.py`
+(Docker, stub providers, `pytest -m live`).
+
+- **The edge is an ARI client** (`webhooks/asterisk_edge.py`): TurnCall keeps
+  `/ari/events?app=<app>` open to every Asterisk it serves — the platform's
+  (`ASTERISK_*`) and each project's own `asterisk` credential — reconciled at
+  start, every minute, and at once after a credential write. A dialplan
+  `Stasis(turncall[,<number>])` reaches it as `StasisStart`; the number is the
+  first Stasis argument, else the channel's extension, and bare digits get a
+  `+`. The edge admits the call, sets `TURNCALL_CALL_ID` on the caller's
+  channel, answers it, asks for external media with channel id
+  `turncall-media-<call_id>`, and bridges the two on the media channel's
+  `Dial ANSWER` (~5 ms after `MEDIA_START`; the pipeline's build is the margin
+  before the greeting). A call it cannot take — unknown number, another
+  project's, or a project that has its own Asterisk arriving on the platform's
+  — or one over the project's live-call limit (#224; `call.rejected` with
+  `transport: "asterisk"`) — is `continue`d **unanswered** to the dialplan's
+  next priority, so the PBX's own fallback takes it. Admission is
+  `open_inbound_call`, as for every carrier.
+- **The media route** is `/ws/asterisk-media` (`webhooks/asterisk_media_stream.py`):
+  the PBX's `websocket_client.conf` entry (`ASTERISK_MEDIA_CONNECTION`,
+  default `turncall`, `connection_type=per_call_config`) points its `uri` here.
+  It reads `MEDIA_START`, takes the call id from `channel_id` (not `v()` URI
+  params, which leaked across calls — asterisk#2194), refuses anything but
+  `ulaw`, and hands over to the shared entry point. Media is raw ulaw at
+  8 kHz, 160 bytes a frame; `orchestrator/asterisk_serializer.py` pads output
+  to whole frames, sends `FLUSH_MEDIA` on a barge-in (chan_websocket queues up
+  to ~20 s), and turns `DTMF_END` into DTMF input. pipecat 1.12 ships nothing
+  for ARI, RTP or AudioSocket.
+- **Two channels, one call.** The caller's and the media channel are tied by
+  the edge: the media ending (agent hung up, pipeline died) hangs up the
+  caller; the caller leaving Stasis (hung up, or continued by a transfer)
+  hangs up the media — never the other way after a transfer. A caller who
+  leaves before the media is up gets the call row failed with `call.failed`,
+  and the live-call slot freed (the media stream never came to hold it).
+- **Actions** (`adapters/telephony/asterisk_adapter.py`): hang-up is
+  `DELETE /channels/{caller}`; DTMF `POST .../dtmf`; a transfer is **cold
+  only** — `continue` in `ASTERISK_TRANSFER_CONTEXT` (default
+  `turncall-transfer`) with the target as extension, so the dialplan dials it
+  (`exten => _+X.,1,Dial(PJSIP/${EXTEN}@trunk)`). A warm transfer, a
+  `transfer_message` or a `fallback_message` raise `UnsupportedCarrierAction`
+  and the model is told why — one behaviour per transfer config (ADR-0022), so
+  never a different one. Transfer AMD only notifies and is skipped. No
+  outbound dialling (a 422 from `POST /v1/calls`), no SMS, nothing to
+  configure on a number (`twilio_webhooks_configured` is null).
+- **Numbers**: `carrier: "asterisk"`, no `external_number_sid` (the E.164 is
+  stored as it), no Twilio account, no SMS (422).
+- **Credentials** (ADR-0020): `PUT /v1/credentials/asterisk` takes
+  `{ari_url, username, password, app?, media_connection?, transfer_context?}`;
+  `ari_url` passes the `BYOM_ALLOWED_URL_PATTERNS` SSRF gate, since TurnCall
+  connects out to it. One Asterisk per project: its numbers ride its own, else
+  the platform's, and REST actions for its calls go to the same one.
+- **One process per Asterisk app.** ARI gives an app's events to the newest
+  WebSocket only, and the replaced one does not get them back when that one
+  leaves (measured; it logs `asterisk_ari_app_replaced`). With several
+  replicas, set `ASTERISK_EDGE_ENABLED=false` on all but one; the others still
+  serve media streams and call control. HA for the edge is deferred.
+- **The caller's leg must carry continuous audio**, as a SIP trunk's RTP
+  does. Through the bridge Asterisk relays only the frames that leg delivers
+  — measured with a Local channel in `Wait()`, which sends none — and with no
+  frames between words, turn detection waits on audio that never comes. An
+  endpoint with silence suppression (VAD/CN) needs it turned off.
 
 ## SMS / Chat
 
@@ -682,14 +756,16 @@ a guardrail must not take the phone line down.
   inbound phone calls in `services/inbound_call.open_inbound_call` (every
   carrier, #217) and WhatsApp voice in its webhook — over the limit, refused
   unanswered at the carrier (Twilio `<Reject reason="busy"/>`, Telnyx's
-  `reject` command with cause `USER_BUSY`, WhatsApp `reject`) and dispatched as
+  `reject` command with cause `USER_BUSY`, Asterisk `continue` back to the
+  dialplan, WhatsApp `reject`) and dispatched as
   `call.rejected` with **no** `call_id` (there is no row) —
   outbound in `place_outbound_call` and WebRTC in `/connect`, both `429`.
   A slot is a **lease** (`LIVE_CALL_LEASE_MS`, 2 min) that whoever runs the call
   renews (`hold_live_call`, in `media_stream` and `start_call_pipeline`) and
   frees on any exit; the Twilio status callback frees it on any terminal status
-  (an unanswered outbound call's only ending), as Telnyx's `call.hangup` does,
-  and a failed dial frees it at
+  (an unanswered outbound call's only ending), as Telnyx's `call.hangup` does
+  and the Asterisk edge for a caller who leaves before the media is up, and a
+  failed dial frees it at
   once. A server that dies frees nothing — its leases lapse, so a crash costs a
   project slots for two minutes, never for good. Every call is counted even
   unlimited, so a limit set mid-day counts what is already live.
@@ -1264,6 +1340,7 @@ Recording runs off the reply's critical path and is best-effort: a failure is lo
 All Pipecat imports isolated in `orchestrator/`. No other module imports Pipecat.
 
 - `serializer.py` — Twilio mulaw ↔ PCM16 frames
+- `asterisk_serializer.py` — Asterisk chan_websocket raw ulaw ↔ PCM16, `FLUSH_MEDIA` on barge-in
 - `pipeline_factory.py` — Builds pipeline from AgentConfig (providers, VAD, Smart Turn, voicemail)
 - `transport_factory.py` — Creates a carrier media-stream, WebRTC, or WhatsApp transport. `CARRIER_MEDIA` is the one place a call's carrier picks a serializer and rate (see "Carriers")
 - `call_session.py` — Per-call lifecycle, first message, cleanup

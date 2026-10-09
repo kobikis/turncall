@@ -4,6 +4,15 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 
+class UnsupportedCarrierAction(RuntimeError):
+    """This carrier cannot do this action the way TurnCall defines it.
+
+    Raised rather than doing something else under the same name: an agent's
+    config must not mean two things depending on its number's carrier
+    (ADR-0022). The message is fit to show the model or an API caller.
+    """
+
+
 class TelephonyAdapter(ABC):
     """A carrier's REST actions — the ones every carrier has (ADR-0022).
 

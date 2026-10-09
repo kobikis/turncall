@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from turncall.api.v1.schemas import E164_PATTERN
-from turncall.domain.carriers import CARRIERS, DEFAULT_CARRIER, TWILIO
+from turncall.domain.carriers import ASTERISK, CARRIERS, DEFAULT_CARRIER, TWILIO
 
 Carrier = Literal[CARRIERS]  # type: ignore[valid-type]
 
@@ -90,7 +90,9 @@ class BindPhoneNumberRequest(TwilioAccountFields, CarrierField):
     def validate_routing(self) -> "BindPhoneNumberRequest":
         if self.carrier != TWILIO:
             only_on_twilio(self, self.carrier)
-        if not self.external_number_sid and not self.has_own_twilio:
+        if self.carrier == ASTERISK:
+            pass  # The PBX's dialplan routes the number: no SID to look up (#209).
+        elif not self.external_number_sid and not self.has_own_twilio:
             msg = (
                 "external_number_sid is required unless the number brings its own "
                 "Twilio account (twilio_account_sid + twilio_auth_token)"

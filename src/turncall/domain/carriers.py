@@ -12,6 +12,9 @@ point refuses a call whose carrier has no serializer, and
 
 TWILIO = "twilio"
 TELNYX = "telnyx"
+# A PBX reached over ARI (#209): no cloud carrier in between, and its edge is
+# an ARI client rather than webhook routes.
+ASTERISK = "asterisk"
 
-CARRIERS: tuple[str, ...] = (TWILIO, TELNYX)
+CARRIERS: tuple[str, ...] = (TWILIO, TELNYX, ASTERISK)
 DEFAULT_CARRIER = TWILIO
