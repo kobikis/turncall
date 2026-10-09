@@ -156,8 +156,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Everything alive now (pipecat, the app, their imports) lives as long as
     # the process. Out of the collector's reach, a full collection scans only
-    # what calls allocate: it paused every call's audio for 300-800 ms at 6-8
-    # calls a pod, and none ran in the frozen run (#270, guides/capacity).
+    # what calls allocate. Unfrozen it paused every call's audio for 300-800 ms
+    # at 6-8 calls a pod; frozen, mostly under 260 ms (#270, guides/capacity).
     gc.collect()
     gc.freeze()
 

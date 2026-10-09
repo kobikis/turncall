@@ -419,13 +419,15 @@ and is not part of this repository's history.
   ~123 MiB before, ~45 MiB after. That covers S2S on server-side VAD too, where
   pipecat builds its default Smart Turn analyzer on every call.
 
-- **No full garbage collection pause across every call** (#270). From about 6
-  calls a pod, a full collection ran every couple of minutes and paused the
-  whole process — every call's audio at once — for 300–800 ms, scanning
+- **Shorter full garbage-collection pauses** (#270). From about 6 calls a
+  pod, a full collection ran every couple of minutes and paused the whole
+  process — every call's audio at once — for 300–800 ms, mostly scanning
   objects (pipecat and its imports) that live as long as the process. The app
-  now freezes its startup heap (`gc.freeze()`) before serving, so those objects
-  are never scanned again; in the same load run no full collection happened at
-  all, and the longest audio gap at 6–8 calls fell from 230–350 ms to ~70 ms.
+  now freezes its startup heap (`gc.freeze()`) before serving, so a full
+  collection scans only what calls allocate. Full collections still run: in
+  three frozen load runs they paused for 43–255 ms, once 749 ms on a step where
+  the host was overloaded. The longest audio gap at 6 calls was 63–82 ms
+  frozen, against 90–354 ms without.
 
 - **A campaign's claim and janitor are index lookups** (#229, #232). The claim
   ordered every pending target by position and filtered out the ones not yet
