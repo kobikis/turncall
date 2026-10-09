@@ -541,7 +541,16 @@ def _register_single_tool(
             # the record says handed off and the pipeline never switched. #144.
             result = (await run_handoff(dict(args), call_context, params)).result
         elif function_name in BUILTIN_TOOL_NAMES:
-            result = await _execute_builtin(function_name, args, call_context)
+            execution = _execute_builtin(function_name, args, call_context)
+            # A transfer takes the call away from this pipeline: the carrier
+            # closes the media stream as part of it, which cancels this tool
+            # mid-flight. Unshielded, `call.transferred` and the status were
+            # lost with it and the call read as the caller hanging up.
+            result = await (
+                asyncio.shield(execution)
+                if function_name == "transfer_call"
+                else execution
+            )
         elif (
             # Only when this registration is not itself a webhook tool. Asking
             # the manager by name alone sent a name the agent config had

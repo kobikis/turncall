@@ -146,8 +146,8 @@ class TestTheAdapter:
 
     async def test_what_later_tickets_bring_raises_rather_than_pretends(self) -> None:
         adapter, seen = _adapter(lambda _r: httpx.Response(200))
-        with pytest.raises(NotImplementedError, match="#220"):
-            await adapter.transfer_call("v3:abc", "+15550000000")
+        with pytest.raises(NotImplementedError, match="#218"):
+            await adapter.initiate_outbound_call("+15550000001", "+15550000000", "")
         assert seen == []
 
 

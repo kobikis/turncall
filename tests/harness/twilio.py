@@ -25,7 +25,13 @@ import websockets
 from twilio.request_validator import RequestValidator
 
 from tests.harness.carrier import CarrierAction, FakeCarrier
-from tests.harness.media_call import FRAME_MS, SAMPLE_RATE, CarrierCall
+from tests.harness.media_call import FRAME_MS, SAMPLE_RATE, CarrierCall, TransferHeard
+from turncall.adapters.telephony.twilio_adapter import TwilioAdapter
+
+
+def _said(twiml: str) -> list[str]:
+    """The `<Say>` lines of a TwiML document, in order."""
+    return [say.text or "" for say in ET.fromstring(twiml).findall("Say")]
 
 
 def sign(auth_token: str, url: str, params: dict[str, str]) -> str:
@@ -52,12 +58,53 @@ class TwilioCall(CarrierCall):
     status_callback_url: str = ""
     direction: str = "inbound"
 
-    async def hang_up(self) -> None:
-        """The caller hangs up: `stop`, close the stream, report `completed`."""
-        if not self.closed.is_set():
-            await self._send({"event": "stop", "stop": {"callSid": self.call_sid}})
-            await self._ws.close()
+    def _stop_message(self) -> dict[str, Any]:
+        return {"event": "stop", "stop": {"callSid": self.call_sid}}
+
+    async def complete_transfer(self, *, answered_by: str | None) -> TransferHeard:
+        """What Twilio does with the transfer TwiML the app swapped in
+        (ADR-0009): the stream ends at the swap, `<Say>` plays to the caller,
+        `<Dial>` rings the operator with ringback to the caller; on answer the
+        operator hears the `<Number url>` whisper, then the legs bridge and the
+        AMD callback reports in parallel; on no answer the `<Dial action>`
+        result decides what the caller hears last. Ends the call."""
+        transfer = await self.carrier.wait_for("transfer", timeout=10)
+        await self.close_stream()
+        params = {k: v for k, v in transfer.params.items() if k != "call_sid"}
+        twiml = ET.fromstring(TwilioAdapter.build_transfer_twiml(**params))
+        dial = twiml.find("Dial")
+        number = dial.find("Number") if dial is not None else None
+        heard = TransferHeard(
+            target=transfer.params["target_number"],
+            caller=[say.text or "" for say in twiml.findall("Say")],
+            ringing=dial is not None,
+        )
+        leg = self._params(CallSid="CA" + secrets.token_hex(16))
+        if answered_by is not None and dial is not None:
+            if number is not None and number.get("url"):
+                whisper = await post_signed(
+                    self.http, self.carrier, number.get("url", ""), leg
+                )
+                heard.operator = _said(whisper.text)
+            heard.bridged = True
+            if number is not None and number.get("amdStatusCallback"):
+                amd = {"human": "human", "machine": "machine_start"}[answered_by]
+                await post_signed(
+                    self.http,
+                    self.carrier,
+                    number.get("amdStatusCallback", ""),
+                    {**leg, "AnsweredBy": amd},
+                )
+        elif dial is not None and dial.get("action"):
+            result = await post_signed(
+                self.http,
+                self.carrier,
+                dial.get("action", ""),
+                self._params(DialCallStatus="no-answer"),
+            )
+            heard.caller += _said(result.text)
         await self.finish()
+        return heard
 
     async def finish(self, status: str = "completed") -> None:
         """What Twilio does once the stream is gone: stop the line and post the

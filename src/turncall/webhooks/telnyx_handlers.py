@@ -6,7 +6,8 @@ with the account's Ed25519 key. An incoming `call.initiated` is answered the
 Call Control way — a REST `answer` command whose `stream_url` points the call's
 media at `/ws/telnyx/media-stream/{call_id}` (`telnyx_media_stream.py`), where
 the shared media entry point takes over. `call.hangup` closes a call no
-pipeline ever ran for; one that ran closes itself.
+pipeline ever ran for; one that ran closes itself. A transfer's webhooks, on
+the caller's leg and the operator's, go on to `services/telnyx_transfer`.
 
 Whose key verifies a webhook is decided by whose call or number it names: the
 project's own `telnyx` credential, else the platform's TELNYX_PUBLIC_KEY. No
@@ -29,6 +30,7 @@ from turncall.api.deps import DbSession
 from turncall.config import get_settings
 from turncall.domain.carriers import TELNYX
 from turncall.domain.enums import CallEventType, CallStatus
+from turncall.services import telnyx_transfer
 from turncall.services.limits import release_live_call
 from turncall.services.telnyx_accounts import TelnyxAccount, account_for_project
 from turncall.storage.models import CallRow, PhoneNumberRow
@@ -71,6 +73,17 @@ async def _whose(
     return None, number if number is not None and number.provider == TELNYX else None
 
 
+async def _transferred(
+    session: AsyncSession, transfer: dict[str, Any] | None
+) -> CallRow | None:
+    """The call a transfer's leg belongs to, named by its `client_state` — the
+    only link an operator's leg, which has no call row, has to it."""
+    if transfer is None:
+        return None
+    call = await call_repo.get_call_by_id(session, telnyx_transfer.call_id_of(transfer))
+    return call if call is not None and call.provider == TELNYX else None
+
+
 @router.post("/voice")
 async def call_control_webhook(request: Request, session: DbSession) -> Response:
     """Every Call Control event for a Telnyx number. 200 for anything verified,
@@ -84,7 +97,11 @@ async def call_control_webhook(request: Request, session: DbSession) -> Response
         return Response(status_code=400)
 
     call, number = await _whose(session, payload)
-    project_id = call.project_id if call else number.project_id if number else None
+    transfer = telnyx_transfer.read_client_state(payload)
+    transferred = call or await _transferred(session, transfer)
+    project_id = (
+        transferred.project_id if transferred else number.project_id if number else None
+    )
     account = await account_for_project(session, project_id, get_settings())
     if not verify_telnyx_signature(
         account.public_key,
@@ -101,6 +118,10 @@ async def call_control_webhook(request: Request, session: DbSession) -> Response
             await _answer_inbound(request, session, account, number, payload)
     elif event_type == "call.hangup" and call is not None:
         await _on_hangup(session, call, payload)
+    if transfer is not None and transferred is not None and account.api_key:
+        await telnyx_transfer.on_event(
+            session, account.adapter(), transferred, event_type, payload, transfer
+        )
     return Response(status_code=200)
 
 
@@ -141,6 +162,11 @@ async def _answer_inbound(
         else:
             await _hang_up(account, call_control_id)
         return
+    # The Call Control application a transfer dials the operator's leg on.
+    call.metadata_json = {
+        **call.metadata_json,
+        telnyx_transfer.CONNECTION_KEY: str(payload.get("connection_id") or ""),
+    }
     # Committed before answering: the media stream Telnyx opens next reads the
     # call row in a session of its own.
     await session.commit()

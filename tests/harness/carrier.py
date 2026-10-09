@@ -98,6 +98,15 @@ class FakeCarrier:
             )
         return self.actions_of(kind)[0]
 
+    async def action_at(self, index: int, *, timeout: float = 5.0) -> CarrierAction:
+        """The `index`-th action, waiting up to `timeout` for it to happen. For
+        a carrier that answers each command before the app issues the next."""
+        async with self._recorded:
+            await asyncio.wait_for(
+                self._recorded.wait_for(lambda: len(self.actions) > index), timeout
+            )
+        return self.actions[index]
+
     async def record(self, kind: str, account_sid: str, **params: Any) -> None:
         self.actions.append(CarrierAction(kind, account_sid, params))
         async with self._recorded:
@@ -242,7 +251,10 @@ class FakeTelephonyAdapter(TelephonyAdapter):
 class FakeTelnyxAdapter(FakeTelephonyAdapter):
     """Telnyx's commands, recorded. `account_sid` on its actions is the API key
     the app used. `answer` and `reject` are Telnyx's own: Call Control answers
-    or refuses a call with a REST command where Twilio reads TwiML."""
+    or refuses a call with a REST command where Twilio reads TwiML. So is a
+    transfer's sequence (`stop_streaming`, `speak`, `start_playback`,
+    `stop_playback`, `dial`, `bridge`); `telnyx.TelnyxCall.complete_transfer`
+    plays Telnyx's side of it."""
 
     async def answer_call(self, call_control_id: str, *, stream_url: str) -> None:
         await self._record("answer", call_sid=call_control_id, stream_url=stream_url)
@@ -251,3 +263,54 @@ class FakeTelnyxAdapter(FakeTelephonyAdapter):
         self, call_control_id: str, *, cause: str = "USER_BUSY"
     ) -> None:
         await self._record("reject", call_sid=call_control_id, cause=cause)
+
+    async def transfer_call(self, provider_call_sid: str, *args: Any, **kw: Any) -> str:
+        raise NotImplementedError("a Telnyx transfer is a sequence of commands")
+
+    async def stop_streaming(self, call_control_id: str, *, client_state: str) -> None:
+        await self._record(
+            "stop_streaming", call_sid=call_control_id, client_state=client_state
+        )
+
+    async def speak(
+        self, call_control_id: str, text: str, *, client_state: str
+    ) -> None:
+        await self._record(
+            "speak", call_sid=call_control_id, text=text, client_state=client_state
+        )
+
+    async def start_playback(self, call_control_id: str, wav: bytes) -> None:
+        await self._record("start_playback", call_sid=call_control_id, wav=wav)
+
+    async def stop_playback(self, call_control_id: str) -> None:
+        await self._record("stop_playback", call_sid=call_control_id)
+
+    async def dial(
+        self,
+        *,
+        connection_id: str,
+        to: str,
+        from_number: str,
+        link_to: str,
+        client_state: str,
+        detect_machine: bool,
+    ) -> str:
+        leg = "v3:" + secrets.token_urlsafe(24)
+        await self._record(
+            "dial",
+            call_sid=leg,
+            connection_id=connection_id,
+            to_number=to,
+            from_number=from_number,
+            link_to=link_to,
+            client_state=client_state,
+            detect_machine=detect_machine,
+        )
+        return leg
+
+    async def bridge(
+        self, call_control_id: str, other: str, *, client_state: str
+    ) -> None:
+        await self._record(
+            "bridge", call_sid=call_control_id, other=other, client_state=client_state
+        )

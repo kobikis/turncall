@@ -32,7 +32,7 @@ import websockets
 from aiohttp import WSMsgType, web
 
 from tests.harness.carrier import FakeCarrier
-from tests.harness.media_call import SILENCE, HearsTheAgent, mulaw_tone
+from tests.harness.media_call import SILENCE, HearsTheAgent, TransferHeard, mulaw_tone
 
 FRAME_S = 0.02
 
@@ -65,6 +65,20 @@ class AsteriskCall(HearsTheAgent):
             await self.asterisk.leave_stasis(self)
         await asyncio.wait_for(self.closed.wait(), 5)
         await self.finish()
+
+    async def complete_transfer(self, *, answered_by: str | None) -> TransferHeard:
+        """A transfer is the caller's channel continuing in the PBX's transfer
+        context, whose dialplan `Dial`s the extension: ringback to the caller,
+        then the bridge if someone answers. That dialplan is the PBX's, not
+        TurnCall's, so this plays it as the minimal one does; it says nothing
+        to either party. Ends the call."""
+        transfer = await self.asterisk.carrier.wait_for("transfer", timeout=10)
+        await self.hang_up()
+        return TransferHeard(
+            target=transfer.params["target_number"],
+            ringing=True,
+            bridged=answered_by is not None,
+        )
 
     async def finish(self) -> None:
         for task in self._tasks:

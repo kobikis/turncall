@@ -1,8 +1,9 @@
 """Transfer state + briefing resolution for warm/cold call transfer.
 
 The transfer intent is parked in Redis when a transfer is issued so the
-Twilio callbacks (whisper, result, AMD) can read it when they fire a moment
-later. See ADR-0009.
+carrier's callbacks (Twilio's whisper, result and AMD; every Call Control
+webhook of a Telnyx transfer) can read it when they fire a moment later.
+See ADR-0009.
 """
 
 from __future__ import annotations
@@ -31,6 +32,8 @@ class TransferIntent:
     briefing_text: str | None = None
     briefing_from_summary: bool = False
     fallback_message: str | None = None
+    # Telnyx: the operator's leg, once it is ringing (services/telnyx_transfer).
+    operator_leg: str | None = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -71,6 +74,13 @@ async def store_transfer_intent(call_id: UUID, intent: TransferIntent) -> None:
     from turncall.storage.redis import get_redis
 
     await get_redis().setex(_redis_key(call_id), TRANSFER_TTL_SECONDS, intent.to_json())
+
+
+async def clear_transfer_intent(call_id: UUID) -> None:
+    """Forget a transfer that did not happen."""
+    from turncall.storage.redis import get_redis
+
+    await get_redis().delete(_redis_key(call_id))
 
 
 async def load_transfer_intent(call_id: UUID) -> TransferIntent | None:

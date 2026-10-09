@@ -283,23 +283,27 @@ async def transfer_call(
         session, call_id, status=CallStatus.TRANSFERRING.value
     )
 
+    from turncall.domain.carriers import TELNYX
+
+    # A Telnyx transfer is steered by Telnyx's webhooks, which read the intent
+    # whether or not a public URL exists (services/telnyx_transfer.py).
+    on_telnyx = call.provider == TELNYX
+    intent = transfer_svc.TransferIntent(
+        target_number=target_number,
+        transfer_mode=transfer_mode,
+        transfer_message=transfer_message,
+        briefing_text=briefing_text,
+        briefing_from_summary=briefing_from_summary,
+        fallback_message=fallback_message,
+    )
     whisper_url = action_url = amd_url = None
     if base_url:
         urls = transfer_svc.transfer_callback_urls(base_url, call_id)
         whisper_url = urls["whisper"] if warm else None
         action_url = urls["result"] if fallback_message else None
         amd_url = urls["amd"]  # AMD notify on both modes
-        await transfer_svc.store_transfer_intent(
-            call_id,
-            transfer_svc.TransferIntent(
-                target_number=target_number,
-                transfer_mode=transfer_mode,
-                transfer_message=transfer_message,
-                briefing_text=briefing_text,
-                briefing_from_summary=briefing_from_summary,
-                fallback_message=fallback_message,
-            ),
-        )
+    if base_url or on_telnyx:
+        await transfer_svc.store_transfer_intent(call_id, intent)
 
     # Execute the transfer on the call's carrier
     sid = call.provider_call_sid
@@ -309,14 +313,22 @@ async def transfer_call(
         adapter = await _carrier_adapter(session, call)
         if adapter:
             try:
-                await adapter.transfer_call(
-                    sid,
-                    target_number,
-                    transfer_message=transfer_message,
-                    whisper_url=whisper_url,
-                    action_url=action_url,
-                    amd_callback_url=amd_url,
-                )
+                if on_telnyx:
+                    from turncall.services import telnyx_transfer
+
+                    # Same AMD rule as Twilio's: notify where Twilio would.
+                    await telnyx_transfer.start(
+                        adapter, call, intent, detect_machine=amd_url is not None
+                    )
+                else:
+                    await adapter.transfer_call(
+                        sid,
+                        target_number,
+                        transfer_message=transfer_message,
+                        whisper_url=whisper_url,
+                        action_url=action_url,
+                        amd_callback_url=amd_url,
+                    )
                 transfer_success = True
             except UnsupportedCarrierAction as exc:
                 refusal = str(exc)
@@ -324,6 +336,10 @@ async def transfer_call(
                 logger.exception(
                     "carrier_transfer_failed", call_sid=sid, target=target_number
                 )
+    if on_telnyx and not transfer_success:
+        # Its media edge reads a parked intent as "transferring, leave the call
+        # up" when the stream ends.
+        await transfer_svc.clear_transfer_intent(call_id)
 
     from turncall.events.emit import emit_call_event
 

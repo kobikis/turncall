@@ -25,12 +25,12 @@ at once while liveness stays green, and the process keeps serving until its
 live calls have ended and their `call.ended` webhooks have gone out. A new
 `GET /metrics` exposes `turncall_active_calls` for autoscaling. See
 [Graceful shutdown](/guides/graceful-shutdown) for the grace period to set.
+
 **Pause, resume or cancel a campaign.** `POST /v1/campaigns/{id}/pause` stops
 new dials without hanging up calls in progress; `/resume` picks up where it
 stopped; `/cancel` ends it, marking undialled targets `cancelled` and
-sending `campaign.cancelled`. A campaign
-worker that crashes mid-dial no longer leaves targets stuck, and never dials a
-target twice to recover. See [Campaigns](/guides/campaigns#pause-resume-cancel).
+sending `campaign.cancelled`. A campaign worker that crashes mid-dial no longer
+leaves targets stuck, and never dials a target twice to recover. See [Campaigns](/guides/campaigns#pause-resume-cancel).
 
 **Campaigns — one agent calls a list.** `POST /v1/campaigns` with JSON
 targets (a number, its own variables for the agent, and a timezone), and the
@@ -38,6 +38,14 @@ new `turncall-campaign-worker` process dials each one once, skipping your
 suppression list and staying inside the project's live-call limit. Each
 target's status is on `GET /v1/campaigns/{id}/targets`. See
 [Campaigns](/guides/campaigns).
+
+**Transfers and DTMF on Telnyx numbers.** `transfer_call` and
+`POST /v1/calls/{id}/transfer` work on a Telnyx call as on Twilio, cold and
+warm: the caller hears your `transfer_message`, then ringing; on a warm
+transfer the operator hears the `briefing` before being connected; a
+voicemail on the operator's line is reported as `transfer.answered`, and an
+operator who doesn't answer gets the caller your `fallback_message`.
+`send_dtmf` works too.
 
 **Telnyx numbers answer inbound calls.** Bind a number with
 `"carrier": "telnyx"` and point its Call Control application at

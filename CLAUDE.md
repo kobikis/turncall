@@ -194,10 +194,14 @@ them:
   422. `domain/carriers.CARRIERS` is the closed set.
 - **Carrier contract test**: `tests/integration/test_carrier_contract.py` runs
   one agent and one caller script per carrier (Seam A) and holds each to the
-  same outcome, events and transfer request. A new carrier adds its edge to
+  same outcome and events. A transfer is compared by what each end heard
+  (`TransferHeard`): each harness call's `complete_transfer` plays its
+  carrier's side — Twilio executing the transfer TwiML, Telnyx answering each
+  Call Control command with its webhook. A new carrier adds its edge to
   `CARRIERS` there; `tests/unit/test_carrier_boundary.py` fails until it has a
-  `CARRIER_MEDIA` entry. Telnyx runs the inbound case; its transfers and DTMF
-  join with #220 (`TRANSFER_CARRIERS` / `DTMF_CARRIERS` there).
+  `CARRIER_MEDIA` entry. Telnyx runs every case; Asterisk every case but the
+  warm transfers (`WARM_TRANSFER_CARRIERS`), since its transfer is a `continue`
+  into the PBX's dialplan, which has no briefing or message of ours to play.
 - **The shared middle of an inbound call** — resolve the agent (call-init, A/B
   weights, the bound agent), create the call row on its carrier, record
   `call.initializing` + `call.started` — is `services/inbound_call
@@ -233,7 +237,9 @@ Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
   it does not — the line would stay up, silent and billed. So the media stream
   edge sends `hangup` when the stream ends (pipecat's serializer hang-up is off:
   REST commands are the adapter's). A call the caller already ended answers
-  `90018`, which counts as hung up. #220 must skip this for a transferred call.
+  `90018`, which counts as hung up. Not when the call is being transferred:
+  the transfer stopped the stream on purpose, and a parked transfer intent
+  (Redis, `transfer:{call_id}`) tells the edge so.
 - **The stream must be the call's**: its `start.call_control_id` has to be the
   call's `provider_call_sid`, or it is closed — no pipeline, no hang-up.
 - **`call.hangup`** is stored as a `call.ended` event (as Twilio's `completed`
@@ -247,10 +253,60 @@ Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
   number's Call Control application is pointed at `/webhooks/telnyx/voice` by
   hand (`twilio_webhooks_configured` is null). `sms_enabled` and a Twilio
   account on a Telnyx number are a 422 (SMS on Telnyx is out of scope).
-- **Not yet**: outbound (#218), number configuration (#219), transfer + DTMF
-  (#220) raise `NotImplementedError` on `TelnyxAdapter`, naming the ticket.
+- **Not yet**: outbound (#218) and number configuration (#219) raise
+  `NotImplementedError` on `TelnyxAdapter`, naming the ticket.
   The live-call limit (#224) admits a call in `open_inbound_call`, ahead of
   call-init, for every carrier.
+- **DTMF** is the `send_dtmf` command; the stream keeps running.
+
+### Telnyx transfers (#220, #221)
+
+ADR-0009's semantics on Call Control, which has no TwiML: each part of a
+transfer is a command on one leg, and the next starts on the webhook that
+reports the last one done (`services/telnyx_transfer.py`).
+
+```
+call_control.transfer_call → park the intent (always, on Telnyx) → start:
+  streaming_stop (caller leg; the agent leaves, the call stays up)
+  [speak transfer_message on the caller leg → call.speak.ended]
+  ringback playback on the caller leg + dial the operator (link_to the caller,
+    bridge_intent → the caller's caller ID, AMD where Twilio runs it)
+  operator call.answered → warm: speak the briefing on the operator leg (the
+    whisper; from_summary resolved now) → its call.speak.ended → stop
+    ringback, bridge.  cold (or no briefing): bridge at once
+  operator call.machine.detection.ended → transfer.answered (notify only)
+  operator call.hangup before answering → fallback_message spoken on the
+    caller leg, then hang up (none → hang up); after answering, before the
+    bridge → hang up
+  caller call.hangup while the operator rings → hang the operator up
+```
+
+- **`client_state`** on every command names the call and the step; Telnyx
+  echoes it on each later webhook of that leg. It is how the operator's leg —
+  no call row — is traced to its call (and to whose key verifies its
+  webhooks), and how a step's `call.speak.ended` is told from another.
+- **Dialling needs the call's Call Control application**: the inbound edge
+  stores `call.initiated`'s `connection_id` in `metadata_json`
+  (`telnyx_connection_id`). Without one the transfer is refused before the
+  stream is touched.
+- **Ringback is ours**: Call Control rings nobody on a leg it dialled itself,
+  where Twilio's `<Dial>` passes ringback through, so the caller's leg plays a
+  generated North American cadence, looped, until the bridge.
+- **Machine detection** on the operator's leg wherever Twilio would run it
+  (`PUBLIC_BASE_URL` set), and it never holds the bridge: the result
+  (`human`/`machine`/`not_sure` → `unknown`) becomes `transfer.answered`
+  whenever it arrives. So a warm briefing plays into a voicemail before the
+  caller is bridged, the same wart ADR-0009 accepts on Twilio.
+- **The fallback** is for an operator who never answered, as Twilio's
+  `<Dial action>` plays it only on a dial status other than `completed`. An
+  operator who answered and hung up before the bridge ends the call.
+- **Failure**: one that stops the transfer before it started leaves the call
+  with the agent; once the stream is stopped, a step that fails hangs the
+  caller up rather than leave a silent line. Call control drops the parked
+  intent when the transfer did not start, so the edge hangs up as usual.
+- **The tool is shielded** (`tool_bridge`, every carrier): the stream closing
+  cancels the pipeline, and with it the `transfer_call` still recording
+  `call.transferred`.
 
 ### Asterisk (ARI)
 

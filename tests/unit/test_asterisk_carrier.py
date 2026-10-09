@@ -133,7 +133,10 @@ class TestATransferIsColdOnly:
         from turncall.services import call_control
 
         call = SimpleNamespace(
-            status="in_progress", provider_call_sid="chan-1", project_id=uuid.uuid4()
+            status="in_progress",
+            provider="asterisk",
+            provider_call_sid="chan-1",
+            project_id=uuid.uuid4(),
         )
         adapter = AsteriskAdapter(ACCOUNT)
         with (

@@ -22,6 +22,24 @@ and is not part of this repository's history.
 - **`metrics.turn` carries `turn_end_ms`** (#204): the time from the caller going
   quiet to the turn being called over — VAD, the transcript, and Smart Turn's or
   Flux's verdict. Absent when unmeasured, never zero.
+
+- **Warm transfer on Telnyx numbers** (#221, ADR-0009, ADR-0022). The
+  operator hears the `briefing` — a string or `{"from_summary": true}`,
+  summarized when they pick up — spoken on their own leg before the caller is
+  connected, while the caller hears ringing. Machine detection on the
+  operator's line reports `transfer.answered` (`human`/`machine`/`unknown`) and
+  never holds the bridge; an operator who does not answer gets the caller the
+  `fallback_message` and the call ends. The carrier contract runs the same
+  three warm scenarios — answered, voicemail, no answer — on Twilio and Telnyx.
+- **Cold transfer and DTMF on Telnyx numbers** (#220, ADR-0009, ADR-0022).
+  `transfer_call` and `POST /v1/calls/{id}/transfer` behave on a Telnyx call as
+  on Twilio: the caller hears the `transfer_message`, then ringing, then the
+  operator, whose caller ID shows the caller's number; if nobody answers, the
+  call ends. On Call Control that is a sequence of commands driven by Telnyx's
+  webhooks (stop the agent's stream, speak, ringback, dial a linked leg,
+  bridge). `send_dtmf` sends its digits with Telnyx's `send_dtmf` command.
+  The carrier contract test runs the cold transfer and DTMF on both carriers.
+
 - **Telnyx numbers answer inbound calls** (#217, ADR-0022). Bind a number with
   `"carrier": "telnyx"` and point its Call Control application at
   `/webhooks/telnyx/voice`: the call is answered through Call Control, its
@@ -33,8 +51,8 @@ and is not part of this repository's history.
   `TELNYX_API_KEY` / `TELNYX_PUBLIC_KEY`; with no key at any level the call
   fails with `missing_keys: ["telnyx"]`. A call over the project's live-call
   limit (#224) is refused busy with a Call Control `reject` and announced as
-  `call.rejected`, as on Twilio. Outbound calls, number configuration,
-  transfer and DTMF on Telnyx come next.
+  `call.rejected`, as on Twilio. Outbound calls and number configuration
+  on Telnyx come next.
 
 ### Changed
 
@@ -369,6 +387,12 @@ and is not part of this repository's history.
   added to the context for the agent's next turn. The unused in-process
   `SessionManager` is gone; the channel is also what reaches a call held by
   another replica.
+
+- **A transfer's own record could be lost with the call** (#220). Every
+  carrier ends the agent's media stream as part of a transfer, which cancels
+  the pipeline — and the `transfer_call` tool still recording
+  `call.transferred` and the call's status with it, so the call could read as
+  the caller hanging up. The tool now runs shielded, as `end_call` does.
 
 - **Knowledge bases never reached an inline agent** (#260). Links live on an
   agent row, and a call-init `agent` or an eval `inline` target has none, so

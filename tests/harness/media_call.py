@@ -40,6 +40,23 @@ def mulaw_tone(ms: int) -> list[bytes]:
     return [ulaw[i : i + FRAME_BYTES] for i in range(0, len(ulaw), FRAME_BYTES)]
 
 
+@dataclass
+class TransferHeard:
+    """A transfer as each end experienced it, played out by the carrier.
+
+    `caller`/`operator`: the lines the carrier spoke to each (the transfer
+    message and any fallback; the briefing whisper), in order. `ringing`: the
+    caller heard ringback while the operator's phone rang. `bridged`: the two
+    were connected.
+    """
+
+    target: str = ""
+    caller: list[str] = field(default_factory=list)
+    operator: list[str] = field(default_factory=list)
+    ringing: bool = False
+    bridged: bool = False
+
+
 class HearsTheAgent:
     """What a caller hears, for any carrier's call object: it appends the
     arrival time of each loud agent frame to `_loud_at` and sets `closed`."""
@@ -103,10 +120,29 @@ class CarrierCall(HearsTheAgent):
         for frame in mulaw_tone(ms):
             await self._outgoing.put(frame)
 
+    async def close_stream(self) -> None:
+        """The carrier ends the media stream (`stop`, then close); the call
+        itself may go on without it."""
+        if not self.closed.is_set():
+            await self._send(self._stop_message())
+            await self._ws.close()
+        await self._stop_streaming()
+
     async def hang_up(self) -> None:
-        raise NotImplementedError
+        """The caller hangs up."""
+        await self.close_stream()
+        await self.finish()
 
     async def finish(self, status: str = "completed") -> None:
+        raise NotImplementedError
+
+    async def complete_transfer(self, *, answered_by: str | None) -> TransferHeard:
+        """Play the carrier's side of the transfer the app asked for, to the
+        end of the call. `answered_by`: "human", "machine" (the operator's
+        voicemail), or None (nobody answers)."""
+        raise NotImplementedError
+
+    def _stop_message(self) -> dict[str, Any]:
         raise NotImplementedError
 
     async def _send(self, message: dict[str, Any]) -> None:
