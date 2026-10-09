@@ -132,9 +132,12 @@ class CallEventType(StrEnum):
 
     # Campaigns (#234): a pair on the eval pattern. `campaign.completed` carries
     # the campaign's read — status and target counts per status — and the
-    # campaign's id rides in the envelope, never the payload.
+    # campaign's id rides in the envelope, never the payload. `cancelled` is
+    # the other way a campaign ends (#232), so it gets its own terminal event
+    # with the same payload rather than a `completed` that lies about why.
     CAMPAIGN_STARTED = "campaign.started"
     CAMPAIGN_COMPLETED = "campaign.completed"
+    CAMPAIGN_CANCELLED = "campaign.cancelled"
 
     # Live control
     CONTEXT_INJECTED = "context.injected"
@@ -285,30 +288,42 @@ class EvalToolPolicy(StrEnum):
 
 
 class CampaignStatus(StrEnum):
-    """Where a campaign is (#229). `queued` until the worker first reaches it,
-    `completed` once no target can be dialled again."""
+    """Where a campaign is (#229, #232). `queued` until the worker first
+    reaches it, `completed` once no target can be dialled again.
+
+    `paused` dials nothing new but still settles the calls it has live;
+    `cancelled` is final, like `completed`, and settles its live calls too.
+    """
 
     QUEUED = "queued"
     RUNNING = "running"
+    PAUSED = "paused"
     COMPLETED = "completed"
+    CANCELLED = "cancelled"
 
 
 class CampaignTargetStatus(StrEnum):
-    """One target's place in its campaign (#229).
+    """One target's place in its campaign (#229, #232).
 
-    `pending` waits to be dialled; `dialling` is claimed by a worker that is
-    dialling it now; `calling` has a call placed; the rest are final. The
-    claim is its own committed step, so a worker that dies mid-dial leaves
-    `dialling` behind as evidence rather than a target silently dialled
-    twice — reclaiming it is a janitor's decision (#232), never a redial.
+    `pending` waits to be dialled; `dialling` is claimed by a worker that has
+    not asked the carrier yet; `placing` is the carrier being asked; `calling`
+    has a call placed; the rest are final.
+
+    `dialling` and `placing` are separate committed steps because a worker can
+    die in either, and they mean opposite things: a dead claim in `dialling`
+    never reached the carrier and goes back to `pending`, while one in
+    `placing` may have rung a phone with no call row to show for it, so the
+    janitor ends it `failed` rather than ever dialling it a second time.
     """
 
     PENDING = "pending"
     DIALLING = "dialling"
+    PLACING = "placing"
     CALLING = "calling"
     COMPLETED = "completed"
     SUPPRESSED = "suppressed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
     @property
     def is_final(self) -> bool:
@@ -316,4 +331,5 @@ class CampaignTargetStatus(StrEnum):
             CampaignTargetStatus.COMPLETED,
             CampaignTargetStatus.SUPPRESSED,
             CampaignTargetStatus.FAILED,
+            CampaignTargetStatus.CANCELLED,
         )

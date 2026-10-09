@@ -178,7 +178,10 @@
               "POST /v1/campaigns",
               "GET /v1/campaigns",
               "GET /v1/campaigns/{campaign_id}",
-              "GET /v1/campaigns/{campaign_id}/targets"
+              "GET /v1/campaigns/{campaign_id}/targets",
+              "POST /v1/campaigns/{campaign_id}/pause",
+              "POST /v1/campaigns/{campaign_id}/resume",
+              "POST /v1/campaigns/{campaign_id}/cancel"
             ]
           },
           {

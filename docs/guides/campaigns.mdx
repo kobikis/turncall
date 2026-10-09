@@ -86,22 +86,25 @@ curl https://api.example.com/v1/campaigns/$CAMPAIGN_ID/targets?status=failed \
 | Target status | Meaning |
 |---------------|---------|
 | `pending` | Waiting to be dialled — at `next_attempt_at` when that is set. After a retryable ending, `ended_reason` is the last attempt's |
-| `dialling` | A worker is dialling it right now |
+| `dialling` | A worker has claimed it and is about to dial |
+| `placing` | The carrier is being asked to place the call right now |
 | `calling` | Dialled; `call_id` is the call, still in progress |
 | `completed` | Done: the last call ended in a way that is final, or used its last attempt; `ended_reason` says how (`customer_did_not_answer`, `customer_busy`, `voicemail`, …) and `attempts` how many dials it took |
 | `suppressed` | On the suppression list when its turn came — never dialled |
 | `failed` | Could not be dialled; `error` says why |
+| `cancelled` | The campaign was cancelled before it was dialled |
 
 Each call also carries `campaign_id` and `campaign_target_id` in its `metadata`, so `call.ended` webhooks tie back to the target. The campaign moves from `running` to `completed` once no target is left to dial.
 
 ## Events
 
-Webhook subscribers (`POST /v1/webhooks`) get two campaign events, each once:
+Webhook subscribers (`POST /v1/webhooks`) get three campaign events, each at most once:
 
 | Event | When |
 |-------|------|
 | `campaign.started` | The worker picked the campaign up — it is `running` |
 | `campaign.completed` | No target is left to dial |
+| `campaign.cancelled` | The campaign was cancelled (`POST /v1/campaigns/{id}/cancel`) — instead of `campaign.completed` |
 
 The payload is the campaign as `GET /v1/campaigns/{id}` returns it — status, agent or weights, target counts per status, timestamps — and the envelope carries `campaign_id` (null on every other event). Per-target results are on `GET /v1/campaigns/{id}/targets`.
 
@@ -120,6 +123,26 @@ The payload is the campaign as `GET /v1/campaigns/{id}` returns it — status, a
   }
 }
 ```
+
+## Pause, resume, cancel
+
+```bash
+curl -X POST https://api.example.com/v1/campaigns/$CAMPAIGN_ID/pause \
+  -H "Authorization: Bearer tc_..."
+```
+
+- **`pause`** stops new dials. Calls already placed stay up, and their endings are still recorded on their targets. The campaign is `paused` until you resume it.
+- **`resume`** carries on where it stopped.
+- **`cancel`** ends the campaign for good: it becomes `cancelled`, and so does every target not yet dialled. Calls already placed finish normally.
+
+Each returns the campaign. Asking for the state it is already in is answered with the campaign; a move it cannot make — resuming a cancelled campaign, pausing a completed one — is `409 invalid_state_transition`. A pause or cancel that lands while a worker is about to dial a target still stops that dial.
+
+## If a worker crashes
+
+Nothing is lost, and nobody is called twice. A worker that dies mid-dial leaves its target `dialling` or `placing`, and the next worker to run picks it up once the claim is older than `CAMPAIGN_CLAIM_TIMEOUT_SECONDS` (default 120):
+
+- **`dialling`** — the carrier was never asked, so the target goes back to `pending` and is dialled.
+- **`placing`** — the carrier may have placed the call before the worker could record it, so the target is ended `failed` with `error` starting `dial_outcome_unknown`, and is **not** dialled again. Check the carrier's call log for that number before adding it to a new campaign.
 
 ## How it paces
 

@@ -22,6 +22,14 @@ tells the worker how soon to come back, so a campaign dials *at* the number's
 rate rather than once a poll. With no rate set on the project, a campaign still
 paces at `CAMPAIGN_DEFAULT_CALLS_PER_SECOND`.
 
+A worker can die anywhere in a dial, and a target says where: `dialling` (claimed,
+the carrier not yet asked) or `placing` (the carrier being asked). The janitor
+at the top of each pass sends a dead `dialling` claim back to `pending` and ends
+a dead `placing` one `failed` — see `campaign_repo.reclaim_abandoned` for why
+that one is never dialled again. Pause and cancel act through the same rows: a
+paused or cancelled campaign's targets are not claimed, and a claim made just
+before loses `begin_placing`, so the carrier never hears of it.
+
 Time comes from a `Clock`, never `datetime.now()` inline: calling windows
 (#230) and retry spacing (#231) are decided against it, and a test has to be
 able to say what time it is. The window is checked on the claimed target
@@ -57,14 +65,22 @@ def system_clock() -> datetime:
     return datetime.now(UTC)
 
 
+_DIALLING = (CampaignStatus.QUEUED.value, CampaignStatus.RUNNING.value)
+
+
+class _NotPlacing(Exception):
+    """`begin_placing` refused: this worker must not ask the carrier."""
+
+
 async def run_pass(session_factory: SessionFactory, *, clock: Clock) -> float | None:
-    """Advance every campaign with work left. One campaign's fault is logged
-    and leaves the others running.
+    """Reclaim dead claims, then advance every campaign with work left. One
+    campaign's fault is logged and leaves the others running.
 
     Returns the seconds until the soonest rate limit that stopped a campaign
     frees up, or None when none did (only a call ending, or time passing, makes
     more work).
     """
+    await _reclaim(session_factory, clock)
     async with session_factory() as session:
         campaigns = await campaign_repo.active_campaigns(session)
     waits: list[float] = []
@@ -79,14 +95,30 @@ async def run_pass(session_factory: SessionFactory, *, clock: Clock) -> float | 
     return min(waits, default=None)
 
 
+async def _reclaim(session_factory: SessionFactory, clock: Clock) -> None:
+    timeout = get_settings().campaigns.claim_timeout_seconds
+    async with session_factory() as session:
+        repended, unknown = await campaign_repo.reclaim_abandoned(
+            session, now=clock(), timeout_seconds=timeout
+        )
+        await session.commit()
+    if repended or unknown:
+        logger.warning(
+            "campaign_claims_reclaimed", repended=repended, outcome_unknown=unknown
+        )
+
+
 async def advance(
     session_factory: SessionFactory, campaign: CampaignRow, *, clock: Clock
 ) -> float | None:
     """Settle, dial what the limits admit, and close the campaign when done.
+    A paused or cancelled campaign is only settled.
 
     Returns the seconds until the rate limit that stopped it frees, if one did.
     """
     await _settle(session_factory, campaign, clock)
+    if campaign.status not in _DIALLING:
+        return None
     async with session_factory() as session:
         if campaign.status == CampaignStatus.QUEUED.value:
             await lifecycle.start(session, campaign.id, clock())
@@ -182,7 +214,7 @@ async def _dial_next(
         # moved, so the pass goes on to the next one.
         await limits.release_dial(campaign.project_id, from_number, call_id)
         return limits.DialCheck(allowed=target is not None)
-    dialled = await _dial(session_factory, campaign, target, call_id)
+    dialled = await _dial(session_factory, campaign, target, call_id, clock)
     if not dialled:
         await limits.release_dial(campaign.project_id, from_number, call_id)
     return limits.DialCheck(allowed=True)
@@ -207,9 +239,20 @@ async def _dial(
     campaign: CampaignRow,
     target: CampaignTargetRow,
     call_id: UUID,
+    clock: Clock,
 ) -> bool:
     """Dial a claimed target under its reserved `call_id`, and record what
     became of it. Whether a call was placed."""
+
+    async def before_carrier() -> None:
+        # Its own transaction, committed before the carrier is asked: the
+        # dial's session holds the uncommitted call row until afterwards.
+        async with session_factory() as placing:
+            moved = await campaign_repo.begin_placing(placing, target.id, clock())
+            await placing.commit()
+        if not moved:
+            raise _NotPlacing
+
     async with session_factory() as session:
         try:
             call = await place_outbound_call(
@@ -221,11 +264,27 @@ async def _dial(
                 to_number=target.e164_number,
                 metadata=_call_metadata(campaign, target),
                 call_id=call_id,
+                before_carrier=before_carrier,
             )
-            await campaign_repo.record_dial(session, target.id, call.id)
+            if not await campaign_repo.record_dial(session, target.id, call.id):
+                # The janitor gave up on this dial before the carrier answered:
+                # the call is real, the target says `dial_outcome_unknown`.
+                logger.error(
+                    "campaign_dial_outlived_its_claim",
+                    target_id=str(target.id),
+                    call_id=str(call.id),
+                )
             # The call row and the target's move commit together.
             await session.commit()
             return True
+        except _NotPlacing:
+            # Paused or cancelled since the claim, or the janitor took it back.
+            # Hand it back if it is still `dialling`; a cancelled or
+            # re-claimed target is left as it is.
+            await session.rollback()
+            await campaign_repo.unclaim(session, target.id)
+            await session.commit()
+            return False
         except RateLimitedError:
             # Only if the reservation lapsed before the dial (a stall of over
             # a second) and another dialler filled the window meanwhile.

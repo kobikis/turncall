@@ -3,8 +3,13 @@
 The API only records a campaign; `turncall-campaign-worker` dials it, through
 the same dial service a single `POST /v1/calls/outbound` uses — so the
 suppression list and the project's limits hold for every target.
+
+Pause, resume and cancel (#232) only move the campaign's row (and, on cancel,
+its undialled targets); the worker reads them at its next claim. None of them
+touches a call already placed.
 """
 
+from collections.abc import Awaitable, Callable
 from typing import Annotated
 from uuid import UUID
 
@@ -13,7 +18,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.deps import DbSession
-from turncall.api.errors import NotFoundError
+from turncall.api.errors import InvalidStateTransitionError, NotFoundError
 from turncall.api.responses import ok, paginated
 from turncall.api.v1.schemas.campaigns import (
     CampaignResponse,
@@ -21,8 +26,9 @@ from turncall.api.v1.schemas.campaigns import (
     CreateCampaignRequest,
 )
 from turncall.auth import Auth, WriteAuth
+from turncall.campaigns import lifecycle
 from turncall.campaigns import queue as campaign_queue
-from turncall.domain.enums import CampaignTargetStatus
+from turncall.domain.enums import CampaignStatus, CampaignTargetStatus
 from turncall.storage.models import CampaignRow
 from turncall.storage.repositories import agent_repo, campaign_repo, phone_number_repo
 
@@ -138,6 +144,74 @@ async def list_campaign_targets(
         page=page,
         limit=limit,
     )
+
+
+@router.post("/{campaign_id}/pause")
+async def pause_campaign(
+    campaign_id: UUID, auth: WriteAuth, session: DbSession
+) -> dict:
+    """Stop dialling new targets. Calls already placed carry on, and their
+    endings are still recorded."""
+    return await _control(
+        session,
+        campaign_id,
+        auth.project_id,
+        campaign_repo.pause_campaign,
+        CampaignStatus.PAUSED,
+    )
+
+
+@router.post("/{campaign_id}/resume")
+async def resume_campaign(
+    campaign_id: UUID, auth: WriteAuth, session: DbSession
+) -> dict:
+    """Dial again where a paused campaign stopped."""
+    response = await _control(
+        session,
+        campaign_id,
+        auth.project_id,
+        campaign_repo.resume_campaign,
+        CampaignStatus.RUNNING,
+    )
+    await _wake_worker(campaign_id)
+    return response
+
+
+@router.post("/{campaign_id}/cancel")
+async def cancel_campaign(
+    campaign_id: UUID, auth: WriteAuth, session: DbSession
+) -> dict:
+    """End the campaign for good. Targets not yet dialled become `cancelled`;
+    calls already placed carry on, and their endings are still recorded."""
+    return await _control(
+        session,
+        campaign_id,
+        auth.project_id,
+        lifecycle.cancel,
+        CampaignStatus.CANCELLED,
+    )
+
+
+async def _control(
+    session: AsyncSession,
+    campaign_id: UUID,
+    project_id: UUID,
+    move: Callable[[AsyncSession, UUID], Awaitable[bool]],
+    target: CampaignStatus,
+) -> dict:
+    """Apply one control move. Asking for the state a campaign is already in
+    answers with the campaign; any other refused move is a 409 naming both."""
+    row = await _campaign(session, campaign_id, project_id)
+    moved = await move(session, campaign_id)
+    await session.commit()
+    await session.refresh(row)
+    already = row.status == target.value or (
+        target == CampaignStatus.RUNNING and row.status == CampaignStatus.QUEUED.value
+    )
+    if not moved and not already:
+        raise InvalidStateTransitionError(row.status, target.value)
+    counts = await campaign_repo.target_counts(session, [row.id])
+    return ok(CampaignResponse.from_row(row, counts[row.id]))
 
 
 async def _campaign(

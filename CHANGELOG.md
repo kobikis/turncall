@@ -146,6 +146,19 @@ and is not part of this repository's history.
   on the project, a campaign paces at `CAMPAIGN_DEFAULT_CALLS_PER_SECOND`
   (default `1`, Twilio's default account rate; `0` turns it off) instead of
   dialling the whole list in one burst.
+- **Campaign pause, resume and cancel; a worker crash loses no target** (#232).
+  `POST /v1/campaigns/{id}/pause` stops new dials and leaves calls already
+  placed up — their endings are still recorded — and `/resume` carries on
+  where it stopped. `/cancel` ends the campaign: targets not yet dialled become
+  `cancelled`, live calls finish, and subscribers get `campaign.cancelled`
+  (the same payload as `campaign.completed`). A move that lands between a worker's claim
+  and its dial still stops that dial. A worker killed mid-dial is recovered by
+  a janitor in the next worker's pass (`CAMPAIGN_CLAIM_TIMEOUT_SECONDS`,
+  default 120): a target claimed but not yet sent to the carrier is dialled
+  again, and one the carrier was being asked about — a new `placing` status —
+  is ended `failed` with `dial_outcome_unknown` instead, because it may already
+  have rung and calling a person twice is worse than reporting one call as
+  unknown.
 
 - **Campaigns: outbound calls to a list** (#229). `POST /v1/campaigns` takes
   one agent, a caller-id number and JSON targets — a number, per-target

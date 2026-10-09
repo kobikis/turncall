@@ -290,6 +290,13 @@ class CampaignSettings(BaseSettings):
     default_calls_per_second: int = Field(
         default=1, ge=0, alias="CAMPAIGN_DEFAULT_CALLS_PER_SECOND"
     )
+    # How old a claim gets before the janitor takes its worker for dead (#232).
+    # Only how soon a crashed worker's targets move on rests on it, never
+    # whether one is dialled twice; it must outlast a slow carrier request, or
+    # a dial that did go through is recorded as `dial_outcome_unknown`.
+    claim_timeout_seconds: int = Field(
+        default=120, ge=1, alias="CAMPAIGN_CLAIM_TIMEOUT_SECONDS"
+    )
 
 
 class ServerSettings(BaseSettings):

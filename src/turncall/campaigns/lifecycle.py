@@ -1,4 +1,5 @@
-"""A campaign starting and finishing, and the events that say so (#234).
+"""A campaign starting, finishing and being cancelled, and the events that say
+so (#234, #232).
 
 Each move is a guarded UPDATE in `campaign_repo`, so however many workers
 reach it, exactly one makes it — and only that one dispatches the event, after
@@ -39,6 +40,18 @@ async def finish_if_done(
     await session.commit()
     logger.info("campaign_completed", campaign_id=str(campaign_id))
     await _announce(session, campaign_id, CallEventType.CAMPAIGN_COMPLETED)
+    return True
+
+
+async def cancel(session: AsyncSession, campaign_id: UUID) -> bool:
+    """Cancel a campaign that has not ended (and every target not yet at the
+    carrier), committed, then `campaign.cancelled`. Whether this call moved it:
+    a second cancel finds it `cancelled` already and announces nothing."""
+    if not await campaign_repo.cancel_campaign(session, campaign_id):
+        return False
+    await session.commit()
+    logger.info("campaign_cancelled", campaign_id=str(campaign_id))
+    await _announce(session, campaign_id, CallEventType.CAMPAIGN_CANCELLED)
     return True
 
 

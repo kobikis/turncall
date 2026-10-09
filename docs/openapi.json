@@ -3119,6 +3119,192 @@
         }
       }
     },
+    "/v1/campaigns/{campaign_id}/pause": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Pause Campaign",
+        "description": "Stop dialling new targets. Calls already placed carry on, and their\nendings are still recorded.",
+        "operationId": "pause_campaign_v1_campaigns__campaign_id__pause_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Pause Campaign V1 Campaigns  Campaign Id  Pause Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/campaigns/{campaign_id}/resume": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Resume Campaign",
+        "description": "Dial again where a paused campaign stopped.",
+        "operationId": "resume_campaign_v1_campaigns__campaign_id__resume_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Resume Campaign V1 Campaigns  Campaign Id  Resume Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/campaigns/{campaign_id}/cancel": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Cancel Campaign",
+        "description": "End the campaign for good. Targets not yet dialled become `cancelled`;\ncalls already placed carry on, and their endings are still recorded.",
+        "operationId": "cancel_campaign_v1_campaigns__campaign_id__cancel_post",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Cancel Campaign V1 Campaigns  Campaign Id  Cancel Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/chat": {
       "post": {
         "tags": [
@@ -7800,13 +7986,15 @@
         "enum": [
           "pending",
           "dialling",
+          "placing",
           "calling",
           "completed",
           "suppressed",
-          "failed"
+          "failed",
+          "cancelled"
         ],
         "title": "CampaignTargetStatus",
-        "description": "One target's place in its campaign (#229).\n\n`pending` waits to be dialled; `dialling` is claimed by a worker that is\ndialling it now; `calling` has a call placed; the rest are final. The\nclaim is its own committed step, so a worker that dies mid-dial leaves\n`dialling` behind as evidence rather than a target silently dialled\ntwice \u2014 reclaiming it is a janitor's decision (#232), never a redial."
+        "description": "One target's place in its campaign (#229, #232).\n\n`pending` waits to be dialled; `dialling` is claimed by a worker that has\nnot asked the carrier yet; `placing` is the carrier being asked; `calling`\nhas a call placed; the rest are final.\n\n`dialling` and `placing` are separate committed steps because a worker can\ndie in either, and they mean opposite things: a dead claim in `dialling`\nnever reached the carrier and goes back to `pending`, while one in\n`placing` may have rung a phone with no call row to show for it, so the\njanitor ends it `failed` rather than ever dialling it a second time."
       },
       "CreateAgentRequest": {
         "properties": {
