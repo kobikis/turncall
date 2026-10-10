@@ -15,6 +15,24 @@ from tests.unit.test_webrtc_validation import _auth, _session_cm
 from turncall.domain.models import AgentConfig
 
 
+class FakeConnection:
+    """What the endpoint touches on pipecat's connection."""
+
+    pc_id = "pc"
+
+    def __init__(self) -> None:
+        self.disconnect = AsyncMock()
+        self.closed: list = []
+
+    def event_handler(self, name: str):
+        def register(handler):
+            if name == "closed":
+                self.closed.append(handler)
+            return handler
+
+        return register
+
+
 def _connect(app, monkeypatch, resolved) -> dict:
     """POST a connect with variables; what the pipeline and call row got."""
     from turncall.api.v1 import webrtc
@@ -36,7 +54,7 @@ def _connect(app, monkeypatch, resolved) -> dict:
     async def _create_call(_s, **kwargs):
         seen["metadata"] = kwargs["metadata_json"]
         seen["call_id"] = kwargs["call_id"]
-        return SimpleNamespace(id=uuid.uuid4())
+        return SimpleNamespace(id=kwargs["call_id"])
 
     monkeypatch.setattr(
         "turncall.storage.repositories.call_repo.create_call", _create_call
@@ -50,7 +68,8 @@ def _connect(app, monkeypatch, resolved) -> dict:
     )
 
     async def handle(_request, callback):
-        await callback(SimpleNamespace(disconnect=AsyncMock()))
+        seen["connection"] = FakeConnection()
+        await callback(seen["connection"])
         return {"sdp": "v=0", "type": "answer", "pc_id": "pc"}
 
     monkeypatch.setattr(webrtc._request_handler, "handle_web_request", handle)

@@ -226,6 +226,14 @@ the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
 
+**A WebRTC renegotiation no longer starts a second call.** A browser client
+that re-sends its offer for a connection it already has (the pipecat client
+does when it restarts ICE) got a new call row stuck at `initiated`, a second
+call-init request, a live-call slot held until it expired, and that stray
+call's id in the answer. The offer now renegotiates the running call and
+answers with its `call_id`; a `pc_id` belonging to another project's call is a
+`404`.
+
 **call-init is told the call's real id.** On an inbound phone call, a WhatsApp
 voice call and a WebRTC call, `call.id` was a stand-in that nothing after it
 carried, so a server could not match the call-init it answered to the call's
