@@ -42,8 +42,16 @@ def warn_unmatched_mocks(
     if not tool_mocks:
         return []
     from turncall.domain.models import BUILTIN_TOOL_NAMES
+    from turncall.services.retrieval import KNOWLEDGE_TOOL_SCHEMA
 
-    known = {t.name for t in target.config.tools} | set(BUILTIN_TOOL_NAMES)
+    # ponytail: `query_knowledge` counts whether or not the agent has a
+    # tool-mode knowledge base — the target carries no KB links, and a mock
+    # for a search that is never offered is the rarer mistake.
+    known = (
+        {t.name for t in target.config.tools}
+        | set(BUILTIN_TOOL_NAMES)
+        | {KNOWLEDGE_TOOL_SCHEMA["name"]}
+    )
     unmatched = sorted(set(tool_mocks) - known)
     if not unmatched:
         return []

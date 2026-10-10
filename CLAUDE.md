@@ -743,6 +743,12 @@ Document Upload → Extract + Clean (PDF/TXT/DOCX) → Chunk (token-based) → C
 
 Retrieval: hybrid — vector KNN + Postgres full-text, RRF rank fusion (ADR-0012).
 Auto-mode query = previous user turn + last agent reply + current utterance.
+Auto on voice acts on the LLMContextFrame the user aggregator hands on (pipecat 1.12
+consumes transcriptions): this turn's passages go right before the turn, the previous
+turn's come out, and the context is re-read after the search so nothing an
+aggregator added meanwhile is lost.
+Tool mode adds KNOWLEDGE_TOOL_HINT ("search before saying no") to the prompt, voice and text —
+not when an agent tool of its own keeps the name `query_knowledge` (`knowledge_hints(tool_names=)`).
 Eval: scripts/eval_retrieval.py + scripts/rag_golden.yaml (hit@k, MRR).
 
 Voice call: transport.input → STT → user_agg → [KnowledgeRetrievalProcessor] → LLM → TTS → transport.output
@@ -1333,7 +1339,7 @@ one target.
 - **Tools are mocked, and fail closed by default (#71).** The scenario's
   `tool_mocks` reach `CallContext.tool_mocks` and `services/tool_mocks.intercept`
   short-circuits the dispatch *before* the branch that would run it — webhook,
-  MCP and built-in alike. Under `mock_only` (the default) a tool with no mock is
+  MCP, built-in and `query_knowledge` alike. Under `mock_only` (the default) a tool with no mock is
   refused and the iteration is `errored` naming it; `live` is the typed opt-in
   for read-only tools. What each iteration called lands in its results entry as
   `tool_calls`, each marked `mocked`. Mocks are the **scenario's**, never the
@@ -1627,7 +1633,7 @@ Tool names are flat and unique: precedence is built-in > agent `tools` > MCP (se
 Tools run on voice **and** text, on every LLM provider — OpenAI-compatible (`tools`/`tool_calls`), Anthropic (`input_schema` + tool_use/tool_result blocks) and Bedrock Converse (`toolSpec`/`toolUse`/`toolResult`) each have their own dialect in `llm_text.py`. Built-ins are voice-only — all four resolve through `call_control` against a live `call_id`. `query_knowledge` is not a built-in and runs on both: a text turn offers it for the agent's `tool`-mode knowledge bases (`chat_tools._knowledge_search`, over `services/retrieval.query_knowledge`, the same search the voice handler runs), last, so an agent tool of that name keeps it. Calls within one round run concurrently. Text turns cap at `_MAX_TOOL_ROUNDS` (5), then re-ask with the tools withheld so a reply always goes out.
 
 ### Tool Invocation Recording
-All tool calls (webhook + MCP + builtin) are recorded in `tool_invocations` with input, output, status, latency_ms, and dispatched as `tool.result` events.
+All tool calls (webhook + MCP + builtin, and `query_knowledge` via `tool_bridge.recorded_tool` on voice) are recorded in `tool_invocations` with input, output, status, latency_ms, and dispatched as `tool.result` events.
 
 A row belongs to a **voice call** (`call_id`) or a **text session** (`session_id`) — a CHECK enforces exactly one. Read them back with `GET /v1/tools/invocations/{call_id}` or `GET /v1/chat/sessions/{session_id}/tool-invocations`.
 

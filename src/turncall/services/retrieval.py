@@ -1,5 +1,6 @@
 """Knowledge base retrieval: embed query, search pgvector, format results."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -219,9 +220,17 @@ KNOWLEDGE_TOOL_HINT = (
 )
 
 
-def knowledge_hints(modes: set[str]) -> str:
+def knowledge_hints(modes: set[str], tool_names: Iterable[str] = ()) -> str:
     """What the prompt says about knowledge read by search: that the model
-    has some (`auto`, `tool`), and to search before saying no (`tool`)."""
+    has some (`auto`, `tool`), and to search before saying no (`tool`).
+
+    An agent tool named `query_knowledge` keeps the name (`tool_names` are the
+    agent's own), so a `tool`-mode KB is never offered and says nothing.
+    ponytail: the agent's configured tools only — an MCP tool taking the name
+    is discovered after the prompt is built; pass discovered names if it bites.
+    """
+    if KNOWLEDGE_TOOL_SCHEMA["name"] in set(tool_names):
+        modes = modes - {"tool"}
     parts = []
     if modes & {"auto", "tool"}:
         parts.append(KNOWLEDGE_AWARENESS_HINT)
@@ -231,7 +240,9 @@ def knowledge_hints(modes: set[str]) -> str:
 
 
 async def build_knowledge_preamble(
-    session_factory: Any, attachments: list[dict[str, Any]]
+    session_factory: Any,
+    attachments: list[dict[str, Any]],
+    tool_names: Iterable[str] = (),
 ) -> str:
     """System-prompt additions for a KB-attached agent: the full text of any
     prompt-mode KBs (always present, no retrieval needed) plus an awareness hint
@@ -249,7 +260,7 @@ async def build_knowledge_preamble(
             full = await get_full_text_context(session, prompt_ids)
         if full:
             parts.append(full)
-    hints = knowledge_hints({str(a.get("mode")) for a in attachments})
+    hints = knowledge_hints({str(a.get("mode")) for a in attachments}, tool_names)
     if hints:
         parts.append(hints)
     return "\n\n".join(parts)

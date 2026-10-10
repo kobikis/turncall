@@ -74,8 +74,17 @@ async def test_the_agents_own_tool_keeps_the_name():
         parameters_schema={"type": "object", "properties": {}},
         webhook_url="http://crm.test/hook",
     )
-    tools = await _build(AgentConfig(tools=[own]), [_tool_link()])
+    from loguru import logger
+
+    seen: list[str] = []
+    sink = logger.add(lambda m: seen.append(str(m)), level="WARNING")
+    try:
+        tools = await _build(AgentConfig(tools=[own]), [_tool_link()])
+    finally:
+        logger.remove(sink)
     assert [s["description"] for s in tools.schemas] == ["Our own lookup"]
+    # Skipped + logged, as every other tool name collision is.
+    assert any("chat_tools_knowledge_name_collision" in m for m in seen)
 
 
 @pytest.mark.unit
@@ -123,7 +132,9 @@ async def test_a_failed_search_is_an_error_the_model_reads_not_a_raise():
         factory.return_value = lambda: _Session()
         result = await tools.execute("query_knowledge", {"query": "hours"})
 
-    assert "embeddings down" in json.loads(result)["error"]
+    # The model reads that the search failed, never why: on SMS or WhatsApp
+    # it can repeat the exception's text to the customer word for word.
+    assert json.loads(result) == {"error": "knowledge search failed"}
 
 
 class _Session:
@@ -132,3 +143,22 @@ class _Session:
 
     async def __aexit__(self, *_):
         return False
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_text_prompt_skips_the_hint_when_the_agent_keeps_the_name():
+    from turncall.services.retrieval import KNOWLEDGE_TOOL_HINT
+    from turncall.services.sms_chat import _inject_kb_context
+
+    link = _tool_link()
+    prompt = await _inject_kb_context(
+        AsyncMock(),
+        attachments=[link],
+        system_prompt="You are Nonna.",
+        user_message="Sushi?",
+        openai_api_key="sk-test",
+        tool_names=["query_knowledge"],
+    )
+    assert prompt == "You are Nonna."
+    assert KNOWLEDGE_TOOL_HINT not in prompt

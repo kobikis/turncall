@@ -9,6 +9,7 @@ Handles inbound SMS and programmatic chat messages:
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -257,6 +258,7 @@ async def _process_chat_message(
         system_prompt=system_prompt,
         user_message=message,
         openai_api_key=credentials.api_key("openai"),
+        tool_names=[t.name for t in agent_config.tools],
     )
 
     llm_messages = await _build_llm_messages(db, session_row.id, system_prompt)
@@ -504,6 +506,7 @@ async def _inject_kb_context(
     system_prompt: str,
     user_message: str,
     openai_api_key: str,
+    tool_names: Iterable[str] = (),
 ) -> str:
     """Inject knowledge base context into system prompt for chat.
 
@@ -549,7 +552,7 @@ async def _inject_kb_context(
     # doesn't deny having one (e.g. "use the attached file" matches nothing),
     # and to search a `tool`-mode one before saying no — as
     # build_knowledge_preamble does on a voice call.
-    hints = knowledge_hints({a.mode for a in attachments})
+    hints = knowledge_hints({a.mode for a in attachments}, tool_names)
     if hints:
         system_prompt = f"{system_prompt}\n\n{hints}"
 

@@ -78,3 +78,25 @@ def test_only_a_tool_mode_kb_adds_the_search_before_saying_no_rule():
     assert KNOWLEDGE_AWARENESS_HINT in knowledge_hints({"tool"})
     assert KNOWLEDGE_TOOL_HINT not in knowledge_hints({"auto"})
     assert knowledge_hints({"prompt"}) == ""
+
+
+def test_no_hint_when_the_agents_own_tool_keeps_the_name():
+    """An agent tool named `query_knowledge` keeps the name, so the search is
+    never offered: telling the model to search with it would run the agent's
+    tool instead, and a tool-mode KB is then one it cannot read at all."""
+    from turncall.services.retrieval import knowledge_hints
+
+    assert knowledge_hints({"tool"}, tool_names=["query_knowledge"]) == ""
+    # An auto KB still retrieves on its own, so it is still worth saying.
+    assert knowledge_hints(
+        {"auto", "tool"}, tool_names=["query_knowledge"]
+    ) == knowledge_hints({"auto"})
+
+
+async def test_the_voice_preamble_skips_it_too():
+    out = await build_knowledge_preamble(
+        _factory,
+        [{"knowledge_base_id": str(uuid4()), "mode": "tool"}],
+        tool_names=["query_knowledge"],
+    )
+    assert out == ""

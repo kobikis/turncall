@@ -155,9 +155,14 @@ async def build_chat_tools(
     # Last, as on a voice call: a tool of the agent's own by that name stays
     # theirs. Settings come from the first link, as the voice tool takes them.
     search = _knowledge_search(knowledge or [], openai_api_key)
-    if search is not None and KNOWLEDGE_TOOL_SCHEMA["name"] not in {
+    if search is not None and KNOWLEDGE_TOOL_SCHEMA["name"] in {
         s["name"] for s in schemas
     }:
+        logger.warning(
+            "chat_tools_knowledge_name_collision", tool=KNOWLEDGE_TOOL_SCHEMA["name"]
+        )
+        search = None
+    if search is not None:
         schemas.append(
             {
                 **KNOWLEDGE_TOOL_SCHEMA,
@@ -165,8 +170,6 @@ async def build_chat_tools(
                 or KNOWLEDGE_TOOL_SCHEMA["description"],
             }
         )
-    else:
-        search = None
 
     async def _run(name: str, args: dict[str, Any]) -> str:
         if search is not None and name == KNOWLEDGE_TOOL_SCHEMA["name"]:
@@ -240,9 +243,11 @@ def _knowledge_search(
                     similarity_threshold=first.similarity_threshold,
                     openai_api_key=openai_api_key,
                 )
-        except Exception as exc:
+        except Exception:
+            # Why goes to the log, not the model: it can repeat it to the
+            # customer word for word.
             logger.exception("chat_query_knowledge_failed")
-            return json.dumps({"error": f"knowledge search failed: {exc}"})
+            return json.dumps({"error": "knowledge search failed"})
         return json.dumps(found)
 
     return search

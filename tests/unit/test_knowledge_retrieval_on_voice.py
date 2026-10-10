@@ -160,3 +160,25 @@ def test_pipecats_user_aggregator_still_hands_the_turn_on_as_a_context_frame():
 
     aggregator = LLMUserAggregator(LLMContext())
     assert isinstance(aggregator._get_context_frame(), LLMContextFrame)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_message_added_during_the_search_is_kept():
+    """The aggregators share the context and run on their own tasks: a reply
+    finishing (or, with barge-in off, the caller's next turn) can land while
+    the search is out. Writing back the list read before it would drop it."""
+    context = LLMContext(messages=[{"role": "user", "content": "Sushi?"}])
+
+    async def retrieve(_session, **_kw):
+        context.add_message({"role": "assistant", "content": "Earlier reply."})
+        return SimpleNamespace(chunks=[_chunk("Salmon roll")])
+
+    with patch.object(kp, "retrieve", retrieve):
+        await run_test(_processor(), frames_to_send=[LLMContextFrame(context=context)])
+
+    messages = context.get_messages()
+    assert messages[-1] == {"role": "assistant", "content": "Earlier reply."}
+    # The passages still sit right before the turn they were found for.
+    assert "Salmon roll" in str(messages[0]["content"])
+    assert messages[1] == {"role": "user", "content": "Sushi?"}

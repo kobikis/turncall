@@ -165,11 +165,15 @@ class KnowledgeRetrievalProcessor(FrameProcessor):
             if isinstance(last, dict) and last.get("role") == "user"
             else ""
         )
-        if current:
-            passages = await self._passages(messages, current)
-            if passages is not None:
-                messages = [*messages[:-1], passages, messages[-1]]
-        context.set_messages(messages)
+        passages = await self._passages(messages, current) if current else None
+        # Read again: the aggregators share this context and may have added to
+        # it while the search was out — writing back the list read before it
+        # would drop that. The turn is found by identity, not position.
+        fresh = [m for m in context.get_messages() if not _is_passages(m)]
+        at = next((i for i, m in enumerate(fresh) if m is last), None)
+        if passages is not None and at is not None:
+            fresh = [*fresh[:at], passages, *fresh[at:]]
+        context.set_messages(fresh)
 
     async def _passages(
         self, messages: list[Any], current: str
@@ -271,9 +275,10 @@ def create_knowledge_tool_handler(
                 )
             await params.result_callback(found)
 
-        except Exception as exc:
+        except Exception:
+            # Why goes to the log, not the model: it can say it aloud.
             logger.exception("Knowledge tool query failed")
-            await params.result_callback({"error": str(exc)})
+            await params.result_callback({"error": "knowledge search failed"})
 
     return handler
 

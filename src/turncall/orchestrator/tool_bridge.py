@@ -9,6 +9,7 @@ the live call control API.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import time
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -176,10 +177,10 @@ async def _execute_builtin(
 
 def recorded_tool(name: str, handler: Any, call_context: CallContext) -> Any:
     """A tool registered outside `register_tools` — `query_knowledge` — logged
-    and recorded as one of them: a `tool_invocations` row and `tool.result`.
-    Without it a knowledge search on a call left no trace anywhere but an LLM
-    trace span, and read as the agent never having looked."""
-    import dataclasses
+    and recorded as one of them: a `tool_invocations` row and `tool.result`,
+    and mocked in an eval like them (#71). Without it a knowledge search on a
+    call left no trace anywhere but an LLM trace span, and read as the agent
+    never having looked."""
 
     async def run(params: Any) -> None:
         logger.info(
@@ -187,19 +188,25 @@ def recorded_tool(name: str, handler: Any, call_context: CallContext) -> Any:
             tool=name,
             call_id=str(call_context.call_id),
         )
+        args = dict(params.arguments)
+        # Ahead of the search, as `register_tools` does: under `mock_only` an
+        # unmocked search is refused, never run against the real knowledge base.
+        mocked = intercept(call_context.tool_mocks, name, args)
+        if mocked is not None:
+            await params.result_callback(mocked)
+            return
         started = time.perf_counter()
 
-        async def deliver(result: Any, *args: Any, **kwargs: Any) -> None:
-            await params.result_callback(result, *args, **kwargs)
+        async def deliver(result: Any, *rest: Any, **kwargs: Any) -> None:
+            await params.result_callback(result, *rest, **kwargs)
+            text = result if isinstance(result, str) else json.dumps(result)
+            if call_context.tool_mocks is not None:
+                # A `live` eval: the search really ran, and the run says so.
+                call_context.tool_mocks.record(name, args, text, outcome=EXECUTED)
             if call_context.is_eval:
                 return  # no `calls` row behind an eval (ADR-0018)
             latency_ms = int((time.perf_counter() - started) * 1000)
-            text = result if isinstance(result, str) else json.dumps(result)
-            _spawn(
-                _log_tool_result(
-                    call_context, name, dict(params.arguments), text, latency_ms
-                )
-            )
+            _spawn(_log_tool_result(call_context, name, args, text, latency_ms))
 
         await handler(dataclasses.replace(params, result_callback=deliver))
 
