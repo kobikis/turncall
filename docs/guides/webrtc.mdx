@@ -37,6 +37,11 @@ The answer carries the **call id** alongside the SDP:
 
 That is the handle for everything after the call — its transcript, its recording, or converting it into an [eval scenario](/guides/evals). A client that only reads `sdp` and `type` is unaffected.
 
+An offer that names the `pc_id` of a connection that is still open — a client
+restarting ICE, or renegotiating its tracks — is that same call: it is
+answered under the same `call_id`, and runs no call-init and creates no new
+call. A `pc_id` from another project's call is a `404`.
+
 If the agent cannot start (a provider with no key, say), there is no answer to give: the response is `500` with code `pipeline_start_failed`, the reason, and `details.missing_keys` when keys are missing. The call is recorded as `failed`.
 
 ```json

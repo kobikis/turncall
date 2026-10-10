@@ -54,6 +54,11 @@ _request_handler = SmallWebRTCRequestHandler(
     connection_mode=ConnectionMode.MULTIPLE,
 )
 
+# The call each held peer connection carries, and its project: pc_id ->
+# (call_id, project_id), from the connection's start until it closes. A
+# renegotiation names one of these, and is that call — never a new one.
+_calls_by_pc: dict[str, tuple[UUID, UUID]] = {}
+
 
 @router.post("/connect", status_code=200)
 async def webrtc_connect(
@@ -91,6 +96,15 @@ async def webrtc_connect(
             code=ErrorCode.VALIDATION_ERROR,
             message=f"Invalid WebRTC signaling payload: {exc}",
         ) from exc
+
+    # pipecat reuses a peer connection whose pc_id it holds, and never calls
+    # back for it: the offer renegotiates a call already running. Asked before
+    # anything a new call does — call-init, a live-call slot, a call row —
+    # each of which a renegotiation used to repeat, leaving a call stuck at
+    # `initiated` and its id in the answer. Its own map, read where it reads it.
+    pc_id = webrtc_request.pc_id
+    if pc_id and pc_id in _request_handler._pcs_map:
+        return await _renegotiate(webrtc_request, auth.project_id)
 
     # Extract agent_id / server_url from request_data
     request_data = webrtc_request.request_data or {}
@@ -265,6 +279,12 @@ async def webrtc_connect(
             build_failure.append((connection, exc))
             raise
 
+        _calls_by_pc[connection.pc_id] = (call.id, auth.project_id)
+
+        @connection.event_handler("closed")
+        async def _forget(closed: SmallWebRTCConnection) -> None:
+            _calls_by_pc.pop(closed.pc_id, None)
+
     try:
         answer = await _request_handler.handle_web_request(
             webrtc_request, on_connection
@@ -304,6 +324,33 @@ async def webrtc_connect(
     if isinstance(answer, dict):
         answer = {**answer, "call_id": str(call.id)}
     return JSONResponse(content=answer)
+
+
+async def _renegotiate(
+    webrtc_request: SmallWebRTCRequest, project_id: UUID
+) -> JSONResponse:
+    """Answer a renegotiation of a held connection, under its call's id.
+
+    A pc_id is the client's to repeat, not a credential: one whose call is
+    another project's, or that no call of ours claims, is a 404.
+    """
+    held = _calls_by_pc.get(webrtc_request.pc_id or "")
+    if held is None or held[1] != project_id:
+        raise NotFoundError("WebRTC connection", str(webrtc_request.pc_id))
+    call_id = held[0]
+
+    async def _no_new_call(_connection: SmallWebRTCConnection) -> None:
+        raise RuntimeError("a renegotiation opened a new connection")
+
+    answer = await _request_handler.handle_web_request(webrtc_request, _no_new_call)
+    if answer is None:
+        raise ApiError(
+            status_code=500,
+            code=ErrorCode.INTERNAL_ERROR,
+            message="Failed to create WebRTC answer",
+        )
+    logger.info("WebRTC renegotiated: call={call_id}", call_id=str(call_id))
+    return JSONResponse(content={**answer, "call_id": str(call_id)})
 
 
 @router.patch("/connect", status_code=200)
