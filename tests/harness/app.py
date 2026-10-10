@@ -203,6 +203,34 @@ async def _database_usable() -> str | None:
     return None
 
 
+async def _settle(timeout: float = 10) -> None:
+    """Wait until this process holds no live call and no post-call work.
+
+    A caller's hang-up returns before the app has finalized the call, so a
+    project deleted while the app is still serving races the call's last
+    writes: the cascade and the finalize lock the same rows in opposite
+    orders, and Postgres deadlocks one of them now and then (seen in CI on
+    test_asterisk_shared_pbx). For a delete *during* a test — `run_app`'s own
+    teardown deletes after the server has stopped, when a delivery to the
+    stopped sink may retry for good. Raises rather than deleting into the race.
+    """
+    from turncall.services import drain
+
+    def busy() -> tuple[int, int]:
+        work = [t for t in drain._post_call_work() if not t.done()]
+        return drain.active_calls(), len(work)
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    while any(busy()):
+        if asyncio.get_running_loop().time() > deadline:
+            live, work = busy()
+            raise AssertionError(
+                f"still {live} live call(s) and {work} post-call task(s) "
+                f"after {timeout}s; not deleting the project under them"
+            )
+        await asyncio.sleep(0.05)
+
+
 async def _delete_project(project_id: str) -> None:
     from sqlalchemy import delete
 

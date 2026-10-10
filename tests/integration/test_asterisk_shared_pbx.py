@@ -17,7 +17,7 @@ import httpx
 import pytest
 
 from tests.harness import HARNESS_AGENT, Script, run_app
-from tests.harness.app import Harness, _bootstrap, _delete_project
+from tests.harness.app import Harness, _bootstrap, _delete_project, _settle
 from tests.harness.asterisk import FakeAsterisk
 
 pytestmark = pytest.mark.integration
@@ -33,6 +33,9 @@ async def _another_project(app: Harness) -> AsyncIterator[httpx.AsyncClient]:
         try:
             yield http
         finally:
+            # The app is still serving: a call it has not finished closing
+            # would race the delete's cascade into a deadlock.
+            await _settle()
             await _delete_project(project_id)
 
 

@@ -35,6 +35,7 @@ def _connect(app, monkeypatch, resolved) -> dict:
 
     async def _create_call(_s, **kwargs):
         seen["metadata"] = kwargs["metadata_json"]
+        seen["call_id"] = kwargs["call_id"]
         return SimpleNamespace(id=uuid.uuid4())
 
     monkeypatch.setattr(
@@ -66,6 +67,7 @@ def _connect(app, monkeypatch, resolved) -> dict:
         headers={"Authorization": "Bearer x"},
     )
     assert r.status_code == 200, r.text
+    seen["resolved_with"] = webrtc._resolve_agent.await_args.kwargs["call_id"]
     return seen
 
 
@@ -77,6 +79,14 @@ def test_the_requests_variables_render_the_agent(app, monkeypatch):
     assert seen["prompt"] == "Hi Ada, vip=True."
     # On the call row, where a handoff and post-call work read them.
     assert seen["metadata"]["template_variables"] == {"name": "Ada", "vip": "True"}
+
+
+@pytest.mark.unit
+def test_call_init_is_asked_with_the_id_the_call_gets(app, monkeypatch):
+    config = AgentConfig(system_prompt="Hi.")
+    seen = _connect(app, monkeypatch, (config, None, {}, {}, None, {"x": 1}))
+
+    assert seen["resolved_with"] == seen["call_id"]
 
 
 @pytest.mark.unit
@@ -103,11 +113,20 @@ async def test_call_init_is_shown_them(monkeypatch):
         AsyncMock(return_value=CallInitResult(dynamic_config={"system_prompt": "x"})),
     )
 
+    call_id = uuid.uuid4()
     await webrtc._resolve_agent(
-        AsyncMock(), None, None, "https://init.example", "s", {"name": "Ada"}
+        AsyncMock(),
+        None,
+        None,
+        "https://init.example",
+        "s",
+        {"name": "Ada"},
+        call_id=call_id,
     )
 
     assert sent.await_args.kwargs["variables"] == {"name": "Ada"}
+    # The id the call is then created with, not a stand-in.
+    assert sent.await_args.kwargs["call_id"] == str(call_id)
 
 
 @pytest.mark.unit

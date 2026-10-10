@@ -13,7 +13,13 @@ from typing import Any
 import pytest
 from aiohttp import web
 
-from tests.harness import HARNESS_AGENT, Script, answer_outbound_call, run_app
+from tests.harness import (
+    HARNESS_AGENT,
+    Script,
+    answer_outbound_call,
+    place_inbound_call,
+    run_app,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -126,3 +132,28 @@ async def test_an_outbound_call_runs_the_agent_call_init_built(monkeypatch):
     assert prompts == ["Built per call for Ada."]
     assert read["active_agent_id"] is None  # an inline agent has no row (ADR-0017)
     assert "dynamic_config" not in read["metadata"]  # never shown (#276)
+
+
+async def test_an_inbound_call_tells_call_init_its_own_id(monkeypatch):
+    """call-init's `call.id` is the id the call is created with — not a
+    stand-in nothing else carries, which left a server no way to match the
+    call-init it answered to the call's events."""
+    async with (
+        CallInitServer() as server,
+        run_app(
+            Script(agent=("Hello there.",)),
+            set_env=monkeypatch.setenv,
+            set_attr=monkeypatch.setattr,
+        ) as app,
+    ):
+        number, _ = await _bind_to_call_init(app, server.url)
+        call = await place_inbound_call(
+            app.carrier, app.api, from_number=CALLEE, to_number=number
+        )
+        await call.wait_for_agent_speech(1)
+        await call.hang_up()
+        await app.sink.wait_for("call.ended")
+
+    [asked] = server.requests
+    assert asked["call"]["type"] == "inboundPhoneCall"
+    assert asked["call"]["id"] == call.call_id

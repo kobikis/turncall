@@ -443,7 +443,7 @@ POST /v1/webrtc/connect
     "type": "call-init",
     "phoneNumber": {"number": "+15551234567"},
     "customer": {"number": "+15559876543"},
-    "call": {"id": "temp-uuid", "provider_call_id": "CA...", "type": "inboundPhoneCall"}
+    "call": {"id": "call-uuid", "provider_call_id": "CA...", "type": "inboundPhoneCall"}
   }
 }
 ```

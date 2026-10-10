@@ -136,6 +136,10 @@ async def webrtc_connect(
             message="server_url must use HTTPS in production",
         )
 
+    # The call's id, chosen before call-init so the server is told the id the
+    # call is then created with, not a stand-in nothing else ever carries.
+    call_id = uuid4()
+
     # Resolve agent config
     (
         config,
@@ -145,7 +149,13 @@ async def webrtc_connect(
         knowledge_context,
         dynamic_config,
     ) = await _resolve_agent(
-        session, auth, agent_id_str, server_url, server_url_secret, variables
+        session,
+        auth,
+        agent_id_str,
+        server_url,
+        server_url_secret,
+        variables,
+        call_id=call_id,
     )
     # The request's own win a clash with call-init's, as an outbound dial's do.
     template_variables = {**(template_variables or {}), **variables}
@@ -162,7 +172,6 @@ async def webrtc_connect(
 
     # Before the call row, so a refusal leaves nothing behind (#224). The slot
     # is the pipeline task's to free once it runs; until then, ours.
-    call_id = uuid4()
     await admit_live_call(session, project_id=auth.project_id, call_id=call_id)
 
     engine = get_engine()
@@ -351,6 +360,8 @@ async def _resolve_agent(
     server_url: str | None,
     server_url_secret: str | None,
     variables: dict[str, str] | None = None,
+    *,
+    call_id: UUID,
 ) -> tuple[AgentConfig, UUID | None, dict, dict, str | None, dict | None]:
     """Resolve agent config from agent_id or server_url.
 
@@ -378,10 +389,9 @@ async def _resolve_agent(
         from turncall.events.server_events import send_call_init
         from turncall.services.call_init_resolver import resolve_call_init
 
-        temp_call_id = str(uuid4())
         response = await send_call_init(
             server_url,
-            call_id=temp_call_id,
+            call_id=str(call_id),
             from_number="",
             to_number="",
             transport_type="webrtc",
