@@ -126,7 +126,7 @@ async def _assemble(
     # Prompt-mode full text + an awareness hint for auto/tool KBs, injected into
     # the system prompt (create_pipeline is sync, so we build it here).
     knowledge_preamble = await build_knowledge_preamble(
-        session_factory, kb_attachments or []
+        session_factory, kb_attachments or [], [t.name for t in config.tools]
     )
 
     credentials = await load_call_credentials(

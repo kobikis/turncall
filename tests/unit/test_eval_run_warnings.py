@@ -66,6 +66,16 @@ class TestTheWarningIsReturnedNotJustLogged:
         assert warnings[0]["mcp_servers"] == 0
         assert "tool name" in warnings[0]["message"]
 
+    def test_a_query_knowledge_mock_is_not_reported(self) -> None:
+        """A tool-mode knowledge base's search is mocked like any tool (#71),
+        though it is in neither the agent's tools nor the built-ins."""
+        assert (
+            warn_unmatched_mocks(
+                {"query_knowledge": {"results": "menu"}}, _target(), run_id=uuid4()
+            )
+            == []
+        )
+
     def test_mocks_that_all_match_warn_about_nothing(self) -> None:
         assert (
             warn_unmatched_mocks(

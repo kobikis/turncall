@@ -233,6 +233,34 @@ calls — the builder's Test Chat included. Text turns now offer it, run the
 same search a voice call does, and record each call as a tool invocation on
 the session.
 
+**`auto` knowledge retrieval works on voice calls again.** No voice call in
+`auto` mode retrieved a passage: the retrieval step listened for frames the
+call no longer sends. Each caller turn now gets that turn's passages, placed
+right before it, and the previous turn's are taken out so the prompt does not
+grow with every turn.
+
+**A voice call's `query_knowledge` searches are recorded.** They now appear in
+`tool_invocations` and as `tool.result` events, like every other tool call.
+Before, a search left no record, and an agent that looked something up read as
+one that never did.
+
+**An agent with a `tool`-mode knowledge base searches before saying no.** The
+model is now told to look something up with `query_knowledge` before telling
+the customer it doesn't have it. Before, an agent sure of the answer from its
+name could deny something its documents list, on voice and text alike.
+
+**An eval mocks `query_knowledge` like any other tool.** A knowledge search
+in an eval ran against the real knowledge base whatever the tool policy, and
+never appeared in the iteration's `tool_calls`. It now follows `tool_policy`:
+a `tool_mocks` entry for `query_knowledge` answers it, and under `mock_only`
+(the default) an unmocked search is refused and the iteration is `errored`
+naming it. A scenario for an agent with a `tool`-mode knowledge base needs a
+mock for it, or `tool_policy: live` to search for real.
+
+**A failed knowledge search no longer tells the model why.** The model is told
+only that the search failed. The exception's text, which it could repeat to the
+customer, goes to the log.
+
 **A WebRTC renegotiation no longer starts a second call.** A browser client
 that re-sends its offer for a connection it already has (the pipecat client
 does when it restarts ICE) got a new call row stuck at `initiated`, a second

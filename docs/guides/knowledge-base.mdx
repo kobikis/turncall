@@ -12,7 +12,7 @@ Give your agents access to documents for retrieval-augmented generation. TurnCal
 |------|----------|----------|
 | `prompt` | Full document text injected into system prompt at call/chat start | Small docs (&lt;5KB): FAQs, company info |
 | `auto` | Per-turn semantic search via pgvector, context injected before LLM | Product catalogs, policies |
-| `tool` | LLM calls `query_knowledge` tool when it decides to search — on voice calls and text (Chat API, SMS, WhatsApp) alike | Large tech docs, archives |
+| `tool` | LLM calls `query_knowledge` tool when it decides to search — on voice calls and text (Chat API, SMS, WhatsApp) alike. The agent is told to search before saying it doesn't have something, and each search is recorded as a tool invocation | Large tech docs, archives |
 
 ## Setup
 

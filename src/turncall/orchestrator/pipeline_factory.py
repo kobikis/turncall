@@ -1389,6 +1389,7 @@ def create_pipeline(
         knowledge_base_attachments,
         call_context.session_factory,
         credentials.api_key("openai"),
+        call_context,
     )
     if knowledge is not None:
         llm.register_function(knowledge.definition.name, knowledge.handler)
@@ -1805,6 +1806,7 @@ def _create_s2s_pipeline(
         knowledge_base_attachments,
         call_context.session_factory,
         credentials.api_key("openai"),
+        call_context,
     )
     extra_tools = _with_knowledge(mcp_tools, knowledge)
     advertised = _advertised_tools(config, extra_tools)

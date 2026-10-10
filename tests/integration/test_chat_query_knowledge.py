@@ -12,7 +12,7 @@ from tests.harness import HARNESS_AGENT, run_app
 from tests.harness.second_instance import STUB_TEXT_REPLY
 from tests.integration.limits_support import SCRIPT
 from turncall.services.llm_text import CompletionResult
-from turncall.services.retrieval import KNOWLEDGE_AWARENESS_HINT
+from turncall.services.retrieval import KNOWLEDGE_AWARENESS_HINT, KNOWLEDGE_TOOL_HINT
 
 pytestmark = pytest.mark.integration
 
@@ -51,3 +51,4 @@ async def test_chat_offers_query_knowledge_for_a_tool_mode_knowledge_base(monkey
     tool = next(t for t in turn["tools"] if t["name"] == "query_knowledge")
     assert tool["description"] == "Look up dishes on the menu"
     assert KNOWLEDGE_AWARENESS_HINT in turn["prompt"]
+    assert KNOWLEDGE_TOOL_HINT in turn["prompt"]  # search before saying no

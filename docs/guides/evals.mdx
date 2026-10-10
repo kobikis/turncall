@@ -83,7 +83,7 @@ A scenario that exercises "book the appointment" against an agent with a real we
 }
 ```
 
-A mocked tool returns your canned response and the real webhook is never called — webhook tools, MCP tools and built-ins alike. Under `mock_only`, the default, a tool call with **no** mock is refused and the run ends as `errored` naming the tool, rather than executing. `live` is the opt-in for agents whose tools are read-only lookups.
+A mocked tool returns your canned response and the real webhook is never called — webhook tools, MCP tools, built-ins and `query_knowledge` (a `tool`-mode knowledge base's search) alike. Under `mock_only`, the default, a tool call with **no** mock is refused and the run ends as `errored` naming the tool, rather than executing. `live` is the opt-in for agents whose tools are read-only lookups.
 
 Mocks belong to the scenario, not the run: "the booking succeeds, does it report the confirmation correctly?" and "the booking fails, does it avoid claiming success?" are two different tests.
 
