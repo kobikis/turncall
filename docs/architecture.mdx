@@ -11,24 +11,30 @@ TurnCall is a **modular monolith** (FastAPI) that orchestrates real-time voice A
 ```mermaid
 flowchart LR
     Phone["📞 Phone"] --> Twilio
+    Phone --> Telnyx
+    PBX["☎️ Your PBX"] --> Asterisk
     SMS["✉️ SMS"] --> Twilio
     Browser["🌐 Browser"] --> WebRTC
     WhatsApp["💬 WhatsApp"] --> Meta
 
     Twilio["Twilio<br/>PSTN + Media Streams"] --> WH
+    Telnyx["Telnyx<br/>Call Control + media"] --> WH
+    Asterisk["Asterisk<br/>ARI + chan_websocket"] --> WH
     Meta["Meta Cloud API"] --> WH
     WebRTC["SmallWebRTC<br/>peer-to-peer"] --> API
 
     subgraph Server["TurnCall Server — FastAPI / Uvicorn"]
         direction TB
-        WH["Webhooks<br/>Twilio voice · status · SMS<br/>WhatsApp calls · messages"] --> Pipe
-        API["Control plane — REST<br/>/v1/agents · /v1/calls · /v1/phone-numbers<br/>/v1/knowledge-bases · /v1/chat · /v1/webrtc"] --> SVC
+        WH["Carrier edges<br/>Twilio voice · status · SMS<br/>Telnyx Call Control · Asterisk ARI<br/>WhatsApp calls · messages"] --> Pipe
+        API["Control plane — REST<br/>/v1/agents · /v1/calls · /v1/phone-numbers<br/>/v1/campaigns · /v1/chat · /v1/webrtc"] --> SVC
         Pipe["Real-time pipeline — one per call<br/>Pipecat · STT · LLM · TTS · S2S"] --> SVC["Services<br/>call control · retrieval<br/>analysis · routing"]
     end
 
     SVC --> PG[("PostgreSQL<br/>+ pgvector")]
     SVC --> Redis[("Redis")]
     Pipe -.->|audio| Twilio
+    Pipe -.-> Telnyx
+    Pipe -.-> Asterisk
     Pipe -.-> WebRTC
     Pipe -.-> Meta
 
@@ -36,8 +42,8 @@ flowchart LR
     classDef vendor fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.5px,color:#334155
     classDef core fill:#dcfce7,stroke:#4ade80,stroke-width:1.5px,color:#14532d
     classDef store fill:#fef3c7,stroke:#fbbf24,stroke-width:1.5px,color:#78350f
-    class Phone,Browser,WhatsApp,SMS client
-    class Twilio,WebRTC,Meta vendor
+    class Phone,PBX,Browser,WhatsApp,SMS client
+    class Twilio,Telnyx,Asterisk,WebRTC,Meta vendor
     class API,WH,Pipe,SVC core
     class PG,Redis store
     style Server fill:#f8fafc,stroke:#cbd5e1,color:#0f172a
@@ -77,8 +83,17 @@ sequenceDiagram
 ### Other entry points
 
 <AccordionGroup>
+  <Accordion title="Telnyx">
+    Telnyx POSTs `call.initiated` to `/webhooks/telnyx/voice` (Ed25519-signed) → TurnCall answers with a REST `answer` naming its `stream_url` → Telnyx opens `/ws/telnyx/media-stream/{call_id}/{token}` → same pipeline. Call Control does not end the call when the stream closes, so the edge sends `hangup` itself.
+  </Accordion>
+  <Accordion title="Asterisk (your PBX)">
+    TurnCall keeps an ARI WebSocket open to each Asterisk it serves. A dialplan `Stasis(turncall)` arrives as `StasisStart` → TurnCall answers the caller's channel, asks for an external-media channel that connects to `/ws/asterisk-media`, and bridges the two → same pipeline.
+  </Accordion>
   <Accordion title="Outbound call">
-    `POST /v1/calls/outbound` creates the Call record and initiates the Twilio call → Twilio hits `/webhooks/twilio/voice/outbound` → the handler resolves the agent from the Call record by `CallSid` → same pipeline as inbound.
+    `POST /v1/calls/outbound` checks the suppression list and the project's limits, runs call-init if the caller-ID number is routed to a server, and dials through the number's carrier (Twilio or Telnyx) → the callee answers and the carrier opens the media stream → same pipeline as inbound.
+  </Accordion>
+  <Accordion title="Campaign">
+    `POST /v1/campaigns` stores a list of targets. `turncall-campaign-worker`, a separate process, claims due targets inside each one's calling window and places each through the same outbound path, paced at the number's calls per second.
   </Accordion>
   <Accordion title="Browser (WebRTC)">
     `POST /v1/webrtc/connect` with an SDP offer → `SmallWebRTCRequestHandler` creates the connection and returns the SDP answer → `PATCH /v1/webrtc/connect` trickles ICE candidates → audio flows peer-to-peer at 16kHz into the same pipeline.
@@ -87,7 +102,7 @@ sequenceDiagram
     Meta POSTs `/webhooks/whatsapp` (field `calls`) → signature validated → Pipecat `WhatsAppClient` handles the WebRTC SDP exchange → 16kHz `SmallWebRTCTransport` pipeline.
   </Accordion>
   <Accordion title="SMS / Chat (text)">
-    Inbound text → resolve session (24h TTL) → build LLM history → chat completion → reply. No Pipecat pipeline — it's a text path through `services/`.
+    Inbound text → resolve session (24h TTL; a number routed to call-init asks your server once, when the session opens) → build LLM history → chat completion → reply. No Pipecat pipeline — it's a text path through `services/`.
   </Accordion>
 </AccordionGroup>
 
@@ -231,9 +246,10 @@ stateDiagram-v2
 | `orchestrator/` | Pipecat pipeline — **all** Pipecat imports isolated here |
 | `services/` | Call control, SMS/chat, retrieval, analysis, weighted routing, template rendering |
 | `storage/` | SQLAlchemy async models, repository pattern, PostgreSQL + Redis |
-| `adapters/` | Object storage (local filesystem, S3) |
+| `adapters/` | Each carrier's REST actions (Twilio, Telnyx, Asterisk ARI) and object storage (local filesystem, S3) |
 | `events/` | Webhook delivery, server events, signing |
-| `webhooks/` | Each carrier's inbound edge (Twilio), WhatsApp handlers, and the shared media entry point that picks a serializer by the call's carrier |
+| `webhooks/` | Each carrier's inbound edge (Twilio, Telnyx, Asterisk), WhatsApp handlers, and the shared media entry point that picks a serializer by the call's carrier |
+| `campaigns/` | The campaign worker: dialler pass, calling windows, retries, lifecycle |
 
 ## Data Model
 
@@ -259,13 +275,17 @@ erDiagram
 | `projects` | Tenant boundary |
 | `api_keys` | Auth (hashed, prefix-indexed) |
 | `agents` | Versioned voice agent configs (JSONB `config_blob`) |
-| `phone_numbers` | Twilio number → agent routing (incl. weighted A/B) |
+| `phone_numbers` | A number on its carrier (Twilio, Telnyx, Asterisk) → agent routing (incl. weighted A/B) |
 | `calls` | Call records with state machine |
 | `call_events` | Event log — transcripts, tools, transfers |
 | `tool_invocations` | Tool execution audit (input/output/latency) |
 | `webhook_subscriptions` | Outbound webhook config |
 | `knowledge_bases` · `documents` · `document_chunks` | RAG — metadata, files, pgvector embeddings |
 | `agent_knowledge_bases` | Agent ↔ KB links with retrieval mode |
-| `sms_sessions` · `sms_messages` | SMS/chat session + message history |
+| `sms_sessions` · `sms_messages` | SMS/chat session + message history; a session keeps its `{{variables}}` and call-init answer |
+| `campaigns` · `campaign_targets` | Outbound call lists, each target's status and attempts |
+| `suppressed_numbers` | The project's do-not-call list |
+| `project_credentials` | A project's own provider and carrier keys, encrypted |
+| `ambience_sounds` | Uploaded room sounds, one rendition per transport rate |
 | `takeaways` | Reusable post-call extractions |
 | `eval_scenarios` · `eval_runs` | Behavioural tests: pipecat definitions, tool mocks, the judge each names — and every run's verdict, transcripts and three snapshots |

@@ -68,7 +68,11 @@ the `examples/call-transfer` example.
 
 <Note>
   Transfers redirect the call's PSTN leg, so they work on Twilio and Telnyx
-  calls — a WebRTC or WhatsApp session has no phone leg to bridge.
+  calls — a WebRTC or WhatsApp session has no phone leg to bridge. On an
+  Asterisk number a transfer is **cold only**: the call continues into your
+  dialplan's transfer context, which dials the target. A warm transfer, a
+  `transfer_message` or a `fallback_message` is refused there, and the model is
+  told why.
 </Note>
 
 ### Choosing the transfer target
@@ -83,6 +87,42 @@ the `examples/call-transfer` example.
 | Your server decides | Watch [events](/guides/server-events) and issue `POST /v1/calls/{call_id}/transfer` yourself | Routing logic that shouldn't involve the LLM at all |
 
 For the lookup-tool pattern, three rules keep transfers reliable: **always return a number** (bake in a fallback line — an error mid-transfer strands a frustrated caller), **answer fast** (the caller waits in silence; the default tool timeout is 10s), and **return E.164**. Avoid putting schedules or rota tables in the prompt itself — the LLM has no reliable clock and can mistranscribe digits; that logic belongs in the tool.
+
+### Agent handoff
+
+`handoff_to_agent` switches the live call to another agent in the same
+project: its prompt and its tools replace the current agent's, over a cleared
+conversation context. The new agent gets what the call started with — the
+call's `{{variables}}` fill its placeholders, and call-init's
+`knowledge_context` leads its prompt — so a value like `{{customer_name}}`
+carries across. Its MCP servers are the exception: they are not connected
+mid-call, so their tools are not offered after the handoff.
+
+## Live call control
+
+Your server can act on a call while it is running, without the model:
+
+| Endpoint | What it does |
+|----------|--------------|
+| `POST /v1/calls/{call_id}/end` | Hang up now |
+| `POST /v1/calls/{call_id}/transfer` | Transfer, with `transfer_call`'s parameters |
+| `POST /v1/calls/{call_id}/dtmf` | Send keypad tones |
+| `POST /v1/calls/{call_id}/messages` | Add a message to the agent's context, read on its next turn |
+| `POST /v1/calls/{call_id}/handoff` | Switch the call to another agent, as `handoff_to_agent` does |
+
+`messages` and `handoff` change the running call itself, so they reach it
+through the server that holds it, on any replica, and answer only once the call
+has applied them:
+
+- **200** — applied. A handoff's response lists what it applied: the target
+  agent and the tools it now offers.
+- **409 `call_not_live`** — the call is not running.
+- **504 `call_did_not_acknowledge`** — the call did not confirm within two
+  seconds.
+- **409** with a reason — the call refused: `messages` on a speech-to-speech
+  agent (its model reads nothing added after the call starts), `handoff` on an
+  `openai_live` agent or to an agent that cannot be loaded.
+- **404** — a handoff to an agent outside your project.
 
 ## Custom Webhook Tools
 

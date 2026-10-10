@@ -3,15 +3,18 @@ title: Introduction
 description: "Voice AI infrastructure you can self-host"
 ---
 
-TurnCall lets developers deploy AI voice agents over phone calls, WebRTC browser calls, WhatsApp, and SMS — with configurable providers, tool calling, call transfers, voicemail detection, and bidirectional server events.
+TurnCall lets developers deploy AI voice agents over phone calls (Twilio, Telnyx or your own Asterisk PBX), WebRTC browser calls, WhatsApp, and SMS — with configurable providers, tool calling, call transfers, voicemail detection, and bidirectional server events.
 
 Define an agent via API, bind it to a phone number, and callers talk to your AI.
 
 ## Features
 
 <CardGroup cols={2}>
-  <Card title="Twilio PSTN Calls" icon="phone">
-    Inbound and outbound phone calls via Twilio Voice + Media Streams.
+  <Card title="Phone Calls" icon="phone">
+    Inbound and outbound calls on Twilio or Telnyx numbers, or through your own Asterisk PBX over ARI.
+  </Card>
+  <Card title="Campaigns" icon="list-check">
+    One agent calls a list — in each target's own calling hours, paced to your number, with retries and a do-not-call list.
   </Card>
   <Card title="WebRTC Browser Calls" icon="globe">
     Talk to agents directly from the browser with peer-to-peer audio.
@@ -26,7 +29,7 @@ Define an agent via API, bind it to a phone number, and callers talk to your AI.
     Text-based conversations with agents via Twilio SMS or the Chat API.
   </Card>
   <Card title="Multi-Provider" icon="shuffle">
-    Mix and match STT, LLM, and TTS providers per agent — Deepgram, OpenAI, Anthropic, ElevenLabs, Cartesia, Ollama.
+    Mix and match STT, LLM, and TTS providers per agent — Deepgram, OpenAI, Anthropic, Google Gemini, ElevenLabs, Cartesia, AssemblyAI, Ollama — with backups that take over when one stops working.
   </Card>
   <Card title="Speech-to-Speech" icon="bolt">
     ~300ms processing (vs ~800ms cascade) via OpenAI Realtime, Gemini Live or Amazon Nova Sonic.
@@ -60,6 +63,9 @@ Define an agent via API, bind it to a phone number, and callers talk to your AI.
   </Card>
   <Card title="Observability" icon="chart-line">
     OpenTelemetry traces and pipeline observers — per-stage latency, turn timing, startup.
+  </Card>
+  <Card title="Production" icon="server">
+    Per-project limits that hold across servers, a Helm chart, and deploys that let live calls finish.
   </Card>
 </CardGroup>
 
@@ -99,11 +105,11 @@ See [Architecture](/architecture) for the full pipeline, call flows, and data mo
 | Voice Pipeline | Pipecat 1.12 |
 | Database | PostgreSQL + SQLAlchemy async + Alembic |
 | Cache | Redis |
-| Telephony | Twilio Voice + Media Streams |
+| Telephony | Twilio Voice + Media Streams · Telnyx Call Control · Asterisk ARI |
 | Browser | WebRTC (SmallWebRTCTransport) |
 | Video Avatar | HeyGen / Tavus (Pipecat avatar services) |
 | STT | Deepgram / OpenAI / ElevenLabs / Cartesia / AssemblyAI |
-| LLM | OpenAI / Anthropic Claude / Ollama / OpenRouter / AWS Bedrock / Any OpenAI-compatible |
+| LLM | OpenAI / Anthropic Claude / Google Gemini / Ollama / OpenRouter / AWS Bedrock / Any OpenAI-compatible |
 | TTS | Deepgram / OpenAI / ElevenLabs / Cartesia |
 | S2S | OpenAI Realtime / Gemini Live / Amazon Nova Sonic 2 |
 | Knowledge Base | pgvector + OpenAI embeddings |

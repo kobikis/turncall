@@ -132,17 +132,28 @@ instance through the API, exactly as if you'd written the config by hand.
 
 ## 6. Talk to it
 
-The agent is a normal TurnCall agent now. Talk to it in the browser with the
-[WebRTC client](/quickstart#talk-to-it), or bind a phone number to it and
-call it for real.
+The agent is a normal TurnCall agent now. Its page opens on **Build**: a
+**Setup** checklist of what a working agent has that this one does not yet (a
+phone number, an eval scenario, a backup model), and every setting in
+sections beside it — prompt, speech and models, tools and apps, knowledge,
+turn-taking and limits.
 
-The events panel polls your instance, so you can watch what its calls produce
-as they happen.
+The **Test** pane on the right talks to the saved agent, by text (**Chat**) or
+in the browser (**Voice**, over WebRTC). Its **Variables** box has an input for
+each `{{placeholder}}` the agent's prompt uses, and fills them the way
+[call-init](/guides/call-init) would on a real call — Chat from the next
+message, Voice from the next call. Values are kept per agent in your browser.
+
+To take real calls, bind a number on **Twilio**, **Telnyx** or your own
+**Asterisk** (each connected once for the workspace under Integrations →
+Telephony). **Calls** shows what its calls produced, **Campaigns** places
+outbound calls to a list, beside the agent's do-not-call list, and **Evals**
+holds its saved test scenarios.
 
 <Note>
   To let it act in your Slack or your Google Calendar, connect the app once for
-  the workspace and choose when it runs on the agent's Configuration tab. See
-  [Connected apps](/guides/integrations).
+  the workspace and choose when it runs in the agent's **Tools and apps**
+  section. See [Connected apps](/guides/integrations).
 </Note>
 
 ## 7. Push the agent to your own GitHub

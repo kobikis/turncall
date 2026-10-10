@@ -92,7 +92,9 @@ locally through Ollama and no audio leaves your network except to the telco.
 
 ## Features
 
-- **Twilio PSTN calls** — Inbound and outbound phone calls via Twilio
+- **Phone calls** — Inbound and outbound on Twilio or Telnyx numbers, or through your own Asterisk PBX over ARI
+- **Campaigns** — One agent calls a list: each target's own calling window, pacing to the number's rate, retries by outcome, pause/resume/cancel
+- **Limits** — Live calls per project, outbound calls per second per number, messages per minute per conversation — counted across servers
 - **WebRTC browser calls** — Talk to agents from the browser
 - **Video Avatar** — Optional HeyGen or Tavus (lip-synced video) on WebRTC cascade calls
 - **Multi-provider STT/LLM/TTS** — Deepgram, OpenAI, Anthropic Claude, Google Gemini, ElevenLabs, Cartesia, AssemblyAI, Ollama, OpenRouter, AWS Bedrock, or any OpenAI-compatible endpoint (configurable per agent)
@@ -103,12 +105,13 @@ locally through Ollama and no audio leaves your network except to the telco.
 - **Voicemail Detection** — With retry backoff, beep detection, auto-message
 - **Tool Calling** — Built-in (transfer, handoff, end_call, DTMF) + webhook tools + MCP servers
 - **MCP Support** — Connect agents to MCP servers for auto-discovered tools (HTTP, SSE, stdio)
-- **Live Call Control** — End, transfer, handoff, inject context via API
+- **Live Call Control** — End, transfer, DTMF, hand off, or add a message to a running call via API
+- **Failover** — Backup LLM, STT and TTS configs that take over mid-call when a provider stops working
 - **Server Events** — Bidirectional hooks (call-init, function-call, call-end)
-- **Pre-Call Init** — Dynamic agent resolution via webhook on all transports (Twilio, WhatsApp, WebRTC)
+- **Pre-Call Init** — Dynamic agent resolution via webhook on every transport: inbound and outbound phone calls, WhatsApp, WebRTC, and SMS / WhatsApp text conversations
 - **Knowledge Base (RAG)** — Upload docs, three retrieval modes: prompt (full inject), auto (per-turn RAG), tool (LLM-decided)
 - **Knowledge Context** — Inject runtime data (CRM, tickets) into system prompt at call start
-- **Template Variables** — Personalize prompts per-call with `{{name}}`, `{{account_id}}`
+- **Template Variables** — Personalize prompts per call or conversation with `{{name}}`, `{{account_id}}` — from call-init, an outbound dial, a campaign target, the Chat API or a WebRTC connect
 - **Agent Versioning** — Publish immutable versions, auto-promote phone numbers, rollback with one API call
 - **A/B Testing** — Weighted traffic routing on phone numbers (50/50, 80/20, etc.), deterministic by caller
 - **Post-Call Analysis** — Automatic LLM-powered analysis: summary, success evaluation, sentiment, structured extraction, scoring rubric
@@ -116,6 +119,7 @@ locally through Ollama and no audio leaves your network except to the telco.
 - **Vocabulary control** — `stt.keyterms` for words the model mishears, `tts.pronunciations` (word → IPA) for words the voice says wrong, both mapped to each provider's own dialect
 - **Multi-tenant** — Project-scoped API keys with RBAC
 - **Observability** — Call events, transcripts, tool invocations, webhook delivery
+- **Production** — Helm chart, graceful shutdown that lets live calls finish, `/metrics` for autoscaling on live calls
 
 ## Quick Start
 
@@ -361,6 +365,9 @@ See [examples/knowledge-base/](examples/knowledge-base/) for a complete setup de
 | [Server events](https://docs.turncall.io/guides/server-events) | Bidirectional hooks |
 | [Knowledge base](https://docs.turncall.io/guides/knowledge-base) | RAG, three retrieval modes |
 | [Evals](https://docs.turncall.io/guides/evals) | Behavioural tests, judges, CI |
+| [Campaigns](https://docs.turncall.io/guides/campaigns) | Outbound call lists, windows, retries |
+| [Limits](https://docs.turncall.io/guides/limits) | Live calls, dialling rate, message rate |
+| [Kubernetes](https://docs.turncall.io/guides/kubernetes) | Helm chart, scaling, graceful shutdown |
 | [QUICKSTART.md](QUICKSTART.md) | The same setup, in-repo |
 
 ## Tools
@@ -441,7 +448,7 @@ POST /v1/webrtc/connect
 }
 ```
 
-Transport types: `inboundPhoneCall`, `inboundWhatsAppCall`, `webrtc`
+Transport types: `inboundPhoneCall`, `outboundPhoneCall`, `inboundWhatsAppCall`, `webrtc`, `inboundSms`, `inboundWhatsAppMessage` (text conversations ask once, when the session opens)
 
 ### Your Server Responds
 
@@ -508,7 +515,7 @@ each one needs — several run with no phone number and no tunnel.
 | Voice Pipeline | Pipecat 1.12 |
 | Database | PostgreSQL + SQLAlchemy async + Alembic |
 | Cache | Redis |
-| Telephony | Twilio Voice + Media Streams |
+| Telephony | Twilio Voice + Media Streams · Telnyx Call Control · Asterisk ARI |
 | Browser | WebRTC (SmallWebRTCTransport) |
 | Video Avatar | HeyGen / Tavus (Pipecat avatar services) |
 | STT | Deepgram / OpenAI / ElevenLabs / Cartesia / AssemblyAI |
