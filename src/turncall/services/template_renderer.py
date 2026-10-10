@@ -15,6 +15,24 @@ from turncall.domain.models import AgentConfig
 
 VARIABLE_PATTERN = re.compile(r"\{\{(\w+)\}\}")
 
+# What one conversation may hold: every value lands in JSONB and in a prompt.
+# A few names and a short note each, not a document.
+MAX_VARIABLES = 50
+MAX_VARIABLES_CHARS = 4_096
+
+
+def check_variables(variables: dict[str, str]) -> dict[str, str]:
+    """`variables`, or ValueError naming the bound it is over."""
+    if len(variables) > MAX_VARIABLES:
+        raise ValueError(f"at most {MAX_VARIABLES} variables, got {len(variables)}")
+    size = sum(len(k) + len(v) for k, v in variables.items())
+    if size > MAX_VARIABLES_CHARS:
+        raise ValueError(
+            f"variables total {size} characters, names included; "
+            f"the most is {MAX_VARIABLES_CHARS}"
+        )
+    return variables
+
 
 def render_template(template: str, variables: dict[str, str]) -> str:
     """Replace {{key}} placeholders with values from variables dict.

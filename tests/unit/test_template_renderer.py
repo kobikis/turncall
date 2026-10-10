@@ -88,3 +88,27 @@ class TestRenderAgentConfig:
         config = AgentConfig(first_message=None)
         rendered = render_agent_config(config, {"name": "Eve"})
         assert rendered.first_message is None
+
+
+@pytest.mark.unit
+class TestForSession:
+    """A text session's agent: its variables over the agent's own metadata."""
+
+    def test_the_session_wins_and_the_agent_metadata_fills_the_rest(self) -> None:
+        from turncall.services.sms_chat import for_session
+
+        config = AgentConfig(
+            system_prompt="{{greeting}}, {{name}}.",
+            metadata={"greeting": "Hi", "name": "there"},
+        )
+        rendered = for_session(config, {"template_variables": {"name": "Ada"}})
+        assert rendered.system_prompt == "Hi, Ada."
+
+    def test_knowledge_context_leads_the_rendered_prompt(self) -> None:
+        from turncall.services.sms_chat import for_session
+
+        rendered = for_session(
+            AgentConfig(system_prompt="Hi {{name}}."),
+            {"template_variables": {"name": "Ada"}, "knowledge_context": "VIP."},
+        )
+        assert rendered.system_prompt == "VIP.\n\nHi Ada."

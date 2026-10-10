@@ -14,16 +14,21 @@ async def create_session(
     session: AsyncSession,
     *,
     project_id: UUID,
-    agent_id: UUID,
+    agent_id: UUID | None,
     phone_number_id: UUID | None = None,
     customer_number: str,
     turncall_number: str,
     channel: str = "sms",
     metadata_json: dict | None = None,
+    session_id: UUID | None = None,
 ) -> SmsSessionRow:
-    """Create a new SMS/chat session."""
+    """Create a new SMS/chat session.
+
+    `session_id` is the id call-init was already told, when it ran first.
+    """
     now = datetime.now(UTC)
     row = SmsSessionRow(
+        **({"id": session_id} if session_id else {}),
         project_id=project_id,
         agent_id=agent_id,
         phone_number_id=phone_number_id,
@@ -39,6 +44,21 @@ async def create_session(
     session.add(row)
     await session.flush()
     return row
+
+
+async def set_session_metadata(
+    session: AsyncSession,
+    session_id: UUID,
+    metadata_json: dict,
+) -> SmsSessionRow | None:
+    """Replace a session's metadata (its template variables, for one)."""
+    result = await session.execute(
+        update(SmsSessionRow)
+        .where(SmsSessionRow.id == session_id)
+        .values(metadata_json=metadata_json)
+        .returning(SmsSessionRow)
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_session_by_id(

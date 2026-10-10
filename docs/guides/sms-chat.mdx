@@ -11,7 +11,7 @@ TurnCall supports text-based conversations via Twilio SMS and the Chat API. Agen
 ```mermaid
 flowchart LR
     C["✉️ Customer texts"] --> T["Twilio<br/>POST /webhooks/twilio/sms/inbound"]
-    T --> R["Resolve phone → agent"]
+    T --> R["Resolve phone → agent<br/>(call-init on a new session)"]
     R --> S[("Create or resume session<br/>24h TTL")]
     S --> H["Build LLM history"]
     H --> L["Chat completion"]
@@ -36,6 +36,10 @@ Set `sms_enabled: true` when binding a phone number. TurnCall auto-configures th
 
 The same number handles both voice calls and SMS.
 
+A number routed to call-init (`routing_target_type: "webhook"`) asks your server
+which agent answers, once per conversation, and keeps its `variables` and
+`knowledge_context` for every reply. See [Pre-Call Init](/guides/call-init#text-conversations-sms-whatsapp-text).
+
 ## Chat API
 
 Use the Chat API for programmatic text conversations:
@@ -52,6 +56,28 @@ curl -X POST http://localhost:8090/v1/chat \
     "turncall_number": "+15551234567"
   }'
 ```
+
+### Template variables
+
+`variables` fill `{{placeholders}}` in the agent's system prompt and tool
+descriptions, as call-init's do on a call. They are kept on the session and
+merged: send them on any message, a name sent again replaces its value, and a
+message without them leaves them as they are. The agent's own `metadata` fills
+any name the session does not set.
+
+```bash
+curl -X POST http://localhost:8090/v1/chat \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "AGENT_ID",
+    "message": "Where is my order?",
+    "variables": {"name": "Jane", "address": "12 Herzl St"}
+  }'
+```
+
+At most 50 names and 4,096 characters, names included — per request (`422`)
+and for the session they add up to (`400`).
 
 ### Endpoints
 

@@ -9642,6 +9642,26 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Metadata"
+          },
+          "variables": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Variables"
           }
         },
         "type": "object",

@@ -463,8 +463,31 @@ DELETE /v1/chat/sessions/:id         # Expire session
 
 Context threading: use `session_id` (group messages) or `previous_chat_id` (linear chain). Cannot use both.
 
+### Text variables and call-init
+
+A text session renders `{{variables}}` like a call: `services/sms_chat
+.for_session` renders the agent with the session's `template_variables` (the
+agent's own `metadata` fills names the session does not set), then prepends
+`knowledge_context`. They live in `sms_sessions.metadata_json`, under a call
+row's keys.
+
+- **Chat API**: `variables` on `POST /v1/chat`, merged into the session's on
+  every message that carries them. Bounded by `template_renderer
+  .check_variables` (50 names, 4,096 characters): per request `422`, the merged
+  session `400`.
+- **SMS / WhatsApp text on a webhook-routed number** (`services/text_agent.py`):
+  call-init runs **once per session**, on the message that opens it, with the
+  new session's id as `call.id`. A later message in the session runs on what
+  it stored, never asking again. `call_init_resolver.usable_agent` decides what
+  can run, as for an outbound dial: an `agent_id` outside the number's project
+  or an inline config that does not validate is refused and the text goes
+  unanswered, no session created. An inline agent leaves `sms_sessions
+  .agent_id` **null** (nullable since `c4e8a2f6b1d3`) with its config in
+  `metadata_json["dynamic_config"]` — ADR-0017's rule; no API read shows it.
+  Its KBs come from `config.knowledge_bases`, resolved against the project.
+
 ### Session Management
-- Auto-created on first inbound SMS or Chat API call
+- Auto-created on first inbound SMS or Chat API call (a call-init number asks its server first; see above)
 - Resumed if same (customer_number, turncall_number) pair and < 24h since last activity
 - Expired after 24h inactivity (lazy on lookup + background cleanup every 15 min)
 - Over the project's `messages_per_minute` (#226): not stored, no LLM; Chat API `429`, SMS/WhatsApp unanswered (see "Limits")
@@ -610,6 +633,7 @@ Dynamic agent resolution before the pipeline starts. Works on all transports.
 | Outbound phone call (API or campaign) | caller-ID number has `routing_target_type: "webhook"` | `outboundPhoneCall` |
 | WhatsApp voice | `routing_target_type: "webhook"` on phone number | `inboundWhatsAppCall` |
 | WebRTC | `server_url` in POST /v1/webrtc/connect body | `webrtc` |
+| SMS / WhatsApp text | `routing_target_type: "webhook"` on phone number, once per session | `inboundSms` / `inboundWhatsAppMessage` |
 
 ### Flow
 ```
