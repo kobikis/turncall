@@ -632,7 +632,7 @@ Dynamic agent resolution before the pipeline starts. Works on all transports.
 | Twilio voice | `routing_target_type: "webhook"` on phone number | `inboundPhoneCall` |
 | Outbound phone call (API or campaign) | caller-ID number has `routing_target_type: "webhook"` | `outboundPhoneCall` |
 | WhatsApp voice | `routing_target_type: "webhook"` on phone number | `inboundWhatsAppCall` |
-| WebRTC | `server_url` in POST /v1/webrtc/connect body | `webrtc` |
+| WebRTC | `server_url` in POST /v1/webrtc/connect body (`variables` beside it reach call-init as `call.variables` and win a clash, as a dial's do) | `webrtc` |
 | SMS / WhatsApp text | `routing_target_type: "webhook"` on phone number, once per session | `inboundSms` / `inboundWhatsAppMessage` |
 
 ### Flow

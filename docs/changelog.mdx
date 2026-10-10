@@ -7,6 +7,11 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**Template variables on a WebRTC call.** `variables` in the connect request's
+`requestData` fill the agent's `{{placeholders}}` for that call. With
+`server_url`, call-init sees them as `call.variables`, and the request's value
+wins a clash. See [WebRTC](/guides/webrtc#template-variables).
+
 **Template variables in text conversations.** `POST /v1/chat` takes
 `variables`, kept on the session and rendered into the agent's prompt as
 `{{placeholders}}`. An SMS or WhatsApp text to a number routed to call-init now

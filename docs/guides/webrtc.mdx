@@ -75,6 +75,27 @@ Pass `server_url` in `requestData` for pre-call initialization:
 
 See [Pre-Call Init](/guides/call-init) for response format.
 
+## Template Variables
+
+`variables` in `requestData` fill the agent's `{{placeholders}}` (system
+prompt, first message, tool descriptions) for this call:
+
+```json
+{
+  "sdp": "v=0...",
+  "type": "offer",
+  "requestData": {
+    "agent_id": "AGENT_UUID",
+    "variables": {"name": "Jane", "address": "12 Herzl St"}
+  }
+}
+```
+
+A flat object of strings, numbers or booleans, at most 50 names and 4,096
+characters — anything else is a `400`. With `server_url`, call-init receives
+them as `call.variables`, and on a clash with call-init's own `variables` the
+request's value wins.
+
 ## Browser Client
 
 See the `examples/webrtc-client` directory for a complete browser client using Pipecat JS SDK + WebRTC.

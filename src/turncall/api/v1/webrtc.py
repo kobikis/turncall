@@ -36,6 +36,7 @@ from turncall.orchestrator.transport_factory import (
 )
 from turncall.services.credentials import MissingProviderKeyError
 from turncall.services.limits import admit_live_call, release_live_call
+from turncall.services.template_renderer import check_variables
 from turncall.storage.database import create_session_factory, get_engine
 from turncall.storage.repositories import agent_repo
 
@@ -99,10 +100,13 @@ async def webrtc_connect(
         server_url_secret = request_data.get("server_url_secret") or body.get(
             "server_url_secret"
         )
+        raw_variables = request_data.get("variables") or body.get("variables")
     else:
         agent_id_str = body.get("agent_id")
         server_url = body.get("server_url")
         server_url_secret = body.get("server_url_secret")
+        raw_variables = body.get("variables")
+    variables = _request_variables(raw_variables)
 
     if not agent_id_str and not server_url:
         raise ApiError(
@@ -140,7 +144,11 @@ async def webrtc_connect(
         request_metadata,
         knowledge_context,
         dynamic_config,
-    ) = await _resolve_agent(session, auth, agent_id_str, server_url, server_url_secret)
+    ) = await _resolve_agent(
+        session, auth, agent_id_str, server_url, server_url_secret, variables
+    )
+    # The request's own win a clash with call-init's, as an outbound dial's do.
+    template_variables = {**(template_variables or {}), **variables}
 
     # Apply template variables and knowledge context
     if template_variables:
@@ -314,14 +322,40 @@ async def webrtc_ice_candidate(request: Request) -> JSONResponse:
     return JSONResponse(content={"status": "ok"})
 
 
+def _request_variables(raw: Any) -> dict[str, str]:
+    """The `{{variables}}` a connect request carries, as strings: a JSON
+    object of scalars, bounded like a chat session's. 400 otherwise."""
+    if raw is None:
+        return {}
+    scalar = (str, int, float, bool)
+    if not isinstance(raw, dict) or not all(
+        isinstance(v, scalar) for v in raw.values()
+    ):
+        raise ApiError(
+            status_code=400,
+            code=ErrorCode.VALIDATION_ERROR,
+            message="variables must be an object of strings, numbers or booleans",
+        )
+    try:
+        return check_variables({str(k): str(v) for k, v in raw.items()})
+    except ValueError as exc:
+        raise ApiError(
+            status_code=400, code=ErrorCode.VALIDATION_ERROR, message=str(exc)
+        ) from exc
+
+
 async def _resolve_agent(
     session: Any,
     auth: Auth,
     agent_id_str: str | None,
     server_url: str | None,
     server_url_secret: str | None,
+    variables: dict[str, str] | None = None,
 ) -> tuple[AgentConfig, UUID | None, dict, dict, str | None, dict | None]:
     """Resolve agent config from agent_id or server_url.
+
+    `variables` are the request's own, shown to call-init as `call.variables`
+    so it can answer with them in mind.
 
     Returns (config, agent_id, template_variables, metadata, knowledge_context,
     dynamic_config). The last is the inline agent as call-init sent it, or None
@@ -352,6 +386,7 @@ async def _resolve_agent(
             to_number="",
             transport_type="webrtc",
             secret=server_url_secret,
+            variables=variables or None,
         )
         if response.success and response.data:
             result = await resolve_call_init(session, response.data)
