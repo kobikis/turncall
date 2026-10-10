@@ -31,6 +31,7 @@ def placed(monkeypatch):
         id=uuid.uuid4(),
         e164_number="+15550000001",
         provider="twilio",
+        routing_target_type="agent",
         twilio_account_sid=None,
         twilio_auth_token_ciphertext=None,
     )

@@ -11,6 +11,7 @@ Pre-call initialization lets you dynamically select and configure the agent befo
 | Transport | Trigger | `call.type` value |
 |-----------|---------|-------------------|
 | Twilio voice | `routing_target_type: "webhook"` on phone number | `inboundPhoneCall` |
+| Outbound phone call (API or campaign) | caller-ID number has `routing_target_type: "webhook"` | `outboundPhoneCall` |
 | WhatsApp voice | `routing_target_type: "webhook"` on phone number | `inboundWhatsAppCall` |
 | WebRTC | `server_url` in POST /v1/webrtc/connect body | `webrtc` |
 
@@ -64,6 +65,29 @@ POST /v1/webrtc/connect
   }
 }
 ```
+
+### Outbound calls
+
+An outbound call placed from a webhook-routed number (`POST /v1/calls/outbound`
+or a campaign) runs call-init too, at the dial, before the phone rings. The
+roles are the same as inbound: `phoneNumber` is your number, `customer` the
+person called. `call` also carries `agent_id`, the agent the dial named, and
+`variables`, the dial's (a campaign target's) template variables, when it has
+any. `provider_call_id` is empty: nothing has been dialled yet.
+
+- Your answer's `agent_id` (an agent in the same project) or inline `agent`
+  runs the call; with neither, the dial's agent does.
+- Your `variables` are merged under the dial's: on a clash the dial's value
+  wins. Your `metadata` is stored as on an inbound call (the call's
+  `metadata.metadata`), and `knowledge_context` likewise.
+- A call-init that fails, times out, or names an agent that cannot run (an
+  invalid inline config, an `agent_id` that is not one of the project's) does
+  not stop the dial: the dial's agent runs with the dial's own variables and
+  metadata, none of your answer, and a warning is logged.
+- Call-init runs after the project's limits admit the dial, so a refused dial
+  never reaches your server.
+
+A number with any other routing never runs call-init.
 
 ## Verify the Signature
 
