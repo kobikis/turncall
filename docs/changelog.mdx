@@ -226,6 +226,13 @@ the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
 
+**A knowledge base in `tool` mode works in text conversations.** The Chat API,
+SMS and WhatsApp text skipped tool mode, so the model was never offered
+`query_knowledge` and a document read that way was invisible outside voice
+calls — the builder's Test Chat included. Text turns now offer it, run the
+same search a voice call does, and record each call as a tool invocation on
+the session.
+
 **A WebRTC renegotiation no longer starts a second call.** A browser client
 that re-sends its offer for a connection it already has (the pipecat client
 does when it restarts ICE) got a new call row stuck at `initiated`, a second

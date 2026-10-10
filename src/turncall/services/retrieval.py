@@ -229,3 +229,56 @@ async def build_knowledge_preamble(
     if any(a.get("mode") in ("auto", "tool") for a in attachments):
         parts.append(KNOWLEDGE_AWARENESS_HINT)
     return "\n\n".join(parts)
+
+
+# `query_knowledge`: the tool a `tool`-mode knowledge base gives the model, on
+# a voice call and a text turn alike. Defined here, not in orchestrator/, so
+# the text path can offer it without importing pipecat.
+KNOWLEDGE_TOOL_SCHEMA = {
+    "name": "query_knowledge",
+    "description": (
+        "Search the knowledge base for relevant information "
+        "to answer the user's question."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The search query to find relevant information",
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+
+async def query_knowledge(
+    session: AsyncSession,
+    *,
+    query: str,
+    knowledge_base_ids: list[UUID],
+    top_k: int = 5,
+    similarity_threshold: float = 0.3,
+    openai_api_key: str = "",
+    embedding_model: str = "text-embedding-3-small",
+) -> dict[str, Any]:
+    """What `query_knowledge` answers the model: the passages found, or that
+    none were, or an error it can read."""
+    if not query:
+        return {"error": "query parameter is required"}
+    result = await retrieve(
+        session,
+        query=query,
+        knowledge_base_ids=knowledge_base_ids,
+        top_k=top_k,
+        similarity_threshold=similarity_threshold,
+        openai_api_key=openai_api_key,
+        embedding_model=embedding_model,
+    )
+    if result.chunks:
+        return {
+            "results": format_retrieved_context(result),
+            "count": len(result.chunks),
+        }
+    return {"results": "No relevant information found.", "count": 0}

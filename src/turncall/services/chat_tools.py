@@ -3,8 +3,9 @@
 The voice pipeline registers tools through orchestrator/tool_bridge, which
 needs a CallContext: every built-in it dispatches resolves through
 call_control against a live call_id. A text session has a session_id and no
-call, so it gets the customer's webhook tools plus anything discovered from
-their MCP servers, and none of the built-ins.
+call, so it gets the customer's webhook tools, anything discovered from
+their MCP servers and `query_knowledge` for a `tool`-mode knowledge base —
+none of the built-ins.
 
 MCP sessions are opened per inbound message and closed with `aclose()`. That
 costs a handshake per reply, but a text request is a single task start to
@@ -29,6 +30,7 @@ from turncall.domain.models import (
     AgentConfig,
     ToolDefinition,
 )
+from turncall.services.retrieval import KNOWLEDGE_TOOL_SCHEMA, query_knowledge
 from turncall.services.tool_webhook import classify_tool_result, post_tool_webhook
 
 # Recording tasks kept referenced so asyncio (which holds only a weak ref)
@@ -109,8 +111,14 @@ async def build_chat_tools(
     *,
     session_id: UUID,
     project_id: UUID,
+    knowledge: list[Any] | None = None,
+    openai_api_key: str = "",
 ) -> ChatTools:
-    """Assemble the tools available to one text turn."""
+    """Assemble the tools available to one text turn.
+
+    `knowledge` is the agent's `tool`-mode knowledge-base links: with any,
+    the model gets `query_knowledge` over all of them, as a voice call does.
+    """
     webhook_tools = {
         t.name: t for t in config.tools if t.name not in BUILTIN_TOOL_NAMES
     }
@@ -144,7 +152,25 @@ async def build_chat_tools(
         _to_function_schema(t) for t in mcp_tools if t.name not in webhook_tools
     ]
 
+    # Last, as on a voice call: a tool of the agent's own by that name stays
+    # theirs. Settings come from the first link, as the voice tool takes them.
+    search = _knowledge_search(knowledge or [], openai_api_key)
+    if search is not None and KNOWLEDGE_TOOL_SCHEMA["name"] not in {
+        s["name"] for s in schemas
+    }:
+        schemas.append(
+            {
+                **KNOWLEDGE_TOOL_SCHEMA,
+                "description": knowledge[0].tool_description  # type: ignore[index]
+                or KNOWLEDGE_TOOL_SCHEMA["description"],
+            }
+        )
+    else:
+        search = None
+
     async def _run(name: str, args: dict[str, Any]) -> str:
+        if search is not None and name == KNOWLEDGE_TOOL_SCHEMA["name"]:
+            return await search(args)
         if (
             mcp_manager is not None
             and name not in webhook_tools
@@ -188,3 +214,35 @@ async def build_chat_tools(
             await mcp_manager.close()
 
     return ChatTools(schemas=schemas, execute=execute, aclose=aclose)
+
+
+def _knowledge_search(
+    links: list[Any], openai_api_key: str
+) -> Callable[[dict[str, Any]], Awaitable[str]] | None:
+    """`query_knowledge` over the agent's `tool`-mode knowledge bases, or
+    None without any. A failed search is an error the model reads, never a
+    raise: losing the lookup must not cost the customer their reply."""
+    if not links:
+        return None
+    first = links[0]
+    kb_ids = [link.knowledge_base_id for link in links]
+
+    async def search(args: dict[str, Any]) -> str:
+        from turncall.storage.database import get_session_factory
+
+        try:
+            async with get_session_factory()() as db:
+                found = await query_knowledge(
+                    db,
+                    query=str(args.get("query", "")),
+                    knowledge_base_ids=kb_ids,
+                    top_k=first.top_k,
+                    similarity_threshold=first.similarity_threshold,
+                    openai_api_key=openai_api_key,
+                )
+        except Exception as exc:
+            logger.exception("chat_query_knowledge_failed")
+            return json.dumps({"error": f"knowledge search failed: {exc}"})
+        return json.dumps(found)
+
+    return search
