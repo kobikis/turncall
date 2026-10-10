@@ -53,6 +53,7 @@ async def _resolve_agent(
     from_number: str,
     to_number: str,
     provider_call_sid: str,
+    call_id: UUID,
 ) -> _Resolved | InboundRefusal:
     if number.routing_target_type == "webhook" and number.server_url:
         from turncall.events.server_events import send_call_init
@@ -60,7 +61,7 @@ async def _resolve_agent(
 
         response = await send_call_init(
             number.server_url,
-            call_id=str(uuid4()),
+            call_id=str(call_id),
             from_number=from_number,
             to_number=to_number,
             call_sid=provider_call_sid,
@@ -140,6 +141,7 @@ async def open_inbound_call(
         from_number=from_number,
         to_number=to_number,
         provider_call_sid=provider_call_sid,
+        call_id=call_id,
     )
     if isinstance(resolved, InboundRefusal):
         await release_live_call(number.project_id, call_id)

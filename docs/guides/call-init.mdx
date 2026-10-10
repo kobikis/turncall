@@ -71,6 +71,11 @@ a clash with the ones you answer — see [WebRTC](/guides/webrtc#template-variab
 }
 ```
 
+`call.id` is the id the call is created with — the `call_id` of its events,
+its webhooks and `GET /v1/calls/{id}` — so you can match the call-init you
+answered to everything the call does after it. (A text conversation's is the
+session's id; see below.)
+
 ### Outbound calls
 
 An outbound call placed from a webhook-routed number (`POST /v1/calls/outbound`

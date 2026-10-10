@@ -275,10 +275,9 @@ async def _start_voice_pipeline(
                 resolve_call_init,
             )
 
-            temp_call_id = str(uuid4())
             response = await send_call_init(
                 phone_row.server_url,
-                call_id=temp_call_id,
+                call_id=str(call_id),
                 from_number=from_number,
                 to_number=to_number,
                 transport_type="inboundWhatsAppCall",

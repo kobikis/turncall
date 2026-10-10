@@ -226,6 +226,12 @@ the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
 
+**call-init is told the call's real id.** On an inbound phone call, a WhatsApp
+voice call and a WebRTC call, `call.id` was a stand-in that nothing after it
+carried, so a server could not match the call-init it answered to the call's
+events. It is now the id the call is created with, as it already was on an
+outbound call.
+
 **A handoff keeps the call's variables and call-init context.** After
 `handoff_to_agent`, or a handoff through the API, the new agent read the
 `{{placeholders}}` in its prompt literally and lost call-init's
