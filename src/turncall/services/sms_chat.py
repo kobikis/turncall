@@ -248,12 +248,12 @@ async def _process_chat_message(
 
     credentials = await for_project(db, project_id)
 
-    # Inject knowledge base context if agent has KBs attached
+    # The agent's knowledge bases: `prompt` and `auto` go into the prompt
+    # here, `tool` becomes `query_knowledge` with the turn's other tools.
+    attachments = await _kb_attachments(db, project_id, agent_id, agent_config)
     system_prompt = await _inject_kb_context(
         db,
-        project_id=project_id,
-        agent_id=agent_id,
-        agent_config=agent_config,
+        attachments=attachments,
         system_prompt=system_prompt,
         user_message=message,
         openai_api_key=credentials.api_key("openai"),
@@ -265,7 +265,11 @@ async def _process_chat_message(
     # live inside complete_text only — history is rebuilt from sms_messages
     # each turn, which stores the customer/assistant text and nothing else.
     chat_tools = await build_chat_tools(
-        agent_config, session_id=session_row.id, project_id=project_id
+        agent_config,
+        session_id=session_row.id,
+        project_id=project_id,
+        knowledge=[a for a in attachments if a.mode == "tool"],
+        openai_api_key=credentials.api_key("openai"),
     )
     try:
         completion = await complete_text(
@@ -481,34 +485,40 @@ async def _dispatch_chat_event(
     )
 
 
+async def _kb_attachments(
+    db: AsyncSession, project_id: UUID, agent_id: UUID | None, config: AgentConfig
+) -> list:
+    """The agent's knowledge-base links: a stored agent's rows, or an inline
+    agent's own `knowledge_bases` (#260)."""
+    from turncall.storage.repositories import knowledge_repo
+
+    if agent_id is not None:
+        return list(await knowledge_repo.get_agent_knowledge_bases(db, agent_id))
+    return await _inline_attachments(db, project_id, config)
+
+
 async def _inject_kb_context(
     db: AsyncSession,
     *,
-    project_id: UUID,
-    agent_id: UUID | None,
-    agent_config: AgentConfig,
+    attachments: list,
     system_prompt: str,
     user_message: str,
     openai_api_key: str,
 ) -> str:
     """Inject knowledge base context into system prompt for chat.
 
-    Handles all three modes:
     - prompt: Full document text prepended
     - auto: Retrieval based on user message, context prepended
-    - tool: Skipped (tool mode not supported in text chat)
+    - tool: nothing here — `query_knowledge` is offered with the turn's tools
+      (`chat_tools`); the awareness hint covers it, as on a voice call
     """
     from turncall.services.retrieval import (
+        KNOWLEDGE_AWARENESS_HINT,
         format_retrieved_context,
         get_full_text_context,
         retrieve,
     )
-    from turncall.storage.repositories import knowledge_repo
 
-    if agent_id is not None:
-        attachments = await knowledge_repo.get_agent_knowledge_bases(db, agent_id)
-    else:
-        attachments = await _inline_attachments(db, project_id, agent_config)
     if not attachments:
         return system_prompt
 
@@ -534,10 +544,11 @@ async def _inject_kb_context(
         if result.chunks:
             context_text = format_retrieved_context(result)
             system_prompt = f"{context_text}\n\n{system_prompt}"
-        # Tell the model it has a KB even when this message didn't retrieve, so it
-        # doesn't deny having one (e.g. "use the attached file" matches nothing).
-        from turncall.services.retrieval import KNOWLEDGE_AWARENESS_HINT
 
+    # Tell the model it has a KB even when this message retrieved nothing, so it
+    # doesn't deny having one (e.g. "use the attached file" matches nothing) —
+    # for `tool` mode too, as build_knowledge_preamble does on a voice call.
+    if any(a.mode in ("auto", "tool") for a in attachments):
         system_prompt = f"{system_prompt}\n\n{KNOWLEDGE_AWARENESS_HINT}"
 
     return system_prompt

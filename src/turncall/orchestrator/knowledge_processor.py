@@ -19,7 +19,12 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.domain.models import KnowledgeBaseAttachment, ToolDefinition
-from turncall.services.retrieval import format_retrieved_context, retrieve
+from turncall.services.retrieval import (
+    KNOWLEDGE_TOOL_SCHEMA,
+    format_retrieved_context,
+    query_knowledge,
+    retrieve,
+)
 
 
 async def load_agent_kb_attachments(
@@ -222,7 +227,7 @@ def create_knowledge_tool_handler(
 
         try:
             async with session_factory() as session:
-                result = await retrieve(
+                found = await query_knowledge(
                     session,
                     query=query,
                     knowledge_base_ids=knowledge_base_ids,
@@ -231,16 +236,7 @@ def create_knowledge_tool_handler(
                     openai_api_key=openai_api_key,
                     embedding_model=embedding_model,
                 )
-
-            if result.chunks:
-                context = format_retrieved_context(result)
-                await params.result_callback(
-                    {"results": context, "count": len(result.chunks)}
-                )
-            else:
-                await params.result_callback(
-                    {"results": "No relevant information found.", "count": 0}
-                )
+            await params.result_callback(found)
 
         except Exception as exc:
             logger.exception("Knowledge tool query failed")
@@ -283,23 +279,3 @@ def knowledge_tool(
     )
     logger.info("KB tool mode enabled for {n} KBs", n=len(tool_kbs))
     return KnowledgeTool(definition, handler)
-
-
-# Tool definition for registering query_knowledge on the LLM
-KNOWLEDGE_TOOL_SCHEMA = {
-    "name": "query_knowledge",
-    "description": (
-        "Search the knowledge base for relevant information "
-        "to answer the user's question."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "The search query to find relevant information",
-            },
-        },
-        "required": ["query"],
-    },
-}
