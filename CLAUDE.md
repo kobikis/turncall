@@ -607,6 +607,7 @@ Dynamic agent resolution before the pipeline starts. Works on all transports.
 | Transport | Trigger | `call.type` value |
 |-----------|---------|-------------------|
 | Twilio voice | `routing_target_type: "webhook"` on phone number | `inboundPhoneCall` |
+| Outbound phone call (API or campaign) | caller-ID number has `routing_target_type: "webhook"` | `outboundPhoneCall` |
 | WhatsApp voice | `routing_target_type: "webhook"` on phone number | `inboundWhatsAppCall` |
 | WebRTC | `server_url` in POST /v1/webrtc/connect body | `webrtc` |
 
@@ -621,6 +622,25 @@ Inbound call → resolve phone number → routing_target_type == "webhook"?
   → Fire call.started event
   → Start pipeline
 ```
+
+### Outbound calls (#277)
+
+An outbound call placed from a webhook-routed number (`POST /v1/calls/outbound`
+or a campaign) runs call-init too, at the dial, before the phone rings. The
+roles are the same as inbound: `phoneNumber` is your number, `customer` the
+person called. `call` also carries `agent_id`, the agent the dial named, and
+`variables`, the dial's (a campaign target's) template variables, when it has
+any. `provider_call_id` is empty: nothing has been dialled yet.
+
+- Your answer's `agent_id` (an agent in the same project) or inline `agent`
+  runs the call; with neither, the dial's agent does.
+- Your `variables` and `metadata` are merged under the dial's: on a clash the
+  dial's value wins.
+- A call-init that fails, times out, or answers an unusable agent (an invalid
+  inline config, another project's agent) does not stop the dial: the dial's
+  agent runs, and a warning is logged.
+
+A number with any other routing never runs call-init.
 
 ### Response Schema
 ```json

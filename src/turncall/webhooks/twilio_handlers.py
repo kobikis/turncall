@@ -297,12 +297,13 @@ async def outbound_voice_webhook(
             media_type=TWIML_CONTENT_TYPE,
         )
 
-    # Load agent from the call record
+    # Load agent from the call record — or call-init's inline one, which has
+    # no row (#277, ADR-0017).
     agent = None
     if call.active_agent_id:
         agent = await agent_repo.get_agent_by_id(session, call.active_agent_id)
 
-    if agent is None:
+    if agent is None and not call.metadata_json.get("dynamic_config"):
         return Response(
             content="<Response><Say>Agent not available.</Say><Hangup/></Response>",
             media_type=TWIML_CONTENT_TYPE,
@@ -313,7 +314,7 @@ async def outbound_voice_webhook(
     logger.info(
         "twilio_outbound_connected",
         call_id=str(call.id),
-        agent_id=str(agent.id),
+        agent_id=str(agent.id) if agent else "dynamic",
     )
 
     return Response(content=twiml, media_type=TWIML_CONTENT_TYPE)

@@ -22,6 +22,9 @@ from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundErro
 from turncall.config import get_settings
 from turncall.domain.carriers import TELNYX, TWILIO
 from turncall.domain.enums import CallDirection, CallEventType
+from turncall.domain.models import AgentConfig
+from turncall.events.server_events import send_call_init
+from turncall.services.call_init_resolver import resolve_call_init
 from turncall.services.limits import admit_outbound_call, release_live_call
 from turncall.services.telnyx_accounts import CONNECTION_KEY
 from turncall.services.telnyx_accounts import (
@@ -41,7 +44,7 @@ if TYPE_CHECKING:
 
     from turncall.services.telnyx_accounts import TelnyxAccount
     from turncall.services.twilio_accounts import TwilioAccount
-    from turncall.storage.models import AgentRow, CallRow, PhoneNumberRow
+    from turncall.storage.models import CallRow, PhoneNumberRow
 
 
 # ponytail: raises the API's own errors, which every caller so far answers
@@ -111,10 +114,20 @@ async def place_outbound_call(
             CONNECTION_KEY: await _telnyx_connection(account, phone_number),
         }
 
+    call_id = call_id or uuid4()
+    runs_as, metadata = await _call_init(
+        session,
+        phone_number,
+        project_id=project_id,
+        agent_id=agent.id,
+        call_id=call_id,
+        to_number=to_number,
+        metadata=metadata,
+    )
+
     # Last, so a dial refused for any other reason holds no slot. The slot is
     # the call's from here: freed when it ends (a status callback, or the media
     # stream's hold), or at once if the dial never happens.
-    call_id = call_id or uuid4()
     await admit_outbound_call(
         session,
         project_id=project_id,
@@ -126,7 +139,7 @@ async def place_outbound_call(
             session,
             call_id=call_id,
             project_id=project_id,
-            agent=agent,
+            agent_id=runs_as,
             phone_number=phone_number,
             account=account,
             to_number=to_number,
@@ -148,10 +161,93 @@ async def place_outbound_call(
             provider_call_sid=provider_call_sid,
             from_number=phone_number.e164_number,
             to_number=to_number,
-            agent_id=agent.id,
+            agent_id=runs_as,
         )
     except Exception as exc:
         raise DialNotRecorded(call_id, provider_call_sid) from exc
+
+
+async def _call_init(
+    session: AsyncSession,
+    number: PhoneNumberRow,
+    *,
+    project_id: UUID,
+    agent_id: UUID,
+    call_id: UUID,
+    to_number: str,
+    metadata: dict[str, Any],
+) -> tuple[UUID | None, dict[str, Any]]:
+    """The agent and metadata the call runs with (#277).
+
+    A webhook-routed number asks its server, as on an inbound call, and the
+    answer is stored where the media stream reads an inbound one's. Its agent
+    wins — an agent id in the project, or an inline config (agent id None,
+    ADR-0017); the dial's own variables and metadata win a clash. Any other
+    number, or a call-init that fails or answers nothing usable, keeps the
+    dial's agent: the dial named one, so there is always an agent to run.
+    """
+    if not (number.routing_target_type == "webhook" and number.server_url):
+        return agent_id, metadata
+    dial_variables = metadata.get("template_variables")
+    if not isinstance(dial_variables, dict):
+        dial_variables = {}
+    response = await send_call_init(
+        number.server_url,
+        call_id=str(call_id),
+        # Our number is the one "called", the callee the customer — the
+        # roles a call-init server already reads.
+        from_number=to_number,
+        to_number=number.e164_number,
+        transport_type="outboundPhoneCall",
+        secret=number.server_url_secret,
+        agent_id=str(agent_id),
+        variables=dial_variables,
+    )
+    if not (response.success and isinstance(response.data, dict)):
+        logger.warning(
+            "outbound_call_init_failed: the dial's agent runs",
+            call_id=str(call_id),
+            error=response.error,
+        )
+        return agent_id, metadata
+    result = await resolve_call_init(session, response.data)
+
+    runs_as: UUID | None = agent_id
+    dynamic_config = result.dynamic_config
+    if dynamic_config is not None:
+        try:
+            AgentConfig.model_validate(dynamic_config)
+            runs_as = None
+        except ValueError as exc:
+            # Refused before the phone rings, not at the callee's first word.
+            logger.warning(
+                "outbound_call_init_invalid_agent: the dial's agent runs",
+                call_id=str(call_id),
+                error=str(exc),
+            )
+            dynamic_config = None
+    elif result.agent is not None:
+        if result.agent.project_id == project_id:
+            runs_as = result.agent.id
+        else:
+            logger.warning(
+                "outbound_call_init_foreign_agent: the dial's agent runs",
+                call_id=str(call_id),
+            )
+
+    added = {
+        "dynamic_config": dynamic_config,
+        "knowledge_context": result.knowledge_context,
+    }
+    merged = {**{k: v for k, v in added.items() if v}, **metadata}
+    for key, theirs in (
+        ("template_variables", result.template_variables),
+        ("metadata", result.metadata),
+    ):
+        if theirs:
+            own = metadata.get(key)
+            merged[key] = {**theirs, **(own if isinstance(own, dict) else {})}
+    return runs_as, merged
 
 
 class DialNotRecorded(Exception):
@@ -212,7 +308,7 @@ async def _dial(
     *,
     call_id: UUID,
     project_id: UUID,
-    agent: AgentRow,
+    agent_id: UUID | None,
     phone_number: PhoneNumberRow,
     account: TwilioAccount | TelnyxAccount,
     to_number: str,
@@ -228,7 +324,7 @@ async def _dial(
         direction=CallDirection.OUTBOUND,
         from_number=phone_number.e164_number,
         to_number=to_number,
-        active_agent_id=agent.id,
+        active_agent_id=agent_id,
         metadata_json=metadata,
         carrier=phone_number.provider,
     )
@@ -271,7 +367,7 @@ async def _record_dial(
     provider_call_sid: str,
     from_number: str,
     to_number: str,
-    agent_id: UUID,
+    agent_id: UUID | None,
 ) -> CallRow:
     """Put the carrier's SID on the call row and record `call.started`."""
     updated = await call_repo.update_call_status(
@@ -292,7 +388,8 @@ async def _record_dial(
             "provider_call_sid": provider_call_sid,
             "from_number": from_number,
             "to_number": to_number,
-            "agent_id": str(agent_id),
+            # None for call-init's inline agent (ADR-0017).
+            "agent_id": str(agent_id) if agent_id else None,
             "direction": CallDirection.OUTBOUND.value,
         },
         sequence_number=seq,

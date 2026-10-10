@@ -124,8 +124,9 @@ async def send_server_event(
         )
 
     # Broad: call-init sits on the inbound-call path, so a malformed URL or any
-    # transport error must degrade to "no dynamic agent", never crash the call.
-    except (httpx.HTTPError, httpx.InvalidURL) as exc:
+    # transport error — or a JSON body that does not parse — must degrade to
+    # "no dynamic agent", never crash the call.
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
         logger.warning(
             "server_event_error",
             event=event.event_type,
@@ -150,18 +151,24 @@ async def send_call_init(
     provider_call_id: str | None = None,
     secret: str | None = None,
     timeout_seconds: float = 5.0,
+    agent_id: str | None = None,
+    variables: dict[str, Any] | None = None,
 ) -> ServerEventResponse:
     """Send call-init event. Response should contain agent config.
 
-    This is called before agent selection on inbound calls when
-    the phone number is configured with a server URL instead of a
-    static agent ID.
+    This is called before agent selection when the phone number is
+    configured with a server URL instead of a static agent ID — on an
+    inbound call, and on an outbound one placed from that number (#277).
 
     Args:
+        to_number: The number called — on an outbound call, TurnCall's own
+            (`phoneNumber`); `from_number` is then the callee (`customer`).
         transport_type: Call type identifier (e.g., "inboundPhoneCall",
-            "inboundWhatsAppCall", "webrtc").
+            "outboundPhoneCall", "inboundWhatsAppCall", "webrtc").
         provider_call_id: External provider call ID. Falls back to call_sid
             for backward compatibility.
+        agent_id, variables: an outbound dial's agent and template variables,
+            so the server can answer for that agent.
     """
     resolved_provider_id = provider_call_id or call_sid or ""
     event = ServerEventRequest(
@@ -174,6 +181,8 @@ async def send_call_init(
                 "id": call_id,
                 "provider_call_id": resolved_provider_id,
                 "type": transport_type,
+                **({"agent_id": agent_id} if agent_id else {}),
+                **({"variables": variables} if variables else {}),
             },
         },
     )
