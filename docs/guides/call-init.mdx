@@ -77,11 +77,15 @@ any. `provider_call_id` is empty: nothing has been dialled yet.
 
 - Your answer's `agent_id` (an agent in the same project) or inline `agent`
   runs the call; with neither, the dial's agent does.
-- Your `variables` and `metadata` are merged under the dial's: on a clash the
-  dial's value wins.
-- A call-init that fails, times out, or answers an unusable agent (an invalid
-  inline config, another project's agent) does not stop the dial: the dial's
-  agent runs, and a warning is logged.
+- Your `variables` are merged under the dial's: on a clash the dial's value
+  wins. Your `metadata` is stored as on an inbound call (the call's
+  `metadata.metadata`), and `knowledge_context` likewise.
+- A call-init that fails, times out, or names an agent that cannot run (an
+  invalid inline config, an `agent_id` that is not one of the project's) does
+  not stop the dial: the dial's agent runs with the dial's own variables and
+  metadata, none of your answer, and a warning is logged.
+- Call-init runs after the project's limits admit the dial, so a refused dial
+  never reaches your server.
 
 A number with any other routing never runs call-init.
 

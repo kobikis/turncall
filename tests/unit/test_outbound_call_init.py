@@ -71,7 +71,7 @@ def dial(monkeypatch):
             f"{MODULE}._carrier_account",
             AsyncMock(return_value=SimpleNamespace(adapter=lambda: adapter)),
         ),
-        patch(f"{MODULE}.admit_outbound_call", AsyncMock()),
+        patch(f"{MODULE}.admit_outbound_call", AsyncMock()) as admit,
         patch(f"{MODULE}.release_live_call", AsyncMock()),
         patch(
             f"{MODULE}.send_call_init",
@@ -88,7 +88,7 @@ def dial(monkeypatch):
         patch(f"{CALLS}.get_next_sequence_number", AsyncMock(return_value=1)),
         patch(f"{CALLS}.create_call_event", AsyncMock()),
     ):
-        state.call_init, state.create = call_init, create
+        state.call_init, state.create, state.admit = call_init, create, admit
         yield state
 
 
@@ -133,16 +133,6 @@ async def test_an_agent_id_from_call_init_wins_over_the_dials(dial):
     assert "dynamic_config" not in created["metadata_json"]
 
 
-async def test_another_projects_agent_is_not_taken(dial):
-    stranger = SimpleNamespace(id=uuid.uuid4(), project_id=uuid.uuid4())
-    dial.agents[stranger.id] = stranger
-    dial.answer = _answer({"agent_id": str(stranger.id)})
-
-    created = await _place(dial)
-
-    assert created["active_agent_id"] == dial.dial_agent.id
-
-
 async def test_call_init_with_no_agent_keeps_the_dials_and_adds_its_context(dial):
     dial.answer = _answer(
         {
@@ -169,16 +159,24 @@ async def test_call_init_with_no_agent_keeps_the_dials_and_adds_its_context(dial
     assert dial.call_init.await_args.kwargs["variables"] == {"tier": "platinum"}
 
 
+STRANGER = SimpleNamespace(id=uuid.uuid4(), project_id=uuid.uuid4())
+# Context written for an agent that will not run: none of it is kept.
+CONTEXT = {"variables": {"name": "Ada"}, "dynamic_data": {"knowledge_context": "k"}}
+
+
 @pytest.mark.parametrize(
     "answer",
     [
         _answer(None, success=False),
-        _answer({"agent_id": "not-a-uuid"}),
+        _answer({"agent_id": "not-a-uuid", **CONTEXT}),
+        _answer({"agent_id": str(uuid.uuid4()), **CONTEXT}),  # no such agent
+        _answer({"agent_id": str(STRANGER.id), **CONTEXT}),  # another project's
         # Would ring the callee into a call that fails at its first frame.
-        _answer({"agent": {"max_call_duration_seconds": "forever"}}),
+        _answer({"agent": {"max_call_duration_seconds": "forever"}, **CONTEXT}),
     ],
 )
-async def test_a_failed_call_init_falls_back_to_the_dials_agent(dial, answer):
+async def test_an_unusable_call_init_falls_back_to_the_dials_agent(dial, answer):
+    dial.agents[STRANGER.id] = STRANGER
     dial.answer = answer
 
     created = await _place(dial, metadata={"crm": "C-9"})
@@ -194,3 +192,14 @@ async def test_a_number_routed_to_an_agent_asks_nobody(dial):
 
     dial.call_init.assert_not_awaited()
     assert created["active_agent_id"] == dial.dial_agent.id
+
+
+async def test_a_dial_the_limits_refuse_asks_nobody(dial):
+    """Admission comes first: a refused dial costs the server no request, and
+    a campaign's one-second reservation is re-taken before call-init's wait."""
+    dial.admit.side_effect = RuntimeError("rate limited")
+
+    with pytest.raises(RuntimeError):
+        await _place(dial)
+
+    dial.call_init.assert_not_awaited()

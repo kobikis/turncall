@@ -24,7 +24,7 @@ from turncall.domain.carriers import TELNYX, TWILIO
 from turncall.domain.enums import CallDirection, CallEventType
 from turncall.domain.models import AgentConfig
 from turncall.events.server_events import send_call_init
-from turncall.services.call_init_resolver import resolve_call_init
+from turncall.services.call_init_resolver import CallInitResult, resolve_call_init
 from turncall.services.limits import admit_outbound_call, release_live_call
 from turncall.services.telnyx_accounts import CONNECTION_KEY
 from turncall.services.telnyx_accounts import (
@@ -114,20 +114,10 @@ async def place_outbound_call(
             CONNECTION_KEY: await _telnyx_connection(account, phone_number),
         }
 
-    call_id = call_id or uuid4()
-    runs_as, metadata = await _call_init(
-        session,
-        phone_number,
-        project_id=project_id,
-        agent_id=agent.id,
-        call_id=call_id,
-        to_number=to_number,
-        metadata=metadata,
-    )
-
     # Last, so a dial refused for any other reason holds no slot. The slot is
     # the call's from here: freed when it ends (a status callback, or the media
     # stream's hold), or at once if the dial never happens.
+    call_id = call_id or uuid4()
     await admit_outbound_call(
         session,
         project_id=project_id,
@@ -135,6 +125,18 @@ async def place_outbound_call(
         from_number=phone_number.e164_number,
     )
     try:
+        # After admission: a dial the limits refuse asks the customer's server
+        # nothing, and a campaign's reservation (a one-second window) is
+        # re-taken before call-init's latency, not after it.
+        runs_as, metadata = await _call_init(
+            session,
+            phone_number,
+            project_id=project_id,
+            agent_id=agent.id,
+            call_id=call_id,
+            to_number=to_number,
+            metadata=metadata,
+        )
         call, provider_call_sid = await _dial(
             session,
             call_id=call_id,
@@ -183,8 +185,9 @@ async def _call_init(
     answer is stored where the media stream reads an inbound one's. Its agent
     wins — an agent id in the project, or an inline config (agent id None,
     ADR-0017); the dial's own variables and metadata win a clash. Any other
-    number, or a call-init that fails or answers nothing usable, keeps the
-    dial's agent: the dial named one, so there is always an agent to run.
+    number, or a call-init that fails or names an agent that cannot run, keeps
+    the dial's agent and metadata as they were: the dial named an agent, so
+    there is always one to run.
     """
     if not (number.routing_target_type == "webhook" and number.server_url):
         return agent_id, metadata
@@ -203,38 +206,19 @@ async def _call_init(
         agent_id=str(agent_id),
         variables=dial_variables,
     )
-    if not (response.success and isinstance(response.data, dict)):
+    chosen = None
+    if response.success and isinstance(response.data, dict):
+        result = await resolve_call_init(session, response.data)
+        chosen = _usable_agent(response.data, result, project_id, default=agent_id)
+    if chosen is None:
         logger.warning(
-            "outbound_call_init_failed: the dial's agent runs",
+            "outbound_call_init_unusable: the dial's agent runs",
             call_id=str(call_id),
             error=response.error,
         )
         return agent_id, metadata
-    result = await resolve_call_init(session, response.data)
 
-    runs_as: UUID | None = agent_id
-    dynamic_config = result.dynamic_config
-    if dynamic_config is not None:
-        try:
-            AgentConfig.model_validate(dynamic_config)
-            runs_as = None
-        except ValueError as exc:
-            # Refused before the phone rings, not at the callee's first word.
-            logger.warning(
-                "outbound_call_init_invalid_agent: the dial's agent runs",
-                call_id=str(call_id),
-                error=str(exc),
-            )
-            dynamic_config = None
-    elif result.agent is not None:
-        if result.agent.project_id == project_id:
-            runs_as = result.agent.id
-        else:
-            logger.warning(
-                "outbound_call_init_foreign_agent: the dial's agent runs",
-                call_id=str(call_id),
-            )
-
+    runs_as, dynamic_config = chosen
     added = {
         "dynamic_config": dynamic_config,
         "knowledge_context": result.knowledge_context,
@@ -248,6 +232,27 @@ async def _call_init(
             own = metadata.get(key)
             merged[key] = {**theirs, **(own if isinstance(own, dict) else {})}
     return runs_as, merged
+
+
+def _usable_agent(
+    answer: dict[str, Any], result: CallInitResult, project_id: UUID, *, default: UUID
+) -> tuple[UUID | None, dict[str, Any] | None] | None:
+    """(agent id, inline config) call-init chose — `default` when it named
+    none — or None when what it named cannot run: an agent id that is not one
+    of the project's, or an inline config that does not validate. Refused
+    before the phone rings, not at the callee's first word."""
+    if result.dynamic_config is not None:
+        try:
+            AgentConfig.model_validate(result.dynamic_config)
+        except ValueError:
+            return None
+        return None, result.dynamic_config
+    if answer.get("agent_id") or answer.get("assistant_id"):
+        agent = result.agent
+        if agent is None or agent.project_id != project_id:
+            return None
+        return agent.id, None
+    return default, None
 
 
 class DialNotRecorded(Exception):
