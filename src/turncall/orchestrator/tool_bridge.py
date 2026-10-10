@@ -19,6 +19,7 @@ from loguru import logger
 from turncall.domain.enums import ToolExecutionMode
 from turncall.domain.models import BUILTIN_TOOL_NAMES, ToolDefinition
 from turncall.services import call_control
+from turncall.services.template_renderer import render_agent_config
 from turncall.services.tool_mocks import EXECUTED, intercept
 from turncall.services.tool_webhook import classify_tool_result, post_tool_webhook
 
@@ -297,6 +298,19 @@ def _build_handoff_frames(config: AgentConfig) -> tuple[Any, Any]:
     return prompt_frame, tools_frame
 
 
+async def _call_template_variables(session: Any, call_id: UUID) -> dict[str, str]:
+    """The `{{variables}}` the call was started with, for the agent it hands to.
+
+    Every voice entry point stores them on the call row (call-init, the
+    outbound dial, a campaign target). An eval has no row, so none.
+    """
+    from turncall.storage.repositories import call_repo
+
+    call = await call_repo.get_call_by_id(session, call_id)
+    variables = (call.metadata_json or {}).get("template_variables") if call else None
+    return variables if isinstance(variables, dict) else {}
+
+
 async def _prepare_handoff(
     args: dict[str, Any],
     call_context: CallContext,
@@ -331,7 +345,10 @@ async def _prepare_handoff(
             if target is None:
                 logger.warning("handoff_context: target agent not found")
                 return None
-            config = AgentConfig.model_validate(target.config_blob)
+            config = render_agent_config(
+                AgentConfig.model_validate(target.config_blob),
+                await _call_template_variables(session, call_context.call_id),
+            )
 
         frames = _build_handoff_frames(config)
     except Exception:

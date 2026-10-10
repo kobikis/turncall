@@ -71,6 +71,10 @@ async def _queue_a_handoff(queue):
             "turncall.storage.repositories.agent_repo.get_agent_by_id",
             new=AsyncMock(return_value=agent),
         ),
+        patch(
+            "turncall.storage.repositories.call_repo.get_call_by_id",
+            new=AsyncMock(return_value=None),
+        ),
         patch("turncall.orchestrator.tool_bridge.register_tools"),
     ):
         target = await _prepare_handoff({"agent_id": str(uuid4())}, call_context)
@@ -236,6 +240,10 @@ async def test_both_frames_of_an_api_handoff_survive_an_interruption():
         patch(
             "turncall.storage.repositories.agent_repo.get_agent_by_id",
             new=AsyncMock(return_value=agent),
+        ),
+        patch(
+            "turncall.storage.repositories.call_repo.get_call_by_id",
+            new=AsyncMock(return_value=None),
         ),
         patch.object(
             tool_bridge,
