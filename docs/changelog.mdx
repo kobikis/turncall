@@ -21,6 +21,37 @@ with its `variables` and `knowledge_context`. Before, such a number left texts
 unanswered. See [SMS / Chat](/guides/sms-chat#template-variables) and
 [Pre-Call Init](/guides/call-init#text-conversations-sms-whatsapp-text).
 
+**An outbound call from a call-init number runs call-init.** A call placed
+with `POST /v1/calls/outbound`, or by a campaign, from a number routed to your
+server now asks it first (`call.type` `outboundPhoneCall`), before the phone
+rings. Its `agent_id` or inline `agent` runs the call, its `variables` merge
+under the dial's, and a call-init that fails leaves the dial's agent to run.
+See [Pre-Call Init](/guides/call-init#outbound-calls).
+
+**An inline agent brings its own knowledge bases.** Call-init's `agent` (and an
+eval's `inline` target) names them in `knowledge_bases`, with a link's fields.
+Before, an inline agent ran with none, silently. Each is resolved against the
+call's project; one that is not there is skipped with a warning. See
+[Knowledge Base](/guides/knowledge-base#inline-agents).
+
+**Usage limits per project.** `PUT /v1/projects/{id}/limits` caps the
+project's live calls, how many outbound calls each of its numbers starts per
+second, and how many messages one text conversation sends per minute. They hold
+across servers, and anything over a limit is refused as `rate_limited` —
+inbound calls at the carrier before they are answered, with a `call.rejected`
+webhook. The `LIMIT_*` environment variables set the platform default. See
+[Limits](/guides/limits).
+
+**Google Gemini as the agent's LLM.** `"llm": {"provider": "google"}` runs
+Gemini (`gemini-3.6-flash` by default) on voice and text, tools included, on
+the same `google` account Gemini Live uses. It also works as an `llm.failover`
+entry. See [Providers](/guides/providers#llm-configuration).
+
+**AssemblyAI speech-to-text.** `"stt": {"provider": "assemblyai"}` uses
+Universal-Streaming — the English model by default, the multilingual one for an
+agent whose `stt.language` is another language — with `stt.keyterms` passed as
+its keyterms prompt. See [Providers](/guides/providers#stt-configuration).
+
 **Helm chart.** `charts/turncall` runs the API and both workers against your
 own Postgres and Redis, runs migrations before each install and upgrade, and
 sizes every pod's grace period so scaling down or rolling out lets live calls
@@ -171,11 +202,44 @@ a key for a provider the agent uses, the call is refused up front, naming it
 are still refused inside an agent's `aws` block when it is off, but an `aws`
 project credential is accepted — it is encrypted and outside agent config.
 
+**A carrier's media stream must prove it belongs to the call (security).** A
+call id is not a secret, and any WebSocket that named one could open a second
+pipeline on a live call — hearing the caller's agent and driving its tools.
+TurnCall now gives each call a media token that only its carrier receives, in
+the call's own stream setup, and refuses a stream without it, one on another
+carrier's route, and a second stream for the same call. Nothing changes for a
+number bound through the API. The token is keyed by `API_KEY_HASH_SECRET`:
+rotating it refuses the stream of a call answered under the old value that has
+not started streaming yet.
+
+**An inline agent's config is never shown (security).** Call-init's inline
+`agent` can carry credentials — MCP headers, an `llm.api_key`, AWS keys — and
+the call read and `call.ended` returned it in `metadata`. Both leave it out
+now, and a text session's never appears in a session read.
+`POST /v1/calls/outbound` refuses a `metadata.dynamic_config` with a 422: it ran
+as the call's agent, around every check an agent create makes. See
+[Returning an inline agent](/guides/call-init#returning-an-inline-agent).
+
 **Ambience is in the call recording.** The agent's channel carries the room, as
 the caller heard it. The docs said it was left out, but it has always been in
 the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
+
+**A handoff keeps the call's variables and call-init context.** After
+`handoff_to_agent`, or a handoff through the API, the new agent read the
+`{{placeholders}}` in its prompt literally and lost call-init's
+`knowledge_context`. It now gets both, as the first agent did.
+
+**`smart_turn_detection: false` turns Smart Turn off.** pipecat's default turn
+end is Smart Turn, so an agent with it off still ran the model and waited on it
+after `silence_timeout_ms` — a slower turn than the setting promised. The turn
+now ends on VAD's silence alone.
+
+**A call could find its own record missing.** An API request's writes were
+committed after its response was sent, so a carrier fast enough to open the
+media stream the moment it read the answer could reach a call that did not
+exist yet, and hear silence. Writes are committed before the response now.
 
 **A handoff through the API switches the live call.** `POST /v1/calls/{call_id}/handoff`
 moved the call's record to the new agent while the caller kept talking to the

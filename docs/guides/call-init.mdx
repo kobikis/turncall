@@ -214,6 +214,12 @@ the call itself, so post-call analysis, the transcript and the `call.ended`
 webhook are unaffected. Correlate such calls through `call_id`, or through
 `metadata` you returned in the call-init response — that is what it is for.
 
+That recorded configuration is never shown back. It can carry credentials — MCP
+headers, an `llm.api_key`, AWS keys — so the call read and `call.ended` leave it
+out of `metadata`, and a text session's is not in any session read. Only
+call-init can give a call an inline agent: `metadata.dynamic_config` on
+`POST /v1/calls/outbound` is refused with a 422.
+
 Knowledge bases linked to a *stored* agent do not apply, since the call does not
 run that agent. An inline agent names its own in `knowledge_bases`, with the
 same fields as a link (`knowledge_base_id`, `mode`, `priority`, `top_k`,

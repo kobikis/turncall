@@ -29,7 +29,7 @@ flowchart LR
 
     subgraph Builder["Builder — holds one encrypted client credential"]
         direction TB
-        Cfg["⚙️ Agent · Configuration tab<br/>attach an app, choose when it runs"]
+        Cfg["⚙️ Agent · Build · Tools and apps<br/>attach an app, choose when it runs"]
     end
 
     PD -.->|"which accounts exist, never the tokens"| Cfg
@@ -92,7 +92,7 @@ login and never sees what is typed into it. Coming back, it asks Pipedream what
 now exists.
 
 Connecting is a **workspace** act and needs admin. Choosing which agent uses an
-app, and when, is a per-agent act on that agent's **Configuration** tab.
+app, and when, is a per-agent act in that agent's **Tools and apps** section (Build tab).
 
 ## Choosing when it runs
 
