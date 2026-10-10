@@ -40,7 +40,7 @@ class _SessionFactory:
         return False
 
 
-async def _handoff(target_config: AgentConfig):
+async def _handoff(target_config: AgentConfig, call_metadata: dict | None = None):
     from turncall.orchestrator.tool_bridge import (
         _apply_handoff_context,
         _prepare_handoff,
@@ -67,19 +67,23 @@ async def _handoff(target_config: AgentConfig):
             "turncall.storage.repositories.agent_repo.get_agent_by_id",
             new=AsyncMock(return_value=agent),
         ),
+        patch(
+            "turncall.storage.repositories.call_repo.get_call_by_id",
+            new=AsyncMock(return_value=SimpleNamespace(metadata_json=call_metadata)),
+        ),
         patch("turncall.orchestrator.tool_bridge.register_tools") as register,
     ):
         target = await _prepare_handoff({"agent_id": str(uuid4())}, call_context)
         assert target is not None
         await _apply_handoff_context(target, call_context, params)
 
-    return params, register
+    return params, register, target
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_target_agents_tools_are_registered():
-    params, register = await _handoff(AgentConfig(tools=[_tool("refund")]))
+    params, register, _ = await _handoff(AgentConfig(tools=[_tool("refund")]))
 
     registered = register.call_args.args[1]
     assert [t.name for t in registered] == ["refund"]
@@ -93,7 +97,7 @@ async def test_the_advertised_tool_set_is_replaced():
     tools schema advertises, so it has to be swapped mid-call too."""
     from pipecat.frames.frames import LLMSetToolsFrame
 
-    params, _ = await _handoff(AgentConfig(tools=[_tool("refund")]))
+    params, _, _ = await _handoff(AgentConfig(tools=[_tool("refund")]))
 
     frames = [c.args[0] for c in params.pipeline_worker.queue_frame.await_args_list]
     tool_frames = [f for f in frames if isinstance(f, LLMSetToolsFrame)]
@@ -108,7 +112,7 @@ async def test_an_agent_with_no_tools_clears_the_previous_set():
     leave the previous agent's tools callable."""
     from pipecat.frames.frames import LLMSetToolsFrame
 
-    params, _ = await _handoff(AgentConfig())
+    params, _, _ = await _handoff(AgentConfig())
 
     frames = [c.args[0] for c in params.pipeline_worker.queue_frame.await_args_list]
     tool_frames = [f for f in frames if isinstance(f, LLMSetToolsFrame)]
@@ -129,3 +133,44 @@ async def test_mcp_servers_on_the_target_are_reported_not_silently_ignored():
     assert any("mcp" in str(c).lower() for c in log.warning.call_args_list), (
         "a target agent's MCP servers going unconnected must be visible"
     )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_calls_template_variables_reach_the_target_agent():
+    """`{{address}}` from call-init was rendered into the first agent only;
+    the agent it handed to read the placeholder itself."""
+    config = AgentConfig(
+        system_prompt="Ship to {{address}}.",
+        tools=[_tool("refund")],
+    )
+
+    _, _, target = await _handoff(
+        config, {"template_variables": {"address": "12 Herzl St"}}
+    )
+
+    assert target.config.system_prompt == "Ship to 12 Herzl St."
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_call_with_no_variables_hands_off_unrendered():
+    _, _, target = await _handoff(AgentConfig(system_prompt="Hi {{name}}."), None)
+
+    assert target.config.system_prompt == "Hi {{name}}."
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_call_inits_knowledge_context_reaches_the_target_agent():
+    """call-init's `knowledge_context` led the first agent's prompt and was
+    gone from the agent it handed to — the CRM context lost mid-call."""
+    _, _, target = await _handoff(
+        AgentConfig(system_prompt="Ship to {{address}}."),
+        {
+            "template_variables": {"address": "12 Herzl St"},
+            "knowledge_context": "Open ticket #456.",
+        },
+    )
+
+    assert target.config.system_prompt == "Open ticket #456.\n\nShip to 12 Herzl St."

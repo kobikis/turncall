@@ -19,6 +19,10 @@ from loguru import logger
 from turncall.domain.enums import ToolExecutionMode
 from turncall.domain.models import BUILTIN_TOOL_NAMES, ToolDefinition
 from turncall.services import call_control
+from turncall.services.template_renderer import (
+    prepend_knowledge_context,
+    render_agent_config,
+)
 from turncall.services.tool_mocks import EXECUTED, intercept
 from turncall.services.tool_webhook import classify_tool_result, post_tool_webhook
 
@@ -297,6 +301,31 @@ def _build_handoff_frames(config: AgentConfig) -> tuple[Any, Any]:
     return prompt_frame, tools_frame
 
 
+async def _as_this_call(
+    session: Any, call_id: UUID, config: AgentConfig
+) -> AgentConfig:
+    """The target agent with what the call was started with.
+
+    Every voice entry point stores the call's `{{variables}}` and call-init's
+    `knowledge_context` on the call row; the agent the call started as got
+    both at build. Applied in the media stream's order — render, then
+    prepend — so the target's prompt reads as the first agent's did. An eval
+    has no row, so neither.
+    """
+    from turncall.storage.repositories import call_repo
+
+    call = await call_repo.get_call_by_id(session, call_id)
+    metadata = (call.metadata_json or {}) if call else {}
+    variables = metadata.get("template_variables")
+    rendered = render_agent_config(
+        config, variables if isinstance(variables, dict) else {}
+    )
+    knowledge_context = metadata.get("knowledge_context")
+    if not isinstance(knowledge_context, str):
+        return rendered
+    return prepend_knowledge_context(rendered, knowledge_context)
+
+
 async def _prepare_handoff(
     args: dict[str, Any],
     call_context: CallContext,
@@ -331,7 +360,11 @@ async def _prepare_handoff(
             if target is None:
                 logger.warning("handoff_context: target agent not found")
                 return None
-            config = AgentConfig.model_validate(target.config_blob)
+            config = await _as_this_call(
+                session,
+                call_context.call_id,
+                AgentConfig.model_validate(target.config_blob),
+            )
 
         frames = _build_handoff_frames(config)
     except Exception:

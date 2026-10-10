@@ -623,6 +623,13 @@ Inbound call → resolve phone number → routing_target_type == "webhook"?
   → Start pipeline
 ```
 
+Template variables (`{{name}}`, `\w+` only — no spaces, no dots; an unsent one
+stays literal) live on the call row as `metadata_json["template_variables"]`
+and render `system_prompt`, `first_message`, tool descriptions and
+`s2s.delegation.instructions`. A `handoff_to_agent` (tool or API) gives the
+target agent the same call's variables and call-init `knowledge_context`
+(`tool_bridge._as_this_call`), rendered then prepended as at the call's start.
+
 ### Outbound calls (#277)
 
 An outbound call placed from a webhook-routed number (`POST /v1/calls/outbound`
