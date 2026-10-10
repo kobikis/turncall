@@ -158,3 +158,19 @@ async def test_a_call_with_no_variables_hands_off_unrendered():
     _, _, target = await _handoff(AgentConfig(system_prompt="Hi {{name}}."), None)
 
     assert target.config.system_prompt == "Hi {{name}}."
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_call_inits_knowledge_context_reaches_the_target_agent():
+    """call-init's `knowledge_context` led the first agent's prompt and was
+    gone from the agent it handed to — the CRM context lost mid-call."""
+    _, _, target = await _handoff(
+        AgentConfig(system_prompt="Ship to {{address}}."),
+        {
+            "template_variables": {"address": "12 Herzl St"},
+            "knowledge_context": "Open ticket #456.",
+        },
+    )
+
+    assert target.config.system_prompt == "Open ticket #456.\n\nShip to 12 Herzl St."
