@@ -4,7 +4,11 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from turncall.services.template_renderer import check_variables
+
+Variable = str | int | float | bool
 
 
 class SendChatMessageRequest(BaseModel):
@@ -16,6 +20,15 @@ class SendChatMessageRequest(BaseModel):
     customer_number: str | None = None
     turncall_number: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # Rendered into the agent's prompt and tool descriptions as `{{name}}`, as
+    # call-init's `variables` are. Kept on the session and merged: a message
+    # carrying none leaves the session's as they are.
+    variables: dict[str, Variable] = Field(default_factory=dict)
+
+    @field_validator("variables")
+    @classmethod
+    def _bounded(cls, value: dict[str, Variable]) -> dict[str, str]:
+        return check_variables({k: str(v) for k, v in value.items()})
 
     @model_validator(mode="after")
     def validate_context(self) -> "SendChatMessageRequest":
@@ -54,7 +67,7 @@ class ChatSessionResponse(BaseModel):
 
     id: UUID
     project_id: UUID
-    agent_id: UUID
+    agent_id: UUID | None  # null for an inline agent from call-init (ADR-0017)
     customer_number: str
     turncall_number: str
     status: str

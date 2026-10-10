@@ -7,6 +7,15 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**Template variables in text conversations.** `POST /v1/chat` takes
+`variables`, kept on the session and rendered into the agent's prompt as
+`{{placeholders}}`. An SMS or WhatsApp text to a number routed to call-init now
+asks your server once per conversation (`call.type` `inboundSms` /
+`inboundWhatsAppMessage`) and runs the agent it names — stored or inline —
+with its `variables` and `knowledge_context`. Before, such a number left texts
+unanswered. See [SMS / Chat](/guides/sms-chat#template-variables) and
+[Pre-Call Init](/guides/call-init#text-conversations-sms-whatsapp-text).
+
 **Helm chart.** `charts/turncall` runs the API and both workers against your
 own Postgres and Redis, runs migrations before each install and upgrade, and
 sizes every pod's grace period so scaling down or rolling out lets live calls

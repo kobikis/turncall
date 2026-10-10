@@ -14,6 +14,8 @@ Pre-call initialization lets you dynamically select and configure the agent befo
 | Outbound phone call (API or campaign) | caller-ID number has `routing_target_type: "webhook"` | `outboundPhoneCall` |
 | WhatsApp voice | `routing_target_type: "webhook"` on phone number | `inboundWhatsAppCall` |
 | WebRTC | `server_url` in POST /v1/webrtc/connect body | `webrtc` |
+| SMS | `routing_target_type: "webhook"` + `sms_enabled` on phone number | `inboundSms` |
+| WhatsApp text | `routing_target_type: "webhook"` + `whatsapp_enabled` on phone number | `inboundWhatsAppMessage` |
 
 ## Setup
 
@@ -88,6 +90,24 @@ any. `provider_call_id` is empty: nothing has been dialled yet.
   never reaches your server.
 
 A number with any other routing never runs call-init.
+
+### Text conversations (SMS, WhatsApp text)
+
+A text to a webhook-routed number runs call-init **once per conversation**: on
+the message that opens a session, never on the ones after it. `call.id` is the
+id the session is created with (the `session_id` of its events), `call.type`
+is `inboundSms` or `inboundWhatsAppMessage`, and `provider_call_id` is empty.
+
+- Your answer's `agent_id` (an agent in the number's project) or inline `agent`
+  answers the conversation. An inline agent has no agent row: the session's
+  `agent_id` is null, and its config is never shown by the API.
+- `variables`, `metadata` and `knowledge_context` are kept on the session and
+  apply to every reply in it, as they do for a whole call.
+- A call-init that fails, times out, or names no agent that can run leaves the
+  message unanswered (an SMS gets a short apology) and opens no session; the
+  next message asks again.
+- The session expires after 24 hours without a message; the next text opens a
+  new one, and asks again.
 
 ## Verify the Signature
 

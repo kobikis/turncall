@@ -13,10 +13,8 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.domain.enums import ChatChannel
-from turncall.domain.models import AgentConfig
-from turncall.services.sms_chat import ChatResult, _process_chat_message
-from turncall.storage.models import AgentRow, PhoneNumberRow
-from turncall.storage.repositories.agent_repo import get_agent_by_id
+from turncall.services.sms_chat import ChatResult, process_inbound_text
+from turncall.services.text_agent import resolve_text_agent
 from turncall.storage.repositories.phone_number_repo import get_by_e164
 
 WHATSAPP_API_BASE = "https://graph.facebook.com/v23.0"
@@ -42,17 +40,13 @@ async def handle_inbound_whatsapp(
     if not phone_row.whatsapp_enabled:
         raise ValueError(f"WhatsApp not enabled on number: {to_number}")
 
-    agent_row = await _resolve_agent(db, phone_row)
-    if agent_row is None:
-        raise ValueError(f"No agent found for number: {to_number}")
-
-    config = AgentConfig.model_validate(agent_row.config_blob)
-
-    return await _process_chat_message(
+    agent = await resolve_text_agent(
+        db, phone_row, customer_number=from_number, channel=ChatChannel.WHATSAPP
+    )
+    return await process_inbound_text(
         db,
+        agent,
         project_id=phone_row.project_id,
-        agent_id=agent_row.id,
-        agent_config=config,
         phone_number_id=phone_row.id,
         customer_number=from_number,
         turncall_number=to_number,
@@ -102,12 +96,3 @@ async def send_whatsapp_text(
 
         logger.info("whatsapp_message_sent", to=to)
         return result
-
-
-async def _resolve_agent(
-    db: AsyncSession, phone_row: PhoneNumberRow
-) -> AgentRow | None:
-    """Resolve the agent for a phone number's routing target."""
-    if phone_row.routing_target_type == "agent" and phone_row.routing_target_id:
-        return await get_agent_by_id(db, phone_row.routing_target_id)
-    return None

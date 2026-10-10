@@ -45,6 +45,7 @@ async def send_message(
         channel=body.channel,
         customer_number=body.customer_number,
         turncall_number=body.turncall_number,
+        variables=body.variables,
     )
 
     return ok(

@@ -14,6 +14,7 @@ from uuid import UUID
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from turncall.domain.models import AgentConfig
 from turncall.storage.repositories import agent_repo
 
 
@@ -94,3 +95,30 @@ async def resolve_call_init(
         metadata=metadata,
         knowledge_context=knowledge_context,
     )
+
+
+def usable_agent(
+    answer: dict[str, Any],
+    result: CallInitResult,
+    project_id: UUID,
+    *,
+    default: UUID | None,
+) -> tuple[UUID | None, dict[str, Any] | None] | None:
+    """(agent id, inline config) call-init chose — `default` when it named
+    none — or None when what it named cannot run: an agent id that is not one
+    of the project's, or an inline config that does not validate. Refused
+    before the agent runs: an outbound call before the phone rings, a text
+    session before its first reply. With no `default`, naming neither is
+    (None, None): nothing to run."""
+    if result.dynamic_config is not None:
+        try:
+            AgentConfig.model_validate(result.dynamic_config)
+        except ValueError:
+            return None
+        return None, result.dynamic_config
+    if answer.get("agent_id") or answer.get("assistant_id"):
+        agent = result.agent
+        if agent is None or agent.project_id != project_id:
+            return None
+        return agent.id, None
+    return default, None

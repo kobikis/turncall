@@ -22,9 +22,8 @@ from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundErro
 from turncall.config import get_settings
 from turncall.domain.carriers import TELNYX, TWILIO
 from turncall.domain.enums import CallDirection, CallEventType
-from turncall.domain.models import AgentConfig
 from turncall.events.server_events import send_call_init
-from turncall.services.call_init_resolver import CallInitResult, resolve_call_init
+from turncall.services.call_init_resolver import resolve_call_init, usable_agent
 from turncall.services.limits import admit_outbound_call, release_live_call
 from turncall.services.telnyx_accounts import CONNECTION_KEY
 from turncall.services.telnyx_accounts import (
@@ -209,7 +208,7 @@ async def _call_init(
     chosen = None
     if response.success and isinstance(response.data, dict):
         result = await resolve_call_init(session, response.data)
-        chosen = _usable_agent(response.data, result, project_id, default=agent_id)
+        chosen = usable_agent(response.data, result, project_id, default=agent_id)
     if chosen is None:
         logger.warning(
             "outbound_call_init_unusable: the dial's agent runs",
@@ -232,27 +231,6 @@ async def _call_init(
             own = metadata.get(key)
             merged[key] = {**theirs, **(own if isinstance(own, dict) else {})}
     return runs_as, merged
-
-
-def _usable_agent(
-    answer: dict[str, Any], result: CallInitResult, project_id: UUID, *, default: UUID
-) -> tuple[UUID | None, dict[str, Any] | None] | None:
-    """(agent id, inline config) call-init chose — `default` when it named
-    none — or None when what it named cannot run: an agent id that is not one
-    of the project's, or an inline config that does not validate. Refused
-    before the phone rings, not at the callee's first word."""
-    if result.dynamic_config is not None:
-        try:
-            AgentConfig.model_validate(result.dynamic_config)
-        except ValueError:
-            return None
-        return None, result.dynamic_config
-    if answer.get("agent_id") or answer.get("assistant_id"):
-        agent = result.agent
-        if agent is None or agent.project_id != project_id:
-            return None
-        return agent.id, None
-    return default, None
 
 
 class DialNotRecorded(Exception):

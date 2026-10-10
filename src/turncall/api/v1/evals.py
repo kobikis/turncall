@@ -496,9 +496,13 @@ async def scenario_from_session(
     except ScenarioError as exc:
         raise BadRequestError(f"the derived scenario does not parse: {exc}") from exc
 
-    # A session names its agent directly — there is no call record and no
-    # inline-config case to read around.
-    target = {"type": "agent", "agent_id": str(row.agent_id)} if row.agent_id else None
+    # A session names its agent, or — one call-init answered with an inline
+    # agent (ADR-0017) — keeps its config, as a call record does.
+    inline = (row.metadata_json or {}).get("dynamic_config")
+    if row.agent_id:
+        target = {"type": "agent", "agent_id": str(row.agent_id)}
+    else:
+        target = {"type": "inline", "agent": inline} if inline else None
 
     saved_id = None
     if body.save:
