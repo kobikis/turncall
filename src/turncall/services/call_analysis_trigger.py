@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.domain.enums import CallEventType, EndedReason
 from turncall.domain.models import AnalysisConfig, AWSConfig, LLMConfig
-from turncall.services.call_view import call_view_fields
+from turncall.services.call_view import call_view_fields, public_metadata
 
 if TYPE_CHECKING:
     from turncall.services.credentials import Credentials
@@ -219,7 +219,7 @@ async def _run_post_call(
             call_ended_payload["direction"] = call.direction
             call_ended_payload["duration_ms"] = call.duration_ms
             call_ended_payload["provider_call_sid"] = call.provider_call_sid
-            call_ended_payload["metadata"] = call.metadata_json
+            call_ended_payload["metadata"] = public_metadata(call.metadata_json)
             call_ended_payload["started_at"] = (
                 call.started_at.isoformat() if call.started_at else None
             )
