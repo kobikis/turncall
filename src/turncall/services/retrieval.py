@@ -207,6 +207,29 @@ KNOWLEDGE_AWARENESS_HINT = (
 )
 
 
+# Told to the model when a KB is in `tool` mode: it searches only when it
+# decides to, and a model sure of the answer from the agent's name or greeting
+# decides not to — then denies something the documents list (an agent called
+# "Nonna" said it serves no sushi with a sushi menu one search away, live
+# 2026-10-10). Saying no is the moment to look.
+KNOWLEDGE_TOOL_HINT = (
+    "Before telling the caller you don't have, sell or serve something — or "
+    "answering a question your documents may cover — look it up with "
+    "query_knowledge. Never deny something without searching first."
+)
+
+
+def knowledge_hints(modes: set[str]) -> str:
+    """What the prompt says about knowledge read by search: that the model
+    has some (`auto`, `tool`), and to search before saying no (`tool`)."""
+    parts = []
+    if modes & {"auto", "tool"}:
+        parts.append(KNOWLEDGE_AWARENESS_HINT)
+    if "tool" in modes:
+        parts.append(KNOWLEDGE_TOOL_HINT)
+    return "\n\n".join(parts)
+
+
 async def build_knowledge_preamble(
     session_factory: Any, attachments: list[dict[str, Any]]
 ) -> str:
@@ -226,8 +249,9 @@ async def build_knowledge_preamble(
             full = await get_full_text_context(session, prompt_ids)
         if full:
             parts.append(full)
-    if any(a.get("mode") in ("auto", "tool") for a in attachments):
-        parts.append(KNOWLEDGE_AWARENESS_HINT)
+    hints = knowledge_hints({str(a.get("mode")) for a in attachments})
+    if hints:
+        parts.append(hints)
     return "\n\n".join(parts)
 
 

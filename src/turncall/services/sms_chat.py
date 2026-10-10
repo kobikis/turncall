@@ -513,9 +513,9 @@ async def _inject_kb_context(
       (`chat_tools`); the awareness hint covers it, as on a voice call
     """
     from turncall.services.retrieval import (
-        KNOWLEDGE_AWARENESS_HINT,
         format_retrieved_context,
         get_full_text_context,
+        knowledge_hints,
         retrieve,
     )
 
@@ -546,10 +546,12 @@ async def _inject_kb_context(
             system_prompt = f"{context_text}\n\n{system_prompt}"
 
     # Tell the model it has a KB even when this message retrieved nothing, so it
-    # doesn't deny having one (e.g. "use the attached file" matches nothing) —
-    # for `tool` mode too, as build_knowledge_preamble does on a voice call.
-    if any(a.mode in ("auto", "tool") for a in attachments):
-        system_prompt = f"{system_prompt}\n\n{KNOWLEDGE_AWARENESS_HINT}"
+    # doesn't deny having one (e.g. "use the attached file" matches nothing),
+    # and to search a `tool`-mode one before saying no — as
+    # build_knowledge_preamble does on a voice call.
+    hints = knowledge_hints({a.mode for a in attachments})
+    if hints:
+        system_prompt = f"{system_prompt}\n\n{hints}"
 
     return system_prompt
 

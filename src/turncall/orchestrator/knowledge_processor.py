@@ -10,11 +10,7 @@ from typing import Any, NamedTuple
 from uuid import UUID
 
 from loguru import logger
-from pipecat.frames.frames import (
-    Frame,
-    LLMMessagesUpdateFrame,
-    TranscriptionFrame,
-)
+from pipecat.frames.frames import Frame, LLMContextFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -89,11 +85,41 @@ async def load_inline_kb_attachments(
     return usable
 
 
+# Every retrieved-context message starts with this (format_retrieved_context),
+# which is how a turn finds the previous turn's passages to take out.
+_PASSAGES_MARKER = "[Knowledge Base Context]"
+
+
+def _text_of(message: Any) -> str:
+    """A message's text, whether its content is a string or content parts."""
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [p.get("text", "") for p in content if isinstance(p, dict)]
+        return " ".join(t for t in parts if t).strip()
+    return ""
+
+
+def _is_passages(message: Any) -> bool:
+    return isinstance(message, dict) and _text_of(message).startswith(_PASSAGES_MARKER)
+
+
 class KnowledgeRetrievalProcessor(FrameProcessor):
-    """Intercepts user transcription frames and injects retrieved KB context.
+    """Retrieves passages for each caller turn and puts them before it.
 
     Sits between user_aggregator and LLM in the pipeline:
       user_agg → KnowledgeRetrievalProcessor → LLM
+
+    pipecat's user aggregator hands each turn on as an `LLMContextFrame` —
+    it consumes the transcription itself — so that is what this acts on: the
+    turn's text is the context's last message. It waited for a transcription
+    and an `LLMMessagesUpdateFrame` instead, neither of which reaches it since
+    pipecat 1.x's universal context, so `auto` never retrieved on a call.
+
+    The passages are for one turn: the context is the call's history, so the
+    previous turn's are taken out before this turn's go in, or every turn's
+    would stay in the prompt for good.
     """
 
     def __init__(
@@ -114,7 +140,6 @@ class KnowledgeRetrievalProcessor(FrameProcessor):
         self._embedding_model = embedding_model
         self._top_k = top_k
         self._similarity_threshold = similarity_threshold
-        self._last_user_text: str = ""
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         """Process frames flowing through the pipeline."""
@@ -123,22 +148,36 @@ class KnowledgeRetrievalProcessor(FrameProcessor):
         # everything and the pipeline stalls at this processor.
         await super().process_frame(frame, direction)
 
-        # Capture the latest user transcription text
-        if isinstance(frame, TranscriptionFrame):
-            if frame.text and frame.text.strip():
-                self._last_user_text = frame.text.strip()
-
-        # When LLM messages are being sent, inject retrieved context
-        if isinstance(frame, LLMMessagesUpdateFrame) and self._last_user_text:
-            await self._inject_context(frame)
-            self._last_user_text = ""
+        if (
+            isinstance(frame, LLMContextFrame)
+            and direction == FrameDirection.DOWNSTREAM
+        ):
+            await self._retrieve_for(frame.context)
 
         await self.push_frame(frame, direction)
 
-    async def _inject_context(self, frame: LLMMessagesUpdateFrame) -> None:
-        """Retrieve relevant chunks and inject them as developer guidance."""
+    async def _retrieve_for(self, context: Any) -> None:
+        """Replace the previous turn's passages with this turn's, if any."""
+        messages = [m for m in context.get_messages() if not _is_passages(m)]
+        last = messages[-1] if messages else None
+        current = (
+            _text_of(last)
+            if isinstance(last, dict) and last.get("role") == "user"
+            else ""
+        )
+        if current:
+            passages = await self._passages(messages, current)
+            if passages is not None:
+                messages = [*messages[:-1], passages, messages[-1]]
+        context.set_messages(messages)
+
+    async def _passages(
+        self, messages: list[Any], current: str
+    ) -> dict[str, str] | None:
+        """This turn's passages as a message, or None for none found or a
+        failed search — the turn goes on without them either way."""
         try:
-            query = build_retrieval_query(frame.messages, self._last_user_text)
+            query = build_retrieval_query(messages, current)
             async with self._session_factory() as session:
                 result = await retrieve(
                     session,
@@ -149,25 +188,21 @@ class KnowledgeRetrievalProcessor(FrameProcessor):
                     openai_api_key=self._openai_api_key,
                     embedding_model=self._embedding_model,
                 )
-
-            if result.chunks:
-                context_text = format_retrieved_context(result)
-                # "developer", not "system": retrieved chunks are guidance for
-                # this turn, not the agent's system prompt. Pipecat moved Mem0's
-                # memories for the same reason in 1.9, and a second "system"
-                # message mid-context is downgraded to "user" by non-OpenAI
-                # services anyway — so this is no worse anywhere and correct on
-                # OpenAI. It also keeps the context free of the "system" role,
-                # which stops working in Pipecat 2.0.
-                context_msg = {"role": "developer", "content": context_text}
-                frame.messages.insert(0, context_msg)
-                logger.debug(
-                    "KB auto-retrieval: injected {n} chunks for: {q:.60}",
-                    n=len(result.chunks),
-                    q=self._last_user_text,
-                )
         except Exception:
             logger.exception("Knowledge retrieval failed, continuing without context")
+            return None
+        if not result.chunks:
+            return None
+        logger.debug(
+            "KB auto-retrieval: {n} chunks for: {q:.60}",
+            n=len(result.chunks),
+            q=current,
+        )
+        # "developer", not "system": retrieved chunks are guidance for this
+        # turn, not the agent's system prompt. Pipecat moved Mem0's memories
+        # for the same reason in 1.9, and a second "system" message
+        # mid-context is downgraded to "user" by non-OpenAI services anyway.
+        return {"role": "developer", "content": format_retrieved_context(result)}
 
 
 def build_retrieval_query(
@@ -179,9 +214,7 @@ def build_retrieval_query(
     carries the entities the conversation is actually about. Recency last,
     capped so an essay-length reply can't drown the question."""
 
-    def _text(m: dict) -> str:
-        content = m.get("content")
-        return content.strip() if isinstance(content, str) else ""
+    _text = _text_of
 
     current = current.strip()
     prev_user = next(
@@ -257,9 +290,11 @@ def knowledge_tool(
     attachments: list[dict[str, Any]] | None,
     session_factory: async_sessionmaker[AsyncSession],
     openai_api_key: str,
+    call_context: Any | None = None,
 ) -> KnowledgeTool | None:
     """One tool over every tool-mode KB, None without any. Settings come from
-    the first of them."""
+    the first of them. With the call's context its calls are logged and
+    recorded like every other tool's."""
     tool_kbs = [a for a in attachments or [] if a.get("mode") == "tool"]
     if not tool_kbs:
         return None
@@ -277,5 +312,9 @@ def knowledge_tool(
         top_k=first.get("top_k", 5),
         similarity_threshold=first.get("similarity_threshold", 0.3),
     )
+    if call_context is not None:
+        from turncall.orchestrator.tool_bridge import recorded_tool
+
+        handler = recorded_tool(definition.name, handler, call_context)
     logger.info("KB tool mode enabled for {n} KBs", n=len(tool_kbs))
     return KnowledgeTool(definition, handler)

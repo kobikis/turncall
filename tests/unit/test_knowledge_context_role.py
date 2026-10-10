@@ -41,12 +41,11 @@ def _processor() -> KnowledgeRetrievalProcessor:
 @pytest.mark.unit
 class TestInjectedRole:
     async def test_injected_message_uses_developer_role(self) -> None:
-        proc = _processor()
-        proc._last_user_text = "what are your hours?"
-        frame = SimpleNamespace(
+        from pipecat.processors.aggregators.llm_context import LLMContext
+
+        context = LLMContext(
             messages=[{"role": "user", "content": "what are your hours?"}]
         )
-
         result = SimpleNamespace(chunks=[SimpleNamespace(text="Open 9-5")])
         with (
             patch(
@@ -55,23 +54,26 @@ class TestInjectedRole:
             ),
             patch(
                 "turncall.orchestrator.knowledge_processor.format_retrieved_context",
-                return_value="Open 9-5",
+                return_value="[Knowledge Base Context] Open 9-5",
             ),
         ):
-            await proc._inject_context(frame)  # type: ignore[arg-type]
+            await _processor()._retrieve_for(context)
 
-        assert frame.messages[0] == {"role": "developer", "content": "Open 9-5"}
-        assert not any(m["role"] == "system" for m in frame.messages)
+        messages = context.get_messages()
+        assert messages[0] == {
+            "role": "developer",
+            "content": "[Knowledge Base Context] Open 9-5",
+        }
+        assert not any(m["role"] == "system" for m in messages)
 
     async def test_nothing_injected_when_no_chunks(self) -> None:
-        proc = _processor()
-        proc._last_user_text = "hi"
-        frame = SimpleNamespace(messages=[{"role": "user", "content": "hi"}])
+        from pipecat.processors.aggregators.llm_context import LLMContext
 
+        context = LLMContext(messages=[{"role": "user", "content": "hi"}])
         with patch(
             "turncall.orchestrator.knowledge_processor.retrieve",
             AsyncMock(return_value=SimpleNamespace(chunks=[])),
         ):
-            await proc._inject_context(frame)  # type: ignore[arg-type]
+            await _processor()._retrieve_for(context)
 
-        assert frame.messages == [{"role": "user", "content": "hi"}]
+        assert context.get_messages() == [{"role": "user", "content": "hi"}]

@@ -37,7 +37,9 @@ async def test_tool_mode_adds_awareness_hint():
     out = await build_knowledge_preamble(
         _factory, [{"knowledge_base_id": str(uuid4()), "mode": "tool"}]
     )
-    assert out == KNOWLEDGE_AWARENESS_HINT
+    # The awareness hint, and — tool mode only — search before saying no.
+    assert out == retrieval.knowledge_hints({"tool"})
+    assert out.startswith(KNOWLEDGE_AWARENESS_HINT)
 
 
 async def test_prompt_mode_injects_full_text(monkeypatch):
@@ -64,3 +66,15 @@ async def test_prompt_and_auto_combined(monkeypatch):
         ],
     )
     assert "MENU" in out and KNOWLEDGE_AWARENESS_HINT in out
+
+
+def test_only_a_tool_mode_kb_adds_the_search_before_saying_no_rule():
+    """In `tool` mode the model searches when it decides to, and one sure of
+    the answer from the agent's name decides not to — an agent called Nonna
+    denied serving sushi with a sushi menu one search away (live 2026-10-10)."""
+    from turncall.services.retrieval import KNOWLEDGE_TOOL_HINT, knowledge_hints
+
+    assert KNOWLEDGE_TOOL_HINT in knowledge_hints({"tool"})
+    assert KNOWLEDGE_AWARENESS_HINT in knowledge_hints({"tool"})
+    assert KNOWLEDGE_TOOL_HINT not in knowledge_hints({"auto"})
+    assert knowledge_hints({"prompt"}) == ""
