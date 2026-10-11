@@ -70,7 +70,7 @@ ngrok http 8090
 helm upgrade turncall ./charts/turncall --reuse-values --set global.publicBaseUrl=https://<yours>.ngrok.app
 ```
 
-- **Migrations** run in the API pod's `migrate` init container, retrying until Postgres is up: the hook Job runs before install creates anything, so it cannot migrate a database the same install brings. The workers restart until the first migration lands.
+- **Migrations** run in the API pod's `migrate` init container, retrying until Postgres is up: the hook Job runs before install creates anything, so it cannot migrate a database the same install brings. The workers wait in a `wait-for-migrations` init container until the database is at the image's head revision, so they start against the tables they expect — on upgrades too.
 - **One API pod.** The files volume is `ReadWriteOnce`.
 - **A rebuilt image** under the same tag is picked up by `kubectl rollout restart deploy`: `values-local.yaml` sets `pullPolicy: Always`, and Docker Desktop's cluster pulls local tags from the Docker engine. On kind or minikube, where images are loaded onto the nodes, set `image.pullPolicy=IfNotPresent`.
 - **Volumes outlive `helm uninstall`** — Postgres's and Redis's (a StatefulSet's claims) and the files one. `kubectl delete pvc -l app.kubernetes.io/instance=turncall` starts over.

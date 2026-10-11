@@ -82,6 +82,23 @@ checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha
 checksum/secret: {{ include (print .Template.BasePath "/secret.yaml") . | sha256sum }}
 {{- end -}}
 
+{{/*
+Holds a worker until the bundled Postgres is migrated. There the API's init
+container migrates, so the workers would otherwise start against no tables and
+crash until it lands; with an external database the hook Job has migrated before
+any pod starts, and this renders nothing.
+*/}}
+{{- define "turncall.waitForMigrations" -}}
+{{- if and .Values.postgresql.enabled .Values.migrations.enabled }}
+initContainers:
+  - name: wait-for-migrations
+    image: {{ include "turncall.image" (dict "ctx" .) }}
+    imagePullPolicy: {{ .Values.image.pullPolicy }}
+    command: ["sh", "-c", "until alembic current 2>/dev/null | grep -q '(head)'; do sleep 3; done"]
+    {{- include "turncall.env" . | nindent 4 }}
+{{- end }}
+{{- end -}}
+
 {{- define "turncall.scheduling" -}}
 {{- with .nodeSelector }}
 nodeSelector:

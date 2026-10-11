@@ -28,6 +28,7 @@ spec:
       # A run killed sooner is not lost — the janitor marks it errored.
       terminationGracePeriodSeconds: {{ add $longestRun 60 }}
       {{- with include "turncall.scheduling" .Values.evalWorker | trim }}{{ . | nindent 6 }}{{ end }}
+      {{- with include "turncall.waitForMigrations" . | trim }}{{ . | nindent 6 }}{{ end }}
       containers:
         - name: eval-worker
           image: {{ include "turncall.image" (dict "ctx" . "override" .Values.evalWorker.image) }}

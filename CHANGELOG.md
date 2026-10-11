@@ -29,7 +29,8 @@ and is not part of this repository's history.
   (`localStorage.enabled`) — the docker compose stack on Docker Desktop, kind
   or minikube. It fills `DATABASE_URL` and `REDIS_URL` itself, and migrates in
   the API pod's init container, since a pre-install hook runs before the
-  database the same install creates. For development: one pod each, no
+  database the same install creates; the workers wait for that migration
+  instead of crashing until it lands. For development: one pod each, no
   backups. `global.publicBaseUrl` sets `PUBLIC_BASE_URL` (a parent chart can
   hand the same value to others), and the install notes warn when it is unset,
   since a number bound without it is saved but not configured at the carrier.

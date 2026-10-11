@@ -933,7 +933,8 @@ Proof against a real process: `tests/integration/test_graceful_shutdown.py`
 campaign worker Deployments against external Postgres/Redis — or, with
 `values-local.yaml`, the compose stack's own (pgvector + Redis StatefulSets, files
 on a PVC, migrations in the API's init container since no hook can migrate a
-database the same install creates; `global.publicBaseUrl` is PUBLIC_BASE_URL,
+database the same install creates, and the workers wait for it in a
+`wait-for-migrations` init container; `global.publicBaseUrl` is PUBLIC_BASE_URL,
 global so the builder's `turncall-stack` chart hands one value to both; a
 production WebRTC `server_url` may be an in-cluster `*.svc[.cluster.local]`
 Service), `alembic upgrade

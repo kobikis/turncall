@@ -25,6 +25,7 @@ spec:
       # unknown outcome rather than dialling it twice.
       terminationGracePeriodSeconds: {{ .Values.campaignWorker.terminationGracePeriodSeconds }}
       {{- with include "turncall.scheduling" .Values.campaignWorker | trim }}{{ . | nindent 6 }}{{ end }}
+      {{- with include "turncall.waitForMigrations" . | trim }}{{ . | nindent 6 }}{{ end }}
       containers:
         - name: campaign-worker
           image: {{ include "turncall.image" (dict "ctx" .) }}

@@ -34,6 +34,7 @@ spec:
       # No calls of its own; post-call webhook delivery gets its 60s.
       terminationGracePeriodSeconds: 90
       {{- with include "turncall.scheduling" .Values.asteriskEdge | trim }}{{ . | nindent 6 }}{{ end }}
+      {{- with include "turncall.waitForMigrations" . | trim }}{{ . | nindent 6 }}{{ end }}
       containers:
         - name: asterisk-edge
           image: {{ include "turncall.image" (dict "ctx" .) }}
