@@ -4,7 +4,7 @@ description: "The Helm chart: the API, the workers, migrations, and autoscaling 
 icon: "dharmachakra"
 ---
 
-The chart in [`charts/turncall`](https://github.com/kobikis/turncall/tree/main/charts/turncall) runs TurnCall against a Postgres (with `pgvector`) and a Redis you already have — or, for a laptop, [brings its own](#everything-in-the-cluster). It is sized for the one thing a voice platform cannot get wrong on Kubernetes: a pod that is scaled down or replaced keeps its calls until they end. See [Graceful shutdown](/guides/graceful-shutdown) for how a process drains.
+The chart in [turncall-charts](https://github.com/kobikis/turncall-charts) (`charts/turncall`; commands below run from a checkout of it) runs TurnCall against a Postgres (with `pgvector`) and a Redis you already have — or, for a laptop, [brings its own](#everything-in-the-cluster). It is sized for the one thing a voice platform cannot get wrong on Kubernetes: a pod that is scaled down or replaced keeps its calls until they end. See [Graceful shutdown](/guides/graceful-shutdown) for how a process drains.
 
 ## What it runs
 
@@ -38,7 +38,7 @@ helm install turncall ./charts/turncall \
   --set config.PUBLIC_BASE_URL=https://turncall.example.com
 ```
 
-[`values-production.yaml`](https://github.com/kobikis/turncall/tree/main/charts/turncall/values-production.yaml) is the same install as a file to copy: a pinned image, `existingSecret`, S3, `global.publicBaseUrl`, and an Ingress with TLS and the WebSocket timeouts. Replace its `example.com` hosts and placeholders.
+[`values-production.yaml`](https://github.com/kobikis/turncall-charts/tree/main/charts/turncall/values-production.yaml) is the same install as a file to copy: a pinned image, `existingSecret`, S3, `publicBaseUrl`, and an Ingress with TLS and the WebSocket timeouts — plus the builder beside it; set `builder.enabled=false` for TurnCall alone. Replace its `example.com` hosts and placeholders.
 
 `existingSecret` holds every secret setting as an environment variable; `config` holds the rest. Both take the variables listed in the project's environment reference. `secretEnv` is the alternative to `existingSecret` when you would rather have the chart own the Secret.
 
@@ -50,7 +50,7 @@ helm install turncall ./charts/turncall \
 
 `values-local.yaml` is the docker compose stack on Kubernetes (Docker Desktop, kind, minikube): the chart also runs Postgres (`pgvector/pgvector:pg16`) and Redis (`redis:7-alpine`), one pod and one volume each, keeps files on a volume (`STORAGE_BACKEND: local`), and fills `DATABASE_URL` and `REDIS_URL` itself.
 
-It runs the image `turncall:dev`, which it expects to find locally (the released image is linux/amd64 only); set `image.repository` / `image.tag` to use another.
+It also runs the builder (builder-api and its console, `builder.enabled`); add `--set builder.enabled=false` for TurnCall alone, or see the charts repo's README for the builder's keys and login. It runs local image tags — `turncall:dev` for TurnCall (the released image is linux/amd64 only) — which it expects to find locally; set `image.repository` / `image.tag` to use another.
 
 ```bash
 cat > my-keys.yaml <<'YAML'
@@ -65,11 +65,11 @@ helm install turncall ./charts/turncall -f charts/turncall/values-local.yaml -f 
 kubectl port-forward svc/turncall 8090:80
 ```
 
-The API is then on `localhost:8090`, with the dev `PLATFORM_API_KEY` from `values-local.yaml` for creating a project. A carrier needs a public https URL: point ngrok at the port-forward and set `global.publicBaseUrl` (it becomes `PUBLIC_BASE_URL`; `config.PUBLIC_BASE_URL` wins if both are set). Without it, a number bound is saved but not configured at the carrier.
+The API is then on `localhost:8090`, with the dev `PLATFORM_API_KEY` from `values-local.yaml` for creating a project. A carrier needs a public https URL: point ngrok at the port-forward and set `publicBaseUrl` (it becomes `PUBLIC_BASE_URL`; `config.PUBLIC_BASE_URL` wins if both are set). Without it, a number bound is saved but not configured at the carrier.
 
 ```bash
 ngrok http 8090
-helm upgrade turncall ./charts/turncall --reuse-values --set global.publicBaseUrl=https://<yours>.ngrok.app
+helm upgrade turncall ./charts/turncall --reuse-values --set publicBaseUrl=https://<yours>.ngrok.app
 ```
 
 - **Migrations** run in the API pod's `migrate` init container, retrying until Postgres is up: the hook Job runs before install creates anything, so it cannot migrate a database the same install brings. The workers wait in a `wait-for-migrations` init container until the database is at the image's head revision, so they start against the tables they expect — on upgrades too.

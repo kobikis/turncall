@@ -13,7 +13,8 @@ and is not part of this repository's history.
 
 ### Added
 
-- **Helm chart** (#210, `charts/turncall`). Runs the API, the eval worker and
+- **Helm chart** (#210), in its own repo,
+  [turncall-charts](https://github.com/kobikis/turncall-charts). Runs the API, the eval worker and
   the campaign worker against your own Postgres and Redis, with migrations as a
   hook Job before each install and upgrade. Each grace period is sized from what
   that process may still be holding — the API's from your longest
@@ -22,8 +23,9 @@ and is not part of this repository's history.
   `HorizontalPodAutoscaler` scales the API on live calls per pod
   (`turncall_active_calls`) rather than CPU. Asterisk's ARI connection runs in
   one dedicated pod, never in an API replica, since ARI gives an app's calls
-  to one connection only. See the Kubernetes guide.
-- **Everything in the cluster** (`charts/turncall/values-local.yaml`). The
+  to one connection only. The same chart can run the builder beside TurnCall
+  (`builder.enabled`). See the Kubernetes guide.
+- **Everything in the cluster** (the chart's `values-local.yaml`). The
   chart can also run its own Postgres (pgvector) and Redis
   (`postgresql.enabled`, `redis.enabled`) and keep files on a volume
   (`localStorage.enabled`) — the docker compose stack on Docker Desktop, kind
@@ -31,8 +33,8 @@ and is not part of this repository's history.
   the API pod's init container, since a pre-install hook runs before the
   database the same install creates; the workers wait for that migration
   instead of crashing until it lands. For development: one pod each, no
-  backups. `global.publicBaseUrl` sets `PUBLIC_BASE_URL` (a parent chart can
-  hand the same value to others), and the install notes warn when it is unset,
+  backups. `publicBaseUrl` sets `PUBLIC_BASE_URL` (and the builder's webhook
+  display), and the install notes warn when it is unset,
   since a number bound without it is saved but not configured at the carrier.
 - **Deepgram Flux STT** (#204). A `flux-*` model on the `deepgram` provider
   (`flux-general-en`, `flux-general-multi`) uses Deepgram's Flux, which detects
