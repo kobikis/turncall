@@ -78,7 +78,10 @@ Pass `server_url` in `requestData` for pre-call initialization:
 }
 ```
 
-See [Pre-Call Init](/guides/call-init) for response format.
+See [Pre-Call Init](/guides/call-init) for response format. In production
+`server_url` must be HTTPS, or a Kubernetes Service in the same cluster
+(`http://<name>.<namespace>.svc.cluster.local/...`), whose traffic never leaves
+it.
 
 ## Template Variables
 

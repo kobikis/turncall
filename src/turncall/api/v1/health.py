@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 from loguru import logger
+from sqlalchemy import text
 
 from turncall.services import drain
 from turncall.storage.database import get_engine
@@ -22,7 +23,7 @@ async def health_check() -> dict[str, Any]:
     try:
         engine = get_engine()
         async with engine.connect() as conn:
-            await conn.execute(conn.default_isolation_level)  # type: ignore[arg-type]
+            await conn.execute(text("SELECT 1"))
         checks["database"] = "healthy"
     except Exception as exc:
         logger.warning("health_check_db_failed", error=str(exc))
@@ -63,8 +64,6 @@ async def readiness_check() -> dict[str, str]:
     try:
         engine = get_engine()
         async with engine.connect() as conn:
-            from sqlalchemy import text
-
             await conn.execute(text("SELECT 1"))
         return {"status": "ready"}
     except Exception:

@@ -7,6 +7,7 @@ Pipecat 1.0 uses SmallWebRTCRequestHandler for signaling:
 
 from dataclasses import fields
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Request
@@ -41,6 +42,20 @@ from turncall.storage.database import create_session_factory, get_engine
 from turncall.storage.repositories import agent_repo
 
 router = APIRouter(prefix="/webrtc", tags=["webrtc"])
+
+
+# A Kubernetes Service name: the request never leaves the cluster, and in-cluster
+# traffic is plain HTTP unless a mesh adds TLS (the builder's Agent Backends).
+_IN_CLUSTER_SUFFIXES = (".svc", ".svc.cluster.local")
+
+
+def _https_or_in_cluster(url: str) -> bool:
+    """What a production server_url must be: HTTPS, or a cluster-internal Service."""
+    if url.startswith("https://"):
+        return True
+    host = urlsplit(url).hostname or ""
+    return url.startswith("http://") and host.endswith(_IN_CLUSTER_SUFFIXES)
+
 
 # SmallWebRTCRequest.from_dict is a bare cls(**data): extra top-level keys like
 # agent_id (honored via body.get() in the handler) must be stripped before it.
@@ -143,7 +158,7 @@ async def webrtc_connect(
 
     # Validate server_url is HTTPS in production
     settings = get_settings()
-    if server_url and settings.is_production and not server_url.startswith("https://"):
+    if server_url and settings.is_production and not _https_or_in_cluster(server_url):
         raise ApiError(
             status_code=400,
             code=ErrorCode.VALIDATION_ERROR,

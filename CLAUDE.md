@@ -929,8 +929,17 @@ Proof against a real process: `tests/integration/test_graceful_shutdown.py`
 
 ### Helm chart (#210)
 
-`charts/turncall` (guide: `docs/guides/kubernetes.mdx`): API, eval worker and
-campaign worker Deployments against external Postgres/Redis, `alembic upgrade
+The chart lives in its own repo, **`kobikis/turncall-charts`** (`charts/turncall`;
+guide: `docs/guides/kubernetes.mdx`), beside the builder's parts
+(`builder.enabled`). A change here that needs a chart change — a new env var, a
+new process, a new probe — needs a PR there too. What it does: API, eval worker
+and campaign worker Deployments against external Postgres/Redis — or, with
+`values-local.yaml`, the compose stack's own (pgvector + Redis StatefulSets, files
+on a PVC, migrations in the API's init container since no hook can migrate a
+database the same install creates, and the workers wait for it in a
+`wait-for-migrations` init container; `publicBaseUrl` is PUBLIC_BASE_URL; a
+production WebRTC `server_url` may be an in-cluster `*.svc[.cluster.local]`
+Service, so the builder's Agent Backends answer call-init in-cluster), `alembic upgrade
 head` as a pre-install/pre-upgrade hook Job, optional HPA on
 `turncall_active_calls` (target 2 per pod, `requests.cpu: 1`, **no CPU limit**
 — #200's measurement, `docs/guides/capacity.mdx`), Ingress, PodMonitor. The Ingress routes `ingress.paths` (`/v1`, `/webhooks`, `/ws`), never `/`: `/metrics` and the probes carry no credential and `/ready`'s 503 counts live calls, so they stay in-cluster (CI fails a render that routes them). Grace periods are computed, not
@@ -939,8 +948,8 @@ typed: API = `api.preStopSeconds` + `maxCallDurationSeconds` + 90; eval worker
 why those two env vars come from `evals.*` and are refused in `config`. Every
 API pod gets `ASTERISK_EDGE_ENABLED=false` (set in `env`, which beats
 `envFrom`); `asteriskEdge.enabled` adds the one process that holds ARI — a
-single-replica `Recreate` Deployment outside the Service. CI runs `helm lint
---strict` + `helm template` on `charts/turncall/ci/*.yaml`.
+single-replica `Recreate` Deployment outside the Service. The charts repo's CI
+lints and renders every values file.
 
 ## Limits
 
