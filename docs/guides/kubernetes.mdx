@@ -38,6 +38,8 @@ helm install turncall ./charts/turncall \
   --set config.PUBLIC_BASE_URL=https://turncall.example.com
 ```
 
+[`values-production.yaml`](https://github.com/kobikis/turncall/tree/main/charts/turncall/values-production.yaml) is the same install as a file to copy: a pinned image, `existingSecret`, S3, `global.publicBaseUrl`, and an Ingress with TLS and the WebSocket timeouts. Replace its `example.com` hosts and placeholders.
+
 `existingSecret` holds every secret setting as an environment variable; `config` holds the rest. Both take the variables listed in the project's environment reference. `secretEnv` is the alternative to `existingSecret` when you would rather have the chart own the Secret.
 
 - **Pin `image.tag`** to a release. A release without the drain would drop calls on every scale-down this chart performs.
