@@ -1,10 +1,10 @@
 ---
 title: Kubernetes
-description: "The Helm chart: the API, the workers, migrations, and autoscaling on live calls"
+description: "The Helm chart: the API, the workers, migrations, autoscaling on live calls, and the builder beside them"
 icon: "dharmachakra"
 ---
 
-The chart in [turncall-charts](https://github.com/kobikis/turncall-charts) (`charts/turncall`; commands below run from a checkout of it) runs TurnCall against a Postgres (with `pgvector`) and a Redis you already have — or, for a laptop, [brings its own](#everything-in-the-cluster). It is sized for the one thing a voice platform cannot get wrong on Kubernetes: a pod that is scaled down or replaced keeps its calls until they end. See [Graceful shutdown](/guides/graceful-shutdown) for how a process drains.
+The chart in [turncall-charts](https://github.com/kobikis/turncall-charts) (`charts/turncall`; commands below run from a checkout of it) runs TurnCall against a Postgres (with `pgvector`) and a Redis you already have — or, for a laptop, [brings its own](#everything-in-the-cluster) — and, if you want it, [the builder](#the-builder) beside it. It is sized for the one thing a voice platform cannot get wrong on Kubernetes: a pod that is scaled down or replaced keeps its calls until they end. See [Graceful shutdown](/guides/graceful-shutdown) for how a process drains.
 
 ## What it runs
 
@@ -14,10 +14,12 @@ The chart in [turncall-charts](https://github.com/kobikis/turncall-charts) (`cha
 | `<release>-eval-worker` | `turncall-eval-worker` | `evalWorker.replicas` |
 | `<release>-campaign-worker` | `turncall-campaign-worker` | `campaignWorker.replicas` |
 | `<release>-asterisk-edge` | the API process holding Asterisk's ARI connection | exactly 1, when `asteriskEdge.enabled` |
+| `<release>-postgresql`, `<release>-redis` (StatefulSets) | Postgres with pgvector, Redis | 1 each, when `postgresql.enabled` / `redis.enabled` |
+| `<release>-builder-api`, `<release>-builder-web` | the builder's API and its console | 1 each, when `builder.enabled` |
 
 The workers are the same image with another entrypoint and never run inside the API: their work in the API's event loop would become dead air on a live call.
 
-Migrations (`alembic upgrade head`) run as a Job before any pod of a new version starts, on install and on every upgrade.
+Migrations (`alembic upgrade head`) run as a Job before any pod of a new version starts, on install and on every upgrade — or, with the bundled Postgres, in the API pod (see [below](#everything-in-the-cluster)).
 
 ## Install
 
@@ -50,7 +52,14 @@ helm install turncall ./charts/turncall \
 
 `values-local.yaml` is the docker compose stack on Kubernetes (Docker Desktop, kind, minikube): the chart also runs Postgres (`pgvector/pgvector:pg16`) and Redis (`redis:7-alpine`), one pod and one volume each, keeps files on a volume (`STORAGE_BACKEND: local`), and fills `DATABASE_URL` and `REDIS_URL` itself.
 
-It also runs the builder (builder-api and its console, `builder.enabled`); add `--set builder.enabled=false` for TurnCall alone, or see the charts repo's README for the builder's keys and login. It runs local image tags — `turncall:dev` for TurnCall (the released image is linux/amd64 only) — which it expects to find locally; set `image.repository` / `image.tag` to use another.
+It also runs [the builder](#the-builder); add `--set builder.enabled=false` for TurnCall alone. It runs local image tags, which it expects to find in your Docker — the released TurnCall image is linux/amd64 only. Build them from the code repos, or point each `image` at your registry's:
+
+```bash
+docker build -t turncall:dev turncall
+docker build -t turncall-builder-api:dev turncall-builder-api
+docker build -t turncall-agent-runtime:dev turncall-builder-api/agent-runtime
+docker build -t turncall-builder-web:dev turncall-builder-web
+```
 
 ```bash
 cat > my-keys.yaml <<'YAML'
@@ -59,24 +68,49 @@ secretEnv:
   DEEPGRAM_API_KEY: ...
   TWILIO_ACCOUNT_SID: AC...
   TWILIO_AUTH_TOKEN: ...
+builder:
+  secretEnv:
+    ANTHROPIC_API_KEY: sk-ant-...   # or OPENAI_API_KEY: the model the builder talks with
 YAML
 
-helm install turncall ./charts/turncall -f charts/turncall/values-local.yaml -f my-keys.yaml
-kubectl port-forward svc/turncall 8090:80
+helm install turncall ./charts/turncall -n turncall --create-namespace \
+  -f charts/turncall/values-local.yaml -f my-keys.yaml
+kubectl -n turncall port-forward svc/turncall 8090:80
 ```
 
 The API is then on `localhost:8090`, with the dev `PLATFORM_API_KEY` from `values-local.yaml` for creating a project. A carrier needs a public https URL: point ngrok at the port-forward and set `publicBaseUrl` (it becomes `PUBLIC_BASE_URL`; `config.PUBLIC_BASE_URL` wins if both are set). Without it, a number bound is saved but not configured at the carrier.
 
 ```bash
 ngrok http 8090
-helm upgrade turncall ./charts/turncall --reuse-values --set publicBaseUrl=https://<yours>.ngrok.app
+helm upgrade turncall ./charts/turncall -n turncall --reuse-values --set publicBaseUrl=https://<yours>.ngrok.app
 ```
 
 - **Migrations** run in the API pod's `migrate` init container, retrying until Postgres is up: the hook Job runs before install creates anything, so it cannot migrate a database the same install brings. The workers wait in a `wait-for-migrations` init container until the database is at the image's head revision, so they start against the tables they expect — on upgrades too.
 - **One API pod.** The files volume is `ReadWriteOnce`.
 - **A rebuilt image** under the same tag is picked up by `kubectl rollout restart deploy`: `values-local.yaml` sets `pullPolicy: Always`, and Docker Desktop's cluster pulls local tags from the Docker engine. On kind or minikube, where images are loaded onto the nodes, set `image.pullPolicy=IfNotPresent`.
-- **Volumes outlive `helm uninstall`** — Postgres's and Redis's (a StatefulSet's claims) and the files one. `kubectl delete pvc -l app.kubernetes.io/instance=turncall` starts over.
+- **Volumes outlive `helm uninstall`** — Postgres's and Redis's (a StatefulSet's claims), the files one and the builder's generated repos. `kubectl delete namespace turncall` starts over.
+- **After pulling a newer chart**, upgrade with `--reset-then-reuse-values`: the chart's new defaults plus the values you installed with. `--reuse-values` alone keeps the old defaults too.
 - **Not for production**: no replication, no backups, dev secrets. Each piece is a switch (`postgresql.enabled`, `redis.enabled`, `localStorage.enabled`), so moving to managed services is turning them off and setting the URLs.
+
+## The builder
+
+`builder.enabled` adds the agent builder — builder-api and its console — to the same release. Off by default: TurnCall installs alone.
+
+- **It finds TurnCall itself**: the builder talks to this release's TurnCall Service and reads TurnCall's `PLATFORM_API_KEY` from TurnCall's Secret, so the two can never disagree. `publicBaseUrl` is also what the console shows as a number's webhook.
+- **Its database** is `builder` on the bundled Postgres, created on first start, or `builder.secretEnv.DATABASE_URL` (or `builder.existingSecret`) for your own.
+- **Each agent's backend** — its tool webhooks, call-init and event feed — runs as a Deployment named for the agent and a Service, which builder-api creates through the Kubernetes API, holding a Role over just those kinds of object. All of them run one runtime image (`builder.agentRuntime.image`) with the agent's code mounted, so nothing is built in the cluster. TurnCall reaches them at `http://turncall-agent-<port>.<namespace>.svc.cluster.local:8000`, which is why a production WebRTC `server_url` may be an in-cluster Service.
+- **Agent Backends' namespace** (`builder.agentNamespace`, default the release's): in production, give them one of their own. They run code the builder generated, and builder-api's Role — which covers Secrets — is then granted there instead of beside TurnCall's Secret.
+- **The console** is the only part a browser needs: it serves the UI and proxies `/api` to builder-api, so Google login and Pipedream callbacks come back through it (`https://<console>/api/...`). Expose it with `builder.ingress`; a builder turn streams for minutes, so turn the controller's buffering off and raise its read timeout.
+- **Private images**: `imagePullSecrets` reaches every pod, Agent Backends included.
+
+On a laptop, log in with a dev account:
+
+```bash
+kubectl -n turncall exec deploy/turncall-builder-api -- python -m scripts.seed_guest
+kubectl -n turncall port-forward svc/turncall-builder-web 5173:80   # http://localhost:5173, guest@turncall.local / guest
+```
+
+`seed_guest` refuses when `builder.config.TURNCALL_ENV` is `production`.
 
 ## Grace periods
 
@@ -181,5 +215,5 @@ KEDA divides the query's total by the threshold to get a replica count, which is
 
 ## Not covered
 
-- **WebRTC** media is UDP between the browser and the pod, which an Ingress does not carry. Browser calls need the pods reachable over UDP (or a TURN server), which is outside this chart.
+- **WebRTC** media is UDP between the browser and the pod, which an Ingress does not carry. Browser calls — the builder's test calls included — need the pods reachable over UDP (or a TURN server), which is outside this chart. Phone calls are unaffected: their audio arrives over the carrier's WebSocket.
 - **Postgres and Redis** in production are yours to run (the bundled ones are for development). Postgres needs the `vector` extension available; the first migration creates it.
