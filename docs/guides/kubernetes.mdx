@@ -78,8 +78,17 @@ docker build -t turncall-agent-runtime:dev turncall-builder-api/agent-runtime
 docker build -t turncall-builder-web:dev turncall-builder-web
 ```
 
+Phone calls need a public https URL that reaches the API, so start the tunnel first and copy the URL it prints. On a free ngrok account it is a fixed domain, such as `https://<name>.ngrok-free.dev`, so it survives a restart:
+
+```bash
+ngrok http 8090
+```
+
+Then the keys file, with that URL as `publicBaseUrl`:
+
 ```bash
 cat > my-keys.yaml <<'YAML'
+publicBaseUrl: https://<name>.ngrok-free.dev   # ngrok's URL; Twilio/Telnyx call it
 secretEnv:
   OPENAI_API_KEY: sk-...
   DEEPGRAM_API_KEY: ...
@@ -95,12 +104,15 @@ helm install turncall ./charts/turncall -n turncall --create-namespace \
 kubectl -n turncall port-forward svc/turncall 8090:80
 ```
 
-The API is then on `localhost:8090`, with the dev `PLATFORM_API_KEY` from `values-local.yaml` for creating a project. A carrier needs a public https URL: point ngrok at the port-forward and set `publicBaseUrl` (it becomes `PUBLIC_BASE_URL`; `config.PUBLIC_BASE_URL` wins if both are set). Without it, a number bound is saved but not configured at the carrier.
+The API is then on `localhost:8090` — and at the ngrok URL, which forwards to the port-forward — with the dev `PLATFORM_API_KEY` from `values-local.yaml` for creating a project. `publicBaseUrl` becomes TurnCall's `PUBLIC_BASE_URL` (`config.PUBLIC_BASE_URL` wins if both are set) and the URL the builder's console shows as a number's webhook. Without it, a number bound is saved but not configured at the carrier, and the console says so.
+
+If the URL changes, or you installed without it:
 
 ```bash
-ngrok http 8090
-helm upgrade turncall ./charts/turncall -n turncall --reuse-values --set publicBaseUrl=https://<yours>.ngrok.app
+helm upgrade turncall ./charts/turncall -n turncall --reuse-values --set publicBaseUrl=https://<name>.ngrok-free.dev
 ```
+
+Then re-save each number in the console, so TurnCall points it at the new URL.
 
 - **Migrations** run in the API pod's `migrate` init container, retrying until Postgres is up: the hook Job runs before install creates anything, so it cannot migrate a database the same install brings. The workers wait in a `wait-for-migrations` init container until the database is at the image's head revision, so they start against the tables they expect — on upgrades too.
 - **One API pod.** The files volume is `ReadWriteOnce`.
