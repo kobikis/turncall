@@ -4,7 +4,22 @@ description: "The Helm chart: the API, the workers, migrations, autoscaling on l
 icon: "dharmachakra"
 ---
 
-The chart in [turncall-charts](https://github.com/kobikis/turncall-charts) (`charts/turncall`; commands below run from a checkout of it) runs TurnCall against a Postgres (with `pgvector`) and a Redis you already have — or, for a laptop, [brings its own](#everything-in-the-cluster) — and, if you want it, [the builder](#the-builder) beside it. It is sized for the one thing a voice platform cannot get wrong on Kubernetes: a pod that is scaled down or replaced keeps its calls until they end. See [Graceful shutdown](/guides/graceful-shutdown) for how a process drains.
+The chart in [turncall-charts](https://github.com/kobikis/turncall-charts) (`charts/turncall`; commands below run from a checkout of it) runs TurnCall against a Postgres (with `pgvector`) and a Redis you already have — or, for a laptop, [brings its own](#everything-in-the-cluster-development) — and, if you want it, [the builder](#the-builder) beside it. It is sized for the one thing a voice platform cannot get wrong on Kubernetes: a pod that is scaled down or replaced keeps its calls until they end. See [Graceful shutdown](/guides/graceful-shutdown) for how a process drains.
+
+There are two ways to install it — the same chart with different values:
+
+| | [Install (production)](#install-production) | [Everything in the cluster (development)](#everything-in-the-cluster-development) |
+|---|---|---|
+| For | a real cluster | a laptop: Docker Desktop, kind, minikube |
+| Postgres and Redis | yours, by URL | run by the chart, one pod each |
+| Files | S3 | a volume |
+| Secrets | a Secret you create | dev values, plus your keys file |
+| Images | the released image, pinned | local `:dev` builds |
+| Builder | off unless enabled | on |
+| API pods | 2 or more, optionally autoscaled | 1 |
+| Reached through | an Ingress with TLS | `kubectl port-forward` (and ngrok for phone calls) |
+
+The production path assumes you run the infrastructure and adds TurnCall to it; the development path is the docker compose stack on Kubernetes — convenient, with no backups or replication.
 
 ## What it runs
 
@@ -19,9 +34,11 @@ The chart in [turncall-charts](https://github.com/kobikis/turncall-charts) (`cha
 
 The workers are the same image with another entrypoint and never run inside the API: their work in the API's event loop would become dead air on a live call.
 
-Migrations (`alembic upgrade head`) run as a Job before any pod of a new version starts, on install and on every upgrade — or, with the bundled Postgres, in the API pod (see [below](#everything-in-the-cluster)).
+Migrations (`alembic upgrade head`) run as a Job before any pod of a new version starts, on install and on every upgrade — or, with the bundled Postgres, in the API pod (see [below](#everything-in-the-cluster-development)).
 
-## Install
+## Install (production)
+
+TurnCall against your own Postgres, Redis and S3, with secrets in a Secret you manage.
 
 ```bash
 kubectl create secret generic turncall-env \
@@ -48,7 +65,7 @@ helm install turncall ./charts/turncall \
 - **Use S3 storage** (`STORAGE_BACKEND: s3`, the chart's default). `local` storage is one pod's filesystem, so a recording written on one pod is missing on the next.
 - **Expose the API** with `ingress.enabled` or your own route to the `<release>` Service. The chart's Ingress routes `/v1`, `/webhooks` and `/ws` only (`ingress.paths`): `/metrics`, `/ready`, `/live` and `/health` carry no credential and report how many calls a pod is carrying, so they stay inside the cluster, where the kubelet and the PodMonitor reach each pod directly. A route of your own should leave them out the same way. Media streams are WebSockets that last a whole call, so raise your ingress controller's proxy timeouts to at least your longest call (the annotations for ingress-nginx are in `values.yaml`).
 
-## Everything in the cluster
+## Everything in the cluster (development)
 
 `values-local.yaml` is the docker compose stack on Kubernetes (Docker Desktop, kind, minikube): the chart also runs Postgres (`pgvector/pgvector:pg16`) and Redis (`redis:7-alpine`), one pod and one volume each, keeps files on a volume (`STORAGE_BACKEND: local`), and fills `DATABASE_URL` and `REDIS_URL` itself.
 
