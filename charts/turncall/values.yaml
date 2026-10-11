@@ -9,6 +9,18 @@ image:
 
 imagePullSecrets: []
 
+# The public https URL carriers reach this API at (PUBLIC_BASE_URL): Twilio and
+# Telnyx webhooks, media streams, transfer callbacks. Without it a number
+# cannot be configured on bind. `global`, so a parent chart (the builder's
+# turncall-stack) hands one value to TurnCall and the builder alike;
+# config.PUBLIC_BASE_URL wins when both are set.
+global:
+  publicBaseUrl: ""
+
+# The prefix of every object's name, instead of <release>-turncall (or the
+# release name when it contains "turncall").
+fullnameOverride: ""
+
 # Plain settings, as environment variables, shared by every TurnCall process
 # (CLAUDE.md "Environment Variables"). TURNCALL_ENV, PORT and
 # ASTERISK_EDGE_ENABLED are set by the chart per Deployment and cannot be
@@ -32,6 +44,36 @@ secretEnv: {}
 # instead of `secretEnv` when set. It must hold DATABASE_URL: the migration
 # Job reads it from there.
 existingSecret: ""
+
+# In-cluster Postgres (pgvector) and Redis, the docker compose stack's two
+# services, for a laptop or a single-node install (values-local.yaml). Each is
+# one pod on one volume: no replication, no backups. In production leave them
+# off and point DATABASE_URL / REDIS_URL at managed ones.
+#
+# Enabled, the chart fills DATABASE_URL / REDIS_URL in its own Secret unless
+# secretEnv sets them (an existingSecret must hold them itself), and the API
+# migrates in an init container instead of the hook Job: a pre-install hook
+# runs before the database it would migrate exists.
+postgresql:
+  enabled: false
+  image: pgvector/pgvector:pg16
+  user: turncall
+  password: turncall
+  database: turncall
+  storage: 8Gi
+  resources: {}
+
+redis:
+  enabled: false
+  image: redis:7-alpine
+  storage: 1Gi
+  resources: {}
+
+# STORAGE_BACKEND=local on a volume, mounted at the API's /app/storage. A
+# ReadWriteOnce volume is one pod's: keep api.replicas at 1 (S3 otherwise).
+localStorage:
+  enabled: false
+  size: 10Gi
 
 # The longest `max_call_duration_seconds` among your agents (the agent
 # default is 3600, the maximum 14400). It sizes the API pods' grace period:

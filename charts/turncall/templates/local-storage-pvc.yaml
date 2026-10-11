@@ -1,0 +1,16 @@
+{{- if .Values.localStorage.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "turncall.fullname" . }}-storage
+  labels:
+    {{- include "turncall.labels" . | nindent 4 }}
+  annotations:
+    # Recordings and uploaded files outlive an uninstall, as the database does.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.localStorage.size }}
+{{- end }}

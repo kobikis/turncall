@@ -23,6 +23,16 @@ and is not part of this repository's history.
   (`turncall_active_calls`) rather than CPU. Asterisk's ARI connection runs in
   one dedicated pod, never in an API replica, since ARI gives an app's calls
   to one connection only. See the Kubernetes guide.
+- **Everything in the cluster** (`charts/turncall/values-local.yaml`). The
+  chart can also run its own Postgres (pgvector) and Redis
+  (`postgresql.enabled`, `redis.enabled`) and keep files on a volume
+  (`localStorage.enabled`) — the docker compose stack on Docker Desktop, kind
+  or minikube. It fills `DATABASE_URL` and `REDIS_URL` itself, and migrates in
+  the API pod's init container, since a pre-install hook runs before the
+  database the same install creates. For development: one pod each, no
+  backups. `global.publicBaseUrl` sets `PUBLIC_BASE_URL` (a parent chart can
+  hand the same value to others), and the install notes warn when it is unset,
+  since a number bound without it is saved but not configured at the carrier.
 - **Deepgram Flux STT** (#204). A `flux-*` model on the `deepgram` provider
   (`flux-general-en`, `flux-general-multi`) uses Deepgram's Flux, which detects
   the end of the caller's turn itself. Flux then owns end-of-turn: Smart Turn
@@ -80,6 +90,11 @@ and is not part of this repository's history.
 
 ### Changed
 
+- **A production WebRTC `server_url` may be a Kubernetes Service**
+  (`http://<name>.<namespace>.svc[.cluster.local]`). It had to be HTTPS, which
+  refused a call-init server in the same cluster — plain HTTP there never
+  leaves it. Any other `http://` URL is still refused in production, and the
+  suffix must be the host's.
 - **A phone number's carrier is `carrier` in the API** (#201, ADR-0022).
   Reads carry `carrier`; `provider` is still there with the same value and
   still accepted on a write, both deprecated — "provider" means an STT, LLM or
@@ -402,6 +417,9 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **`/health` reports a reachable database as healthy.** It executed the
+  isolation level's name as a statement, which SQLAlchemy refuses, so every
+  deployment read `"database": "unhealthy"`. `/ready` was unaffected.
 - **`smart_turn_detection: false` turns Smart Turn off** (#269). The flag only
   stopped TurnCall adding Smart Turn; pipecat 1.12's *default* stop strategy is
   Smart Turn V3, so the model still ran and waited after VAD's

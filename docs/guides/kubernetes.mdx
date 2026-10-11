@@ -4,7 +4,7 @@ description: "The Helm chart: the API, the workers, migrations, and autoscaling 
 icon: "dharmachakra"
 ---
 
-The chart in [`charts/turncall`](https://github.com/kobikis/turncall/tree/main/charts/turncall) runs TurnCall against a Postgres (with `pgvector`) and a Redis you already have. It is sized for the one thing a voice platform cannot get wrong on Kubernetes: a pod that is scaled down or replaced keeps its calls until they end. See [Graceful shutdown](/guides/graceful-shutdown) for how a process drains.
+The chart in [`charts/turncall`](https://github.com/kobikis/turncall/tree/main/charts/turncall) runs TurnCall against a Postgres (with `pgvector`) and a Redis you already have — or, for a laptop, [brings its own](#everything-in-the-cluster). It is sized for the one thing a voice platform cannot get wrong on Kubernetes: a pod that is scaled down or replaced keeps its calls until they end. See [Graceful shutdown](/guides/graceful-shutdown) for how a process drains.
 
 ## What it runs
 
@@ -43,6 +43,38 @@ helm install turncall ./charts/turncall \
 - **Pin `image.tag`** to a release. A release without the drain would drop calls on every scale-down this chart performs.
 - **Use S3 storage** (`STORAGE_BACKEND: s3`, the chart's default). `local` storage is one pod's filesystem, so a recording written on one pod is missing on the next.
 - **Expose the API** with `ingress.enabled` or your own route to the `<release>` Service. The chart's Ingress routes `/v1`, `/webhooks` and `/ws` only (`ingress.paths`): `/metrics`, `/ready`, `/live` and `/health` carry no credential and report how many calls a pod is carrying, so they stay inside the cluster, where the kubelet and the PodMonitor reach each pod directly. A route of your own should leave them out the same way. Media streams are WebSockets that last a whole call, so raise your ingress controller's proxy timeouts to at least your longest call (the annotations for ingress-nginx are in `values.yaml`).
+
+## Everything in the cluster
+
+`values-local.yaml` is the docker compose stack on Kubernetes (Docker Desktop, kind, minikube): the chart also runs Postgres (`pgvector/pgvector:pg16`) and Redis (`redis:7-alpine`), one pod and one volume each, keeps files on a volume (`STORAGE_BACKEND: local`), and fills `DATABASE_URL` and `REDIS_URL` itself.
+
+It runs the image `turncall:dev`, which it expects to find locally (the released image is linux/amd64 only); set `image.repository` / `image.tag` to use another.
+
+```bash
+cat > my-keys.yaml <<'YAML'
+secretEnv:
+  OPENAI_API_KEY: sk-...
+  DEEPGRAM_API_KEY: ...
+  TWILIO_ACCOUNT_SID: AC...
+  TWILIO_AUTH_TOKEN: ...
+YAML
+
+helm install turncall ./charts/turncall -f charts/turncall/values-local.yaml -f my-keys.yaml
+kubectl port-forward svc/turncall 8090:80
+```
+
+The API is then on `localhost:8090`, with the dev `PLATFORM_API_KEY` from `values-local.yaml` for creating a project. A carrier needs a public https URL: point ngrok at the port-forward and set `global.publicBaseUrl` (it becomes `PUBLIC_BASE_URL`; `config.PUBLIC_BASE_URL` wins if both are set). Without it, a number bound is saved but not configured at the carrier.
+
+```bash
+ngrok http 8090
+helm upgrade turncall ./charts/turncall --reuse-values --set global.publicBaseUrl=https://<yours>.ngrok.app
+```
+
+- **Migrations** run in the API pod's `migrate` init container, retrying until Postgres is up: the hook Job runs before install creates anything, so it cannot migrate a database the same install brings. The workers restart until the first migration lands.
+- **One API pod.** The files volume is `ReadWriteOnce`.
+- **A rebuilt image** under the same tag is picked up by `kubectl rollout restart deploy`: `values-local.yaml` sets `pullPolicy: Always`, and Docker Desktop's cluster pulls local tags from the Docker engine. On kind or minikube, where images are loaded onto the nodes, set `image.pullPolicy=IfNotPresent`.
+- **Volumes outlive `helm uninstall`** — Postgres's and Redis's (a StatefulSet's claims) and the files one. `kubectl delete pvc -l app.kubernetes.io/instance=turncall` starts over.
+- **Not for production**: no replication, no backups, dev secrets. Each piece is a switch (`postgresql.enabled`, `redis.enabled`, `localStorage.enabled`), so moving to managed services is turning them off and setting the URLs.
 
 ## Grace periods
 
@@ -148,4 +180,4 @@ KEDA divides the query's total by the threshold to get a replica count, which is
 ## Not covered
 
 - **WebRTC** media is UDP between the browser and the pod, which an Ingress does not carry. Browser calls need the pods reachable over UDP (or a TURN server), which is outside this chart.
-- **Postgres and Redis** are yours to run. Postgres needs the `vector` extension available; the first migration creates it.
+- **Postgres and Redis** in production are yours to run (the bundled ones are for development). Postgres needs the `vector` extension available; the first migration creates it.

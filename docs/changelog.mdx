@@ -179,7 +179,19 @@ everything the agent says, on Twilio, WebRTC and WhatsApp voice, S2S included.
 Uploads are normalized for every transport, and a sound too low to survive a
 phone line is flagged at upload. See [Ambience](/guides/ambience).
 
+**Everything in the cluster with Helm.** `charts/turncall/values-local.yaml`
+runs TurnCall with its own Postgres (pgvector) and Redis and keeps files on a
+volume — the docker compose stack on Docker Desktop, kind or minikube. The
+chart fills `DATABASE_URL` and `REDIS_URL` and migrates before the API starts.
+`global.publicBaseUrl` sets the public URL carriers call. For development.
+See [Kubernetes](/guides/kubernetes#everything-in-the-cluster).
+
 ## Changed
+
+**A production WebRTC `server_url` may be a Kubernetes Service.**
+`http://<name>.<namespace>.svc.cluster.local` is accepted beside HTTPS, so a
+call-init server in the same cluster works; any other `http://` URL is still
+refused in production. See [WebRTC](/guides/webrtc#dynamic-routing).
 
 **A phone number's carrier is `carrier`.** Phone-number reads carry
 `carrier`; `provider` keeps the same value and is still accepted on a write,
@@ -225,6 +237,9 @@ the caller heard it. The docs said it was left out, but it has always been in
 the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
+
+**`/health` reports a reachable database as healthy.** It read
+`"database": "unhealthy"` on every deployment. `/ready` was unaffected.
 
 **A knowledge base in `tool` mode works in text conversations.** The Chat API,
 SMS and WhatsApp text skipped tool mode, so the model was never offered

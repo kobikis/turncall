@@ -44,6 +44,8 @@ jobs:
       - run: helm lint --strict charts/turncall -f charts/turncall/ci/existing-secret-values.yaml
       - run: helm template turncall charts/turncall -f charts/turncall/ci/full-values.yaml
       - run: helm template turncall charts/turncall -f charts/turncall/ci/existing-secret-values.yaml
+      - run: helm lint --strict charts/turncall -f charts/turncall/values-local.yaml
+      - run: helm template turncall charts/turncall -f charts/turncall/values-local.yaml
       # The probes and /metrics need no credential, so they never reach the
       # public Ingress: no rule may route `/` or one of them.
       - run: |

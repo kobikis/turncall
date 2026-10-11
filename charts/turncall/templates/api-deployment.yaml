@@ -38,6 +38,24 @@ spec:
       # end of this drops whatever calls remain.
       terminationGracePeriodSeconds: {{ $grace }}
       {{- with include "turncall.scheduling" .Values.api | trim }}{{ . | nindent 6 }}{{ end }}
+      {{- if and .Values.postgresql.enabled .Values.migrations.enabled }}
+      initContainers:
+        # The bundled Postgres has no pre-install hook to migrate it (it does
+        # not exist yet then), so the API migrates before it starts.
+        - name: migrate
+          image: {{ include "turncall.image" (dict "ctx" .) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # ponytail: retries forever, so the database coming up is waited
+          # for; a migration that fails for real loops too — read its logs.
+          command: ["sh", "-c", "until alembic upgrade head; do sleep 3; done"]
+          {{- include "turncall.env" . | nindent 10 }}
+      {{- end }}
+      {{- if .Values.localStorage.enabled }}
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: {{ include "turncall.fullname" . }}-storage
+      {{- end }}
       containers:
         - name: api
           image: {{ include "turncall.image" (dict "ctx" .) }}
@@ -76,6 +94,11 @@ spec:
             httpGet: {path: /live, port: http}
             periodSeconds: 2
             failureThreshold: 60
+          {{- if .Values.localStorage.enabled }}
+          volumeMounts:
+            - name: storage
+              mountPath: /app/storage
+          {{- end }}
           {{- with .Values.api.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

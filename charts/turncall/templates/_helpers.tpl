@@ -1,5 +1,7 @@
 {{- define "turncall.fullname" -}}
-{{- if contains .Chart.Name .Release.Name -}}
+{{- if .Values.fullnameOverride -}}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else if contains .Chart.Name .Release.Name -}}
 {{- .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
 {{- printf "%s-%s" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" -}}
@@ -30,9 +32,22 @@ app.kubernetes.io/component: {{ .component }}
 {{- default (include "turncall.fullname" .) .Values.existingSecret -}}
 {{- end -}}
 
+{{/* secretEnv, with the bundled Postgres/Redis URLs under any it does not set. */}}
+{{- define "turncall.secretEnv" -}}
+{{- $env := dict -}}
+{{- $full := include "turncall.fullname" . -}}
+{{- with .Values.postgresql }}{{ if .enabled -}}
+{{- $_ := set $env "DATABASE_URL" (printf "postgresql+asyncpg://%s:%s@%s-postgresql:5432/%s" .user (urlquery .password) $full .database) -}}
+{{- end }}{{ end -}}
+{{- if .Values.redis.enabled -}}
+{{- $_ := set $env "REDIS_URL" (printf "redis://%s-redis:6379/0" $full) -}}
+{{- end -}}
+{{- toYaml (merge (deepCopy .Values.secretEnv) $env) -}}
+{{- end -}}
+
 {{- define "turncall.checkSecrets" -}}
-{{- if not (or .Values.existingSecret .Values.secretEnv.DATABASE_URL) -}}
-{{- fail "set secretEnv.DATABASE_URL, or existingSecret naming a Secret that holds it" -}}
+{{- if not (or .Values.existingSecret .Values.secretEnv.DATABASE_URL .Values.postgresql.enabled) -}}
+{{- fail "set secretEnv.DATABASE_URL, existingSecret naming a Secret that holds it, or postgresql.enabled" -}}
 {{- end -}}
 {{- end -}}
 
@@ -48,6 +63,8 @@ securityContext:
   runAsNonRoot: true
   runAsUser: 10001
   runAsGroup: 10001
+  # A fresh volume (localStorage) is root-owned; this makes it the app's.
+  fsGroup: 10001
 {{- end -}}
 
 {{/* envFrom + the env every TurnCall container gets. */}}

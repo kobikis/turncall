@@ -13,5 +13,10 @@ data:
   {{- range $key, $value := .Values.config }}
   {{ $key }}: {{ $value | toString | quote }}
   {{- end }}
+  {{- with (.Values.global).publicBaseUrl }}
+  {{- if not (hasKey $.Values.config "PUBLIC_BASE_URL") }}
+  PUBLIC_BASE_URL: {{ . | quote }}
+  {{- end }}
+  {{- end }}
   EVAL_MAX_ITERATIONS: {{ .Values.evals.maxIterations | quote }}
   EVAL_MAX_RUN_DURATION_SECONDS: {{ .Values.evals.maxRunDurationSeconds | quote }}

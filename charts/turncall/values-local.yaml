@@ -1,0 +1,56 @@
+# Everything TurnCall needs, in the cluster — the docker compose stack on
+# Kubernetes (Docker Desktop, kind, minikube). Not for production: Postgres
+# and Redis are one pod each, files are on one volume, the secrets are dev
+# values. docs/guides/kubernetes.mdx, "Everything in the cluster".
+#
+#   helm install turncall charts/turncall -f charts/turncall/values-local.yaml -f my-keys.yaml
+#
+# The image is a local tag (the released one is amd64 only); point it at your
+# registry's instead.
+# pullPolicy Always: Docker Desktop's cluster pulls local tags from the Docker
+# engine, so a rebuilt image is picked up on the next pod start (`kubectl
+# rollout restart deploy`); with IfNotPresent a node keeps a tag's first build
+# for good. On kind or minikube, with images loaded onto the nodes, set
+# IfNotPresent.
+image:
+  repository: turncall
+  tag: dev
+  pullPolicy: Always
+
+postgresql:
+  enabled: true
+redis:
+  enabled: true
+localStorage:
+  enabled: true
+
+config:
+  STORAGE_BACKEND: local
+
+# Twilio/Telnyx need a public https URL that reaches this API (ngrok to a
+# port-forward is enough for a laptop). Without it, binding a number saves it
+# unconfigured.
+global:
+  publicBaseUrl: ""   # e.g. https://abc.ngrok.app
+
+# Dev values. Provider keys go here too (OPENAI_API_KEY, DEEPGRAM_API_KEY,
+# TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, ...) — keep them in a file of your
+# own passed as a second -f, not in this one.
+secretEnv:
+  API_KEY_HASH_SECRET: turncall-local-dev-pepper-do-not-change
+  PLATFORM_API_KEY: turncall-local-platform-key
+  # Fernet key, dev only. Never rotate it once credentials are stored.
+  CREDENTIAL_ENCRYPTION_KEY: MBH9WQ_Nj4EVJvaKpupko4y_7wNcF33eaCeFBF_EgoE=
+
+api:
+  replicas: 1
+  # Room for the rest on a laptop; the production request is a whole core.
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+# One short drain instead of an hour: a laptop restart should not wait on it.
+maxCallDurationSeconds: 600

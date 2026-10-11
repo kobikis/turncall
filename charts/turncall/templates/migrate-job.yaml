@@ -1,4 +1,5 @@
-{{- if .Values.migrations.enabled }}
+{{- /* With the bundled Postgres the API's init container migrates (api-deployment.yaml). */}}
+{{- if and .Values.migrations.enabled (not .Values.postgresql.enabled) }}
 {{- include "turncall.checkSecrets" . }}
 {{- $name := printf "%s-migrate" (include "turncall.fullname" .) }}
 {{- if not .Values.existingSecret }}

@@ -930,7 +930,13 @@ Proof against a real process: `tests/integration/test_graceful_shutdown.py`
 ### Helm chart (#210)
 
 `charts/turncall` (guide: `docs/guides/kubernetes.mdx`): API, eval worker and
-campaign worker Deployments against external Postgres/Redis, `alembic upgrade
+campaign worker Deployments against external Postgres/Redis — or, with
+`values-local.yaml`, the compose stack's own (pgvector + Redis StatefulSets, files
+on a PVC, migrations in the API's init container since no hook can migrate a
+database the same install creates; `global.publicBaseUrl` is PUBLIC_BASE_URL,
+global so the builder's `turncall-stack` chart hands one value to both; a
+production WebRTC `server_url` may be an in-cluster `*.svc[.cluster.local]`
+Service), `alembic upgrade
 head` as a pre-install/pre-upgrade hook Job, optional HPA on
 `turncall_active_calls` (target 2 per pod, `requests.cpu: 1`, **no CPU limit**
 — #200's measurement, `docs/guides/capacity.mdx`), Ingress, PodMonitor. The Ingress routes `ingress.paths` (`/v1`, `/webhooks`, `/ws`), never `/`: `/metrics` and the probes carry no credential and `/ready`'s 503 counts live calls, so they stay in-cluster (CI fails a render that routes them). Grace periods are computed, not
