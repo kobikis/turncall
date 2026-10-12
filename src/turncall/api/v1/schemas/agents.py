@@ -666,6 +666,12 @@ class AgentConfigSchema(BaseModel):
         "verbatim; S2S has no TTS stage, so the model is asked to check in.",
     )
     interruption_enabled: bool = True
+    greeting_interruptible: bool = Field(
+        default=True,
+        description="False: the caller is not heard until the agent's first "
+        "reply has finished playing, so a noise as the call connects cannot cut "
+        "the greeting off — and anything said over it is lost. Cascade only.",
+    )
     smart_turn_detection: bool = Field(
         default=True,
         description="Use ML-based turn detection (SmartTurnV3). Not used with a "

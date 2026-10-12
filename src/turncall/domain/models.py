@@ -356,6 +356,9 @@ class AgentConfig(DomainModel):
     user_idle_timeout_ms: int = 10000
     idle_message: str = "Are you still there?"
     interruption_enabled: bool = True
+    # False: the caller is not heard until the agent's first reply has played,
+    # so a noise at connect cannot cut the greeting off. Cascade only.
+    greeting_interruptible: bool = True
     smart_turn_detection: bool = True  # Use ML-based turn detection (LocalSmartTurnV3)
     smart_turn_stop_secs: float = 1.0  # Max silence before forcing end-of-turn
     max_call_duration_seconds: int = 3600
