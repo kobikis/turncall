@@ -17,12 +17,13 @@ from pipecat.frames.frames import (
     LLMTextFrame,
     TranscriptionFrame,
     TTSSpeakFrame,
+    TTSStoppedFrame,
     TTSTextFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.tests.utils import run_test
+from pipecat.tests.utils import SleepFrame, run_test
 from pipecat.utils.errors import ErrorCategory
 from pydantic import ValidationError
 
@@ -33,6 +34,7 @@ from turncall.api.v1.schemas.agents import (
     TTSConfigSchema,
 )
 from turncall.domain.models import AgentConfig
+from turncall.orchestrator import failover
 from turncall.orchestrator.failover import FailoverSTT, FailoverTTS
 from turncall.orchestrator.pipeline_factory import (
     _create_stt_stage,
@@ -186,6 +188,76 @@ class TestSTT:
         assert [f for f in up if isinstance(f, ErrorFrame)]
 
 
+class _Stalled(_FakeSTT):
+    """Takes the caller's audio and answers nothing — or, given `hears`, only
+    on the segments marked True, in order."""
+
+    def __init__(self, hears: list[bool] | None = None) -> None:
+        super().__init__()
+        self.hears = list(hears or [])
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        if isinstance(frame, VADUserStoppedSpeakingFrame) and not (
+            self.hears and self.hears.pop(0)
+        ):
+            await FrameProcessor.process_frame(self, frame, direction)
+            self.speaking = False
+            await self.push_frame(frame, direction)
+            return
+        await super().process_frame(frame, direction)
+
+
+def _turns(*chunks: int) -> list[Frame]:
+    """The caller saying something `chunks` long, then waiting for an answer."""
+    frames: list[Frame] = []
+    for n in chunks:
+        frames += [VADUserStartedSpeakingFrame(), *(_audio() for _ in range(n))]
+        frames += [VADUserStoppedSpeakingFrame(), SleepFrame(sleep=0.15)]
+    return frames
+
+
+@pytest.mark.unit
+class TestSilentSTT:
+    """A stalled STT reports no error, so the group reads it from the call:
+    the caller spoke and waited, twice in a row, and nothing was transcribed."""
+
+    @pytest.fixture(autouse=True)
+    def _quick(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(failover, "_SILENT_TURN_S", 0.05)
+
+    async def test_two_silent_turns_move_the_call_and_replay_both(self) -> None:
+        backup = _FakeSTT()
+        group = FailoverSTT([("deepgram/nova-3-general", _Stalled()), ("b/2", backup)])
+        seen = _watch(group)
+
+        down, _up = await run_test(group, frames_to_send=_turns(2, 1))
+
+        assert [s for s, _d, _e in seen] == ["deepgram/nova-3-general"]
+        # Everything the caller said reaches the backup, in one segment.
+        assert [f.text for f in down if isinstance(f, TranscriptionFrame)] == [
+            "3 chunks"
+        ]
+
+    async def test_one_silent_turn_is_a_cough(self) -> None:
+        primary = _Stalled()
+        group = FailoverSTT([("a/1", primary), ("b/2", _FakeSTT())])
+        await run_test(group, frames_to_send=_turns(1))
+        assert group.strategy.active_service is primary
+
+    async def test_a_transcript_between_them_starts_the_count_over(self) -> None:
+        primary = _Stalled(hears=[False, True, False])
+        group = FailoverSTT([("a/1", primary), ("b/2", _FakeSTT())])
+        await run_test(group, frames_to_send=_turns(1, 1, 1))
+        assert group.strategy.active_service is primary
+
+    async def test_the_last_member_is_never_written_off(self) -> None:
+        """Nobody to move to: writing it off would only end the call."""
+        backup = _Stalled()
+        group = FailoverSTT([("a/1", _Stalled()), ("b/2", backup)])
+        await run_test(group, frames_to_send=_turns(1, 1, 1, 1, 1))
+        assert group.strategy.active_service is backup and backup.is_usable
+
+
 @pytest.mark.unit
 class TestTTS:
     async def test_the_backup_says_the_whole_reply(self) -> None:
@@ -222,6 +294,55 @@ class TestTTS:
         )
         await run_test(group, frames_to_send=[TTSSpeakFrame("Welcome to Nonna's.")])
         assert backup.spoken == ["Welcome to Nonna's."]
+
+    async def test_a_reply_that_ended_silent_is_spoken_by_the_backup(self) -> None:
+        """pipecat's own verdict on a TTS that stalls (#223): the reply's
+        context times out with no audio, so a TTSStoppedFrame closes it, and
+        only then the error that writes the service off. The stop must not
+        count as the reply having been said."""
+
+        class _Stalled(_FakeTTS):
+            async def _speak(self, text: str) -> None:
+                await self.push_frame(TTSStoppedFrame())
+                await self.push_error(
+                    "3 consecutive TTS contexts completed with no audio",
+                    force_treat_as_permanent=True,
+                )
+
+        backup = _FakeTTS()
+        group = FailoverTTS([("openai/gpt-4o-mini-tts", _Stalled()), ("b/2", backup)])
+        await run_test(group, frames_to_send=[TTSSpeakFrame("Welcome to Nonna's.")])
+        assert backup.spoken == ["Welcome to Nonna's."]
+
+    async def test_a_stalled_openai_tts_hands_the_greeting_to_the_backup(
+        self,
+    ) -> None:
+        """End to end through pipecat's own verdict: the real OpenAI service
+        against a server that never answers, as `gpt-4o-mini-tts` did."""
+        from openai import DefaultAsyncHttpxClient, Timeout
+        from pipecat.services.openai.tts import OpenAITTSService
+
+        async def never(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+            await reader.read()  # answer nothing; done when the client gives up
+            writer.close()
+
+        server = await asyncio.start_server(never, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        stalled = OpenAITTSService(
+            api_key="sk-test",
+            base_url=f"http://127.0.0.1:{port}/v1",
+            http_client=DefaultAsyncHttpxClient(timeout=Timeout(0.2)),
+            stop_frame_timeout_s=0.1,
+            max_consecutive_zero_audio_contexts=1,
+        )
+        backup = _FakeTTS()
+        group = FailoverTTS([("openai/gpt-4o-mini-tts", stalled), ("b/2", backup)])
+        async with server:
+            await run_test(
+                group,
+                frames_to_send=[TTSSpeakFrame("Welcome."), SleepFrame(sleep=0.3)],
+            )
+        assert backup.spoken == ["Welcome."]
 
     async def test_recoverable_error_does_not_switch(self) -> None:
         primary, backup = _FakeTTS(ErrorCategory.RATE_LIMIT), _FakeTTS()
@@ -335,6 +456,38 @@ class TestBuild:
             "deepgram/aura-2-helena-en",
             "openai/tts-1",
         ]
+
+    def test_a_tts_with_a_backup_is_written_off_on_one_silent_reply(self) -> None:
+        """pipecat waits for three silent replies in a row; with somewhere to
+        go, one is enough. The last member keeps the default: writing it off
+        leaves nobody to speak and ends the call."""
+        config = AgentConfig.model_validate(
+            {
+                "tts": {
+                    "provider": "openai",
+                    "voice": "alloy",
+                    "failover": [
+                        {"provider": "deepgram", "voice": "aura-2-amalthea-en"},
+                        {"provider": "openai", "model": "tts-1", "voice": "alloy"},
+                    ],
+                }
+            }
+        )
+        tts = _create_tts_stage(config, creds("sk-test", deepgram="dg"))
+        # A Deepgram member is named by the voice it speaks with.
+        assert tts.label(tts.services[1]) == "deepgram/aura-2-amalthea-en"
+        assert [s._max_consecutive_zero_audio_contexts for s in tts.services] == [
+            1,
+            1,
+            3,
+        ]
+        alone = _create_tts_stage(
+            AgentConfig.model_validate({"tts": {"provider": "openai"}}),
+            creds("sk-test"),
+        )
+        assert alone._max_consecutive_zero_audio_contexts == 3
+        # A request OpenAI never answers gives up in seconds, not 600s.
+        assert alone._client.timeout.read == 10.0
 
     def test_assemblyai_entry_resolves_its_model_from_its_own_language(
         self,

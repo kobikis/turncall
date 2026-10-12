@@ -10,6 +10,7 @@ from typing import Any
 from uuid import UUID
 
 from loguru import logger
+from openai import Timeout
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
@@ -641,6 +642,12 @@ def _tts_model_voice(config: AgentConfig) -> tuple[str | None, str | None]:
     if provider != "deepgram":
         model = None if model == _AURA_DEFAULT else model
         voice = None if voice == _AURA_DEFAULT else voice
+    elif voice and not voice.startswith("aura"):
+        # Deepgram's voice *is* its model, and every one is `aura-*`. Anything
+        # else — "alloy", left over from switching off OpenAI — is refused with
+        # an HTTP 400 at connect, which ends the call before it says a word.
+        logger.warning(f"tts_voice_not_deepgram: {voice!r}, using the model instead")
+        voice = model if model and model.startswith("aura") else None
     default_model, default_voice = _TTS_DEFAULTS.get(provider, (None, None))
     return model or default_model, voice or default_voice
 
@@ -727,8 +734,21 @@ def _warn_unusable_pronunciations(config: AgentConfig, tts: Any) -> None:
     )
 
 
-def _create_tts_service(config: AgentConfig, credentials: Credentials) -> Any:
-    """Create TTS service. Supports deepgram, openai, elevenlabs, and cartesia."""
+# The OpenAI SDK's default is 600s, retried twice. A request OpenAI never
+# answers (gpt-4o-mini-tts did, for hours, 2026-10-12) then held the call's
+# session — and its live-call slot — open up to half an hour after the caller
+# hung up, since the pipeline cannot end while it waits. The read timeout is
+# between chunks, so a long reply streaming steadily is never cut.
+# openai's own `Timeout`: its client is not plain httpx's, and reads an httpx
+# `Timeout` as a number.
+_OPENAI_TTS_TIMEOUT = Timeout(10.0, connect=5.0)
+
+
+def _create_tts_service(
+    config: AgentConfig, credentials: Credentials, **kwargs: Any
+) -> Any:
+    """Create TTS service. Supports deepgram, openai, elevenlabs, and cartesia.
+    `kwargs` reach pipecat's `TTSService` as they are."""
     provider = config.tts.provider
 
     speed = {"speed": config.tts.speed} if config.tts.speed != 1.0 else {}
@@ -745,6 +765,7 @@ def _create_tts_service(config: AgentConfig, credentials: Credentials) -> Any:
                 extra=_overflow(config.tts.extra, "voice", "speed"),
             ),
             text_transforms=_tts_text_transforms(DeepgramTTSService, config),
+            **kwargs,
         )
 
     if provider == "elevenlabs":
@@ -791,13 +812,16 @@ def _create_tts_service(config: AgentConfig, credentials: Credentials) -> Any:
             text_transforms=_tts_text_transforms(
                 ElevenLabsTTSService, config, pronunciations=bool(enable_ssml_parsing)
             ),
+            **kwargs,
         )
 
     if provider == "openai":
+        from openai import DefaultAsyncHttpxClient
         from pipecat.services.openai.tts import OpenAITTSService
 
         return OpenAITTSService(
             api_key=credentials.api_key("openai"),
+            http_client=DefaultAsyncHttpxClient(timeout=_OPENAI_TTS_TIMEOUT),
             settings=OpenAITTSService.Settings(
                 model=model,
                 voice=voice,
@@ -805,6 +829,7 @@ def _create_tts_service(config: AgentConfig, credentials: Credentials) -> Any:
                 extra=_overflow(config.tts.extra, "model", "voice", "speed"),
             ),
             text_transforms=_tts_text_transforms(OpenAITTSService, config),
+            **kwargs,
         )
 
     if provider == "cartesia":
@@ -839,6 +864,7 @@ def _create_tts_service(config: AgentConfig, credentials: Credentials) -> Any:
             api_key=api_key,
             settings=tts_settings,
             text_transforms=_tts_text_transforms(CartesiaTTSService, config),
+            **kwargs,
         )
 
     raise ValueError(f"Unsupported TTS provider: {provider}")
@@ -847,23 +873,49 @@ def _create_tts_service(config: AgentConfig, credentials: Credentials) -> Any:
 def _create_tts_stage(config: AgentConfig, credentials: Credentials) -> Any:
     """The call's TTS: the service itself, or it and its backups (#223). Each
     entry is a whole TTS config, its pronunciations included."""
-    tts = _create_tts_service(config, credentials)
+    # With a backup to move to, one reply that ends in silence writes a TTS
+    # off: the caller has already heard 3s of nothing, and pipecat's default of
+    # three in a row outlasts most callers. The last member keeps the default —
+    # writing it off leaves nobody to speak, and ends the call.
+    write_off = {"max_consecutive_zero_audio_contexts": 1}
+    last = len(config.tts.failover)
+    tts = _create_tts_service(config, credentials, **(write_off if last else {}))
     _warn_unusable_pronunciations(config, tts)
     if not config.tts.failover:
         return tts
     from turncall.orchestrator.failover import FailoverTTS
 
     members = [(_tts_label(config), tts)]
-    for entry in config.tts.failover:
+    for i, entry in enumerate(config.tts.failover, start=1):
         backup = config.model_copy(update={"tts": entry})
-        service = _create_tts_service(backup, credentials)
+        service = _create_tts_service(
+            backup, credentials, **(write_off if i < last else {})
+        )
         _warn_unusable_pronunciations(backup, service)
         members.append((_tts_label(backup), service))
     return FailoverTTS(members)
 
 
+def _user_mute_strategies(config: AgentConfig) -> list[Any]:
+    """`greeting_interruptible: false` — the caller is muted until the first
+    reply has played. pipecat's strategy lifts the mute if that reply fails
+    before any audio, so a dead voice does not leave the caller unheard; a TTS
+    failover absorbs the failure and the backup's greeting lifts it instead."""
+    if config.greeting_interruptible:
+        return []
+    from pipecat.turns.user_mute.mute_until_first_bot_complete_user_mute_strategy import (
+        MuteUntilFirstBotCompleteUserMuteStrategy,
+    )
+
+    return [MuteUntilFirstBotCompleteUserMuteStrategy()]
+
+
 def _tts_label(config: AgentConfig) -> str:
-    return f"{config.tts.provider}/{_tts_model_voice(config)[0]}"
+    model, voice = _tts_model_voice(config)
+    # Deepgram's voice is what it runs; its `model` field is never sent.
+    return (
+        f"{config.tts.provider}/{voice if config.tts.provider == 'deepgram' else model}"
+    )
 
 
 def _build_tools_prompt_section(config: AgentConfig) -> str:
@@ -1427,6 +1479,7 @@ def create_pipeline(
     turn_strategies = _build_turn_strategies(config, smart_turn=True)
     if turn_strategies is not None:
         user_params_kwargs["user_turn_strategies"] = turn_strategies
+    user_params_kwargs["user_mute_strategies"] = _user_mute_strategies(config)
 
     context_aggregator = LLMContextAggregatorPair(
         context=context,
@@ -1767,6 +1820,12 @@ def _create_s2s_pipeline(
             "'{td}'): the realtime service owns turn-taking. Use "
             "pipeline_mode='cascade' to disable barge-in.",
             td=config.s2s.turn_detection,
+        )
+
+    if not config.greeting_interruptible:
+        logger.warning(
+            "greeting_interruptible=false is not applied on S2S: the realtime "
+            "service owns turn-taking."
         )
 
     if config.tts.pronunciations:

@@ -19,10 +19,17 @@ every role:
     caller repeats it.
   - TTS: the reply being spoken. A TTS refused on its first sentence (often the
     greeting) otherwise loses the reply's opening, or all of it.
+
+- **a stalled STT is written off.** One that takes the caller's audio and never
+  answers reports no error, so pipecat never moves the call off it. The group
+  reads it from the call instead (`_SILENT_TURNS`). (A stalled TTS pipecat does
+  catch, as replies that end with no audio; the pipeline factory has it give up
+  after one when there is a backup to move to.)
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from typing import Any
 
@@ -36,6 +43,7 @@ from pipecat.frames.frames import (
     LLMFullResponseStartFrame,
     TextFrame,
     TranscriptionFrame,
+    TTSAudioRawFrame,
     TTSSpeakFrame,
     TTSStoppedFrame,
     VADUserStartedSpeakingFrame,
@@ -55,6 +63,14 @@ _GROUP_ATTR = "_turncall_failover_group"
 # frames every transport sends, 30s — longer than anyone talks in one turn,
 # short enough that a long silence does not become a long replay.
 _STT_REPLAY_FRAMES = 1500
+
+# A silent turn: the caller spoke, stopped, and waited this long with nothing
+# transcribed — a final transcript usually lands well under a second after.
+_SILENT_TURN_S = 3.0
+# This many in a row writes the STT off. One is a cough or a door.
+# ponytail: a noisy line with no speech can trip it too; the cost is the backup
+# STT for the rest of the call, which the caller does not hear.
+_SILENT_TURNS = 2
 
 
 class FailoverGroup:
@@ -117,19 +133,55 @@ class FailoverSTT(FailoverGroup, ServiceSwitcher[ServiceSwitcherStrategyFailover
         # broadcasts its frames back up through here.
         self._speech = False
         self._speaking = False
+        # Anything transcribed, interim or final, since the last silent-turn
+        # check; consecutive silent turns; the check pending after a stop.
+        self._heard = False
+        self._silent_turns = 0
+        self._silence_check: asyncio.Task | None = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         if isinstance(frame, InputAudioRawFrame):
             self._unheard.append(frame)
         elif isinstance(frame, VADUserStartedSpeakingFrame):
             self._speech = self._speaking = True
+            await self._cancel_silence_check()
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
             self._speaking = False
+            await self._cancel_silence_check()
+            self._silence_check = self.create_task(self._check_silent_turn())
         await super().process_frame(frame, direction)
+
+    async def cleanup(self) -> None:
+        await self._cancel_silence_check()
+        await super().cleanup()
+
+    async def _cancel_silence_check(self) -> None:
+        if self._silence_check:
+            await self.cancel_task(self._silence_check)
+            self._silence_check = None
+
+    async def _check_silent_turn(self) -> None:
+        await asyncio.sleep(_SILENT_TURN_S)
+        self._silence_check = None
+        self._silent_turns = 0 if self._heard else self._silent_turns + 1
+        self._heard = False
+        if self._silent_turns < _SILENT_TURNS:
+            return
+        active = self.strategy.active_service
+        later = self.strategy.services[self.strategy.services.index(active) + 1 :]
+        if not any(s.is_usable for s in later):
+            return  # nobody to move to: writing it off would only end the call
+        self._silent_turns = 0
+        await active.push_error(
+            f"no transcript for {_SILENT_TURNS} turns in a row",
+            force_treat_as_permanent=True,
+        )
 
     async def push_frame(
         self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM
     ) -> None:
+        if isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)):
+            self._heard = True
         if isinstance(frame, TranscriptionFrame) and not isinstance(
             frame, InterimTranscriptionFrame
         ):
@@ -166,8 +218,10 @@ class FailoverTTS(FailoverGroup, ServiceSwitcher[ServiceSwitcherStrategyFailover
     def __init__(self, ttss: list[tuple[str, Any]]) -> None:
         super().__init__([s for _, s in ttss], ServiceSwitcherStrategyFailover)
         self._init_group(ttss)
-        # The reply being spoken, as the frames that asked for it.
+        # The reply being spoken, as the frames that asked for it; and whether
+        # any of it has been heard.
         self._reply: list[Frame] = []
+        self._reply_heard = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         if direction is FrameDirection.DOWNSTREAM:
@@ -178,6 +232,7 @@ class FailoverTTS(FailoverGroup, ServiceSwitcher[ServiceSwitcherStrategyFailover
         if isinstance(frame, (LLMFullResponseStartFrame, TTSSpeakFrame)):
             if not getattr(frame, "skip_tts", False):
                 self._reply = [frame]
+                self._reply_heard = False
         elif isinstance(frame, InterruptionFrame):
             # Cut off by the caller: nothing of it is wanted any more.
             self._reply = []
@@ -192,8 +247,13 @@ class FailoverTTS(FailoverGroup, ServiceSwitcher[ServiceSwitcherStrategyFailover
     async def push_frame(
         self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM
     ) -> None:
-        if isinstance(frame, TTSStoppedFrame):
-            # The reply has been synthesized; a later failure owes it nothing.
+        if isinstance(frame, TTSAudioRawFrame):
+            self._reply_heard = True
+        elif isinstance(frame, TTSStoppedFrame) and self._reply_heard:
+            # The reply has been spoken; a later failure owes it nothing. A
+            # stop with no audio before it is pipecat closing a context that
+            # timed out silent — the failure that writes a stalled TTS off
+            # comes right after it, and that reply is the one to replay.
             self._reply = []
         await super().push_frame(frame, direction)
 

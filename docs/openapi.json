@@ -7346,6 +7346,12 @@
             "title": "Interruption Enabled",
             "default": true
           },
+          "greeting_interruptible": {
+            "type": "boolean",
+            "title": "Greeting Interruptible",
+            "description": "False: the caller is not heard until the agent's first reply has finished playing, so a noise as the call connects cannot cut the greeting off \u2014 and anything said over it is lost. Cascade only.",
+            "default": true
+          },
           "smart_turn_detection": {
             "type": "boolean",
             "title": "Smart Turn Detection",
