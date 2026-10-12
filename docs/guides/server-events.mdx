@@ -1,12 +1,15 @@
 ---
 title: Server Events
-description: "Bidirectional server hooks for call lifecycle"
+description: "call-init and the webhook events your server receives"
 icon: "arrows-left-right"
 ---
 
-TurnCall supports bidirectional server hooks. The platform calls your server URL and your response can influence call behavior.
+Your server hears from TurnCall in two ways:
 
-## Setup
+- **call-init** — a request TurnCall makes to your server URL before a call starts. Your answer picks the agent and fills its variables. It is the only event sent to a server URL.
+- **webhook events** — everything that happens during and after a call (transcripts, tool results, transfers, failovers, the end of the call), delivered to the URLs you subscribe with `POST /v1/webhooks`. They are fire-and-forget: your response is ignored.
+
+## call-init
 
 Bind a phone number with `routing_target_type: "webhook"`:
 
@@ -22,65 +25,58 @@ curl -X POST http://localhost:8090/v1/phone-numbers \
   }'
 ```
 
-Or set `server_url` in the agent config for per-agent events.
+A WebRTC call takes `server_url` in the body of `POST /v1/webrtc/connect` instead. The request and the answer are described in [call-init](/guides/call-init).
 
-## Event Types
+## Webhook events
 
-| Event | When | Response Controls |
-|-------|------|-------------------|
-| `call-init` | Before agent selection | Which agent + variables |
-| `function-call` | Tool execution | Tool result |
-| `call-end` | After call ends | — |
-| `status-update` | Call status changes | — |
-| `transcript-update` | Transcript updates | — |
-| `speech-update` | Speaking events | — |
+```bash
+curl -X POST http://localhost:8090/v1/webhooks \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://your-server.com/events", "events": ["*"]}'
+```
 
-## function-call
+`events` is a list of event types, or `["*"]` for all of them. The response carries the signing secret, once. To change the list later without changing the secret, use `PATCH /v1/webhooks/{id}` with a new `events`.
 
-Sent when the agent calls a tool (alternative to per-tool webhook URLs).
-
-### Request
+Every delivery is one envelope:
 
 ```json
 {
-  "message": {
-    "type": "function-call",
-    "call": {"id": "call-uuid"},
-    "functionCall": {
-      "name": "lookup_customer",
-      "parameters": {"phone": "+15559876543"}
-    }
-  }
+  "event": "transcript.final",
+  "project_id": "uuid",
+  "call_id": "uuid",
+  "agent_id": "uuid",
+  "event_id": "uuid",
+  "timestamp": "2026-10-12T17:40:43Z",
+  "payload": {"role": "customer", "text": "Hello?"}
 }
 ```
 
-### Response
+`event_id` is stable across retries: use it to drop a redelivery.
 
-```json
-{
-  "result": {"name": "John Smith", "account_id": "ACC-123"}
-}
-```
+| Event | When |
+|-------|------|
+| `call.initializing` | The call is created, after call-init |
+| `call.started` | The agent is about to answer |
+| `transcript.final` | Each final utterance, the caller's or the agent's |
+| `tool.result` | A tool call returned |
+| `call.transferred` / `transfer.answered` | A transfer started / the transfer target answered |
+| `call.agent_handoff` | The call moved to another agent |
+| `provider.failover` | An STT, LLM or TTS moved to its backup |
+| `error.raised` | A stage failed; the payload says which and why |
+| `call.customer_silent` / `call.max_duration_reached` / `call.opted_out` | The idle guard, the duration cap, or a do-not-call request ended the call |
+| `dtmf.sent` / `context.injected` | Keypad tones sent / a message added to the live call |
+| `recording.ready` | The recording is stored |
+| `call.failed` | The call could not be connected |
+| `call.ended` | The call is over — with transcript, analysis and `ended_reason` |
+| `call.rejected` | An inbound call refused over the live-call limit (no `call_id`) |
+| `session.created` / `session.updated` / `chat.created` | Text conversations |
+| `eval.run.started` / `eval.run.completed` | Eval runs |
+| `campaign.started` / `campaign.completed` / `campaign.cancelled` | Campaigns |
 
-## call-end
+`metrics.turn` and `delegation.completed` are stored on the call's event log (`GET /v1/calls/{id}/events`) and never delivered.
 
-Sent after a call ends. Fire-and-forget (response ignored).
-
-```json
-{
-  "message": {
-    "type": "call-end",
-    "call": {"id": "call-uuid"},
-    "endedReason": "completed",
-    "transcript": [
-      {"role": "assistant", "content": "Hello!"},
-      {"role": "user", "content": "I need help with billing"}
-    ],
-    "summary": "Customer asked about billing...",
-    "durationMs": 45000
-  }
-}
-```
+Tool calls go to each tool's own `webhook_url` — see [Tools](/guides/tools).
 
 ## Signature Verification
 
@@ -91,4 +87,4 @@ X-TurnCall-Signature: v1=<hex_hmac>
 X-TurnCall-Timestamp: 1712345678
 ```
 
-Verify by computing HMAC-SHA256 over `"timestamp.body"` using the signing secret returned when you created the phone number.
+Verify by computing HMAC-SHA256 over `"timestamp.body"` with the signing secret: for call-init, the one returned when you bound the phone number; for webhook events, the one returned when you created the subscription.

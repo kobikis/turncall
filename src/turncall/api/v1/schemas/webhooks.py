@@ -15,6 +15,15 @@ class CreateWebhookRequest(BaseModel):
     )
 
 
+class UpdateWebhookRequest(BaseModel):
+    events: list[str] = Field(
+        ...,
+        min_length=1,
+        description="Event types to subscribe to, or ['*'] for all. Replaces "
+        "the current list; the signing secret is kept.",
+    )
+
+
 class WebhookResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 

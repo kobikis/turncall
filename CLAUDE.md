@@ -1666,7 +1666,7 @@ All Pipecat imports isolated in `orchestrator/`. No other module imports Pipecat
 
 ## Webhook Events
 
-Subscribers (`POST /v1/webhooks`) receive a signed envelope per event:
+Subscribers (`POST /v1/webhooks`; `PATCH /v1/webhooks/{id}` replaces the event list and keeps the signing secret) receive a signed envelope per event. Only `call-init` goes to a server URL — `docs/guides/server-events.mdx` lists what subscribers get:
 
 ```json
 {
