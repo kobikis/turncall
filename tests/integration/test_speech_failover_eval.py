@@ -160,7 +160,7 @@ def stub_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         pipeline_factory,
         "_create_tts_service",
-        lambda config, _c: _StubTTS(config.tts.model == REFUSED),
+        lambda config, _c, **_k: _StubTTS(config.tts.model == REFUSED),
     )
     monkeypatch.setattr(
         pipeline_factory, "_create_llm_stage", lambda *_a, **_k: _StubLLM()
@@ -249,10 +249,13 @@ async def test_a_refused_tts_fails_over_and_the_reply_is_spoken(
     stub_providers: None,
 ) -> None:
     target = _target(
+        # Deepgram is named by its voice (its model field is never sent), and
+        # a voice that is not aura-* is replaced, so both are aura names.
         tts={
             "model": REFUSED,
+            "voice": "aura-2-refused-en",
             "failover": [
-                {"provider": "deepgram", "model": "backup", "voice": "backup"}
+                {"provider": "deepgram", "model": "backup", "voice": "aura-2-backup-en"}
             ],
         },
     )
@@ -285,6 +288,8 @@ async def test_a_refused_tts_fails_over_and_the_reply_is_spoken(
 
     assert result.passed, ([str(f) for f in result.failures], agent_errors)
     assert any(
-        e.startswith(f"tts failed over from deepgram/{REFUSED} to deepgram/backup")
+        e.startswith(
+            "tts failed over from deepgram/aura-2-refused-en to deepgram/aura-2-backup-en"
+        )
         for e in agent_errors
     ), agent_errors
