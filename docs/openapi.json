@@ -5661,6 +5661,76 @@
       }
     },
     "/v1/webhooks/{webhook_id}": {
+      "patch": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Update Webhook",
+        "description": "Change which events a subscription receives.\n\nThe signing secret is kept: a receiver that verifies with it \u2014 and the\ntools signed with the same secret \u2014 keep working, which deleting and\nre-creating the subscription would break.",
+        "operationId": "update_webhook_v1_webhooks__webhook_id__patch",
+        "parameters": [
+          {
+            "name": "webhook_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Webhook Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWebhookRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Webhook V1 Webhooks  Webhook Id  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "webhooks"
@@ -10305,6 +10375,24 @@
         },
         "type": "object",
         "title": "UpdateTakeawayRequest"
+      },
+      "UpdateWebhookRequest": {
+        "properties": {
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Events",
+            "description": "Event types to subscribe to, or ['*'] for all. Replaces the current list; the signing secret is kept."
+          }
+        },
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "title": "UpdateWebhookRequest"
       },
       "ValidationError": {
         "properties": {

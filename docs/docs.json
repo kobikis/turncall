@@ -271,6 +271,7 @@
             "pages": [
               "POST /v1/webhooks",
               "GET /v1/webhooks",
+              "PATCH /v1/webhooks/{webhook_id}",
               "DELETE /v1/webhooks/{webhook_id}"
             ]
           },

@@ -9,7 +9,11 @@ from sqlalchemy import select, update
 from turncall.api.deps import DbSession
 from turncall.api.errors import NotFoundError
 from turncall.api.responses import ok
-from turncall.api.v1.schemas.webhooks import CreateWebhookRequest, WebhookResponse
+from turncall.api.v1.schemas.webhooks import (
+    CreateWebhookRequest,
+    UpdateWebhookRequest,
+    WebhookResponse,
+)
 from turncall.auth import Auth, WriteAuth
 from turncall.storage.models import WebhookSubscriptionRow
 
@@ -59,6 +63,34 @@ async def list_webhooks(
     )
     rows = result.scalars().all()
     return ok([WebhookResponse.from_row(r) for r in rows])
+
+
+@router.patch("/{webhook_id}")
+async def update_webhook(
+    webhook_id: UUID,
+    body: UpdateWebhookRequest,
+    auth: WriteAuth,
+    session: DbSession,
+) -> dict:
+    """Change which events a subscription receives.
+
+    The signing secret is kept: a receiver that verifies with it — and the
+    tools signed with the same secret — keep working, which deleting and
+    re-creating the subscription would break.
+    """
+    result = await session.execute(
+        update(WebhookSubscriptionRow)
+        .where(
+            WebhookSubscriptionRow.id == webhook_id,
+            WebhookSubscriptionRow.project_id == auth.project_id,
+        )
+        .values(events={"events": body.events})
+        .returning(WebhookSubscriptionRow)
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise NotFoundError("Webhook", str(webhook_id))
+    return ok(WebhookResponse.from_row(row))
 
 
 @router.delete("/{webhook_id}")
