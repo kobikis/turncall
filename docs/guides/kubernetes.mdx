@@ -17,7 +17,7 @@ There are two ways to install it — the same chart with different values:
 | Images | the released image, pinned | local `:dev` builds |
 | Builder | off unless enabled | on |
 | API pods | 2 or more, optionally autoscaled | 1 |
-| Reached through | an Ingress with TLS | `kubectl port-forward` (and ngrok for phone calls) |
+| Reached through | an Ingress with TLS | `kubectl port-forward`, and an in-cluster ngrok tunnel for phone calls |
 
 The production path assumes you run the infrastructure and adds TurnCall to it; the development path is the docker compose stack on Kubernetes — convenient, with no backups or replication.
 
@@ -78,17 +78,10 @@ docker build -t turncall-agent-runtime:dev turncall-builder-api/agent-runtime
 docker build -t turncall-builder-web:dev turncall-builder-web
 ```
 
-Phone calls need a public https URL that reaches the API, so start the tunnel first and copy the URL it prints. On a free ngrok account it is a fixed domain, such as `https://<name>.ngrok-free.dev`, so it survives a restart:
-
-```bash
-ngrok http 8090
-```
-
-Then the keys file, with that URL as `publicBaseUrl`:
+Phone calls need a public https URL that reaches the API. The chart can run an ngrok agent in the cluster for that (`tunnel`): give it your ngrok domain — a free account gets one fixed domain, such as `<name>.ngrok-free.dev` — and your authtoken, and the domain becomes `publicBaseUrl`.
 
 ```bash
 cat > my-keys.yaml <<'YAML'
-publicBaseUrl: https://<name>.ngrok-free.dev   # ngrok's URL; Twilio/Telnyx call it
 secretEnv:
   OPENAI_API_KEY: sk-...
   DEEPGRAM_API_KEY: ...
@@ -97,22 +90,19 @@ secretEnv:
 builder:
   secretEnv:
     ANTHROPIC_API_KEY: sk-ant-...   # or OPENAI_API_KEY: the model the builder talks with
+tunnel:
+  enabled: true
+  domain: <name>.ngrok-free.dev     # Twilio/Telnyx call it
+  authtoken: ...                    # dashboard.ngrok.com > Your Authtoken
 YAML
 
 helm install turncall ./charts/turncall -n turncall --create-namespace \
   -f charts/turncall/values-local.yaml -f my-keys.yaml
-kubectl -n turncall port-forward svc/turncall 8090:80
 ```
 
-The API is then on `localhost:8090` — and at the ngrok URL, which forwards to the port-forward — with the dev `PLATFORM_API_KEY` from `values-local.yaml` for creating a project. `publicBaseUrl` becomes TurnCall's `PUBLIC_BASE_URL` (`config.PUBLIC_BASE_URL` wins if both are set) and the URL the builder's console shows as a number's webhook. Without it, a number bound is saved but not configured at the carrier, and the console says so.
+The tunnel forwards to TurnCall's Service, not to a pod, so it keeps working when the API pods are replaced by an upgrade or a restart, and it behaves the same on Docker Desktop, minikube or a dev cluster on EKS. Don't put ngrok on your laptop in front of a `kubectl port-forward` instead: a port-forward stays on the pod it started with, so after every restart ngrok answers 503 and Twilio drops the call (error 11200). ngrok allows one agent per domain, so stop any other ngrok using it.
 
-If the URL changes, or you installed without it:
-
-```bash
-helm upgrade turncall ./charts/turncall -n turncall --reuse-values --set publicBaseUrl=https://<name>.ngrok-free.dev
-```
-
-Then re-save each number in the console, so TurnCall points it at the new URL.
+`publicBaseUrl` becomes TurnCall's `PUBLIC_BASE_URL` (`config.PUBLIC_BASE_URL` wins if both are set) and the URL the builder's console shows as a number's webhook. Without one, a number bound is saved but not configured at the carrier, and the console says so. If the URL changes, upgrade with the new domain and re-save each number in the console. The dev `PLATFORM_API_KEY` from `values-local.yaml` creates a project; for curl or scripts, `kubectl -n turncall port-forward svc/turncall 8090:80` puts the API on `localhost:8090`.
 
 - **Migrations** run in the API pod's `migrate` init container, retrying until Postgres is up: the hook Job runs before install creates anything, so it cannot migrate a database the same install brings. The workers wait in a `wait-for-migrations` init container until the database is at the image's head revision, so they start against the tables they expect — on upgrades too.
 - **One API pod.** The files volume is `ReadWriteOnce`.
