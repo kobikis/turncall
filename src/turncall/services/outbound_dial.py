@@ -159,6 +159,8 @@ async def place_outbound_call(
         return await _record_dial(
             session,
             call,
+            project_id=project_id,
+            carrier=phone_number.provider,
             provider_call_sid=provider_call_sid,
             from_number=phone_number.e164_number,
             to_number=to_number,
@@ -347,6 +349,8 @@ async def _record_dial(
     session: AsyncSession,
     call: CallRow,
     *,
+    project_id: UUID,
+    carrier: str,
     provider_call_sid: str,
     from_number: str,
     to_number: str,
@@ -362,10 +366,26 @@ async def _record_dial(
         raise RuntimeError(
             f"outbound call {call.id} vanished after dialling {provider_call_sid}"
         )
-    seq = await call_repo.get_next_sequence_number(session, call.id)
-    await call_repo.create_call_event(
+    # Recorded and dispatched, as an inbound call's are: call.started was
+    # stored only, and an outbound call had no call.initializing at all.
+    from turncall.events.emit import emit_call_event
+
+    await emit_call_event(
         session,
         call_id=call.id,
+        project_id=project_id,
+        event_type=CallEventType.CALL_INITIALIZING,
+        payload={
+            "from_number": from_number,
+            "to_number": to_number,
+            "direction": CallDirection.OUTBOUND.value,
+            "transport": carrier,
+        },
+    )
+    await emit_call_event(
+        session,
+        call_id=call.id,
+        project_id=project_id,
         event_type=CallEventType.CALL_STARTED,
         payload={
             "provider_call_sid": provider_call_sid,
@@ -375,7 +395,6 @@ async def _record_dial(
             "agent_id": str(agent_id) if agent_id else None,
             "direction": CallDirection.OUTBOUND.value,
         },
-        sequence_number=seq,
     )
 
     logger.info(

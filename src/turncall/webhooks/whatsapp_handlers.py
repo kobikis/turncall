@@ -346,11 +346,14 @@ async def _start_voice_pipeline(
             metadata_json=call_metadata,
         )
 
-        # Fire call.initializing event
-        init_seq = await call_repo.get_next_sequence_number(db, call.id)
-        await call_repo.create_call_event(
+        # Recorded and dispatched, as every carrier's inbound call is — these
+        # were stored only, so no subscriber heard a WhatsApp call start.
+        from turncall.events.emit import emit_call_event
+
+        await emit_call_event(
             db,
             call_id=call.id,
+            project_id=phone_row.project_id,
             event_type=CallEventType.CALL_INITIALIZING,
             payload={
                 "from_number": from_number,
@@ -358,13 +361,11 @@ async def _start_voice_pipeline(
                 "direction": "inbound",
                 "transport": "whatsapp",
             },
-            sequence_number=init_seq,
         )
-
-        seq = await call_repo.get_next_sequence_number(db, call.id)
-        await call_repo.create_call_event(
+        await emit_call_event(
             db,
             call_id=call.id,
+            project_id=phone_row.project_id,
             event_type=CallEventType.CALL_STARTED,
             payload={
                 "whatsapp_call_id": whatsapp_call_id,
@@ -373,7 +374,6 @@ async def _start_voice_pipeline(
                 "agent_id": (str(agent_id_for_call) if agent_id_for_call else None),
                 "agent_name": agent.name if agent else "dynamic",
             },
-            sequence_number=seq,
         )
         await db.commit()
 

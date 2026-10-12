@@ -233,13 +233,29 @@ async def webrtc_connect(
             metadata_json=call_metadata,
         )
 
-        init_seq = await call_repo.get_next_sequence_number(db_session, call.id)
-        await call_repo.create_call_event(
+        # Recorded *and* dispatched, as every carrier's inbound call is: these
+        # were stored only, and call.started never written, so a subscriber's
+        # first word of a WebRTC call was its first transcript.
+        from turncall.events.emit import emit_call_event
+
+        await emit_call_event(
             db_session,
             call_id=call.id,
+            project_id=auth.project_id,
             event_type=CallEventType.CALL_INITIALIZING,
             payload={"direction": "inbound", "transport": "webrtc"},
-            sequence_number=init_seq,
+        )
+        await emit_call_event(
+            db_session,
+            call_id=call.id,
+            project_id=auth.project_id,
+            event_type=CallEventType.CALL_STARTED,
+            payload={
+                "direction": "inbound",
+                "transport": "webrtc",
+                # agent_id is carried in the envelope (ADR-0007).
+                "dynamic_config": bool(dynamic_config),
+            },
         )
         await db_session.commit()
 

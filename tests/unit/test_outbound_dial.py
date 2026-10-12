@@ -138,6 +138,7 @@ def dial(app, monkeypatch):
             AsyncMock(return_value=ProjectLimits()),
         ),
         patch(f"{CALLS}.create_call_event", AsyncMock()) as event,
+        patch("turncall.events.emit.dispatch_event", AsyncMock()) as dispatched,
         patch(
             f"{ADAPTER}.initiate_outbound_call", AsyncMock(return_value="CA123")
         ) as carrier,
@@ -148,6 +149,7 @@ def dial(app, monkeypatch):
             event,
             carrier,
         )
+        state.dispatched = dispatched
         state.suppression = suppression
         state.post = lambda: app.post("/v1/calls/outbound", headers=H, json=state.body)
         yield state
@@ -179,6 +181,11 @@ class TestRoute:
         assert event["event_type"] == CallEventType.CALL_STARTED
         assert event["payload"]["provider_call_sid"] == "CA123"
         assert event["payload"]["direction"] == "outbound"
+        # Delivered to subscribers too, as an inbound call's are.
+        assert [c.kwargs["event_type"] for c in dial.dispatched.await_args_list] == [
+            CallEventType.CALL_INITIALIZING,
+            CallEventType.CALL_STARTED,
+        ]
 
     def test_unknown_agent_is_404(self, dial) -> None:
         dial.agent = None
