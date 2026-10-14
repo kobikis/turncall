@@ -188,7 +188,7 @@ async def test_session_records_the_failover(is_eval: bool) -> None:
     from turncall.orchestrator.call_session import CallSession
 
     group = FailoverLLM([("a/1", _FakeLLM("a")), ("b/2", _FakeLLM("b"))])
-    context = MagicMock(is_eval=is_eval)
+    context = MagicMock(is_eval=is_eval, records=not is_eval, has_database=True)
     cs = CallSession(
         call_context=context, transport=MagicMock(), pipeline=Pipeline([group])
     )

@@ -1,0 +1,98 @@
+---
+title: Website demo
+description: "Let visitors talk to an agent in the browser, with no platform behind it"
+icon: "browser"
+---
+
+`turncall-demo` is a small server for a "talk to an agent" button on a website.
+It runs the real voice pipeline — the agent's own STT, LLM and TTS, Silero VAD,
+Smart Turn — over WebRTC, with **no database, Redis, project or carrier**. The
+agents come from a file and the provider keys from the environment, so it runs
+where the platform cannot: a container that starts per visitor and is thrown
+away after the call.
+
+It authenticates nothing. Put it behind something that decides who may call —
+a CAPTCHA, a rate limit, a daily budget — because every minute is your
+provider bill.
+
+## Run it
+
+It is the TurnCall image with another command:
+
+```bash
+docker run --rm -p 8090:8090 \
+  -e DEMO_AGENTS_FILE=/demo/agents.json -v "$PWD/agents.json:/demo/agents.json:ro" \
+  -e OPENAI_API_KEY=... -e DEEPGRAM_API_KEY=... \
+  ghcr.io/kobikis/turncall:main turncall-demo
+```
+
+The agents file maps a name to an agent config, in the shape `POST /v1/agents`
+takes as `config` ([Agents](/guides/agents)). The first is the default:
+
+```json
+{
+  "front-desk": {
+    "system_prompt": "You are the receptionist at Northside Dental...",
+    "first_message": "Thanks for calling Northside Dental. How can I help?",
+    "llm": {"provider": "openai", "max_tokens": 200},
+    "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"},
+    "tools": [{"name": "end_call", "description": "End the call after saying goodbye.", "parameters_schema": {}}],
+    "analysis": {"enabled": false}
+  },
+  "restaurant": { "...": "..." }
+}
+```
+
+A demo call has nothing to write to, so an agent may use only what needs no
+platform. The server **refuses to start** — naming the agent and the field —
+on an agent with:
+
+- a tool other than `end_call` (which says goodbye and hangs up), or a webhook tool
+- MCP servers, knowledge bases, ambience or a video avatar
+
+An unknown field is refused too, as on the API. Every agent's
+`max_call_duration_seconds` is capped at `DEMO_MAX_CALL_SECONDS`.
+
+## Settings
+
+| Variable | Default | |
+|---|---|---|
+| `DEMO_AGENTS_FILE` | `demo-agents.json` | The agents, by name |
+| `DEMO_MAX_CALL_SECONDS` | `180` | Ceiling on every agent's call length |
+| `DEMO_MAX_CALLS` | `1` | Calls one process holds at once; the next offer is a `429` |
+| `DEMO_EXIT_AFTER_CALL` | `false` | Exit once the last call ends, so a per-visitor container stops billing |
+| `WEBRTC_ICE_SERVERS` | public STUN | A TURN relay, when the server has no public address. See [WebRTC](/guides/webrtc#behind-nat-a-turn-relay) |
+| `HOST` / `PORT` | `0.0.0.0` / `8090` | Where it listens |
+
+Provider keys are the platform's usual variables (`OPENAI_API_KEY`,
+`DEEPGRAM_API_KEY`, ...). Without one an agent needs, the call is refused with
+a `503` naming it.
+
+## Endpoints
+
+The browser speaks to it with pipecat's `SmallWebRTCTransport`, as it does to
+[`/v1/webrtc/connect`](/guides/webrtc). The agent is named in `requestData`:
+
+```js
+await client.connect({
+  webrtcRequestParams: { endpoint: "/connect", requestData: { demo: "front-desk" } },
+});
+```
+
+| | |
+|---|---|
+| `POST /connect` | The SDP offer; answered with the SDP answer. `404` for an unknown agent, `429` when the line is busy, `503` while shutting down |
+| `PATCH /connect` | ICE candidates for an open connection |
+| `GET /agents` | `{"agents": [...], "default": "..."}` |
+| `GET /ready` | `200` when a call can start, `503` (`busy` or `draining`) when not |
+| `GET /live` | `200` while the process runs |
+
+On `SIGTERM` it stops taking calls and lets the one on the line finish, as the
+API does ([graceful shutdown](/guides/graceful-shutdown)).
+
+## What it does not do
+
+No call is stored: no transcript, recording, events, webhooks or post-call
+analysis. Nothing reaches a project, so project credentials, limits and
+suppression lists do not apply — the server's own `DEMO_MAX_CALLS` and
+whatever fronts it are the only limits.

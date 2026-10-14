@@ -155,7 +155,7 @@ async def control_channel(
     Without Redis (not initialized, or unreachable) the call runs without a
     channel and every request to it is a 409 — a call is never lost to it.
     """
-    if call_context.is_eval:
+    if not call_context.records:
         yield
         return
     from turncall.storage.redis import dedicated_client, get_redis

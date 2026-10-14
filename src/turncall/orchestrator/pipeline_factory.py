@@ -56,7 +56,9 @@ class CallContext:
     agent_id: UUID
     call_sid: str
     stream_sid: str
-    session_factory: async_sessionmaker[AsyncSession]
+    # None for a conversation with no platform behind it — the website demo
+    # (`turncall.demo`): no database, no Redis, no project. See `records`.
+    session_factory: async_sessionmaker[AsyncSession] | None
     mcp_manager: Any | None = None  # MCPSessionManager (optional)
     # Set when this pipeline is an eval iteration rather than a call (ADR-0018).
     # There is no `calls` row behind it, so every call-scoped side effect --
@@ -71,6 +73,21 @@ class CallContext:
     @property
     def is_eval(self) -> bool:
         return self.eval_run_id is not None
+
+    @property
+    def has_database(self) -> bool:
+        return self.session_factory is not None
+
+    @property
+    def records(self) -> bool:
+        """Whether there is a `calls` row to write to: status, call events,
+        tool invocations, the recording, the control channel, `call.ended`.
+
+        Neither an eval (ADR-0018) nor the demo has one. Every call-scoped
+        side effect asks this; `is_eval` is left for what an eval does
+        differently on purpose — its RTVI bridge, no hangup gate, no ambience.
+        """
+        return self.has_database and not self.is_eval
 
 
 def _overflow(extra: dict[str, Any], *managed: str) -> dict[str, Any]:

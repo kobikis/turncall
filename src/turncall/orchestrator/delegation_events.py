@@ -214,7 +214,9 @@ class DelegationTrackingLiveService(OpenAILiveLLMService):
 def record_delegations(service: Any, call_context: CallContext) -> None:
     """Store each delegation's outcome on a live call; nothing for an eval,
     which has no call row to hang them off (ADR-0018)."""
-    if call_context.is_eval or not isinstance(service, DelegationTrackingLiveService):
+    if not call_context.records or not isinstance(
+        service, DelegationTrackingLiveService
+    ):
         return
 
     async def _store(_service: Any, payload: dict[str, Any]) -> None:

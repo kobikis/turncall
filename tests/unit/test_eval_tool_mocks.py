@@ -52,6 +52,8 @@ def _context(mocks: ToolMocks | None, mcp_manager: object | None = None):
         session_factory=AsyncMock(),
         tool_mocks=mocks,
         is_eval=mocks is not None,
+        records=not (mocks is not None),
+        has_database=True,
     )
 
 

@@ -20,7 +20,19 @@ from turncall.orchestrator.asterisk_serializer import (
 )
 from turncall.orchestrator.serializer import TwilioFrameSerializer
 
-STUN_SERVERS = ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]
+
+def ice_servers() -> list[Any]:
+    """The ICE servers a WebRTC peer connection of ours gathers with
+    (`WEBRTC_ICE_SERVERS`; public STUN unless set), as pipecat's `IceServer`."""
+    from pipecat.transports.smallwebrtc.connection import IceServer
+
+    from turncall.config import get_settings
+
+    return [
+        IceServer(urls=s.urls, username=s.username, credential=s.credential)
+        for s in get_settings().webrtc.ice_servers
+    ]
+
 
 # Twilio Media Streams carry 8kHz mulaw — the carrier's rate, not a choice.
 TWILIO_SAMPLE_RATE = 8000
@@ -146,7 +158,7 @@ def create_webrtc_transport(*, mixer: Any = None) -> Any:
         SmallWebRTCTransport,
     )
 
-    connection = SmallWebRTCConnection(ice_servers=STUN_SERVERS)
+    connection = SmallWebRTCConnection(ice_servers=ice_servers())
 
     from pipecat.transports.base_transport import TransportParams
 

@@ -136,7 +136,11 @@ async def _assemble(
             config=config,
             transport="T",
             call_context=SimpleNamespace(
-                agent_id=agent_id, project_id=project_id, is_eval=True
+                agent_id=agent_id,
+                project_id=project_id,
+                is_eval=True,
+                records=False,
+                has_database=True,
             ),
             settings=SimpleNamespace(pipecat=None, byom=None),
             session_factory=_factory,

@@ -145,10 +145,12 @@ class CallSession:
         ctx = self._call_context
         direction = transport = from_number = to_number = None
         try:
-            async with ctx.session_factory() as session:
-                from turncall.storage.repositories import call_repo
+            call = None
+            if ctx.records:
+                async with ctx.session_factory() as session:
+                    from turncall.storage.repositories import call_repo
 
-                call = await call_repo.get_call_by_id(session, ctx.call_id)
+                    call = await call_repo.get_call_by_id(session, ctx.call_id)
             if call:
                 direction = call.direction
                 transport = call.provider
@@ -225,6 +227,21 @@ class CallSession:
             if self._task is not None:
                 await self._task.cancel()
 
+        greets_on_connect = _speaks_to_a_peer(self._transport)
+        if greets_on_connect:
+            # A WebRTC peer is not connected when the pipeline starts, and
+            # pipecat drops audio written before it is: a first message
+            # queued now played to nobody whenever the TTS beat ICE + DTLS (a
+            # fast voice, a slow network, a TURN relay). Spoken on connect.
+            greeted = False
+
+            @self._transport.event_handler("on_client_connected")  # type: ignore[attr-defined]
+            async def _greet_once_connected(*_args: object) -> None:
+                nonlocal greeted
+                if not greeted and self._task is not None:
+                    greeted = True
+                    await self._trigger_first_response(self._task)
+
         @self._task.event_handler("on_pipeline_error")
         async def _record_provider_error(_worker: object, frame: ErrorFrame) -> None:
             await self._on_pipeline_error(frame)
@@ -250,7 +267,8 @@ class CallSession:
                 # Note: call.started event is fired by the inbound handler
                 # (twilio_handlers / whatsapp_handlers) before the pipeline starts.
 
-                await self._trigger_first_response(self._task)
+                if not greets_on_connect:
+                    await self._trigger_first_response(self._task)
                 await run_until_pipeline_done(self._runner, self._task)
         except asyncio.CancelledError:
             logger.info("call_session_cancelled", call_id=str(self.call_id))
@@ -383,7 +401,7 @@ class CallSession:
                 self.pipeline_errors.append(
                     f"{role} failed over from {src} to {dst}: {error}"
                 )
-            if not self._call_context.is_eval:
+            if self._call_context.records:
                 await self._log_event(
                     CallEventType.PROVIDER_FAILOVER,
                     {"role": role, "from": src, "to": dst, "error": error},
@@ -564,7 +582,7 @@ class CallSession:
         An eval has no call to finalize, and must not dispatch `call.ended` to
         subscribers for a conversation that was never a call.
         """
-        if self._call_context.is_eval:
+        if not self._call_context.records:
             return
         await finalize_call(
             self._call_context.session_factory,
@@ -580,7 +598,7 @@ class CallSession:
 
     async def _update_call_status(self, status: CallStatus) -> None:
         """Bridge pipeline lifecycle to call state machine."""
-        if self._call_context.is_eval:
+        if not self._call_context.records:
             # An eval iteration has no `calls` row; the run row is its record.
             return
         try:
@@ -610,13 +628,13 @@ class CallSession:
     async def _log_event(self, event_type: CallEventType, payload: dict) -> None:
         """Log a call event to the database and dispatch webhook. None in an
         eval, which has no call row to hang it off (ADR-0018)."""
-        if self._call_context.is_eval:
+        if not self._call_context.records:
             return
         await log_call_event(self._call_context, event_type, payload)
 
     async def _record_error(self, stage: str, error: object, **detail: Any) -> None:
         """Keep the first error that ends the call, on its event log too."""
-        if self._error is not None or self._call_context.is_eval:
+        if self._error is not None or not self._call_context.records:
             return
         self._error = readable_error(error)
         await self._log_event(
@@ -713,6 +731,14 @@ async def finalize_call(session_factory: Any, call_id: UUID, *, failed: bool) ->
             )
 
 
+def _speaks_to_a_peer(transport: object) -> bool:
+    """A WebRTC transport (browser, WhatsApp voice): its peer connects after
+    the pipeline starts. A carrier's media stream is open before it does."""
+    from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
+
+    return isinstance(transport, SmallWebRTCTransport)
+
+
 async def fail_unstarted_call(call_context: CallContext, error: BaseException) -> None:
     """A call whose pipeline never ran: failed, with why, and `call.ended`.
 
@@ -720,7 +746,7 @@ async def fail_unstarted_call(call_context: CallContext, error: BaseException) -
     initial status and subscribers heard nothing. Never raises — the caller is
     already handling the original error.
     """
-    if call_context.is_eval:
+    if not call_context.records:
         return
     try:
         await log_call_event(

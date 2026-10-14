@@ -231,6 +231,10 @@ def test_every_voice_entry_point_counts_its_calls():
         if "build_call_pipeline(" in path.read_text()
         and path.relative_to(root).parts[0] != "evals"
     }
-    assert builders == {"orchestrator/pipeline_builder.py", "webhooks/media_stream.py"}
+    assert builders == {
+        "demo/app.py",
+        "orchestrator/pipeline_builder.py",
+        "webhooks/media_stream.py",
+    }
     for module in builders:
         assert "drain.live_call(" in (root / module).read_text(), module

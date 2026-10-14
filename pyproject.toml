@@ -98,6 +98,9 @@ dependencies = [
 turncall-eval-worker = "turncall.evals.worker:main"
 # The campaign worker (#229): same image, its own process, for the same reason.
 turncall-campaign-worker = "turncall.campaigns.worker:main"
+# The website demo (`turncall.demo`): agents from a file over WebRTC, with no
+# database, Redis or project — so it runs where the platform cannot.
+turncall-demo = "turncall.demo.__main__:main"
 # The CLI (#77). An ordinary API client — same key, same endpoints — whose
 # exit code is what lets a pull request be gated on agent behaviour.
 turncall = "turncall.cli.main:run"

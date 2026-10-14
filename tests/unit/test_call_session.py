@@ -33,6 +33,7 @@ def _make_call_session(call_id):
     # A bare MagicMock makes every attribute truthy, which would read as an
     # eval and skip the call-scoped work this file is about.
     call_context.is_eval = False
+    call_context.records = True
 
     return CallSession(
         call_context=call_context,
@@ -272,6 +273,8 @@ class TestUnstartedCall:
             project_id=uuid4(),
             session_factory=MagicMock(),
             is_eval=is_eval,
+            records=not is_eval,
+            has_database=True,
         )
 
     async def test_records_why_and_finalizes_as_failed(self) -> None:
@@ -293,7 +296,10 @@ class TestUnstartedCall:
         from turncall.orchestrator import call_session as mod
 
         with patch.object(mod, "finalize_call", AsyncMock()) as finalize:
-            await mod.fail_unstarted_call(self._ctx(is_eval=True), RuntimeError("x"))
+            await mod.fail_unstarted_call(
+                self._ctx(is_eval=True),
+                RuntimeError("x"),
+            )
         finalize.assert_not_awaited()
 
     async def test_never_masks_the_original_error(self) -> None:
@@ -357,7 +363,12 @@ async def test_a_missing_key_is_named_on_the_event() -> None:
     from turncall.services.credentials import MissingProviderKeyError
 
     ctx = SimpleNamespace(
-        call_id=uuid4(), project_id=uuid4(), session_factory=MagicMock(), is_eval=False
+        call_id=uuid4(),
+        project_id=uuid4(),
+        session_factory=MagicMock(),
+        is_eval=False,
+        records=True,
+        has_database=True,
     )
     with (
         patch.object(mod, "log_call_event", AsyncMock()) as log_event,

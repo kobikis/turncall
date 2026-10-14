@@ -23,6 +23,8 @@ async def test_result_callback_fires_before_background_logging() -> None:
         # A real call: no eval mocks intercepting the dispatch.
         tool_mocks=None,
         is_eval=False,
+        records=True,
+        has_database=True,
     )
 
     captured = {}

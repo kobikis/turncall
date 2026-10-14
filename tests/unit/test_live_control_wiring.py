@@ -44,6 +44,8 @@ def _context(*, is_eval: bool = False) -> SimpleNamespace:
         session_factory=AsyncMock(),
         mcp_manager=None,
         is_eval=is_eval,
+        records=not is_eval,
+        has_database=True,
     )
 
 

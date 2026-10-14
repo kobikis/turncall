@@ -31,9 +31,9 @@ from turncall.orchestrator.ambience import build_ambience_mixer
 from turncall.orchestrator.pipeline_builder import start_call_pipeline
 from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
 from turncall.orchestrator.transport_factory import (
-    STUN_SERVERS,
     WEBRTC_SAMPLE_RATE,
     create_whatsapp_transport,
+    ice_servers,
 )
 from turncall.services.credentials import MissingProviderKeyError
 from turncall.services.limits import admit_live_call, release_live_call
@@ -65,7 +65,7 @@ _SIGNALING_KEYS = {f.name for f in fields(SmallWebRTCRequest)} | {"requestData"}
 
 # Module-level request handler — manages peer connections across requests
 _request_handler = SmallWebRTCRequestHandler(
-    ice_servers=STUN_SERVERS,
+    ice_servers=ice_servers(),
     connection_mode=ConnectionMode.MULTIPLE,
 )
 

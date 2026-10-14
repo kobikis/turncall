@@ -97,6 +97,13 @@ async def _record_control_end(
     )
 
 
+# What `end_call` tells the model: its next reply is the goodbye.
+ASSISTANT_END_MESSAGE = (
+    "The call ends after your next reply. Say a short goodbye now, "
+    "or reply with nothing if you already said goodbye."
+)
+
+
 async def begin_assistant_end(
     session: AsyncSession, call_id: UUID, *, reason: str
 ) -> ControlResult:
@@ -114,13 +121,7 @@ async def begin_assistant_end(
         return call
     await _record_control_end(session, call_id, reason)
     # Read by the model, which replies next: that reply is the goodbye.
-    return ControlResult(
-        success=True,
-        message=(
-            "The call ends after your next reply. Say a short goodbye now, "
-            "or reply with nothing if you already said goodbye."
-        ),
-    )
+    return ControlResult(success=True, message=ASSISTANT_END_MESSAGE)
 
 
 async def end_call(

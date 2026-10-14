@@ -141,4 +141,6 @@ def _context():
         # A real call: no eval mocks intercepting the dispatch.
         tool_mocks=None,
         is_eval=False,
+        records=True,
+        has_database=True,
     )

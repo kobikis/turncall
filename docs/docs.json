@@ -69,7 +69,8 @@
                   "guides/observability",
                   "guides/graceful-shutdown",
                   "guides/capacity",
-                  "guides/kubernetes"
+                  "guides/kubernetes",
+                  "guides/website-demo"
                 ]
               }
             ]

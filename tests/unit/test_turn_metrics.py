@@ -62,7 +62,9 @@ def _recorder(clock):
     async def write(payload: dict) -> None:
         written.append(payload)
 
-    ctx = SimpleNamespace(is_eval=False, call_id=uuid4())
+    ctx = SimpleNamespace(
+        is_eval=False, records=True, has_database=True, call_id=uuid4()
+    )
     return TurnMetricsRecorder(ctx, write=write, time_source=clock), written
 
 
@@ -160,10 +162,14 @@ async def test_no_release_seen_means_no_turn_end_rather_than_zero():
 
 
 def test_eval_attaches_no_recorder():
-    ctx = SimpleNamespace(is_eval=True, call_id=uuid4())
+    ctx = SimpleNamespace(
+        is_eval=True, records=False, has_database=True, call_id=uuid4()
+    )
     assert turn_metrics_observers(ctx) == []
 
 
 def test_live_call_attaches_one():
-    ctx = SimpleNamespace(is_eval=False, call_id=uuid4())
+    ctx = SimpleNamespace(
+        is_eval=False, records=True, has_database=True, call_id=uuid4()
+    )
     assert len(turn_metrics_observers(ctx)) == 1

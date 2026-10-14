@@ -41,7 +41,13 @@ async def test_a_search_on_a_call_is_recorded(monkeypatch):
     monkeypatch.setattr(tool_bridge, "_spawn", lambda coro: spawned.append(coro))
     logged = AsyncMock()
     monkeypatch.setattr(tool_bridge, "_log_tool_result", logged)
-    call = SimpleNamespace(call_id=uuid.uuid4(), is_eval=False, tool_mocks=None)
+    call = SimpleNamespace(
+        call_id=uuid.uuid4(),
+        is_eval=False,
+        records=True,
+        has_database=True,
+        tool_mocks=None,
+    )
 
     async def search(params):
         await params.result_callback({"results": "Salmon roll", "count": 1})
@@ -63,7 +69,13 @@ async def test_a_search_on_a_call_is_recorded(monkeypatch):
 async def test_an_eval_records_nothing(monkeypatch):
     spawned: list = []
     monkeypatch.setattr(tool_bridge, "_spawn", lambda coro: spawned.append(coro))
-    call = SimpleNamespace(call_id=uuid.uuid4(), is_eval=True, tool_mocks=None)
+    call = SimpleNamespace(
+        call_id=uuid.uuid4(),
+        is_eval=True,
+        records=False,
+        has_database=True,
+        tool_mocks=None,
+    )
 
     async def search(params):
         await params.result_callback({"count": 0})
@@ -77,7 +89,13 @@ async def test_an_eval_records_nothing(monkeypatch):
 
 @pytest.mark.unit
 def test_the_calls_knowledge_tool_is_the_recorded_one():
-    call = SimpleNamespace(call_id=uuid.uuid4(), is_eval=False, tool_mocks=None)
+    call = SimpleNamespace(
+        call_id=uuid.uuid4(),
+        is_eval=False,
+        records=True,
+        has_database=True,
+        tool_mocks=None,
+    )
     links = [{"knowledge_base_id": uuid.uuid4(), "mode": "tool"}]
     with patch.object(
         tool_bridge, "recorded_tool", wraps=tool_bridge.recorded_tool
@@ -89,7 +107,13 @@ def test_the_calls_knowledge_tool_is_the_recorded_one():
 
 
 def _eval_call(mocks: ToolMocks) -> SimpleNamespace:
-    return SimpleNamespace(call_id=uuid.uuid4(), is_eval=True, tool_mocks=mocks)
+    return SimpleNamespace(
+        call_id=uuid.uuid4(),
+        is_eval=True,
+        records=False,
+        has_database=True,
+        tool_mocks=mocks,
+    )
 
 
 @pytest.mark.unit
