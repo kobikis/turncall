@@ -50,6 +50,8 @@ def _context(mcp_manager: object | None) -> SimpleNamespace:
         # No eval, so nothing intercepts the dispatch these tests are about.
         tool_mocks=None,
         is_eval=False,
+        records=True,
+        has_database=True,
     )
 
 

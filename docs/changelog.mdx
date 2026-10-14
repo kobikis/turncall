@@ -7,6 +7,16 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**A website demo server.** `turncall-demo` runs agents from a JSON file over
+WebRTC with no database, Redis or project — the real voice pipeline behind a
+"talk to an agent" button, in a container per visitor. See
+[Website demo](/guides/website-demo).
+
+**A TURN relay for WebRTC.** `WEBRTC_ICE_SERVERS` sets the ICE servers our side
+of a browser call gathers with; public STUN stays the default. A server behind
+NAT needs one, or the browser connects and hears nothing. See
+[WebRTC](/guides/webrtc#behind-nat-a-turn-relay).
+
 **Template variables on a WebRTC call.** `variables` in the connect request's
 `requestData` fill the agent's `{{placeholders}}` for that call. With
 `server_url`, call-init sees them as `call.variables`, and the request's value
@@ -238,6 +248,12 @@ the caller heard it. The docs said it was left out, but it has always been in
 the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
+
+**A WebRTC call's greeting is no longer lost.** The agent's first message was
+spoken as the pipeline started, and audio written before the browser's
+connection is up is dropped — so a greeting ready before ICE and DTLS finished
+(a fast voice, a slow network, a TURN relay) played to nobody. It now waits
+for the connection.
 
 **`/health` reports a reachable database as healthy.** It read
 `"database": "unhealthy"` on every deployment. `/ready` was unaffected.

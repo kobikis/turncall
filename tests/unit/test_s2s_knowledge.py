@@ -72,7 +72,7 @@ def _build(
     pipeline = create_pipeline(
         config=config,
         transport=MagicMock(),
-        call_context=MagicMock(is_eval=True),
+        call_context=MagicMock(is_eval=True, records=False, has_database=True),
         pipecat_settings=SimpleNamespace(),
         credentials=creds("sk-test", google="g", anthropic="sk-ant"),
         knowledge_base_attachments=attachments,
@@ -203,7 +203,13 @@ async def _assemble(
         await pipeline_builder.build_call_pipeline(
             config=config,
             transport="T",
-            call_context=SimpleNamespace(agent_id="a", project_id="p", is_eval=True),
+            call_context=SimpleNamespace(
+                agent_id="a",
+                project_id="p",
+                is_eval=True,
+                records=False,
+                has_database=True,
+            ),
             settings=SimpleNamespace(pipecat=None, byom=None),
             session_factory="SF",
         )
@@ -261,7 +267,13 @@ async def test_the_assembly_checks_the_delegates_key_for_a_tool_kb() -> None:
         await pipeline_builder.build_call_pipeline(
             config=_config("openai_live", llm={"provider": "anthropic"}),
             transport="T",
-            call_context=SimpleNamespace(agent_id="a", project_id="p", is_eval=False),
+            call_context=SimpleNamespace(
+                agent_id="a",
+                project_id="p",
+                is_eval=False,
+                records=True,
+                has_database=True,
+            ),
             settings=SimpleNamespace(pipecat=None, byom=None),
             session_factory="SF",
         )

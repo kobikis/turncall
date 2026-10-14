@@ -59,7 +59,13 @@ async def test_recording_is_stereo_caller_left_agent_right() -> None:
         return f"file:///{key}"
 
     storage = SimpleNamespace(upload=upload)
-    ctx = SimpleNamespace(is_eval=False, call_id=uuid4(), project_id=uuid4())
+    ctx = SimpleNamespace(
+        is_eval=False,
+        records=True,
+        has_database=True,
+        call_id=uuid4(),
+        project_id=uuid4(),
+    )
     recorder = CallRecorder(ctx, sample_rate=rate)
     with (
         patch(
@@ -102,7 +108,13 @@ async def test_a_call_with_no_audio_still_ends_its_recording() -> None:
     from turncall.domain.enums import RecordingStatus
     from turncall.orchestrator.call_recorder import CallRecorder
 
-    ctx = SimpleNamespace(is_eval=False, call_id=uuid4(), project_id=uuid4())
+    ctx = SimpleNamespace(
+        is_eval=False,
+        records=True,
+        has_database=True,
+        call_id=uuid4(),
+        project_id=uuid4(),
+    )
     recorder = CallRecorder(ctx, sample_rate=8000)
     with patch.object(CallRecorder, "_set_status", AsyncMock()) as set_status:
         await run_test(

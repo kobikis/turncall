@@ -198,6 +198,8 @@ async def test_the_handoff_is_prepared_before_the_switch_is_committed():
                 mcp_manager=None,
                 tool_mocks=None,
                 is_eval=False,
+                records=True,
+                has_database=True,
             ),
         )
         await registered["handoff_to_agent"](
@@ -322,6 +324,8 @@ async def _run_handoff_tool() -> None:
             mcp_manager=None,
             tool_mocks=None,
             is_eval=False,
+            records=True,
+            has_database=True,
         ),
     )
     await registered["handoff_to_agent"](

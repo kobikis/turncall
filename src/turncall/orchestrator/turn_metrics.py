@@ -132,6 +132,6 @@ async def store_call_event(
 def turn_metrics_observers(call_context: CallContext) -> list[UserBotLatencyObserver]:
     """The recorder's observer for a live call; nothing for an eval, which has
     no call row to hang the records off (ADR-0018)."""
-    if call_context.is_eval:
+    if not call_context.records:
         return []
     return [TurnMetricsRecorder(call_context).observer]

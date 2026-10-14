@@ -29,7 +29,9 @@ def _settings():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_forwards_kb_and_transport_options():
-    ctx = SimpleNamespace(agent_id="a1", project_id="p1", is_eval=False)
+    ctx = SimpleNamespace(
+        agent_id="a1", project_id="p1", is_eval=False, records=True, has_database=True
+    )
     pipeline = MagicMock()
     pipeline.processors_with_metrics.return_value = []  # no LLM proc -> skip tools
 
@@ -70,7 +72,9 @@ async def test_forwards_kb_and_transport_options():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_registers_static_plus_mcp_tools():
-    ctx = SimpleNamespace(agent_id="a1", project_id="p1", is_eval=False)
+    ctx = SimpleNamespace(
+        agent_id="a1", project_id="p1", is_eval=False, records=True, has_database=True
+    )
 
     class FakeLLM:
         pass
@@ -123,7 +127,9 @@ async def test_a_build_that_raises_fails_the_call_and_still_raises():
     """A provider SDK refusing an empty key raises at construction (cascade's
     OpenAI LLM does). No CallSession exists to finalize it, so the builder does,
     for every transport — then lets the caller see the error too."""
-    ctx = SimpleNamespace(agent_id="a1", project_id="p1", is_eval=False)
+    ctx = SimpleNamespace(
+        agent_id="a1", project_id="p1", is_eval=False, records=True, has_database=True
+    )
     boom = RuntimeError("Missing credentials")
 
     with (
@@ -153,7 +159,9 @@ async def test_a_build_that_raises_fails_the_call_and_still_raises():
 async def test_a_provider_with_no_key_is_named_before_anything_is_built():
     """Without this the OpenAI SDK said "Missing credentials" at build, or
     Deepgram answered 401 mid-call — neither saying which key to add."""
-    ctx = SimpleNamespace(agent_id="a1", project_id="p1", is_eval=False)
+    ctx = SimpleNamespace(
+        agent_id="a1", project_id="p1", is_eval=False, records=True, has_database=True
+    )
     with (
         patch.object(pipeline_builder, "create_pipeline") as cp,
         patch.object(
@@ -183,7 +191,9 @@ async def test_a_provider_with_no_key_is_named_before_anything_is_built():
 @pytest.mark.asyncio
 async def test_an_eval_does_not_need_the_speech_keys():
     """Text mode never opens STT/TTS; a run must not start needing them."""
-    ctx = SimpleNamespace(agent_id="a1", project_id="p1", is_eval=True)
+    ctx = SimpleNamespace(
+        agent_id="a1", project_id="p1", is_eval=True, records=False, has_database=True
+    )
     pipeline = MagicMock()
     pipeline.processors_with_metrics.return_value = []
     with (

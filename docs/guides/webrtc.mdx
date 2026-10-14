@@ -64,6 +64,28 @@ curl -X PATCH http://localhost:8090/v1/webrtc/connect \
   -d '{"candidate": "...", "sdpMid": "0", "sdpMLineIndex": 0}'
 ```
 
+## Behind NAT: a TURN relay
+
+TurnCall's side of the call gathers its candidates with public STUN by
+default, which works when the server has a public address. Behind NAT — a
+Kubernetes pod, or a Cloudflare Container, which takes no inbound UDP at all —
+the browser can connect and still hear nothing. Give it a TURN relay with
+`WEBRTC_ICE_SERVERS`, as JSON in the browser's `RTCIceServer` shape:
+
+```bash
+WEBRTC_ICE_SERVERS='[{"urls": "turns:turn.cloudflare.com:443?transport=tcp",
+                      "username": "...", "credential": "..."}]'
+```
+
+Only the first TURN entry is used. TURN over TLS on port 443 is the one that
+gets out of the most networks.
+
+## The greeting
+
+The agent's `first_message` is spoken once the browser's peer connection is
+up, not when the pipeline starts: audio written before the connection is
+dropped, so a greeting that beat ICE and DTLS used to play to nobody.
+
 ## Dynamic Routing
 
 Pass `server_url` in `requestData` for pre-call initialization:

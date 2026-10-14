@@ -54,6 +54,8 @@ async def _call(name: str, builtin_result: str, *, is_eval: bool = False):
         session_factory=AsyncMock(),
         tool_mocks=None,
         is_eval=is_eval,
+        records=not is_eval,
+        has_database=True,
     )
     llm = _LLM()
     with (
@@ -145,6 +147,8 @@ async def test_a_barge_in_cannot_split_the_record_from_the_end(via_gate):
         session_factory=AsyncMock(),
         tool_mocks=None,
         is_eval=False,
+        records=True,
+        has_database=True,
     )
     with (
         patch.object(tool_bridge, "_execute_builtin", new=AsyncMock(return_value=OK)),

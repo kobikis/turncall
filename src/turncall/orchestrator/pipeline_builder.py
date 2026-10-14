@@ -43,8 +43,11 @@ async def load_call_credentials(
     """Every key this call can resolve, read fresh per call (ADR-0020).
 
     Read at build rather than cached, so a credential written or deleted
-    between two calls is what the next one runs on, with no restart.
+    between two calls is what the next one runs on, with no restart. With no
+    database (the demo) there is no project either: the platform's keys alone.
     """
+    if session_factory is None:
+        return Credentials.from_settings(settings)
     async with session_factory() as session:
         return await for_project(session, project_id, settings)
 
@@ -89,6 +92,10 @@ async def _kb_attachments(
         load_inline_kb_attachments,
     )
 
+    if not call_context.has_database:
+        # Nothing to resolve a knowledge base against (the demo, which refuses
+        # an agent naming one before any call).
+        return []
     if call_context.agent_id == DYNAMIC_AGENT_ID:
         return await load_inline_kb_attachments(
             session_factory, call_context.project_id, config.knowledge_bases

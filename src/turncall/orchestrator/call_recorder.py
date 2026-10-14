@@ -92,7 +92,7 @@ class CallRecorder(AudioBufferProcessor):
         num_channels: int,
     ) -> None:
         self._flushed = True
-        if self._call_context.is_eval:
+        if not self._call_context.records:
             # An eval has no `calls` row (ADR-0018), so the WAV would be a file
             # nothing points at and the `recording.ready` event a foreign-key
             # error on every iteration. The processor itself stays in the
@@ -152,7 +152,7 @@ class CallRecorder(AudioBufferProcessor):
         )
 
     async def _set_status(self, status: RecordingStatus) -> None:
-        if self._call_context.is_eval:
+        if not self._call_context.records:
             return
         try:
             async with self._call_context.session_factory() as session:

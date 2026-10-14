@@ -4,7 +4,14 @@ from enum import StrEnum
 from functools import lru_cache
 
 from dotenv import load_dotenv
-from pydantic import Field, PostgresDsn, RedisDsn, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PostgresDsn,
+    RedisDsn,
+    field_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from turncall.domain.enums import EvalModelProvider
@@ -311,6 +318,59 @@ class ServerSettings(BaseSettings):
     public_base_url: str | None = Field(default=None, alias="PUBLIC_BASE_URL")
 
 
+class IceServer(BaseModel):
+    """One ICE server, in the browser's RTCIceServer shape."""
+
+    model_config = ConfigDict(frozen=True)
+
+    urls: str | list[str]
+    username: str | None = None
+    credential: str | None = None
+
+
+DEFAULT_ICE_SERVERS = (
+    IceServer(urls="stun:stun.l.google.com:19302"),
+    IceServer(urls="stun:stun1.l.google.com:19302"),
+)
+
+
+class WebRTCSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="")
+
+    # The ICE servers TurnCall's side of a WebRTC call gathers candidates
+    # with, as JSON: `[{"urls": "turns:turn.example.com:443?transport=tcp",
+    # "username": "...", "credential": "..."}]`. Public STUN by default, which
+    # works when the server has a public address. Behind NAT (a Kubernetes
+    # pod, a Cloudflare Container that takes no inbound UDP at all) it needs a
+    # TURN relay, or the browser connects and hears nothing. aiortc uses the
+    # first TURN entry only.
+    ice_servers: list[IceServer] = Field(
+        default_factory=lambda: list(DEFAULT_ICE_SERVERS), alias="WEBRTC_ICE_SERVERS"
+    )
+
+
+class DemoSettings(BaseSettings):
+    """`turncall-demo`, the website's talk-to-an-agent server (`turncall.demo`).
+
+    No database, no Redis, no project: the agents come from a file and the
+    keys from the environment, so it can run where the platform cannot.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="DEMO_")
+
+    # {"<name>": <agent config, as POST /v1/agents takes it>, ...}
+    agents_file: str = "demo-agents.json"
+    # Ceiling on any agent's max_call_duration_seconds: every minute of a
+    # public demo is the deployment's provider bill.
+    max_call_seconds: int = Field(default=180, ge=10)
+    # Calls one process holds at once; the rest are a 429. One per process is
+    # what the website runs (a container per visitor).
+    max_calls: int = Field(default=1, ge=1)
+    # End the process once its calls are over, so a container started for one
+    # visitor stops billing the moment their call ends.
+    exit_after_call: bool = False
+
+
 class WebhookSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="")
 
@@ -477,6 +537,8 @@ class Settings(BaseSettings):
     whatsapp: WhatsAppSettings = Field(default_factory=WhatsAppSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
+    webrtc: WebRTCSettings = Field(default_factory=WebRTCSettings)
+    demo: DemoSettings = Field(default_factory=DemoSettings)
     webhook: WebhookSettings = Field(default_factory=WebhookSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     byom: BYOMSettings = Field(default_factory=BYOMSettings)

@@ -105,6 +105,7 @@ def test_the_transcript_taps_stay_silent_for_an_eval() -> None:
 
     context = MagicMock()
     context.is_eval = True
+    context.records = False
 
     async def _never() -> None:  # pragma: no cover - must not be scheduled
         raise AssertionError("an eval must not write call-scoped rows")
@@ -132,6 +133,7 @@ async def test_an_eval_writes_no_recording_and_no_recording_event() -> None:
 
     context = MagicMock()
     context.is_eval = True
+    context.records = False
     context.call_id = uuid4()
     context.session_factory = AsyncMock()
 

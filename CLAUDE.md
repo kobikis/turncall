@@ -60,6 +60,7 @@ make format           # ruff format
 make migrate          # alembic upgrade head (runs in docker; make docker-up first)
 make docker-up        # Postgres + Redis + TurnCall API + LocalStack
 make load-test        # concurrent calls per pod on stub providers (#200; docs/guides/capacity.mdx)
+turncall-demo         # the website demo: agents from a file over WebRTC, no DB/Redis (docs/guides/website-demo.mdx)
 ```
 
 ## Environment Variables
@@ -99,6 +100,8 @@ make load-test        # concurrent calls per pod on stub providers (#200; docs/g
 | `AWS_AGENT_CREDENTIALS_ENABLED` | No | Allow per-agent **static** AWS keys in the agent config (default `false`). They persist in `config_blob`, which is unencrypted JSONB, so agents supplying them are rejected at create unless this is on. The unrestricted path is `config.aws.role_arn`, which stores no durable secret. **Agent config only**: an `aws` project credential is encrypted and not gated by it, so `false` means "no static AWS keys *in agent config*", not "none on this deployment". See `adr/0016`, `adr/0020` |
 | `CREDENTIAL_ENCRYPTION_KEY` | With credentials | Fernet key for project credentials (ADR-0020). Storing one without it is an error, and startup **fails** (API and eval worker) when credentials exist and it is unset or wrong. **Set once, never rotate** — rotating orphans every stored credential |
 | `ASTERISK_ARI_URL` | No | The platform's Asterisk, over ARI (#209): `http(s)://host:8088`. With `ASTERISK_ARI_USERNAME` / `ASTERISK_ARI_PASSWORD` (ari.conf), `ASTERISK_ARI_APP` (`turncall`, the `Stasis()` app), `ASTERISK_MEDIA_CONNECTION` (`turncall`, the websocket_client.conf entry) and `ASTERISK_TRANSFER_CONTEXT` (`turncall-transfer`). A project's own `asterisk` credential replaces it for that project. `ASTERISK_EDGE_ENABLED` (`true`): on in exactly one replica — see "Carriers" |
+| `WEBRTC_ICE_SERVERS` | No | ICE servers our side of a WebRTC call gathers with, JSON in `RTCIceServer` shape (`[{"urls": "turns:...:443?transport=tcp", "username", "credential"}]`). Public STUN by default; behind NAT (a pod, a Cloudflare Container — no inbound UDP) a browser connects and hears nothing without a TURN relay. aiortc uses the first TURN entry only |
+| `DEMO_AGENTS_FILE` | Demo | `turncall-demo`'s agents (`{"<name>": <agent config>}`), with `DEMO_MAX_CALL_SECONDS` (`180`, caps every agent), `DEMO_MAX_CALLS` (`1` per process, then `429`) and `DEMO_EXIT_AFTER_CALL` (`false`; exit when the last call ends, for a container per visitor). See "Website demo" |
 | `PUBLIC_BASE_URL` | No | Public https base URL (e.g. `https://abc.ngrok.io`) for Twilio callbacks issued without an inbound request — warm-transfer briefing + no-answer fallback. Cold transfer works without it. See `adr/0009` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OTLP collector endpoint for OpenTelemetry traces (e.g. `http://localhost:4318`). Required for tracing in production (it self-disables without one). `OTEL_EXPORTER_OTLP_PROTOCOL` (`http/protobuf`\|`grpc`), `OTEL_EXPORTER_OTLP_HEADERS` also honored. See `adr/0010` |
 | `PIPECAT_VAD_CONFIDENCE_THRESHOLD` | No | Silero VAD confidence (default `0.6`). Pairs with the agent's `silence_timeout_ms`, which sets the VAD stop window when Smart Turn is off (with it on, the model decides the turn and VAD uses Pipecat's 0.2s — the two waits are serial, so charging both cost 1.8s a turn) |
@@ -621,6 +624,37 @@ DELETE /v1/ambience-sounds/{id}       # 409 naming the agents while any names it
 
 Key files: `services/ambience_ingest.py`, `api/v1/ambience.py`,
 `orchestrator/ambience.py`, `storage/repositories/ambience_repo.py`.
+
+## Website demo
+
+`turncall-demo` (`turncall/demo/`) runs agents from a JSON file over WebRTC with
+**no database, Redis, project or carrier** — the website's talk-to-an-agent
+button, a container per visitor. Same image, its own entrypoint; it speaks
+pipecat's SmallWebRTC signaling on `POST`/`PATCH /connect` (`requestData.demo`
+names the agent), plus `/agents`, `/ready` (503 busy or draining) and `/live`.
+It authenticates nothing: what fronts it decides who calls.
+
+- **`CallContext.records`** is what every call-scoped side effect asks — status,
+  call events, transcript taps, tool invocations, the recording, turn metrics,
+  the control channel, `call.ended`. False for an eval and for a call whose
+  `session_factory` is None (`has_database`). `is_eval` is kept for what an eval
+  does differently on purpose: the RTVI bridge, no hangup gate, no ambience, no
+  missing-key check. A fake `CallContext` in a test needs both.
+- With no database the keys are the platform's (`Credentials.from_settings`),
+  knowledge bases are skipped, and `end_call` only asks for the goodbye
+  (`tool_bridge._builtin_without_a_platform`) — the hangup gate ends the call as
+  on any other. The other built-ins are refused.
+- `demo/agents.py` refuses at boot, naming the agent and field, an agent with a
+  tool other than `end_call`, a webhook tool, MCP, KBs, ambience or an avatar;
+  `max_call_duration_seconds` is capped at `DEMO_MAX_CALL_SECONDS`.
+- Calls are counted (`drain.live_call`) and SIGTERM drains as in the API.
+- `tests/integration/test_demo_call.py`: an aiortc caller on the harness stubs,
+  with DATABASE_URL and REDIS_URL pointing at nothing; fails on any error a
+  `turncall` logger records.
+
+A WebRTC call's first message waits for the peer (`CallSession`, on
+`on_client_connected`): pipecat drops audio written before the connection is
+up, so a greeting that beat ICE + DTLS played to nobody.
 
 ## Pre-Call Initialization (call-init)
 

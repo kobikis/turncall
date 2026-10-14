@@ -49,7 +49,7 @@ def _session(
     # these tests pass against a guard that disarmed itself on every call.
     pipeline.processors = [other, aggregator]
 
-    context = MagicMock(is_eval=is_eval)
+    context = MagicMock(is_eval=is_eval, records=not is_eval, has_database=True)
     context.call_id = uuid4()
 
     session = CallSession(

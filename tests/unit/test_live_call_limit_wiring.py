@@ -22,8 +22,10 @@ pytestmark = pytest.mark.unit
 
 SRC = Path(turncall.__file__).parent
 ADMISSIONS = {"admit_inbound_call", "admit_live_call", "admit_outbound_call"}
-# An eval is not a call: no row, no slot (ADR-0018).
-NOT_A_CALL = ("evals/",)
+# An eval is not a call: no row, no slot (ADR-0018). A website demo call has
+# no project to count it against, and no Redis: its server caps itself
+# (`DEMO_MAX_CALLS`).
+NOT_A_CALL = ("evals/", "demo/")
 
 
 def _calls(tree: ast.AST) -> list[ast.Call]:

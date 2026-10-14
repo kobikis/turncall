@@ -116,6 +116,8 @@ async def _execute_builtin(
     call_context: CallContext,
 ) -> str:
     """Execute a built-in tool using shared call_control primitives."""
+    if not call_context.has_database:
+        return _builtin_without_a_platform(function_name)
     async with call_context.session_factory() as session:
         if function_name == "end_call":
             result = await call_control.begin_assistant_end(
@@ -175,6 +177,26 @@ async def _execute_builtin(
         )
 
 
+def _builtin_without_a_platform(function_name: str) -> str:
+    """A built-in on a call with no database behind it — the website demo.
+
+    `end_call` has nothing to record, so it only asks for the goodbye, and the
+    hangup gate ends the call after it as on any call. The others act on a
+    call row, a carrier or another agent, none of which exist here.
+    """
+    if function_name == "end_call":
+        result = call_control.ControlResult(
+            success=True, message=call_control.ASSISTANT_END_MESSAGE
+        )
+    else:
+        result = call_control.ControlResult(
+            success=False, message=f"{function_name} is not available on this call."
+        )
+    return json.dumps(
+        {"success": result.success, "message": result.message, "details": None}
+    )
+
+
 def recorded_tool(name: str, handler: Any, call_context: CallContext) -> Any:
     """A tool registered outside `register_tools` — `query_knowledge` — logged
     and recorded as one of them: a `tool_invocations` row and `tool.result`,
@@ -203,8 +225,8 @@ def recorded_tool(name: str, handler: Any, call_context: CallContext) -> Any:
             if call_context.tool_mocks is not None:
                 # A `live` eval: the search really ran, and the run says so.
                 call_context.tool_mocks.record(name, args, text, outcome=EXECUTED)
-            if call_context.is_eval:
-                return  # no `calls` row behind an eval (ADR-0018)
+            if not call_context.records:
+                return  # no `calls` row behind an eval (ADR-0018) or the demo
             latency_ms = int((time.perf_counter() - started) * 1000)
             _spawn(_log_tool_result(call_context, name, args, text, latency_ms))
 
@@ -650,7 +672,7 @@ def _register_single_tool(
             call_context.tool_mocks.record(
                 function_name, args, result, outcome=EXECUTED
             )
-        if not call_context.is_eval:
+        if call_context.records:
             # No `calls` row behind an eval (ADR-0018), so
             # `tool_invocations.call_id` has nothing to point at and the write
             # is a foreign-key error every time. The iteration's tool record is

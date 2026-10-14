@@ -53,7 +53,7 @@ def _spawn_unless_eval(call_context: CallContext, coro) -> None:  # type: ignore
     never happened. The run row and the harness's own transcript are the eval's
     record. Closing the coroutine keeps it from warning as never awaited.
     """
-    if call_context.is_eval:
+    if not call_context.records:
         coro.close()
         return
     _spawn(coro)
