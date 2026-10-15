@@ -765,7 +765,11 @@ def _create_tts_service(
     config: AgentConfig, credentials: Credentials, **kwargs: Any
 ) -> Any:
     """Create TTS service. Supports deepgram, openai, elevenlabs, and cartesia.
-    `kwargs` reach pipecat's `TTSService` as they are."""
+    `kwargs` reach pipecat's `TTSService` as they are, beside the filter that
+    keeps the model's stage directions unspoken."""
+    from turncall.orchestrator.stage_directions import StageDirectionFilter
+
+    kwargs = {"text_filters": [StageDirectionFilter()], **kwargs}
     provider = config.tts.provider
 
     speed = {"speed": config.tts.speed} if config.tts.speed != 1.0 else {}
