@@ -7,6 +7,12 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**Redaction.** A project can have its callers' phone numbers, emails, card
+numbers and more replaced in the transcript, the call's event log and every
+webhook, before they are stored or sent. The agent still hears them during
+the call. Detection runs locally, and nothing changes until an admin turns it
+on. See [Redaction](/guides/redaction).
+
 **A website demo server.** `turncall-demo` runs agents from a JSON file over
 WebRTC with no database, Redis or project — the real voice pipeline behind a
 "talk to an agent" button, in a container per visitor. See

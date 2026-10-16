@@ -330,7 +330,8 @@ async def test_none_in_an_eval(stored: AsyncMock) -> None:
 async def test_never_dispatched_as_a_webhook() -> None:
     """Stored through the call-event repo, and nothing else."""
     call_context = _call_context()
-    session = MagicMock(commit=AsyncMock())
+    # `get`: the exit point reads the project's redaction (#313); none here.
+    session = MagicMock(commit=AsyncMock(), get=AsyncMock(return_value=None))
     call_context.session_factory.return_value.__aenter__ = AsyncMock(
         return_value=session
     )

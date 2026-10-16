@@ -1,6 +1,7 @@
 # ADR-0024: The compliance kit: redaction, retention and an audit log in the engine
 
-**Status:** Accepted (not yet built)
+**Status:** Accepted (redaction of the transcript and call events built in
+#313; the rest of redaction in #314; retention and the audit log not yet)
 **Date:** 2026-10-16
 **Relates to:** ADR-0005 (call recording), ADR-0010 (OTel tracing), ADR-0011
 (project deletion), ADR-0013 (takeaways), ADR-0015 (open-core licensing).
@@ -73,7 +74,12 @@ certification.
 
 ## Consequences
 
-- The image gains Presidio and a small spaCy model (tens of MB, not hundreds).
+- The image gains Presidio and a small spaCy model: ~74 MB of the pull, but
+  ~255 MB unpacked (spaCy's compiled code, phonenumbers' geodata, blis, thinc,
+  the model), about 7% of the image. *Corrected 2026-10-16 (#313): this said
+  "tens of MB, not hundreds", which holds only for the compressed pull.* A
+  process holding the loaded detector uses ~200 MB more memory, and only a
+  process that has redacted something holds it.
 - Redaction runs before storage and before webhook dispatch, so a webhook
   consumer never sees what was redacted; that has to be stated in the webhook
   docs.

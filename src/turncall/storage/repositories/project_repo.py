@@ -48,6 +48,25 @@ async def set_limits(
     return row
 
 
+async def set_redaction(
+    session: AsyncSession,
+    project_id: UUID,
+    *,
+    enabled: bool,
+    entities: list[str] | None,
+) -> ProjectRow | None:
+    """Replace a live project's redaction (#313); `entities` None = the
+    platform's default list."""
+    row = await get_project_by_id(session, project_id)
+    if row is None:
+        return None
+    row.redaction_enabled = enabled
+    row.redaction_entities = entities
+    await session.flush()
+    await session.refresh(row)
+    return row
+
+
 async def list_projects(
     session: AsyncSession,
     *,

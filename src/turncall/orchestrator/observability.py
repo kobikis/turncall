@@ -28,6 +28,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from turncall.domain.enums import CallEventType
 from turncall.orchestrator.stage_directions import strip_voice_tags
+from turncall.services import live_transcript
 
 if TYPE_CHECKING:
     from turncall.orchestrator.pipeline_factory import CallContext
@@ -83,7 +84,9 @@ class TranscriptTapProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
     async def _log_transcript(self, text: str, role: str) -> None:
-
+        # The raw line, before the exit point redacts the stored one: what the
+        # briefing and post-call analysis read (services/live_transcript).
+        live_transcript.said(self._call_context.call_id, role, text)
         payload = {
             "text": text,
             "role": role,
@@ -185,6 +188,7 @@ class AssistantTranscriptTapProcessor(FrameProcessor):
             "text": strip_voice_tags(text),
             "role": "assistant",
         }
+        live_transcript.said(self._call_context.call_id, "assistant", payload["text"])
         model = self._resolved_model()
         if model:
             payload["model"] = model

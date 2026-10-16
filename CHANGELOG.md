@@ -13,6 +13,32 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Redaction** (#313, ADR-0024). A project can have PII replaced in
+  everything it stores and sends about its calls: `PUT
+  /v1/projects/{id}/redaction` (admin key) with `{"enabled": true}` and,
+  optionally, `entities` — Presidio's type names, `PHONE_NUMBER`,
+  `EMAIL_ADDRESS`, `CREDIT_CARD`, `US_SSN` and `IBAN_CODE` by default,
+  `PERSON` and the rest opt-in. A detected value becomes `<ENTITY_TYPE>` in the
+  transcript, on the call's event log and in every webhook payload, before it
+  is stored or sent, so a subscriber never sees the original. With
+  `PHONE_NUMBER` chosen, the payloads' `from_number`, `to_number`,
+  `customer_number` (and `turncall_number`, `target_number`, `number`) are
+  replaced too; the call record keeps the number, so `GET /v1/calls/{id}`,
+  routing, the suppression list and campaigns are unaffected. The agent is
+  never redacted: the model hears the caller's words, a warm transfer's
+  operator is briefed on them, and post-call analysis and takeaways read them.
+  Their results are redacted on the way out in `call.ended`; the copy stored
+  on the call (`analysis` on the call read and `GET /v1/calls/{id}/analysis`),
+  tool-invocation rows, SMS and chat messages, logs and spans are not yet
+  (#314). Detection is local —
+  Presidio over spaCy's small English model, no text leaves the deployment —
+  and runs off the event loop; a project with redaction off never loads it.
+  Off for every project until turned on; a change applies from the next
+  event, and nothing stored before it is rewritten. Recall is the detector's:
+  digits spoken as words ("four one five…") are not caught, so an STT that
+  does not format numbers (Deepgram's `smart_format` does) leaves them.
+  Migration `d7f2a4c9e5b8`. See the Redaction guide.
+
 - **Helm chart** (#210), in its own repo,
   [turncall-charts](https://github.com/kobikis/turncall-charts). Runs the API, the eval worker and
   the campaign worker against your own Postgres and Redis, with migrations as a
@@ -93,6 +119,21 @@ and is not part of this repository's history.
 
 ### Changed
 
+- **The image carries a PII detector** (#313): Presidio, spaCy and its small
+  English model (`en_core_web_sm`, pinned in `pyproject.toml`), ~255 MB
+  unpacked and ~74 MB of the pull. With it, numpy resolves to 2.4.x
+  (presidio-analyzer caps it below 2.5) and `presidio-anonymizer` is pinned to
+  2.2.362 (2.2.364 caps cryptography below 49). Neither of its runtime
+  downloads runs: a missing model is an error, not a pip install, and the
+  image sets `TLDEXTRACT_PUBLIC_SUFFIX_LIST_URLS=""` so the email recognizer
+  uses its bundled suffix list instead of fetching one.
+- **The warm-transfer briefing and post-call analysis read the conversation
+  from memory** (#313). The process that ran the call keeps what was said for
+  five minutes after it ends, and the briefing summary, analysis and takeaways
+  read that rather than the stored transcript, so redaction never reaches
+  them. When another replica handles the carrier's callback or the call's end,
+  they fall back to the stored transcript, as before — redacted, if the
+  project redacts.
 - **A production WebRTC `server_url` may be a Kubernetes Service**
   (`http://<name>.<namespace>.svc[.cluster.local]`). It had to be HTTPS, which
   refused a call-init server in the same cluster — plain HTTP there never

@@ -42,6 +42,10 @@ class _Db:
         # The exit point sends inside a SAVEPOINT; a no-op one here.
         return self
 
+    async def get(self, *_):
+        # The exit point reads the project's redaction (#313): no project.
+        return None
+
     async def commit(self):
         self.committed = True
 
