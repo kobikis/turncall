@@ -30,6 +30,11 @@ keeps the raw number (routing, the suppression list and campaigns read it).
 None of that needs the detector: a payload with no text in it is redacted
 right here, synchronously, and never reaches it.
 
+Those key rules are for TurnCall's own payloads. JSON whose keys the user
+chose (a tool's arguments and result, a takeaway) goes through `redact_json`,
+which analyses every string whatever its key; a lone string, through
+`redact_text` (#314).
+
 **The detector** is Presidio with spaCy's small English model, run locally so
 no text goes to a vendor to be redacted. It runs in a worker process of its
 own (`_Engine`), not a thread: Presidio is mostly Python and holds the GIL, so
@@ -328,6 +333,35 @@ async def redact_payload(
         keep=keep,
         redact=lambda text: replaced.get(text, WITHHELD),
     )
+
+
+async def redact_json(value: Any, policy: RedactionPolicy) -> Any:
+    """Free JSON (`value`: any JSON value) with the policy's entity types
+    replaced: a tool's arguments or result, a takeaway (#314).
+
+    Unlike `redact_payload`, nothing is skipped by its key: the keys are the
+    user's, not TurnCall's envelope, so a field named `customer_id`,
+    `callback_url` or `number` may hold what the caller said, and a phone
+    number in it is the detector's to find rather than replaced whole by its
+    field's name. Keys themselves are not analysed. UUIDs and ISO-8601
+    timestamps are skipped by their shape, as everywhere. The same worker,
+    the same failure mode (withheld, never raw), and never mutates `value`.
+    """
+    texts: list[str] = []
+
+    def collect(text: str) -> str:
+        texts.append(text)
+        return text
+
+    _deep(value, collect)
+    replaced = await _detect(texts, policy.entities) if texts else {}
+    return _deep(value, lambda text: replaced.get(text, WITHHELD))
+
+
+async def redact_text(text: str, policy: RedactionPolicy) -> str:
+    """One plain string redacted: an SMS row's content, a chat message."""
+    redacted: str = await redact_json(text, policy)
+    return redacted
 
 
 async def _detect(texts: list[str], entities: tuple[str, ...]) -> dict[str, str]:
