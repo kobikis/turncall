@@ -44,6 +44,14 @@ and is not part of this repository's history.
   digits spoken as words ("four one five…") are not caught, so an STT that
   does not format numbers (Deepgram's `smart_format` does) leaves them.
   Migration `d7f2a4c9e5b8`. See the Redaction guide.
+- **Redaction: tool invocations** (#314). With redaction on, a tool call's
+  arguments and result are stored redacted on its `tool_invocations` row, so
+  `GET /v1/tools/invocations/{call_id}`, a chat session's tool invocations
+  and scenarios drafted from a call or session read back redacted. The fields
+  are the tool's own, so every value is analysed whatever it is called (a
+  `customer_id` holding an email is redacted); the same holds for takeaway
+  and `structured_data` fields in the stored analysis. The tool's webhook is
+  still sent the raw arguments and the model still reads the raw result.
 
 - **Helm chart** (#210), in its own repo,
   [turncall-charts](https://github.com/kobikis/turncall-charts). Runs the API, the eval worker and

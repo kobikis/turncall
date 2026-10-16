@@ -255,7 +255,10 @@ async def _run_post_call(
 
             # Store analysis on call record. Redacted first, for a project that
             # redacts: the call read serves it, and analysis read the raw
-            # conversation (#313; the rest of #314's surfaces are #314's).
+            # conversation (#313). The top-level keys are ours (`model`,
+            # `analyzed_at` are skipped); everything under them is analysed
+            # whatever its key, so `takeaways` and `structured_data`, whose
+            # keys are the user's, are redacted in full (#314).
             # Before the session, as every redaction wait is (events/emit).
             if policy is not None:
                 analysis_dict = await redaction.redact_payload(analysis_dict, policy)

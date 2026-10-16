@@ -169,7 +169,9 @@ async def test_post_call_analysis_and_takeaways_read_the_raw_conversation(
     async def analysis_llm(_llm: Any, messages: list[dict[str, str]], **_: Any) -> Any:
         prompts.append(messages[-1]["content"])
         if "Takeaway: callback" in messages[-1]["content"]:
-            return SimpleNamespace(text=json.dumps({"number": NUMBER}))
+            return SimpleNamespace(
+                text=json.dumps({"number": NUMBER, "customer_id": EMAIL})
+            )
         return SimpleNamespace(text=json.dumps({"summary": f"Call back on {NUMBER}."}))
 
     monkeypatch.setattr(call_analysis, "complete_text", analysis_llm)
@@ -184,7 +186,10 @@ async def test_post_call_analysis_and_takeaways_read_the_raw_conversation(
                 "name": "callback",
                 "schema": {
                     "type": "object",
-                    "properties": {"number": {"type": "string"}},
+                    "properties": {
+                        "number": {"type": "string"},
+                        "customer_id": {"type": "string"},
+                    },
                     "required": ["number"],
                 },
             },
@@ -208,19 +213,106 @@ async def test_post_call_analysis_and_takeaways_read_the_raw_conversation(
     assert analysis and takeaways
     for prompt in analysis + takeaways:
         assert NUMBER in prompt and EMAIL in prompt, prompt
+    # A takeaway's fields are the user's: one named `customer_id` holds what
+    # the caller said, and is analysed like the rest (#314).
+    extracted = {"number": "<PHONE_NUMBER>", "customer_id": "<EMAIL_ADDRESS>"}
     payload = ended["payload"]
     assert payload["summary"] == "Call back on <PHONE_NUMBER>."
-    assert payload["analysis"]["takeaways"]["callback"]["result"] == {
-        "number": "<PHONE_NUMBER>"
-    }
+    assert payload["analysis"]["takeaways"]["callback"]["result"] == extracted
     # Stored redacted on the call, so the call read serves no more than the
     # transcript does (#327 review, 4).
     assert record["analysis"]["summary"] == "Call back on <PHONE_NUMBER>."
-    assert record["analysis"]["takeaways"]["callback"]["result"] == {
-        "number": "<PHONE_NUMBER>"
-    }
+    assert record["analysis"]["takeaways"]["callback"]["result"] == extracted
     assert _raw_in(record["analysis"]) == []
     assert _raw_in(stored) == []
+
+
+async def test_tool_invocations_are_stored_redacted_but_the_tool_got_them_raw(
+    monkeypatch,
+) -> None:
+    """The tool's webhook is part of the live call: it is sent what the model
+    passed, the caller's number and email included, and the model is handed
+    its answer as it was. The invocation record outlives the call, so it is
+    stored redacted, whatever the tool named its fields (#314)."""
+    import asyncio
+
+    from aiohttp import web
+
+    arguments = {"callback": NUMBER, "customer_id": EMAIL}
+    answer = {"booked": True, "confirmation": f"We will email {EMAIL}."}
+    received: list[dict[str, Any]] = []
+
+    async def book(request: web.Request) -> web.Response:
+        received.append(await request.json())
+        return web.json_response(answer)
+
+    tool_app = web.Application()
+    tool_app.router.add_post("/book", book)
+    runner = web.AppRunner(tool_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+
+    given: list[Given] = []
+    script = Script(
+        caller=(SAID,),
+        agent=(
+            ToolCall("book_callback", arguments),
+            _remembering(given, ("Booked.", ToolCall("end_call"))),
+            "Goodbye!",
+        ),
+    )
+    agent = {
+        **AGENT,
+        "tools": [
+            END_CALL,
+            {
+                "name": "book_callback",
+                "description": "Book a callback",
+                "parameters_schema": {"type": "object", "properties": {}},
+                "webhook_url": f"http://127.0.0.1:{port}/book",
+            },
+        ],
+    }
+    try:
+        async with run_app(
+            script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+        ) as app:
+            await _redact(app, enabled=True)
+            call, _ = await _call(app, agent)
+            # Recorded off the tool's critical path: wait for both rows.
+            for _ in range(100):
+                read = await app.api.get(f"/v1/tools/invocations/{call.call_id}")
+                rows = read.json()["data"]
+                if len(rows) >= 2:
+                    break
+                await asyncio.sleep(0.1)
+    finally:
+        await runner.cleanup()
+
+    # The live call: the webhook got the arguments, the model the answer.
+    assert [r["arguments"] for r in received] == [arguments]
+    tool_said = " ".join(
+        str(m.get("content"))
+        for context in given
+        for m in context
+        if m["role"] == "tool"
+    )
+    assert EMAIL in tool_said
+
+    # The record: redacted, `customer_id` included.
+    [booked] = [r for r in rows if r["tool_name"] == "book_callback"]
+    assert booked["status"] == "succeeded"
+    assert booked["input_json"] == {
+        "callback": "<PHONE_NUMBER>",
+        "customer_id": "<EMAIL_ADDRESS>",
+    }
+    assert booked["output_json"] == {
+        "booked": True,
+        "confirmation": "We will email <EMAIL_ADDRESS>.",
+    }
+    assert _raw_in(rows) == []
 
 
 async def test_the_warm_transfer_operator_is_briefed_on_what_was_said(

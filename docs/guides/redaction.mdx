@@ -50,11 +50,12 @@ You can also choose `PERSON`, `LOCATION`, `DATE_TIME`, `ORGANIZATION`, `URL`, `I
 - **The transcript**: `GET /v1/calls/{id}/transcript`, and `transcript` in `call.ended`.
 - **Every call event**: on the event log (`GET /v1/calls/{id}/events`) and in every webhook. That includes tool arguments and results in `tool.result`, and a call's `metadata` in `call.ended`.
 - **The numbers in payloads**: with `PHONE_NUMBER` chosen, `from_number`, `to_number`, `customer_number`, `turncall_number`, `target_number` and `number` are replaced whole. The call record keeps them: `GET /v1/calls/{id}` still shows `from_number`, and routing, the suppression list and campaigns work as before.
-- **Post-call analysis and takeaways**: stored redacted on the call, so `analysis` on `GET /v1/calls/{id}` and `GET /v1/calls/{id}/analysis` match `summary` and `analysis` in `call.ended`.
+- **Post-call analysis and takeaways**: stored redacted on the call, so `analysis` on `GET /v1/calls/{id}` and `GET /v1/calls/{id}/analysis` match `summary` and `analysis` in `call.ended`. A takeaway's fields, and `structured_data`'s, are yours, so every value is analysed whatever its field is called: a field named `customer_id` or `callback_url` is redacted like any other.
+- **Tool invocations**: the arguments (`input_json`) and the result (`output_json`) of every tool call are stored redacted, so `GET /v1/tools/invocations/{call_id}` and a chat session's invocations read back redacted. As with takeaways, the fields are the tool's, and every value is analysed. The status is read from the result before it is redacted. Your tool's webhook still gets the raw arguments during the call, and the model the raw result. A scenario drafted from a call or a session (`POST /v1/eval-scenarios/from-call`, `/from-session`) is built from these records and the transcript, so its arguments and tool mocks are redacted too.
 
 TurnCall's own identifiers are never analysed: ids, timestamps, statuses, provider names (the `from` and `to` of `provider.failover`) and tool names (`tool_name`). With `ORGANIZATION` chosen, "Azure" in a provider name stays as it is.
 
-Not yet redacted: the call record's own `metadata` and numbers (the numbers stay on purpose, see above), tool-invocation records, SMS and chat messages, logs and traces.
+Not yet redacted: the call record's own `metadata` and numbers (the numbers stay on purpose, see above), SMS and chat messages, logs and traces.
 
 Never redacted: call-init and tool webhooks. These are part of the live call, and your own server answers them with the raw values.
 

@@ -260,6 +260,10 @@ curl http://localhost:8090/v1/chat/sessions/SESSION_ID/tool-invocations \
 
 Every row carries both `call_id` and `session_id`, exactly one of them set.
 
+With [redaction](/guides/redaction) on, the arguments and the result are stored
+redacted, every value whatever the field is called. The webhook is still sent
+the raw arguments, and the model still reads the raw result.
+
 <Note>
   Recording is best-effort and runs after the answer goes out, so a database
   hiccup costs you the audit row rather than the caller's reply. Each recorded
