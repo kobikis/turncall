@@ -498,8 +498,8 @@ needs the caller's number to book the appointment, nor what the call itself read
 its behalf afterwards (a warm transfer's briefing, post-call analysis and takeaways read
 the conversation as said; their *outputs* are redacted on the way out). Text only; done
 locally (Presidio), opt-in per project. A redacted value reads `<ENTITY_TYPE>`. Built for
-the transcript and call events at the event exit point (#313); analysis as stored,
-tool-invocation rows, text messages, logs and spans are #314. See ADR-0024.
+the transcript, call events and stored analysis (#313); tool-invocation rows, text
+messages, logs and spans are #314. See ADR-0024.
 _Avoid_: "masking" (reads as display-only), "anonymization" (a stronger legal claim).
 
 **Retention policy**:

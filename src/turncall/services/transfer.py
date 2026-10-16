@@ -110,15 +110,36 @@ async def resolve_briefing_text(
     session: AsyncSession,
     call_id: UUID,
     intent: TransferIntent,
+    *,
+    here: bool = False,
 ) -> str | None:
-    """The text to speak to the operator: static briefing or a live summary."""
+    """The text to speak to the operator: static briefing or a live summary.
+
+    `here`: build it in this process whoever holds the conversation (the
+    holder answering another replica, `briefing_here`).
+    """
     if not intent.briefing_from_summary:
         return intent.briefing_text
 
     # Auto-summary: gather the transcript and run the agent's LLM on the fly.
     from turncall.domain.models import AWSConfig, LLMConfig
+    from turncall.services import live_transcript, redaction
     from turncall.services.llm_text import complete_text
     from turncall.storage.repositories import agent_repo, call_repo
+
+    call = await call_repo.get_call_by_id(session, call_id)
+    if (
+        not here
+        and call is not None
+        and live_transcript.lines(call_id) is None
+        and await redaction.policy_for_project(call.project_id, session=session)
+    ):
+        # The whisper landed on a replica that did not run the call, and the
+        # stored transcript is redacted: the process holding the conversation
+        # builds the briefing (services/live_transcript).
+        answered = await live_transcript.ask_holder(call_id, live_transcript.BRIEFING)
+        if answered is not None and answered.get("text"):
+            return str(answered["text"])
 
     lines = []
     for speaker, said in await _conversation(session, call_id):
@@ -128,7 +149,6 @@ async def resolve_briefing_text(
             lines.append(f"{role}: {text}")
     transcript = "\n".join(lines) or "(no transcript captured)"
 
-    call = await call_repo.get_call_by_id(session, call_id)
     if call is None or call.active_agent_id is None:
         return "The caller is being transferred to you."
     agent = await agent_repo.get_agent_by_id(session, call.active_agent_id)
@@ -158,19 +178,38 @@ async def resolve_briefing_text(
 _BRIEFING_LINES = 200
 
 
+async def briefing_here(body: dict[str, object]) -> dict[str, object]:
+    """Another replica's whisper request to this one, which holds the call's
+    conversation: the briefing text (`live_transcript.BRIEFING`)."""
+    from turncall.services.live_call_channel import ControlRefused
+    from turncall.storage.database import get_session_factory
+
+    call_id = UUID(str(body["call_id"]))
+    intent = await load_transfer_intent(call_id)
+    if intent is None:
+        raise ControlRefused("No transfer in flight for this call")
+    async with get_session_factory()() as session:
+        return {
+            "text": await resolve_briefing_text(session, call_id, intent, here=True)
+        }
+
+
 async def _conversation(session: AsyncSession, call_id: UUID) -> list[tuple[str, str]]:
     """(speaker, text) for the call so far, as said (#313): the operator is
     briefed on the caller's own words, which redaction never reaches. The
-    stored transcript only when this process does not hold the call's
-    conversation (services/live_transcript) — redacted if the project
-    redacts."""
+    stored transcript only when no process holds the call's conversation any
+    more (services/live_transcript) — redacted if the project redacts."""
     from turncall.services import live_transcript
     from turncall.storage.repositories import call_repo
 
     held = live_transcript.lines(call_id)
     if held is not None:
         return [(line.role, line.text) for line in held[:_BRIEFING_LINES]]
-    logger.info("transfer_briefing_from_stored_transcript", call_id=str(call_id))
+    logger.warning(
+        "transfer_briefing_from_stored_transcript",
+        call_id=str(call_id),
+        reason="no process holds the call's conversation",
+    )
     events = await call_repo.list_call_events(
         session, call_id, event_type="transcript.final", limit=_BRIEFING_LINES
     )

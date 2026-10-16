@@ -81,8 +81,23 @@ async def _endable_call(session: AsyncSession, call_id: UUID) -> Any:
     return call
 
 
-async def _record_control_end(session: AsyncSession, call: Any, reason: str) -> None:
-    """The `call.ended` event `infer_ended_reason` reads as the agent's hangup."""
+async def _control_end(session: AsyncSession, call: Any, reason: str) -> Any:
+    """The `call.ended` event `infer_ended_reason` reads as the agent's hangup,
+    redacted: the reason is the model's or the API caller's own words. Called
+    after the call is read and before anything is written, so ending the
+    read-only transaction for the redaction wait commits nothing early."""
+    from turncall.events.emit import redact
+
+    return await redact(
+        call.project_id,
+        CallEventType.CALL_ENDED,
+        {"reason": reason, "source": "control"},
+        release=session,
+    )
+
+
+async def _record_control_end(session: AsyncSession, call: Any, event: Any) -> None:
+    """Store the `_control_end` event."""
     from turncall.events.emit import record_call_event
 
     await record_call_event(
@@ -90,7 +105,7 @@ async def _record_control_end(session: AsyncSession, call: Any, reason: str) -> 
         call_id=call.id,
         project_id=call.project_id,
         event_type=CallEventType.CALL_ENDED,
-        payload={"reason": reason, "source": "control"},
+        payload=event,
     )
 
 
@@ -117,7 +132,7 @@ async def begin_assistant_end(
     call = await _endable_call(session, call_id)
     if isinstance(call, ControlResult):
         return call
-    await _record_control_end(session, call, reason)
+    await _record_control_end(session, call, await _control_end(session, call, reason))
     # Read by the model, which replies next: that reply is the goodbye.
     return ControlResult(success=True, message=ASSISTANT_END_MESSAGE)
 
@@ -138,6 +153,7 @@ async def end_call(
     call = await _endable_call(session, call_id)
     if isinstance(call, ControlResult):
         return call
+    ended = await _control_end(session, call, reason)
 
     # Hang up through the call's carrier
     sid = call.provider_call_sid
@@ -165,7 +181,7 @@ async def end_call(
         duration_ms=duration_ms,
     )
 
-    await _record_control_end(session, call, reason)
+    await _record_control_end(session, call, ended)
 
     # Trigger post-call processing (transcript, recording, analysis, webhook)
     # The comprehensive call.ended webhook is dispatched after analysis completes.
@@ -278,6 +294,22 @@ async def transfer_call(
             "fallback message",
         )
 
+    from turncall.events.emit import emit_call_event, redact
+
+    # Redacted now, after the reads and before the first write: the reason
+    # and message are free text, and no detector wait may happen inside a
+    # transaction that has written (events/emit).
+    transferred = await redact(
+        call.project_id,
+        CallEventType.CALL_TRANSFERRED,
+        {
+            "target_number": target_number,
+            "transfer_mode": transfer_mode,
+            "reason": reason,
+            "transfer_message": transfer_message,
+        },
+        release=session,
+    )
     await call_repo.update_call_status(
         session, call_id, status=CallStatus.TRANSFERRING.value
     )
@@ -340,21 +372,15 @@ async def transfer_call(
         # up" when the stream ends.
         await transfer_svc.clear_transfer_intent(call_id)
 
-    from turncall.events.emit import emit_call_event
-
     await emit_call_event(
         session,
         call_id=call_id,
         project_id=call.project_id,
         event_type=CallEventType.CALL_TRANSFERRED,
-        payload={
-            "target_number": target_number,
-            "transfer_mode": transfer_mode,
-            "reason": reason,
-            "transfer_message": transfer_message,
-            "has_briefing": bool(briefing_text or briefing_from_summary),
-            "success": transfer_success,
-        },
+        payload=transferred.plus(
+            has_briefing=bool(briefing_text or briefing_from_summary),
+            success=transfer_success,
+        ),
     )
 
     if transfer_success:
@@ -430,6 +456,21 @@ async def handoff_to_agent(
             message=f"Target agent not found: {target_agent_id}",
         )
 
+    from turncall.events.emit import emit_call_event, redact
+
+    # After the reads, before the first write (events/emit): the reason and
+    # the context are free text.
+    handed_off = await redact(
+        call.project_id,
+        CallEventType.CALL_AGENT_HANDOFF,
+        {
+            "source_agent_id": str(call.active_agent_id),
+            "target_agent_id": str(target_agent_id),
+            "reason": reason,
+            "context_payload": context_payload,
+        },
+        release=session,
+    )
     await call_repo.update_call_status(
         session,
         call_id,
@@ -437,19 +478,12 @@ async def handoff_to_agent(
         active_agent_id=target_agent_id,
     )
 
-    from turncall.events.emit import emit_call_event
-
     await emit_call_event(
         session,
         call_id=call_id,
         project_id=call.project_id,
         event_type=CallEventType.CALL_AGENT_HANDOFF,
-        payload={
-            "source_agent_id": str(call.active_agent_id),
-            "target_agent_id": str(target_agent_id),
-            "reason": reason,
-            "context_payload": context_payload,
-        },
+        payload=handed_off,
     )
 
     await call_repo.update_call_status(
@@ -523,6 +557,12 @@ async def send_dtmf(
             message=f"Call is not active (status: {current.value})",
         )
 
+    from turncall.events.emit import emit_call_event, redact
+
+    # Before anything is written (events/emit): keyed digits can be a card.
+    sent = await redact(
+        call.project_id, CallEventType.DTMF_SENT, {"digits": digits}, release=session
+    )
     sid = call.provider_call_sid
     if sid and sid != "webrtc":
         adapter = await _carrier_adapter(session, call)
@@ -533,14 +573,12 @@ async def send_dtmf(
                 logger.exception("carrier_dtmf_failed", call_sid=sid)
                 return ControlResult(success=False, message="DTMF send failed")
 
-    from turncall.events.emit import emit_call_event
-
     await emit_call_event(
         session,
         call_id=call_id,
         project_id=call.project_id,
         event_type=CallEventType.DTMF_SENT,
-        payload={"digits": digits},
+        payload=sent,
     )
 
     return ControlResult(success=True, message="DTMF sent", details={"digits": digits})
@@ -578,14 +616,21 @@ async def inject_context(
     if not ack.ok:
         return ControlResult(success=False, message=ack.error or "Refused by the call")
 
-    from turncall.events.emit import emit_call_event
+    from turncall.events.emit import emit_call_event, redact
 
+    # Nothing written yet: the read-only transaction ends for the wait.
+    injected = await redact(
+        call.project_id,
+        CallEventType.CONTEXT_INJECTED,
+        {"message": message, "role": role},
+        release=session,
+    )
     await emit_call_event(
         session,
         call_id=call_id,
         project_id=call.project_id,
         event_type=CallEventType.CONTEXT_INJECTED,
-        payload={"message": message, "role": role},
+        payload=injected,
     )
 
     return ControlResult(

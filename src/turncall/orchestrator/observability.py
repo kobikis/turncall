@@ -87,15 +87,18 @@ class TranscriptTapProcessor(FrameProcessor):
         # The raw line, before the exit point redacts the stored one: what the
         # briefing and post-call analysis read (services/live_transcript).
         live_transcript.said(self._call_context.call_id, role, text)
-        payload = {
-            "text": text,
-            "role": role,
-        }
-
         try:
-            async with self._call_context.session_factory() as session:
-                from turncall.events.emit import emit_call_event
+            from turncall.events.emit import emit_call_event, redact
 
+            # Redacted before the session: the store holds the call's
+            # sequence lock, which no detector wait may (events/emit).
+            payload = await redact(
+                self._call_context.project_id,
+                CallEventType.TRANSCRIPT_FINAL,
+                {"text": text, "role": role},
+                sessions=self._call_context.session_factory,
+            )
+            async with self._call_context.session_factory() as session:
                 await emit_call_event(
                     session,
                     call_id=self._call_context.call_id,
@@ -194,15 +197,21 @@ class AssistantTranscriptTapProcessor(FrameProcessor):
             payload["model"] = model
 
         try:
-            async with self._call_context.session_factory() as session:
-                from turncall.events.emit import emit_call_event
+            from turncall.events.emit import emit_call_event, redact
 
+            redacted = await redact(
+                self._call_context.project_id,
+                CallEventType.TRANSCRIPT_FINAL,
+                payload,
+                sessions=self._call_context.session_factory,
+            )
+            async with self._call_context.session_factory() as session:
                 await emit_call_event(
                     session,
                     call_id=self._call_context.call_id,
                     project_id=self._call_context.project_id,
                     event_type=CallEventType.TRANSCRIPT_FINAL,
-                    payload=payload,
+                    payload=redacted,
                     commit=True,
                 )
         except Exception:

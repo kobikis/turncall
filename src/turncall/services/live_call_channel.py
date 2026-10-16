@@ -114,14 +114,18 @@ async def request(
     body: dict[str, Any],
     *,
     timeout: float | None = None,
+    to: str | None = None,
 ) -> Ack:
     """Ask the live call to apply `kind`, and return its answer.
 
     Raises `CallNotLive` when nothing is running the call and
     `CallDidNotAcknowledge` when it does not answer within the timeout.
+    `to`: another channel than the call's control channel, answered the same
+    way (`live_transcript`'s, held by whichever process has the call's
+    conversation).
     """
     req = ControlRequest(kind=kind, body=body)
-    receivers = await redis.publish(channel(call_id), req.to_json())
+    receivers = await redis.publish(to or channel(call_id), req.to_json())
     if receivers == 0:
         raise CallNotLive(str(call_id))
     reply = await redis.blpop(
@@ -208,7 +212,7 @@ async def _listen(
     try:
         async for message in pubsub.listen():
             if message["type"] == "message":
-                await _answer(redis, message["data"], call_id, handlers)
+                await answer(redis, message["data"], call_id, handlers)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -216,12 +220,13 @@ async def _listen(
         logger.exception("control_channel_lost", call_id=str(call_id))
 
 
-async def _answer(
+async def answer(
     redis: Redis,
     raw: str | bytes,
     call_id: uuid.UUID | str,
     handlers: Mapping[str, Handler],
 ) -> None:
+    """Apply one request through its handler and push the `Ack`."""
     try:
         req = ControlRequest.from_json(raw)
     except (ValueError, KeyError, TypeError):

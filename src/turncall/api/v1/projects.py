@@ -16,6 +16,7 @@ from turncall.api.v1.schemas.projects import (
 )
 from turncall.auth import AdminAuth, Auth, PlatformKey
 from turncall.config import get_settings
+from turncall.services import redaction
 from turncall.storage.repositories import project_repo
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -80,11 +81,12 @@ async def set_project_redaction(
     session: DbSession,
 ) -> dict:
     """Turn the project's redaction on or off and choose its entity types
-    (#313, ADR-0024), replacing the whole setting: `entities` left out or null
-    is the default list. Read per event, so it applies to everything stored or
-    sent from now on — a call already live is redacted from its next event.
-    What was stored before is not rewritten. Admin key; a project can only set
-    its own."""
+    (#313, ADR-0024), replacing the whole setting: `enabled` is required, and
+    `entities` left out or null is the default list. It applies to what is
+    stored or sent from then on, a call already live included: at once on the
+    server that took this request, and within 30 seconds on the others (each
+    caches the setting that long). What was stored before is not rewritten.
+    Admin key; a project can only set its own."""
     if auth.project_id != project_id:
         raise ForbiddenError("A project can only set its own redaction")
     row = await project_repo.set_redaction(
@@ -92,6 +94,11 @@ async def set_project_redaction(
     )
     if row is None:
         raise NotFoundError("Project", str(project_id))
+    await session.commit()
+    policy = redaction.policy_of(body.enabled, body.entities)
+    redaction.remember_policy(project_id, policy)
+    if policy is not None:
+        redaction.warm()  # in the background: the first call must not pay it
     logger.info(
         "project_redaction_set",
         project_id=str(project_id),

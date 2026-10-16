@@ -366,7 +366,7 @@
           "projects"
         ],
         "summary": "Set Project Redaction",
-        "description": "Turn the project's redaction on or off and choose its entity types\n(#313, ADR-0024), replacing the whole setting: `entities` left out or null\nis the default list. Read per event, so it applies to everything stored or\nsent from now on \u2014 a call already live is redacted from its next event.\nWhat was stored before is not rewritten. Admin key; a project can only set\nits own.",
+        "description": "Turn the project's redaction on or off and choose its entity types\n(#313, ADR-0024), replacing the whole setting: `enabled` is required, and\n`entities` left out or null is the default list. It applies to what is\nstored or sent from then on, a call already live included: at once on the\nserver that took this request, and within 30 seconds on the others (each\ncaches the setting that long). What was stored before is not rewritten.\nAdmin key; a project can only set its own.",
         "operationId": "set_project_redaction_v1_projects__project_id__redaction_put",
         "parameters": [
           {
@@ -9378,8 +9378,7 @@
           "enabled": {
             "type": "boolean",
             "title": "Enabled",
-            "description": "Redact this project's calls from now on",
-            "default": false
+            "description": "Redact this project's calls. Required: a PUT replaces the whole setting, so one naming only `entities` must not turn it off"
           },
           "entities": {
             "anyOf": [
@@ -9399,6 +9398,9 @@
         },
         "additionalProperties": false,
         "type": "object",
+        "required": [
+          "enabled"
+        ],
         "title": "ProjectRedaction",
         "description": "A project's redaction (#313, ADR-0024): PII of these entity types is\nreplaced in the transcript and every call event before it is stored or\nsent to a webhook. Never in what the agent hears during the call. A `PUT`\nreplaces the whole setting."
       },

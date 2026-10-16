@@ -27,14 +27,20 @@ and is not part of this repository's history.
   routing, the suppression list and campaigns are unaffected. The agent is
   never redacted: the model hears the caller's words, a warm transfer's
   operator is briefed on them, and post-call analysis and takeaways read them.
-  Their results are redacted on the way out in `call.ended`; the copy stored
-  on the call (`analysis` on the call read and `GET /v1/calls/{id}/analysis`),
+  Their results are redacted before they are stored on the call, so `analysis`
+  on the call read, `GET /v1/calls/{id}/analysis` and `call.ended` agree;
   tool-invocation rows, SMS and chat messages, logs and spans are not yet
-  (#314). Detection is local —
-  Presidio over spaCy's small English model, no text leaves the deployment —
-  and runs off the event loop; a project with redaction off never loads it.
-  Off for every project until turned on; a change applies from the next
-  event, and nothing stored before it is rewritten. Recall is the detector's:
+  (#314). TurnCall's own identifiers (ids, statuses, provider and tool names)
+  are never analysed. Detection is local — Presidio over spaCy's small English
+  model, no text leaves the deployment — and runs in a worker process of its
+  own, outside the process carrying live calls' audio; a project with
+  redaction off never starts it. It loads in the background when a project
+  turns redaction on, and at startup when any project has it on. If it cannot
+  load, analysed text is withheld (`<REDACTED>`) for five minutes before it is
+  tried again; if it falls far behind, text is withheld rather than queued.
+  `enabled` is required in the `PUT`. Off for every project until turned on;
+  a change applies at once on the server that took it and within 30 seconds
+  on the others, and nothing stored before it is rewritten. Recall is the detector's:
   digits spoken as words ("four one five…") are not caught, so an STT that
   does not format numbers (Deepgram's `smart_format` does) leaves them.
   Migration `d7f2a4c9e5b8`. See the Redaction guide.
@@ -131,9 +137,13 @@ and is not part of this repository's history.
   from memory** (#313). The process that ran the call keeps what was said for
   five minutes after it ends, and the briefing summary, analysis and takeaways
   read that rather than the stored transcript, so redaction never reaches
-  them. When another replica handles the carrier's callback or the call's end,
-  they fall back to the stored transcript, as before — redacted, if the
-  project redacts.
+  them. For a project that redacts, when another replica handles the
+  carrier's whisper or status callback or the end API, it asks the process
+  holding the conversation (Redis pub/sub, naming only the call) to build the
+  briefing or run post-call processing; the conversation itself is never
+  written to Redis or the database. Only when no process holds it any more (a
+  restart, after five minutes, a re-run) do they read the stored transcript,
+  redacted, and log that they did.
 - **A production WebRTC `server_url` may be a Kubernetes Service**
   (`http://<name>.<namespace>.svc[.cluster.local]`). It had to be HTTPS, which
   refused a call-init server in the same cluster — plain HTTP there never

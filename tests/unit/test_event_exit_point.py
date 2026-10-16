@@ -6,7 +6,9 @@ to a subscriber (`dispatcher.dispatch_event`) are written only through
 the engine's source and fails on any other module that stores or dispatches
 an event: by naming one of the ways out, constructing a `CallEventRow`,
 reaching a way out through `getattr` with its name as a string, or writing
-`call_events` in raw SQL.
+`call_events` in raw SQL. And it fails on any module but the exit point
+building an `emit.Redacted`: that is how a payload says it went through
+redaction (#313), and only `emit.redact()` may say so.
 
 What it does not guard, because the exit point does not cover it: call-init
 and the other server events (`events/server_events.py`) and tool webhooks,
@@ -43,6 +45,8 @@ WAYS_OUT = {
 }
 # Where a `CallEventRow(...)` may be built: the one function that inserts it.
 BUILDS_A_ROW = {CALL_REPO}
+# Where an `emit.Redacted(...)` may be built: the exit point, in `redact()`.
+VOUCHES_FOR_REDACTION = {EXIT_POINT}
 # Raw SQL that adds to or rewrites the log. A DELETE takes nothing out of the
 # call, so it is not a way out.
 WRITES_THE_LOG = re.compile(
@@ -75,6 +79,8 @@ def _ways_out(tree: ast.AST) -> set[str]:
             called = _called(node)
             if called == "CallEventRow":
                 found.add("CallEventRow(")
+            elif called == "Redacted":
+                found.add("Redacted(")
             elif (
                 called in {"getattr", "setattr", "hasattr"}
                 and len(node.args) >= 2
@@ -91,7 +97,12 @@ def _ways_out(tree: ast.AST) -> set[str]:
     return found
 
 
-ALLOWED = {**WAYS_OUT, "CallEventRow(": BUILDS_A_ROW, "SQL writing call_events": set()}
+ALLOWED = {
+    **WAYS_OUT,
+    "CallEventRow(": BUILDS_A_ROW,
+    "Redacted(": VOUCHES_FOR_REDACTION,
+    "SQL writing call_events": set(),
+}
 
 
 def _mentions(source: dict[str, str] | None = None) -> dict[str, set[str]]:
@@ -129,7 +140,9 @@ def test_nothing_stores_or_sends_an_event_but_the_exit_point() -> None:
 
 def test_the_guard_sees_the_exit_point() -> None:
     """A rename must not leave the guard above checking for nothing."""
-    assert {"create_call_event", "dispatch_event"} <= _mentions()[EXIT_POINT]
+    assert {"create_call_event", "dispatch_event", "Redacted("} <= _mentions()[
+        EXIT_POINT
+    ]
 
 
 @pytest.mark.parametrize(
@@ -141,6 +154,8 @@ def test_the_guard_sees_the_exit_point() -> None:
         "async def f(d):\n    await getattr(d, 'dispatch_event')(None)",
         "from sqlalchemy import text\nq = text('INSERT INTO call_events (id) VALUES (1)')",
         "q = 'update public.call_events set payload = :p'",
+        "from turncall.events.emit import Redacted\np = Redacted('x', {})",
+        "from turncall.events import emit\np = emit.Redacted('x', {})",
     ],
 )
 def test_the_guard_catches_each_route(code: str) -> None:

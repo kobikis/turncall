@@ -12,7 +12,7 @@ from sqlalchemy import text
 
 from turncall.config.settings import Settings
 from turncall.events import dispatcher
-from turncall.events.emit import emit_call_event
+from turncall.events.emit import emit_call_event, redact
 from turncall.storage.database import create_engine, create_session_factory
 from turncall.storage.models import ProjectRow
 from turncall.storage.repositories import call_repo
@@ -53,7 +53,12 @@ async def test_a_failed_send_leaves_the_stored_row_to_the_callers_commit(
                 call_id=call_id,
                 project_id=project_id,
                 event_type="transcript.final",
-                payload={"role": "customer", "text": "hello"},
+                payload=await redact(
+                    project_id,
+                    "transcript.final",
+                    {"role": "customer", "text": "hello"},
+                    sessions=session_factory,
+                ),
             )
             await session.commit()
 
