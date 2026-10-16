@@ -38,6 +38,10 @@ class _Db:
     async def __aexit__(self, *exc):
         return False
 
+    def begin_nested(self):
+        # The exit point sends inside a SAVEPOINT; a no-op one here.
+        return self
+
     async def commit(self):
         self.committed = True
 

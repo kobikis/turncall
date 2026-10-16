@@ -420,6 +420,15 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **A Twilio call that rings out no longer reports `call.started`.** Every
+  status callback but `completed` and `failed` went out as `call.started`, so
+  an outbound call that rang and was never answered sent it at `ringing` and
+  again at `busy` or `no-answer`. Now only `in-progress` (answered) sends it;
+  `ringing` sends nothing, and `busy` and `no-answer` store a `call.ended` row
+  on the call's log and send nothing, as a Telnyx hangup does. The status and
+  `ended_reason` (`customer_busy`, `customer_did_not_answer`) are unchanged.
+- **`voicemail.detected` takes its place on the call's log.** It was stored
+  with sequence number 0, so it read back first, before the call started.
 - **`/health` reports a reachable database as healthy.** It executed the
   isolation level's name as a statement, which SQLAlchemy refuses, so every
   deployment read `"database": "unhealthy"`. `/ready` was unaffected.

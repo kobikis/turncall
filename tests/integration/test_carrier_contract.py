@@ -84,21 +84,23 @@ class CarrierEdge:
 
 
 async def _twilio_no_answer(app: Harness, dial: CarrierAction) -> None:
-    """Twilio reports a dial nobody picked up to the dial's status callback."""
-    response = await post_twilio(
-        app.api,
-        app.carrier,
-        dial.params["status_callback_url"],
-        {
-            "AccountSid": app.carrier.account_sid,
-            "CallSid": dial.params["call_sid"],
-            "CallStatus": "no-answer",
-            "From": dial.params["from_number"],
-            "To": dial.params["to_number"],
-            "Direction": "outbound-api",
-        },
-    )
-    response.raise_for_status()
+    """Twilio reports a dial nobody picked up to the dial's status callback:
+    `ringing` (the app asks for it), then `no-answer`."""
+    for status in ("ringing", "no-answer"):
+        response = await post_twilio(
+            app.api,
+            app.carrier,
+            dial.params["status_callback_url"],
+            {
+                "AccountSid": app.carrier.account_sid,
+                "CallSid": dial.params["call_sid"],
+                "CallStatus": status,
+                "From": dial.params["from_number"],
+                "To": dial.params["to_number"],
+                "Direction": "outbound-api",
+            },
+        )
+        response.raise_for_status()
 
 
 TWILIO = CarrierEdge(
@@ -295,16 +297,23 @@ async def test_an_outbound_call(edge: CarrierEdge, monkeypatch) -> None:
 
 @pytest.mark.parametrize("edge", OUTBOUND_CARRIERS)
 async def test_an_outbound_call_nobody_answers(edge: CarrierEdge, monkeypatch) -> None:
-    """What a campaign's retry policy reads: `customer_did_not_answer`."""
+    """What a campaign's retry policy reads: `customer_did_not_answer`. The
+    call rang and nobody picked up, so ringing out adds no `call.started` to
+    the one the dial recorded: the log is the dial's two events and the
+    carrier's `call.ended` row, on every carrier."""
     async with run_app(
         Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
     ) as app:
         call_id, dial = await _dial(app, edge)
         await edge.no_answer(app, dial)
         read = (await app.api.get(f"/v1/calls/{call_id}")).json()["data"]
+        events = await _events(app, call_id)
+        sent = [e["event"] for e in app.sink.events if e["call_id"] == call_id]
 
     assert read["status"] == "no_answer"
     assert read["ended_reason"] == "customer_did_not_answer"
+    assert events == ["call.initializing", "call.started", "call.ended"], events
+    assert sent.count("call.started") == 1, sent
 
 
 @dataclass(frozen=True)

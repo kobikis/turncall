@@ -106,7 +106,7 @@ class TurnMetricsRecorder:
 
 
 async def store_call_event(
-    ctx: CallContext, event_type: CallEventType, payload: dict[str, Any]
+    ctx: CallContext, event_type: str, payload: dict[str, Any]
 ) -> None:
     """Store one call event and dispatch nothing: for the records only the
     call's event log carries. Best-effort — a lost record is logged."""
@@ -120,8 +120,8 @@ async def store_call_event(
                 project_id=ctx.project_id,
                 event_type=event_type,
                 payload=payload,
+                commit=True,
             )
-            await session.commit()
     except Exception:
         logger.exception(
             "call_event_write_error", call_id=str(ctx.call_id), event_type=event_type

@@ -1,24 +1,42 @@
-"""The one exit point for events (#312, ADR-0024).
+"""The one exit point for call events and webhooks (#312, ADR-0024).
 
-Every row written to a call's event log and every event sent to webhook
-subscribers leaves through `_leave`, so redaction (#313) has one place to
-stand: it runs there once per event, before the store and before the send.
-Nothing else in the engine calls `call_repo.create_call_event` or
-`dispatcher.dispatch_event`; `tests/unit/test_event_exit_point.py` fails the
-build if something does.
+What it covers: every row written to a call's event log (`call_events`) and
+every event sent to webhook subscribers (`dispatcher.dispatch_event`) goes
+through here, and nothing else in the engine calls
+`call_repo.create_call_event` or `dispatcher.dispatch_event`.
+`tests/unit/test_event_exit_point.py` fails the build if something does.
+Redaction (#313) runs here once per event, in `_redact`, before the store and
+before the send.
+
+What it does not cover, on purpose:
+
+- `events/server_events.py` (call-init and the other server events) and tool
+  webhooks (`services/tool_webhook.py`). They are part of the live call: the
+  operator's own server answers them and needs the raw values, and ADR-0024
+  never redacts what the live call uses.
+- Tool-invocation rows (`tool_invocation_repo.create_invocation`, written by
+  `orchestrator/tool_bridge.py` and `services/chat_tools.py`). Those are
+  stored data, but not call events; their redaction is #314's.
+- Everything else that is stored or logged: the call row (`analysis_json`),
+  SMS/chat message rows, logs and spans.
 
 Four entries, by where an event goes:
 
-- `emit_call_event` — stored on the call's log *and* sent. Most call events.
-- `record_call_event` — stored only, never sent: the carrier's own
-  `call.ended` rows, the agent's hangup marker, `metrics.turn`,
-  `delegation.completed`, `voicemail.detected`.
-- `dispatch_call_event` — sent only: the comprehensive `call.ended`, already
-  stored as its status rows and sent once post-call work is done (ADR-0006).
-- `dispatch_project_event` — sent only, with no call behind it: text
+- `emit_call_event`: stored on the call's log *and* sent. Most call events.
+- `record_call_event`: stored only, never sent: the carrier's own
+  `call.ended` rows (Twilio's `completed`/`busy`/`no-answer` status
+  callback, Telnyx's hangup), the agent's hangup marker (`call.ended`, source
+  `control`), `metrics.turn`, `delegation.completed` and `voicemail.detected`.
+- `dispatch_call_event`: sent only: the comprehensive `call.ended`, whose
+  facts are already on the log, sent once post-call work is done (ADR-0006).
+- `dispatch_project_event`: sent only, with no call behind it: text
   sessions, eval runs, campaigns, and `call.rejected` (refused before a call
   row existed).
 
+Each entry is the same three steps, built from the primitives below:
+`_redact` the payload, `_store` it, `_send` it. A send runs its database
+reads (the subscriber list, the call's agent) inside a SAVEPOINT, so a failed
+send cannot abort the caller's transaction and take the stored row with it.
 The send-only entries let a dispatch failure propagate, as the dispatcher
 always has; their callers log it. `emit_call_event` logs and swallows it, so
 a dead subscriber never costs the stored row.
@@ -55,17 +73,14 @@ async def emit_call_event(
     before any subscriber hears of it, and the per-call sequence lock is
     released first. Otherwise the caller commits, after the send.
     """
-    await _leave(
-        session,
-        project_id=project_id,
-        event_type=event_type,
-        payload=payload,
-        call_id=call_id,
-        store=True,
-        commit=commit,
-        send=True,
-        quiet_send=True,
-    )
+    payload = await _redact(session, project_id, payload)
+    await _store(session, call_id, event_type, payload, commit=commit)
+    try:
+        await _send(session, project_id, event_type, payload, call_id=call_id)
+    except Exception:
+        logger.exception(
+            "event_dispatch_error", event_type=event_type, call_id=str(call_id)
+        )
 
 
 async def record_call_event(
@@ -75,21 +90,15 @@ async def record_call_event(
     project_id: UUID,
     event_type: str,
     payload: dict[str, Any],
-    sequence_number: int | None = None,
+    commit: bool = False,
 ) -> None:
     """Store a call event on the call's log and send it nowhere.
 
-    The next sequence number unless one is given. The caller commits.
+    `commit=True` commits it, for a writer that owns its session; otherwise
+    the caller commits.
     """
-    await _leave(
-        session,
-        project_id=project_id,
-        event_type=event_type,
-        payload=payload,
-        call_id=call_id,
-        store=True,
-        sequence_number=sequence_number,
-    )
+    payload = await _redact(session, project_id, payload)
+    await _store(session, call_id, event_type, payload, commit=commit)
 
 
 async def dispatch_call_event(
@@ -101,14 +110,8 @@ async def dispatch_call_event(
     payload: dict[str, Any],
 ) -> None:
     """Send a call's event to subscribers without storing it."""
-    await _leave(
-        session,
-        project_id=project_id,
-        event_type=event_type,
-        payload=payload,
-        call_id=call_id,
-        send=True,
-    )
+    payload = await _redact(session, project_id, payload)
+    await _send(session, project_id, event_type, payload, call_id=call_id)
 
 
 async def dispatch_project_event(
@@ -124,12 +127,12 @@ async def dispatch_project_event(
 ) -> None:
     """Send a project's event that has no call: what it is about rides in
     the envelope (ADR-0007)."""
-    await _leave(
+    payload = await _redact(session, project_id, payload)
+    await _send(
         session,
-        project_id=project_id,
-        event_type=event_type,
-        payload=payload,
-        send=True,
+        project_id,
+        event_type,
+        payload,
         session_id=session_id,
         eval_run_id=eval_run_id,
         campaign_id=campaign_id,
@@ -137,53 +140,77 @@ async def dispatch_project_event(
     )
 
 
-async def _leave(
+async def _redact(
+    session: AsyncSession, project_id: UUID, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """What of `payload` may leave the call. Every entry above calls this
+    first, and passes only what it returns to `_store` and `_send`.
+
+    Nothing is redacted yet: #313 fills this in (the project's redaction
+    settings, looked up on `session`).
+    """
+    return payload
+
+
+async def _store(
     session: AsyncSession,
+    call_id: UUID,
+    event_type: str,
+    payload: dict[str, Any],
     *,
+    commit: bool,
+) -> None:
+    """Append the event to the call's log under the next sequence number,
+    committing if asked."""
+    sequence_number = await call_repo.get_next_sequence_number(session, call_id)
+    await call_repo.create_call_event(
+        session,
+        call_id=call_id,
+        event_type=event_type,
+        payload=payload,
+        sequence_number=sequence_number,
+    )
+    if commit:
+        await session.commit()
+
+
+async def _send(
+    session: AsyncSession,
     project_id: UUID,
     event_type: str,
     payload: dict[str, Any],
+    *,
     call_id: UUID | None = None,
-    store: bool = False,
-    sequence_number: int | None = None,
-    commit: bool = False,
-    send: bool = False,
-    quiet_send: bool = False,
-    **envelope: UUID | None,
+    session_id: UUID | None = None,
+    eval_run_id: UUID | None = None,
+    campaign_id: UUID | None = None,
+    agent_id: UUID | None = None,
 ) -> None:
-    """Where every event leaves: stored, then committed, then sent, each as
-    asked. #313 redacts `payload` here, before either."""
-    if store:
-        if call_id is None:
-            raise ValueError("only a call's event is stored")
-        if sequence_number is None:
-            sequence_number = await call_repo.get_next_sequence_number(session, call_id)
-        await call_repo.create_call_event(
-            session,
-            call_id=call_id,
-            event_type=event_type,
-            payload=payload,
-            sequence_number=sequence_number,
-        )
-    if commit:
-        await session.commit()
-    if not send:
-        return
-    # Only what the caller named, as each call site passed it before.
-    named = {k: v for k, v in {"call_id": call_id, **envelope}.items() if v is not None}
-    try:
+    """Hand the event to the dispatcher, which reads its subscribers and
+    queues delivery in the background.
+
+    The dispatcher reads on the caller's session. In a SAVEPOINT, a failed
+    read rolls back to it and the caller's transaction (an uncommitted stored
+    row, say) is still usable; without one, Postgres aborts the whole
+    transaction and the caller's commit fails.
+    """
+    # Only the envelope fields this event has, as each caller passed them.
+    envelope = {
+        name: value
+        for name, value in {
+            "call_id": call_id,
+            "session_id": session_id,
+            "eval_run_id": eval_run_id,
+            "campaign_id": campaign_id,
+            "agent_id": agent_id,
+        }.items()
+        if value is not None
+    }
+    async with session.begin_nested():
         await dispatcher.dispatch_event(
             session,
             project_id=project_id,
             event_type=event_type,
             payload=payload,
-            **named,
-        )
-    except Exception:
-        if not quiet_send:
-            raise
-        logger.exception(
-            "event_dispatch_error",
-            event_type=event_type,
-            call_id=str(call_id),
+            **envelope,
         )

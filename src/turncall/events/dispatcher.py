@@ -1,8 +1,8 @@
 """Event dispatcher — routes events to webhook subscribers.
 
 Connects the internal event system to external webhook delivery. Only
-`events/emit.py`, the one exit point for events (#312), calls it; everything
-else emits through there.
+`events/emit.py`, the exit point for call events and webhooks (#312), calls
+it; everything else sends through there.
 """
 
 from __future__ import annotations
