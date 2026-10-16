@@ -288,6 +288,14 @@ operator's legal record, not the platform's.
 _Avoid_: "DNC list" unqualified (that is the national registry), "blocklist" (reads as
 inbound blocking).
 
+**Release** (a number) (vs **unbind**):
+Giving a number back to its [[carrier]], so the operator stops paying for it and may
+never get it back. Distinct from unbinding, which only stops routing it to an agent and
+leaves it on the account. Admin-only, refused while the number is bound, and requires
+an explicit confirmation in the request. Its counterpart is buying a number through the
+engine on the project's own carrier account. See ADR-0025 (decided, not yet built).
+_Avoid_: "delete number" (reads as unbind), "port out" (moving it to another carrier).
+
 ## Voicemail
 
 **Voicemail detector**:
@@ -458,6 +466,44 @@ The switch (default **on**) that puts `from_number`/`to_number` on spans. Phone
 numbers are PII landing in an external tracing backend; flip it off for
 compliance-sensitive deployments. The non-PII attributes (`project_id`,
 `agent_id`, `direction`, `transport`) are always present. See ADR-0010.
+ADR-0024 flips the default to **off** from the public release.
+
+**Caller-ear latency** (vs **pipeline latency**):
+The wait a caller actually hears: from the end of their speech to the agent's first
+audio, measured in the call's stereo [[call recording]] over a real carrier. Includes
+endpointing and the carrier leg, which [[turn metrics]] and the latency summary do
+not. The number TurnCall publishes. See ADR-0023.
+_Avoid_: "latency" unqualified when comparing with other platforms; "TTFB" (one
+stage's time to first byte).
+
+**Usage**:
+What one call consumed, per [[provider]] and role: STT seconds, LLM input and output
+tokens, TTS characters, carrier minutes. Recorded on the call. See ADR-0027 (decided,
+not yet built).
+_Avoid_: "billing" (TurnCall bills nobody), "metering" unqualified.
+
+**Cost estimate** / **price table**:
+A call's [[usage]] priced from the price table: list prices shipped with the engine
+for every provider and model, overridable per project with negotiated rates. Always
+an estimate, never an invoice; the provider's bill is the truth. See ADR-0027.
+_Avoid_: "cost" unqualified in UI copy, "spend".
+
+## Privacy & retention
+
+**Redaction**:
+Replacing PII (entity types the project chooses) in everything that outlives the live
+call or leaves the process: the stored transcript, analysis, takeaways, webhook
+payloads, logs and spans. **Never** what the model hears during the call, which still
+needs the caller's number to book the appointment. Text only; done locally (Presidio),
+opt-in per project. See ADR-0024 (decided, not yet built).
+_Avoid_: "masking" (reads as display-only), "anonymization" (a stronger legal claim).
+
+**Retention policy**:
+How long a project keeps recordings, transcripts and events, set separately for each,
+overridable per agent, enforced by a janitor. Unset means keep everything, the
+behaviour before it existed. Never applies to the [[audit log]]. See ADR-0024.
+_Avoid_: "TTL", "auto-delete", confusing it with the soft-delete purge of whole
+projects (`PROJECT_PURGE_RETENTION_DAYS`, ADR-0011).
 
 ## Access & credentials
 
@@ -508,6 +554,23 @@ block — writes third-party secrets into `config_blob`, the unencrypted JSONB t
 _Avoid_: "integration" (the Builder's word for the console-side record it is projected
 from), "the project's API key" (that is a `tc_...` [[API key]], authorizing calls *to*
 TurnCall rather than out of it).
+
+**Audit log**:
+An append-only record of changes made through the API (agents, credentials, numbers,
+API keys, project settings), each entry keyed by the [[API key]] that made it, since
+TurnCall is identity-free. Kept under its own retention, never the call
+[[retention policy]]. The builder audits the person behind a console change and links
+to these entries. See ADR-0024 (decided, not yet built).
+_Avoid_: "activity feed" (reads as user-facing history), "event log" (that is a
+call's events).
+
+**Session token** (browser):
+What a browser presents to join a WebRTC call instead of an [[API key]]: minted by the
+customer's server, valid for one call, five minutes and one agent, with the template
+variables sealed by the minting server so a visitor cannot change them. There are no
+publishable keys. See ADR-0026 (decided, not yet built).
+_Avoid_: "public key", "client key" (implies a long-lived credential), "media token"
+(the carrier stream's proof, `services/media_token.py`).
 
 ## Evals
 
