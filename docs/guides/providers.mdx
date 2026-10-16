@@ -160,6 +160,7 @@ Set `"extra": {"profanity_filter": true}` if you want it on.
 | `fallback_models` | For `openrouter` | Ordered list of fallback models (voice only) |
 | `temperature` | No | 0.0–2.0 (default: 0.7). **Not sent to `anthropic`** — current Claude models reject it and the call fails; set one via `llm.extra` if your model still accepts it. **Not sent to Gemini 3 models on `google`** — Google warns they loop below their own default of 1.0; older Gemini models still get it, and `llm.extra` sets one anyway |
 | `max_tokens` | No | 1–128000 (default: 1024) |
+| `warm_up` | No | `true` sends a one-token request with the system prompt as the caller's first turn starts, so the first reply does not wait on a cold connection. Voice only, OpenAI-compatible providers only (`openai`, `openrouter`, `custom_openai`, `ollama`); costs the system prompt's tokens once more per call. Default `false` |
 | `extra` | No | Provider passthrough. On `bedrock` it becomes `additionalModelRequestFields` — how Anthropic extended thinking is reached. On `google` it merges into the generation config, e.g. `{"thinkingConfig": {"thinkingLevel": "low"}}` |
 
 <Warning>

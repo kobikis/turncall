@@ -1513,6 +1513,10 @@ def create_pipeline(
         context=context,
         user_params=LLMUserAggregatorParams(**user_params_kwargs),
     )
+    if config.llm.warm_up:
+        from turncall.orchestrator.llm_warm_up import warm_up_on_first_turn
+
+        warm_up_on_first_turn(context_aggregator.user(), llm)
 
     # Observability: transcript taps placed early to capture before aggregation
     from turncall.orchestrator.observability import (

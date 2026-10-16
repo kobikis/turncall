@@ -98,6 +98,9 @@ class LLMConfig(DomainModel):
     # OpenAI reasoning effort (minimal|low|medium|high). None = provider default.
     # OpenAI-family only (openai/openrouter/custom_openai); sent only when set.
     reasoning_effort: str | None = None
+    # Send a one-token completion as the caller's first turn starts, so the
+    # first reply does not pay for a cold client (orchestrator/llm_warm_up.py).
+    warm_up: bool = False
     extra: dict[str, Any] = Field(default_factory=dict)
     # Backup LLMs, in order, a call moves to when this one stops being usable
     # (#222). Voice cascade only; each entry's key resolves like any other.
