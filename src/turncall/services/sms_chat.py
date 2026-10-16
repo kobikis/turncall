@@ -20,7 +20,7 @@ from turncall.api.errors import BadRequestError
 from turncall.domain.enums import CallEventType, ChatChannel, SmsMessageRole
 from turncall.domain.models import AgentConfig
 from turncall.domain.session_state import is_session_expired
-from turncall.events.emit import dispatch_project_event
+from turncall.events.emit import Redacted, dispatch_project_event, redact
 from turncall.services.chat_tools import build_chat_tools
 from turncall.services.limits import admit_message
 from turncall.services.llm_text import complete_text
@@ -231,13 +231,17 @@ async def _process_chat_message(
     # already received session.created/chat.created for IDs that never persisted.
     await db.commit()
 
-    # 3. Dispatch events (rows are now durable)
+    # 3. Dispatch events (rows are now durable). Both are redacted first,
+    # while the session holds no transaction (events/emit): a dispatch reads
+    # on it, and a chat's customer may be an email or a name, not a number.
+    customer_event = await _chat_event(customer_msg, session_row.id, project_id)
     if is_new:
-        await _dispatch_session_event(
-            db, CallEventType.SESSION_CREATED, session_row, project_id
+        created = await _session_event(
+            CallEventType.SESSION_CREATED, session_row, project_id
         )
+        await _dispatch_session_event(db, created, session_row, project_id)
 
-    await _dispatch_chat_event(db, customer_msg, session_row.id, project_id)
+    await _dispatch_chat_event(db, customer_event, session_row.id, project_id)
 
     # 4. Build LLM messages and generate reply
     agent_config = for_session(agent_config, session_row.metadata_json or {})
@@ -300,11 +304,13 @@ async def _process_chat_message(
     await sms_session_repo.update_session_activity(db, session_row.id)
     await db.commit()
 
-    # 7. Dispatch agent message event
-    await _dispatch_chat_event(db, agent_msg, session_row.id, project_id)
-    await _dispatch_session_event(
-        db, CallEventType.SESSION_UPDATED, session_row, project_id
+    # 7. Dispatch agent message event, both redacted before either is sent.
+    agent_event = await _chat_event(agent_msg, session_row.id, project_id)
+    updated = await _session_event(
+        CallEventType.SESSION_UPDATED, session_row, project_id
     )
+    await _dispatch_chat_event(db, agent_event, session_row.id, project_id)
+    await _dispatch_session_event(db, updated, session_row, project_id)
 
     logger.info(
         "chat_message_processed",
@@ -442,9 +448,27 @@ async def _build_llm_messages(
     return messages
 
 
+async def _session_event(
+    event_type: CallEventType, session_row: SmsSessionRow, project_id: UUID
+) -> Redacted:
+    """A session lifecycle payload, redacted. Await it with no transaction
+    open on the turn's session (events/emit)."""
+    return await redact(
+        project_id,
+        event_type.value,
+        {
+            "session_id": str(session_row.id),
+            "customer_number": session_row.customer_number,
+            "turncall_number": session_row.turncall_number,
+            "channel": session_row.channel,
+            "status": session_row.status,
+        },
+    )
+
+
 async def _dispatch_session_event(
     db: AsyncSession,
-    event_type: CallEventType,
+    event: Redacted,
     session_row: SmsSessionRow,
     project_id: UUID,
 ) -> None:
@@ -452,22 +476,34 @@ async def _dispatch_session_event(
     await dispatch_project_event(
         db,
         project_id=project_id,
-        event_type=event_type.value,
-        payload={
-            "session_id": str(session_row.id),
-            "customer_number": session_row.customer_number,
-            "turncall_number": session_row.turncall_number,
-            "channel": session_row.channel,
-            "status": session_row.status,
-        },
+        event_type=event.event_type,
+        payload=event,
         session_id=session_row.id,
         agent_id=session_row.agent_id,
     )
 
 
+async def _chat_event(
+    message_row: object, session_id: UUID, project_id: UUID
+) -> Redacted:
+    """A chat.created payload, redacted. Await it with no transaction open on
+    the turn's session: it may wait on the detector (events/emit)."""
+    return await redact(
+        project_id,
+        CallEventType.CHAT_CREATED.value,
+        {
+            "message_id": str(message_row.id),
+            "session_id": str(session_id),
+            "role": message_row.role,
+            "content": message_row.content,
+            "channel": message_row.channel,
+        },
+    )
+
+
 async def _dispatch_chat_event(
     db: AsyncSession,
-    message_row: object,
+    event: Redacted,
     session_id: UUID,
     project_id: UUID,
 ) -> None:
@@ -476,13 +512,7 @@ async def _dispatch_chat_event(
         db,
         project_id=project_id,
         event_type=CallEventType.CHAT_CREATED.value,
-        payload={
-            "message_id": str(message_row.id),
-            "session_id": str(session_id),
-            "role": message_row.role,
-            "content": message_row.content,
-            "channel": message_row.channel,
-        },
+        payload=event,
         session_id=session_id,
     )
 

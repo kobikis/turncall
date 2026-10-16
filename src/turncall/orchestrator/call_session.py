@@ -680,15 +680,22 @@ async def log_call_event(
 ) -> None:
     """Log a call event to the database and dispatch webhook. Never raises."""
     try:
-        async with call_context.session_factory() as session:
-            from turncall.events.emit import emit_call_event
+        from turncall.events.emit import emit_call_event, redact
 
+        # Before the session: no detector wait inside a transaction (events/emit).
+        redacted = await redact(
+            call_context.project_id,
+            event_type,
+            payload,
+            sessions=call_context.session_factory,
+        )
+        async with call_context.session_factory() as session:
             await emit_call_event(
                 session,
                 call_id=call_context.call_id,
                 project_id=call_context.project_id,
                 event_type=event_type,
-                payload=payload,
+                payload=redacted,
             )
             await session.commit()
     except Exception:

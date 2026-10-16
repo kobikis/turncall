@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from turncall.services.redaction import DEFAULT_ENTITIES, SUPPORTED_ENTITIES
@@ -54,7 +55,10 @@ class ProjectRedaction(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool = Field(
-        default=False, description="Redact this project's calls from now on"
+        description=(
+            "Redact this project's calls. Required: a PUT replaces the whole "
+            "setting, so one naming only `entities` must not turn it off"
+        ),
     )
     entities: list[str] | None = Field(
         default=None,
@@ -83,7 +87,22 @@ class ProjectRedaction(BaseModel):
 
     @classmethod
     def from_row(cls, row: Any) -> "ProjectRedaction":
-        return cls(enabled=row.redaction_enabled, entities=row.redaction_entities)
+        """Read leniently: an entity type stored by an earlier build and no
+        longer supported is left out (and logged), never a failed read. With
+        none left, the project redacts the default list, as
+        `redaction.policy_of` does."""
+        stored = row.redaction_entities
+        if stored is None:
+            return cls(enabled=row.redaction_enabled, entities=None)
+        unknown = [e for e in stored if e not in SUPPORTED_ENTITIES]
+        if unknown:
+            logger.warning(
+                "project_redaction_unknown_entities",
+                project_id=str(row.id),
+                entities=unknown,
+            )
+        known = [e for e in stored if e in SUPPORTED_ENTITIES]
+        return cls(enabled=row.redaction_enabled, entities=known or None)
 
 
 class ProjectResponse(BaseModel):

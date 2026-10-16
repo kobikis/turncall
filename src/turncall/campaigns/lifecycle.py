@@ -60,17 +60,25 @@ async def _announce(
 ) -> None:
     """Best effort, like every dispatch: the row is written either way, and a
     subscriber being down must not stop a campaign."""
-    from turncall.events.emit import dispatch_project_event
+    from turncall.events.emit import dispatch_project_event, redact
 
     try:
         row = await campaign_repo.get_campaign_by_id(session, campaign_id)
         if row is None:
             return
+        # The campaign's change is committed (every caller commits first), so
+        # ending the read here commits nothing while redaction waits.
+        payload = await redact(
+            row.project_id,
+            event_type.value,
+            await _payload(session, row),
+            release=session,
+        )
         await dispatch_project_event(
             session,
             project_id=row.project_id,
             event_type=event_type.value,
-            payload=await _payload(session, row),
+            payload=payload,
             campaign_id=row.id,
             agent_id=row.agent_id,
         )

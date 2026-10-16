@@ -5,8 +5,20 @@ When a call completes, this module:
    conversation instead, see `_analysis_transcript`)
 2. Fetches recording URL(s) from recording.ready events
 3. Runs LLM analysis (if enabled)
-4. Stores analysis results on the call record
+4. Stores analysis results on the call record, redacted if the project
+   redacts (#313, ADR-0024: the call read serves them)
 5. Dispatches a comprehensive call.ended webhook with all data
+
+Where it runs (#313): analysis reads the call's raw conversation, which only
+the process that ran the call holds (`services/live_transcript`), and only for
+a few minutes. Post-call is triggered from wherever the call's end is noticed:
+the pipeline's own finalize, but also Twilio's `/status` callback or the end
+API, which can land on another replica. For a project that redacts, with
+analysis on, such a replica hands the run to the process holding the
+conversation over Redis pub/sub (`live_transcript.ask_holder`); no transcript
+crosses Redis, only the request. When no process holds it (a restart, or the
+minutes are up, as for a re-run), the run is local, on the stored and redacted
+transcript, and logged as such.
 """
 
 from __future__ import annotations
@@ -20,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.domain.enums import CallEventType, EndedReason
 from turncall.domain.models import AnalysisConfig, AWSConfig, LLMConfig
+from turncall.services import live_transcript, redaction
 from turncall.services.call_view import call_view_fields, public_metadata
 
 if TYPE_CHECKING:
@@ -65,11 +78,9 @@ def _analysis_transcript(
     ADR-0024). Redaction rewrites the stored transcript; extracting the
     caller's callback number from `<PHONE_NUMBER>` is no extraction, so they
     read this process's raw copy (services/live_transcript) and only their
-    output is redacted on the way out. `stored` when this process does not
-    hold the conversation (another replica finalized the call, a restart) —
-    redacted if the project redacts."""
-    from turncall.services import live_transcript
-
+    output is redacted on the way out. `stored` when no process holds the
+    conversation any more (a restart, a re-run minutes later) — redacted if
+    the project redacts."""
     held = live_transcript.lines(call_id)
     if held is not None:
         return [
@@ -80,8 +91,6 @@ def _analysis_transcript(
             for line in held
             if line.text.strip()
         ]
-    if stored:
-        logger.info("post_call_analysis_from_stored_transcript", call_id=str(call_id))
     return [
         {
             "text": e["text"],
@@ -159,11 +168,40 @@ async def _run_post_call(
     llm_config: LLMConfig,
     system_prompt: str,
     aws_config: AWSConfig | None = None,
+    *,
+    here: bool = False,
 ) -> None:
-    """Full post-call processing: transcript, recording, analysis, webhook."""
+    """Full post-call processing: transcript, recording, analysis, webhook.
+
+    `here`: run in this process whoever holds the conversation; the holder's
+    own run, asked for by another replica (`post_call_here`).
+    """
     from turncall.storage.repositories import call_repo
 
     try:
+        policy = await redaction.policy_for_project(
+            project_id, sessions=session_factory
+        )
+        if (
+            analysis_config.enabled
+            and policy is not None
+            and live_transcript.lines(call_id) is None
+        ):
+            if (
+                not here
+                and await live_transcript.ask_holder(call_id, live_transcript.POST_CALL)
+                is not None
+            ):
+                logger.info("post_call_handed_to_call_holder", call_id=str(call_id))
+                return
+            # Nobody holds it: analysis reads the stored, redacted transcript,
+            # and a takeaway asking for the caller's number gets the redaction.
+            logger.warning(
+                "post_call_analysis_from_stored_transcript",
+                call_id=str(call_id),
+                reason="no process holds the call's conversation",
+            )
+
         # 1. Gather transcript
         transcript = await _gather_transcript(session_factory, call_id)
         logger.info(
@@ -215,7 +253,12 @@ async def _run_post_call(
                 takeaways=len(takeaways_dict or {}),
             )
 
-            # Store analysis on call record
+            # Store analysis on call record. Redacted first, for a project that
+            # redacts: the call read serves it, and analysis read the raw
+            # conversation (#313; the rest of #314's surfaces are #314's).
+            # Before the session, as every redaction wait is (events/emit).
+            if policy is not None:
+                analysis_dict = await redaction.redact_payload(analysis_dict, policy)
             async with session_factory() as session:
                 await call_repo.update_call_analysis(session, call_id, analysis_dict)
                 await session.commit()
@@ -261,16 +304,27 @@ async def _run_post_call(
             call_ended_payload["summary"] = analysis_dict.get("summary")
             call_ended_payload["analysis"] = analysis_dict
 
-        # 6. Dispatch comprehensive call.ended webhook
-        async with session_factory() as session:
-            from turncall.events.emit import dispatch_call_event
+        # 6. Dispatch comprehensive call.ended webhook. Redacted before the
+        # session (events/emit). What was read back from this project's
+        # stored events (the transcript, failovers) and the analysis stored
+        # just above are redacted already, and pass through: only the rest
+        # (the call's metadata) is analysed.
+        from turncall.events.emit import dispatch_call_event, redact
 
+        ended = await redact(
+            project_id,
+            CallEventType.CALL_ENDED,
+            call_ended_payload,
+            stored=("transcript", "failovers", "summary", "analysis"),
+            sessions=session_factory,
+        )
+        async with session_factory() as session:
             await dispatch_call_event(
                 session,
                 call_id=call_id,
                 project_id=project_id,
                 event_type=CallEventType.CALL_ENDED,
-                payload=call_ended_payload,
+                payload=ended,
             )
 
         logger.info(
@@ -400,6 +454,8 @@ def trigger_post_call_analysis(
     call_id: UUID,
     project_id: UUID,
     agent_config_blob: dict[str, Any],
+    *,
+    here: bool = False,
 ) -> asyncio.Task:
     """Fire-and-forget post-call processing.
 
@@ -421,9 +477,29 @@ def trigger_post_call_analysis(
             llm_config,
             system_prompt,
             aws_config,
+            here=here,
         ),
         name=f"post-call-{call_id}",
     )
     _POST_CALL_TASKS.add(task)
     task.add_done_callback(_POST_CALL_TASKS.discard)
     return task
+
+
+async def post_call_here(body: dict[str, Any]) -> dict[str, Any]:
+    """Another replica's request to this one, which holds the call's
+    conversation: run post-call processing here (`live_transcript.POST_CALL`).
+    Answers once it is started, not finished."""
+    from turncall.services.live_call_channel import ControlRefused
+    from turncall.storage.database import get_session_factory
+    from turncall.storage.repositories import call_repo
+
+    call_id = UUID(str(body["call_id"]))
+    factory = get_session_factory()
+    async with factory() as session:
+        call = await call_repo.get_call_by_id(session, call_id)
+        config = await config_for_call(session, call) if call else None
+    if call is None or config is None:
+        raise ControlRefused("No call or agent config to analyse")
+    trigger_post_call_analysis(factory, call_id, call.project_id, config, here=True)
+    return {}

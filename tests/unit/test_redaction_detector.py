@@ -68,3 +68,36 @@ def test_a_missing_model_is_an_error_not_a_download(monkeypatch) -> None:
     with pytest.raises(redaction.RedactionUnavailable, match="en_core_web_sm"):
         redaction._build_detector()
     assert downloads == []
+
+
+async def test_the_worker_process_redacts_and_leaves_identifiers_alone() -> None:
+    """The shipped path: the model loads in its own worker process, and with
+    ORGANIZATION chosen a failover's provider names, read back as data, are
+    left as they are while its error text is analysed (#327 review, 9)."""
+    from turncall.services.redaction import RedactionPolicy, redact_payload
+
+    policy = RedactionPolicy(("ORGANIZATION", "PHONE_NUMBER", "EMAIL_ADDRESS"))
+    try:
+        assert await redaction.ready()
+        failover = await redact_payload(
+            {
+                "role": "llm",
+                "from": "Microsoft Azure",
+                "to": "Google",
+                "error": "Microsoft Azure said: call 415 555 0132 for support",
+            },
+            policy,
+            event_type="provider.failover",
+        )
+        said = await redact_payload(
+            {"text": "Write to jane.doe@example.com", "role": "customer"},
+            policy,
+            event_type="transcript.final",
+        )
+    finally:
+        redaction.shutdown()
+
+    assert failover["from"] == "Microsoft Azure" and failover["to"] == "Google"
+    assert "415 555 0132" not in failover["error"]
+    assert "<PHONE_NUMBER>" in failover["error"]
+    assert said == {"text": "Write to <EMAIL_ADDRESS>", "role": "customer"}

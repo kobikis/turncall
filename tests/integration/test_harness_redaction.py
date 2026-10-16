@@ -9,7 +9,9 @@ with redaction off is untouched and never loads the detector.
 
 Driven through Seam A: the real app, stub providers, a fake carrier, a signed
 webhook subscriber. The detector is the real one, Presidio over spaCy's small
-model.
+model in its worker process. It is loaded before each call is placed
+(`_redact`), as `PUT /redaction` starts it in the background: no request or
+carrier webhook may be what waits for the model's load.
 """
 
 from __future__ import annotations
@@ -29,6 +31,9 @@ from tests.harness import (
     place_inbound_call,
     run_app,
 )
+from tests.harness.second_instance import second_instance
+from tests.harness.twilio import post_signed
+from turncall.services import redaction
 
 pytestmark = pytest.mark.integration
 
@@ -72,10 +77,14 @@ def _raw_in(document: Any) -> list[str]:
 
 
 async def _redact(app: Harness, **setting: Any) -> dict[str, Any]:
+    """Set the project's redaction; turned on, wait for the detector the PUT
+    started loading, so the call that follows is not what pays for it."""
     response = await app.api.put(
         f"/v1/projects/{app.project_id}/redaction", json=setting
     )
     assert response.status_code == 200, response.text
+    if setting.get("enabled"):
+        assert await redaction.ready()
     return response.json()["data"]["redaction"]
 
 
@@ -188,7 +197,9 @@ async def test_post_call_analysis_and_takeaways_read_the_raw_conversation(
                 "takeaway_ids": [takeaway.json()["data"]["id"]],
             },
         }
-        _, ended = await _call(app, agent)
+        call, ended = await _call(app, agent)
+        record = (await app.api.get(f"/v1/calls/{call.call_id}")).json()["data"]
+        stored = (await app.api.get(f"/v1/calls/{call.call_id}/analysis")).json()
 
     analysis, takeaways = (
         [p for p in prompts if "Takeaway: callback" not in p],
@@ -202,6 +213,14 @@ async def test_post_call_analysis_and_takeaways_read_the_raw_conversation(
     assert payload["analysis"]["takeaways"]["callback"]["result"] == {
         "number": "<PHONE_NUMBER>"
     }
+    # Stored redacted on the call, so the call read serves no more than the
+    # transcript does (#327 review, 4).
+    assert record["analysis"]["summary"] == "Call back on <PHONE_NUMBER>."
+    assert record["analysis"]["takeaways"]["callback"]["result"] == {
+        "number": "<PHONE_NUMBER>"
+    }
+    assert _raw_in(record["analysis"]) == []
+    assert _raw_in(stored) == []
 
 
 async def test_the_warm_transfer_operator_is_briefed_on_what_was_said(
@@ -277,18 +296,17 @@ async def test_the_warm_transfer_operator_is_briefed_on_what_was_said(
 
 
 async def test_a_project_with_redaction_off_is_untouched(monkeypatch) -> None:
-    """As before redaction existed, and the detector is never built."""
-    from turncall.services import redaction
-
+    """As before redaction existed, and the detector is never built: its
+    worker process is never started."""
     built: list[str] = []
 
-    def build() -> Any:
+    def start() -> Any:
         built.append("detector")
         raise AssertionError("a project with redaction off loaded the detector")
 
-    # Unloaded, whatever an earlier test in this process did: any use builds.
-    monkeypatch.setattr(redaction, "_DETECTOR", None)
-    monkeypatch.setattr(redaction, "_build_detector", build)
+    # Unloaded, whatever an earlier test in this process did: any use starts it.
+    monkeypatch.setattr(redaction, "ENGINE", redaction._Engine())
+    monkeypatch.setattr(redaction, "_new_pool", start)
     script = Script(caller=(SAID,), agent=(ToolCall("end_call"), "Goodbye!"))
     async with run_app(
         script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
@@ -322,6 +340,8 @@ async def test_only_an_admin_key_sets_redaction(monkeypatch) -> None:
             )
             refused[role] = response.status_code
         unknown = await app.api.put(url, json={"enabled": True, "entities": ["SSN"]})
+        # `enabled` is required: a PUT naming only entities used to turn it off.
+        partial = await app.api.put(url, json={"entities": ["PERSON"]})
         chosen = await _redact(app, enabled=True, entities=["PERSON", "PHONE_NUMBER"])
         read = (await app.api.get(f"/v1/projects/{app.project_id}")).json()
         other = await app.api.put(
@@ -331,6 +351,145 @@ async def test_only_an_admin_key_sets_redaction(monkeypatch) -> None:
 
     assert refused == {"developer": 403, "viewer": 403}
     assert unknown.status_code == 422
+    assert partial.status_code == 422
     assert chosen == {"enabled": True, "entities": ["PERSON", "PHONE_NUMBER"]}
     assert read["data"]["redaction"] == chosen
     assert other.status_code == 403
+
+
+async def test_a_whisper_on_another_replica_is_briefed_by_the_calls_process(
+    monkeypatch,
+) -> None:
+    """The conversation lives only in the process that ran the call. When
+    Twilio fetches the warm transfer's whisper from another replica, that
+    replica asks the call's process for the briefing (Redis pub/sub, carrying
+    the call's id and nothing else) instead of briefing from the redacted
+    transcript (#327 review, 6). The other replica's LLM is a real one with no
+    key: a briefing it made itself would be the fallback line."""
+    import turncall.services.llm_text as llm_text
+
+    async def summarize(_llm: Any, messages: list[dict[str, str]], **_: Any) -> Any:
+        return SimpleNamespace(
+            text=messages[-1]["content"].removeprefix("Transcript:\n")
+        )
+
+    monkeypatch.setattr(llm_text, "complete_text", summarize)
+    script = Script(
+        caller=(SAID,),
+        agent=(
+            ToolCall(
+                "transfer_call",
+                {
+                    "target_number": OPERATOR,
+                    "transfer_mode": "warm",
+                    "briefing": {"from_summary": True},
+                },
+            ),
+            "Connecting you now.",
+        ),
+    )
+    agent = {
+        **AGENT,
+        "tools": [
+            {
+                "name": "transfer_call",
+                "description": "Transfer the caller",
+                "parameters_schema": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+    async with (
+        run_app(
+            script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+        ) as app,
+        second_instance() as other,
+    ):
+        await _redact(app, enabled=True)
+        number = await app.bind_number(await app.create_agent(agent))
+        call = await place_inbound_call(
+            app.carrier, app.api, from_number=CALLER, to_number=number
+        )
+        await call.wait_for_agent_speech(1)
+        await call.say(400)
+
+        # The operator answers; Twilio fetches the whisper from the other server.
+        transfer = await app.carrier.wait_for("transfer", timeout=10)
+        await call.close_stream()
+        whisper_path = transfer.params["whisper_url"].removeprefix(app.base_url)
+        whisper = await post_signed(
+            other,
+            app.carrier,
+            f"{other.base_url}{whisper_path}",
+            {
+                "AccountSid": app.carrier.account_sid,
+                "CallSid": "CA" + "0" * 32,
+                "From": number,
+                "To": OPERATOR,
+            },
+        )
+        await call.finish()
+        await app.sink.wait_for("call.ended")
+
+    assert whisper.status_code == 200, whisper.text
+    assert f"Caller: {SAID}" in whisper.text
+
+
+async def test_post_call_triggered_on_another_replica_runs_in_the_calls_process(
+    monkeypatch,
+) -> None:
+    """The call is ended through the API on another replica, which is where
+    post-call processing is triggered. It hands the run to the call's process,
+    so analysis reads what was said (#327 review, 6). The other replica's
+    analysis LLM is a real one with no key: an analysis it ran itself would
+    carry no summary."""
+    import turncall.services.call_analysis as call_analysis
+
+    analysed: list[str] = []
+
+    async def analysis_llm(_llm: Any, messages: list[dict[str, str]], **_: Any) -> Any:
+        analysed.append(messages[-1]["content"])
+        return SimpleNamespace(text=json.dumps({"summary": f"Call back on {NUMBER}."}))
+
+    monkeypatch.setattr(call_analysis, "complete_text", analysis_llm)
+    script = Script(caller=(SAID,), agent=("Thanks, one moment.",))
+    agent = {**AGENT, "tools": [], "analysis": {"enabled": True}}
+    async with (
+        run_app(
+            script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+        ) as app,
+        second_instance() as other,
+    ):
+        other.headers["Authorization"] = app.api.headers["Authorization"]
+        await _redact(app, enabled=True)
+        number = await app.bind_number(await app.create_agent(agent))
+        call = await place_inbound_call(
+            app.carrier, app.api, from_number=CALLER, to_number=number
+        )
+        await call.wait_for_agent_speech(1)
+        await call.say(400)
+        await call.wait_for_agent_speech(2)
+        ended_there = await other.post(f"/v1/calls/{call.call_id}/end", json={})
+        await call.close_stream()
+        await call.finish()
+        ended = await _all_call_ended(app)
+
+    assert ended_there.status_code == 200, ended_there.text
+    assert analysed, "the call's process never analysed the call"
+    for prompt in analysed:
+        assert NUMBER in prompt and EMAIL in prompt, prompt
+    assert ended
+    for event in ended:
+        assert event["payload"]["summary"] == "Call back on <PHONE_NUMBER>."
+        assert _raw_in(event) == []
+
+
+async def _all_call_ended(app: Harness, settle: float = 3.0) -> list[dict[str, Any]]:
+    """Every `call.ended`, once they stop coming (#328 sends some twice)."""
+    import asyncio
+
+    await app.sink.wait_for("call.ended")
+    seen = -1
+    while seen != len(app.sink.of("call.ended")):
+        seen = len(app.sink.of("call.ended"))
+        await asyncio.sleep(settle)
+    return list(app.sink.of("call.ended"))
