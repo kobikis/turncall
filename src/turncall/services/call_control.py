@@ -99,8 +99,9 @@ async def _record_control_end(
 
 # What `end_call` tells the model: its next reply is the goodbye.
 ASSISTANT_END_MESSAGE = (
-    "The call ends after your next reply. Say a short goodbye now, "
-    "or reply with nothing if you already said goodbye."
+    "The call ends after your next reply, which the caller hears word for "
+    "word. Say a short goodbye now, or reply with nothing if you already said "
+    "goodbye. Never describe or announce ending the call."
 )
 
 
