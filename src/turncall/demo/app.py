@@ -46,8 +46,13 @@ def create_demo_app(agents: dict[str, AgentConfig], settings: Settings) -> FastA
         # A container is stopped with SIGTERM (a rollout, a host going away)
         # and given time to exit: the call on the line finishes first (#199).
         drain.install_sigterm_drain()
+        # Off the event loop, so the port answers at once and `/connect` is
+        # served meanwhile; an offer that comes first waits on the same
+        # import lock, never longer than it would have.
+        warming = asyncio.create_task(asyncio.to_thread(import_call_path))
         yield
         drain.uninstall_sigterm_drain()
+        warming.cancel()
 
     app = FastAPI(
         title="TurnCall demo", docs_url=None, redoc_url=None, lifespan=lifespan
@@ -177,6 +182,20 @@ def create_demo_app(agents: dict[str, AgentConfig], settings: Settings) -> FastA
         return JSONResponse(content={"status": "ok"})
 
     return app
+
+
+def import_call_path() -> None:
+    """Import what building a call needs, ahead of the first call.
+
+    Measured on a demo container (1 vCPU): 1.7 s between the SDP answer and
+    the pipeline, nearly all of it `pipeline_builder`'s imports (the OpenAI
+    SDK's types alone are a third). The visitor waits for all of it before
+    the greeting, so it is paid at startup instead, while their browser is
+    still fetching its client and asking for the microphone.
+    """
+    from pipecat.audio.vad import silero  # noqa: F401
+
+    from turncall.orchestrator import pipeline_builder  # noqa: F401
 
 
 async def _run(session: Any, config: AgentConfig) -> None:
