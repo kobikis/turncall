@@ -1628,20 +1628,12 @@ def create_pipeline(
                     )
                 )
 
-            # Log event
-            try:
-                async with call_context.session_factory() as session:
-                    from turncall.storage.repositories import call_repo
+            # On the call's log, never sent: what `ended_reason` reads.
+            from turncall.orchestrator.turn_metrics import store_call_event
 
-                    await call_repo.create_call_event(
-                        session,
-                        call_id=call_context.call_id,
-                        event_type="voicemail.detected",
-                        payload={"retries": _vm_retry_count},
-                    )
-                    await session.commit()
-            except Exception:
-                logger.exception("voicemail_event_error")
+            await store_call_event(
+                call_context, "voicemail.detected", {"retries": _vm_retry_count}
+            )
 
         @voicemail_detector.event_handler("on_conversation_detected")
         async def handle_conversation(processor: Any) -> None:

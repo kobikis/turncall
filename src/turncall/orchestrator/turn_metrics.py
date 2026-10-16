@@ -106,23 +106,22 @@ class TurnMetricsRecorder:
 
 
 async def store_call_event(
-    ctx: CallContext, event_type: CallEventType, payload: dict[str, Any]
+    ctx: CallContext, event_type: str, payload: dict[str, Any]
 ) -> None:
     """Store one call event and dispatch nothing: for the records only the
     call's event log carries. Best-effort — a lost record is logged."""
     try:
-        from turncall.storage.repositories import call_repo
+        from turncall.events.emit import record_call_event
 
         async with ctx.session_factory() as session:
-            seq = await call_repo.get_next_sequence_number(session, ctx.call_id)
-            await call_repo.create_call_event(
+            await record_call_event(
                 session,
                 call_id=ctx.call_id,
+                project_id=ctx.project_id,
                 event_type=event_type,
                 payload=payload,
-                sequence_number=seq,
+                commit=True,
             )
-            await session.commit()
     except Exception:
         logger.exception(
             "call_event_write_error", call_id=str(ctx.call_id), event_type=event_type

@@ -91,28 +91,15 @@ class TranscriptTapProcessor(FrameProcessor):
 
         try:
             async with self._call_context.session_factory() as session:
-                from turncall.storage.repositories import call_repo
+                from turncall.events.emit import emit_call_event
 
-                seq = await call_repo.get_next_sequence_number(
-                    session, self._call_context.call_id
-                )
-                await call_repo.create_call_event(
+                await emit_call_event(
                     session,
                     call_id=self._call_context.call_id,
-                    event_type=CallEventType.TRANSCRIPT_FINAL,
-                    payload=payload,
-                    sequence_number=seq,
-                )
-                await session.commit()
-
-                from turncall.events.dispatcher import dispatch_event
-
-                await dispatch_event(
-                    session,
                     project_id=self._call_context.project_id,
                     event_type=CallEventType.TRANSCRIPT_FINAL,
                     payload=payload,
-                    call_id=self._call_context.call_id,
+                    commit=True,
                 )
         except Exception:
             logger.exception(
@@ -204,28 +191,15 @@ class AssistantTranscriptTapProcessor(FrameProcessor):
 
         try:
             async with self._call_context.session_factory() as session:
-                from turncall.storage.repositories import call_repo
+                from turncall.events.emit import emit_call_event
 
-                seq = await call_repo.get_next_sequence_number(
-                    session, self._call_context.call_id
-                )
-                await call_repo.create_call_event(
+                await emit_call_event(
                     session,
                     call_id=self._call_context.call_id,
-                    event_type=CallEventType.TRANSCRIPT_FINAL,
-                    payload=payload,
-                    sequence_number=seq,
-                )
-                await session.commit()
-
-                from turncall.events.dispatcher import dispatch_event
-
-                await dispatch_event(
-                    session,
                     project_id=self._call_context.project_id,
                     event_type=CallEventType.TRANSCRIPT_FINAL,
                     payload=payload,
-                    call_id=self._call_context.call_id,
+                    commit=True,
                 )
         except Exception:
             logger.exception(

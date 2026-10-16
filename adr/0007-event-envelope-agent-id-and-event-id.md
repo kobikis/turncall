@@ -78,3 +78,11 @@ Already populated for sms/chat events (`_dispatch_session_event` /
   the session row). Add if a consumer needs it.
 - `analysis.completed` (`CallEventType.ANALYSIS_COMPLETED`) is defined but never
   dispatched — analysis ships inside `call.ended`. Unrelated pre-existing gap.
+
+## Note (2026-10-16, #312)
+
+The "`dispatch_event`, not `emit_call_event`" reasoning above is out of date:
+`tool.result`, `transcript.final` and `call.ended` no longer call
+`dispatch_event` directly. Every call event and webhook now leaves through
+`events/emit.py`, the only caller of `dispatch_event`. The decision itself
+stands: `agent_id` is still resolved in `dispatch_event`.

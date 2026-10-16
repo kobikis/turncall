@@ -55,7 +55,7 @@ async def _record_invocation(
     row must not cost someone their reply.
     """
     from turncall.domain.enums import CallEventType
-    from turncall.events.dispatcher import dispatch_event
+    from turncall.events.emit import dispatch_project_event
     from turncall.storage.database import get_session_factory
     from turncall.storage.repositories import tool_invocation_repo
 
@@ -73,7 +73,7 @@ async def _record_invocation(
             )
             await db.commit()
 
-            await dispatch_event(
+            await dispatch_project_event(
                 db,
                 project_id=project_id,
                 event_type=CallEventType.TOOL_RESULT,

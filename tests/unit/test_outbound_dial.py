@@ -12,7 +12,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -76,6 +76,13 @@ def _call(**kw):
     return SimpleNamespace(**row)
 
 
+def _session() -> AsyncMock:
+    session = AsyncMock()
+    # The event exit point sends inside a SAVEPOINT: an async context manager.
+    session.begin_nested = MagicMock()
+    return session
+
+
 @pytest.fixture
 def dial(app, monkeypatch):
     """The route with every repository and the carrier mocked."""
@@ -83,7 +90,7 @@ def dial(app, monkeypatch):
         project_id=uuid.uuid4(), api_key_id=uuid.uuid4(), role=ProjectRole.ADMIN
     )
     app.app.dependency_overrides[resolve_auth_context] = lambda: ctx
-    app.app.dependency_overrides[get_session] = lambda: AsyncMock()
+    app.app.dependency_overrides[get_session] = _session
     state = SimpleNamespace(settings=_settings(), project_id=ctx.project_id)
     monkeypatch.setattr(
         "turncall.services.outbound_dial.get_settings", lambda: state.settings
@@ -138,7 +145,7 @@ def dial(app, monkeypatch):
             AsyncMock(return_value=ProjectLimits()),
         ),
         patch(f"{CALLS}.create_call_event", AsyncMock()) as event,
-        patch("turncall.events.emit.dispatch_event", AsyncMock()) as dispatched,
+        patch("turncall.events.dispatcher.dispatch_event", AsyncMock()) as dispatched,
         patch(
             f"{ADAPTER}.initiate_outbound_call", AsyncMock(return_value="CA123")
         ) as carrier,

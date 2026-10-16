@@ -1736,8 +1736,12 @@ and the payload carries `{reason, limit, transport, from_number, to_number,
 provider_call_id}`. Dispatched only — there is no event log to store it on.
 
 Stored-only call events — on the call's event log (`GET /v1/calls/{id}/events`),
-never sent to webhook subscribers, none in an eval: `metrics.turn` (#176) and
-`delegation.completed` (#247).
+never sent to webhook subscribers, none in an eval: `metrics.turn` (#176),
+`delegation.completed` (#247), `voicemail.detected`, and the log's own
+`call.ended` rows (the carrier's: Twilio's `completed`/`busy`/`no-answer`
+status callback, Telnyx's hangup; and the agent's hangup marker, source
+`control`). Subscribers get the comprehensive `call.ended` instead, which is
+sent and never stored.
 
 The call read (`GET /v1/calls[/{id}]`) carries the same derived fields —
 `ended_reason`, `agent_name`, `agent_version`, `latency_summary`, `failovers` — from the same function,
@@ -1821,7 +1825,25 @@ in the payload: a list of 10,000 is not a webhook.
 payload, sent instead of `campaign.completed` by the cancel request whose
 UPDATE moved the campaign.
 
-Key files: `events/webhook_delivery.py` (envelope + signing + retry),
+Call events and webhooks leave through one exit point, `events/emit.py`
+(#312), so redaction (ADR-0024, #313) has one place to stand. It covers two
+things: rows on a call's event log (`call_events`) and events sent to webhook
+subscribers. Store and send with `emit_call_event`, store only with
+`record_call_event`, send only with `dispatch_call_event` or, with no call
+behind it, `dispatch_project_event`. `tests/unit/test_event_exit_point.py`
+fails on any other module that calls `call_repo.create_call_event` or
+`dispatcher.dispatch_event`, builds a `CallEventRow`, or writes `call_events`
+in raw SQL.
+
+It does not cover, by design: call-init and the other server events
+(`events/server_events.py`) or tool webhooks (`services/tool_webhook.py`),
+which are part of the live call and send the operator's own server raw values;
+and tool-invocation rows (`tool_invocation_repo.create_invocation`, from
+`orchestrator/tool_bridge.py` and `services/chat_tools.py`), which are stored
+data and redacted under #314. Nor the call row's `analysis_json`, SMS/chat
+message rows, logs or spans.
+
+Key files: `events/emit.py` (the exit point), `events/webhook_delivery.py` (envelope + signing + retry),
 `events/dispatcher.py` (agent_id/event_id resolution), `domain/call_state.py`
 (`infer_ended_reason`). See `adr/0007`, `adr/0008`.
 

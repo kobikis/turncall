@@ -296,7 +296,7 @@ async def admit_inbound_call(
     no call row — the call never started — so the event goes to webhook
     subscribers with no `call_id`, and the carrier's id in its payload.
     """
-    from turncall.events.dispatcher import dispatch_event
+    from turncall.events.emit import dispatch_project_event
 
     limits = await limits_for_project(session, project_id)
     if await claim_live_call(project_id, call_id, limits.live_calls):
@@ -311,7 +311,7 @@ async def admit_inbound_call(
     }
     logger.warning("inbound_call_rejected", project_id=str(project_id), **payload)
     try:
-        await dispatch_event(
+        await dispatch_project_event(
             session,
             project_id=project_id,
             event_type=CallEventType.CALL_REJECTED.value,

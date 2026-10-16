@@ -235,14 +235,14 @@ async def _run_post_call(
 
         # 6. Dispatch comprehensive call.ended webhook
         async with session_factory() as session:
-            from turncall.events.dispatcher import dispatch_event
+            from turncall.events.emit import dispatch_call_event
 
-            await dispatch_event(
+            await dispatch_call_event(
                 session,
+                call_id=call_id,
                 project_id=project_id,
                 event_type=CallEventType.CALL_ENDED,
                 payload=call_ended_payload,
-                call_id=call_id,
             )
 
         logger.info(

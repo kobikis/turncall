@@ -20,7 +20,7 @@ from turncall.api.errors import BadRequestError
 from turncall.domain.enums import CallEventType, ChatChannel, SmsMessageRole
 from turncall.domain.models import AgentConfig
 from turncall.domain.session_state import is_session_expired
-from turncall.events.dispatcher import dispatch_event
+from turncall.events.emit import dispatch_project_event
 from turncall.services.chat_tools import build_chat_tools
 from turncall.services.limits import admit_message
 from turncall.services.llm_text import complete_text
@@ -449,7 +449,7 @@ async def _dispatch_session_event(
     project_id: UUID,
 ) -> None:
     """Dispatch a session lifecycle webhook event."""
-    await dispatch_event(
+    await dispatch_project_event(
         db,
         project_id=project_id,
         event_type=event_type.value,
@@ -472,7 +472,7 @@ async def _dispatch_chat_event(
     project_id: UUID,
 ) -> None:
     """Dispatch a chat.created webhook event."""
-    await dispatch_event(
+    await dispatch_project_event(
         db,
         project_id=project_id,
         event_type=CallEventType.CHAT_CREATED.value,

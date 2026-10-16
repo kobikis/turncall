@@ -22,6 +22,7 @@ from turncall.domain.carriers import TWILIO
 from turncall.domain.enums import CallEventType, CallStatus
 from turncall.services.limits import release_live_call
 from turncall.services.media_token import media_token
+from turncall.storage.models import CallRow
 from turncall.storage.repositories import (
     agent_repo,
     call_repo,
@@ -390,42 +391,7 @@ async def status_callback(
 
     await call_repo.update_call_status(session, call.id, **update_kwargs)
 
-    # Create event + dispatch webhook (except call.ended which is dispatched
-    # by post-call trigger with full transcript/analysis)
-    from turncall.events.emit import emit_call_event
-
-    event_type = {
-        CallStatus.COMPLETED: CallEventType.CALL_ENDED,
-        CallStatus.FAILED: CallEventType.CALL_FAILED,
-    }.get(new_status, CallEventType.CALL_STARTED)
-
-    status_payload = {
-        "provider_call_sid": call_sid,
-        "twilio_status": call_status,
-        "internal_status": new_status.value,
-        "from_number": call.from_number,
-        "to_number": call.to_number,
-    }
-
-    if new_status == CallStatus.COMPLETED:
-        # DB event only — comprehensive webhook dispatched by post-call trigger
-        seq = await call_repo.get_next_sequence_number(session, call.id)
-        await call_repo.create_call_event(
-            session,
-            call_id=call.id,
-            event_type=event_type,
-            payload=status_payload,
-            sequence_number=seq,
-        )
-    else:
-        # Non-completed statuses: dispatch webhook immediately
-        await emit_call_event(
-            session,
-            call_id=call.id,
-            project_id=call.project_id,
-            event_type=event_type,
-            payload=status_payload,
-        )
+    await _record_status(session, call, new_status, call_sid, call_status)
 
     # Trigger post-call processing when call completes
     if new_status == CallStatus.COMPLETED:
@@ -450,6 +416,56 @@ async def status_callback(
             logger.exception("analysis_trigger_error", call_id=str(call.id))
 
     return Response(status_code=204)
+
+
+async def _record_status(
+    session: AsyncSession,
+    call: CallRow,
+    new_status: CallStatus,
+    call_sid: str,
+    twilio_status: str,
+) -> None:
+    """The call event a status callback leaves, as Telnyx's edge leaves one.
+
+    - answered (`in-progress`): `call.started`, stored and sent.
+    - `failed`/`canceled`: `call.failed`, stored and sent, which reads back
+      as `telephony_failed`.
+    - `completed`, `busy`, `no-answer`: the carrier's `call.ended` row,
+      stored only. A completed call's subscribers hear the comprehensive
+      `call.ended` from post-call processing (ADR-0006); an unanswered one's
+      status, and so its `ended_reason`, is on the call row.
+    - `ringing`, `queued`: nothing beyond the call row's status. A call that
+      rings out is not a call that started.
+    """
+    from turncall.events.emit import emit_call_event, record_call_event
+
+    payload = {
+        "provider_call_sid": call_sid,
+        "twilio_status": twilio_status,
+        "internal_status": new_status.value,
+        "from_number": call.from_number,
+        "to_number": call.to_number,
+    }
+    sent = {
+        CallStatus.IN_PROGRESS: CallEventType.CALL_STARTED,
+        CallStatus.FAILED: CallEventType.CALL_FAILED,
+    }.get(new_status)
+    if sent is not None:
+        await emit_call_event(
+            session,
+            call_id=call.id,
+            project_id=call.project_id,
+            event_type=sent,
+            payload=payload,
+        )
+    elif new_status in {CallStatus.COMPLETED, CallStatus.BUSY, CallStatus.NO_ANSWER}:
+        await record_call_event(
+            session,
+            call_id=call.id,
+            project_id=call.project_id,
+            event_type=CallEventType.CALL_ENDED,
+            payload=payload,
+        )
 
 
 @router.post("/recording")
