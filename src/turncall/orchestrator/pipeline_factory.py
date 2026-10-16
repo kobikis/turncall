@@ -1631,13 +1631,17 @@ def create_pipeline(
             # Log event
             try:
                 async with call_context.session_factory() as session:
-                    from turncall.storage.repositories import call_repo
+                    from turncall.events.emit import record_call_event
 
-                    await call_repo.create_call_event(
+                    await record_call_event(
                         session,
                         call_id=call_context.call_id,
+                        project_id=call_context.project_id,
                         event_type="voicemail.detected",
                         payload={"retries": _vm_retry_count},
+                        # Unnumbered, as it has always been: it sorts first on
+                        # the call's log. Kept as found (#312, no behaviour change).
+                        sequence_number=0,
                     )
                     await session.commit()
             except Exception:

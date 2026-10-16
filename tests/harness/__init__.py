@@ -14,6 +14,7 @@ Pieces
   `Script.agent[n]` (text, a `ToolCall`, a tuple of both, or a function of
   `Given` — the prompt, messages and tools it was given). A tool result is
   its own inference, so "call a tool, then say goodbye" is two entries.
+  Each inference is instant unless `Script.think_ms` says otherwise.
   `install_stub_providers(script, set_attr)` swaps the three factories in
   `orchestrator/pipeline_factory` — cascade only; S2S, post-call analysis, the
   voicemail classifier and KB embeddings still reach real providers, so keep

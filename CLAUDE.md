@@ -1821,7 +1821,15 @@ in the payload: a list of 10,000 is not a webhook.
 payload, sent instead of `campaign.completed` by the cancel request whose
 UPDATE moved the campaign.
 
-Key files: `events/webhook_delivery.py` (envelope + signing + retry),
+Every event leaves through one exit point, `events/emit.py` (#312): a row on
+a call's event log and a webhook to a subscriber are written nowhere else, so
+redaction (ADR-0024) has one place to stand. Store and send with
+`emit_call_event`, store only with `record_call_event`, send only with
+`dispatch_call_event` or, with no call behind it, `dispatch_project_event`.
+`tests/unit/test_event_exit_point.py` fails on any other module that calls
+`call_repo.create_call_event` or `dispatcher.dispatch_event`.
+
+Key files: `events/emit.py` (the exit point), `events/webhook_delivery.py` (envelope + signing + retry),
 `events/dispatcher.py` (agent_id/event_id resolution), `domain/call_state.py`
 (`infer_ended_reason`). See `adr/0007`, `adr/0008`.
 

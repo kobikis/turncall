@@ -60,13 +60,13 @@ async def _announce(
 ) -> None:
     """Best effort, like every dispatch: the row is written either way, and a
     subscriber being down must not stop a campaign."""
-    from turncall.events.dispatcher import dispatch_event
+    from turncall.events.emit import dispatch_project_event
 
     try:
         row = await campaign_repo.get_campaign_by_id(session, campaign_id)
         if row is None:
             return
-        await dispatch_event(
+        await dispatch_project_event(
             session,
             project_id=row.project_id,
             event_type=event_type.value,

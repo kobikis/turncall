@@ -81,19 +81,16 @@ async def _endable_call(session: AsyncSession, call_id: UUID) -> Any:
     return call
 
 
-async def _record_control_end(
-    session: AsyncSession, call_id: UUID, reason: str
-) -> None:
+async def _record_control_end(session: AsyncSession, call: Any, reason: str) -> None:
     """The `call.ended` event `infer_ended_reason` reads as the agent's hangup."""
-    from turncall.storage.repositories import call_repo
+    from turncall.events.emit import record_call_event
 
-    seq = await call_repo.get_next_sequence_number(session, call_id)
-    await call_repo.create_call_event(
+    await record_call_event(
         session,
-        call_id=call_id,
+        call_id=call.id,
+        project_id=call.project_id,
         event_type=CallEventType.CALL_ENDED,
         payload={"reason": reason, "source": "control"},
-        sequence_number=seq,
     )
 
 
@@ -120,7 +117,7 @@ async def begin_assistant_end(
     call = await _endable_call(session, call_id)
     if isinstance(call, ControlResult):
         return call
-    await _record_control_end(session, call_id, reason)
+    await _record_control_end(session, call, reason)
     # Read by the model, which replies next: that reply is the goodbye.
     return ControlResult(success=True, message=ASSISTANT_END_MESSAGE)
 
@@ -168,7 +165,7 @@ async def end_call(
         duration_ms=duration_ms,
     )
 
-    await _record_control_end(session, call_id, reason)
+    await _record_control_end(session, call, reason)
 
     # Trigger post-call processing (transcript, recording, analysis, webhook)
     # The comprehensive call.ended webhook is dispatched after analysis completes.

@@ -11,6 +11,7 @@ their own cursor into it, so concurrent calls each run the whole script.
 
 from __future__ import annotations
 
+import asyncio
 import audioop
 import math
 from collections.abc import AsyncGenerator, Callable, Sequence
@@ -83,6 +84,9 @@ class Script:
     agent: tuple[Reply, ...] = ()
     # Agent speech length per word. Real TTS is ~400ms a word; tests want less.
     tts_ms_per_word: int = 60
+    # How long the model takes over each inference. Instant by default; a test
+    # that needs one moment's events delivered before the next sets it.
+    think_ms: int = 0
 
 
 class StubSTT(STTService):
@@ -125,10 +129,11 @@ class StubSTT(STTService):
 class StubLLM(LLMService):
     """Answers its n-th inference with the script's n-th reply."""
 
-    def __init__(self, replies: Sequence[Reply]) -> None:
+    def __init__(self, replies: Sequence[Reply], *, think_ms: int = 0) -> None:
         super().__init__()
         self._replies = iter(replies)
         self._calls = 0
+        self._think_s = think_ms / 1000
 
     def can_generate_metrics(self) -> bool:
         # pipeline_builder finds the LLM to register tools on by this; False
@@ -142,6 +147,8 @@ class StubLLM(LLMService):
             return
         await self.push_frame(LLMFullResponseStartFrame())
         await self.start_ttfb_metrics()
+        if self._think_s:
+            await asyncio.sleep(self._think_s)
         reply = next(self._replies, EXHAUSTED)
         if callable(reply):
             reply = reply(self._given(frame.context))
@@ -229,7 +236,7 @@ def install_stub_providers(script: Script, set_attr: Setter = setattr) -> None:
         return StubSTT(script.caller)
 
     def llm(*_args: Any, **_kwargs: Any) -> StubLLM:
-        return StubLLM(script.agent)
+        return StubLLM(script.agent, think_ms=script.think_ms)
 
     def tts(*_args: Any, **_kwargs: Any) -> StubTTS:
         return StubTTS(ms_per_word=script.tts_ms_per_word)

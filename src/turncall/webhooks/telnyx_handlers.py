@@ -293,10 +293,12 @@ async def _on_hangup(
     stream opened — is finalized here, since nothing else will. One that has a
     pipeline is finalized by it, recording and transcript complete.
     """
-    seq = await call_repo.get_next_sequence_number(session, call.id)
-    await call_repo.create_call_event(
+    from turncall.events.emit import record_call_event
+
+    await record_call_event(
         session,
         call_id=call.id,
+        project_id=call.project_id,
         event_type=CallEventType.CALL_ENDED,
         payload={
             "provider_call_sid": call.provider_call_sid,
@@ -306,7 +308,6 @@ async def _on_hangup(
             "from_number": call.from_number,
             "to_number": call.to_number,
         },
-        sequence_number=seq,
     )
     await session.commit()
     # The carrier says the call is over, whatever our state machine thinks —

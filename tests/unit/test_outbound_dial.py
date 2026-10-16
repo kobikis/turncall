@@ -138,7 +138,7 @@ def dial(app, monkeypatch):
             AsyncMock(return_value=ProjectLimits()),
         ),
         patch(f"{CALLS}.create_call_event", AsyncMock()) as event,
-        patch("turncall.events.emit.dispatch_event", AsyncMock()) as dispatched,
+        patch("turncall.events.dispatcher.dispatch_event", AsyncMock()) as dispatched,
         patch(
             f"{ADAPTER}.initiate_outbound_call", AsyncMock(return_value="CA123")
         ) as carrier,

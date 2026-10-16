@@ -353,10 +353,10 @@ async def _dispatch_run_event(
     and `agent_id` is null for an inline target, which is the honest answer
     rather than missing data (ADR-0017).
     """
-    from turncall.events.dispatcher import dispatch_event
+    from turncall.events.emit import dispatch_project_event
 
     try:
-        await dispatch_event(
+        await dispatch_project_event(
             session,
             project_id=project_id,
             event_type=event_type,

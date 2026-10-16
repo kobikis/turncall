@@ -59,7 +59,8 @@ async def _log_tool_result(
     try:
         async with call_context.session_factory() as session:
             from turncall.domain.enums import CallEventType
-            from turncall.storage.repositories import call_repo, tool_invocation_repo
+            from turncall.events.emit import emit_call_event
+            from turncall.storage.repositories import tool_invocation_repo
 
             status, output_json = classify_tool_result(result)
             await tool_invocation_repo.create_invocation(
@@ -71,26 +72,13 @@ async def _log_tool_result(
                 output_json=output_json,
                 latency_ms=latency_ms,
             )
-            seq = await call_repo.get_next_sequence_number(
-                session, call_context.call_id
-            )
-            await call_repo.create_call_event(
+            await emit_call_event(
                 session,
                 call_id=call_context.call_id,
-                event_type=CallEventType.TOOL_RESULT,
-                payload=payload,
-                sequence_number=seq,
-            )
-            await session.commit()
-
-            from turncall.events.dispatcher import dispatch_event
-
-            await dispatch_event(
-                session,
                 project_id=call_context.project_id,
                 event_type=CallEventType.TOOL_RESULT,
                 payload=payload,
-                call_id=call_context.call_id,
+                commit=True,  # the invocation row and the event, together
             )
     except Exception:
         logger.exception("tool_event_log_error")

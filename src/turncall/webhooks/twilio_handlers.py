@@ -392,7 +392,7 @@ async def status_callback(
 
     # Create event + dispatch webhook (except call.ended which is dispatched
     # by post-call trigger with full transcript/analysis)
-    from turncall.events.emit import emit_call_event
+    from turncall.events.emit import emit_call_event, record_call_event
 
     event_type = {
         CallStatus.COMPLETED: CallEventType.CALL_ENDED,
@@ -409,13 +409,12 @@ async def status_callback(
 
     if new_status == CallStatus.COMPLETED:
         # DB event only — comprehensive webhook dispatched by post-call trigger
-        seq = await call_repo.get_next_sequence_number(session, call.id)
-        await call_repo.create_call_event(
+        await record_call_event(
             session,
             call_id=call.id,
+            project_id=call.project_id,
             event_type=event_type,
             payload=status_payload,
-            sequence_number=seq,
         )
     else:
         # Non-completed statuses: dispatch webhook immediately
