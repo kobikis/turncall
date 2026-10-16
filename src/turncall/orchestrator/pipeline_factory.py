@@ -29,6 +29,7 @@ from turncall.orchestrator.deepgram_flux import (
     MIXED_FLUX_GROUP,
     create_flux_stt,
     flux_turn_strategies,
+    is_eager,
     is_flux,
     mixes_flux,
 )
@@ -1094,7 +1095,10 @@ def _build_turn_strategies(config: AgentConfig, *, smart_turn: bool) -> Any | No
     strategy beside it would only add a second wait after Flux's (#204).
     """
     if smart_turn and _flux_owns_turn(config):
-        return flux_turn_strategies(interruptions=config.interruption_enabled)
+        return flux_turn_strategies(
+            interruptions=config.interruption_enabled,
+            eager=is_eager(config.stt.extra),
+        )
 
     strategies: dict[str, Any] = {}
 

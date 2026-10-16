@@ -117,6 +117,19 @@ class TestTheService:
 
         assert "sample_rate=8000" in _connection_url(service)
 
+    def test_an_eager_threshold_turns_the_prediction_on(self) -> None:
+        """The threshold alone makes Flux send predictions; the flag is what
+        has the service act on them."""
+        service = _service(
+            _flux(stt=STTConfig(model=FLUX, extra={"eager_eot_threshold": 0.5}))
+        )
+
+        assert service.eager_end_of_turn_enabled
+        assert "eager_eot_threshold=0.5" in _connection_url(service)
+
+    def test_no_threshold_no_prediction(self) -> None:
+        assert not _service(_flux()).eager_end_of_turn_enabled
+
     @pytest.mark.parametrize("enabled", [True, False])
     def test_the_service_agrees_with_the_agent_on_barge_in(self, enabled: bool) -> None:
         assert (
@@ -146,6 +159,16 @@ class TestTheTurnIsFluxs:
         )
 
         assert strategies.start[0]._enable_interruptions is enabled
+
+    def test_an_eager_agent_answers_the_prediction(self) -> None:
+        strategies = _build_turn_strategies(
+            _flux(stt=STTConfig(model=FLUX, extra={"eager_eot_threshold": 0.5})),
+            smart_turn=True,
+        )
+
+        assert [type(s).__name__ for s in strategies.stop] == [
+            "EagerUserTurnStopStrategy"
+        ]
 
     def test_nova_keeps_smart_turn(self) -> None:
         strategies = _build_turn_strategies(AgentConfig(), smart_turn=True)
@@ -312,3 +335,27 @@ async def test_metrics_turn_records_the_turn_end_flux_decided(mocker) -> None:
     [turn] = written
     assert 500 <= turn["turn_end_ms"] < 1500
     assert turn["user_to_bot_ms"] >= turn["turn_end_ms"]
+
+
+async def test_an_eager_end_of_turn_asks_the_llm_once(mocker) -> None:
+    """The prediction starts the reply while the turn is open; an EndOfTurn
+    that agrees with it releases that reply instead of asking again."""
+    down = await _drive(
+        mocker,
+        [
+            _Noise(),
+            _Server("StartOfTurn"),
+            _Server("EagerEndOfTurn", "Table for two at seven"),
+            SleepFrame(0.2),
+            _Marker(),
+            _Server("EndOfTurn", "Table for two at seven."),
+            SleepFrame(0.2),
+        ],
+        stt=STTConfig(model=FLUX, extra={"eager_eot_threshold": 0.5}),
+    )
+
+    kinds = [type(f) for f in down]
+    asked = [f for f in down if isinstance(f, LLMContextFrame)]
+    assert len(asked) == 1, "the confirmed turn was answered twice"
+    assert asked[0].speculation
+    assert kinds.index(LLMContextFrame) < kinds.index(_Marker)
