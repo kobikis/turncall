@@ -99,6 +99,9 @@ class LLMConfigSchema(BaseModel):
     reasoning_effort: str | None = Field(
         default=None, pattern="^(minimal|low|medium|high)$"
     )
+    # Voice: warm the LLM client as the caller's first turn starts. One paid
+    # one-token request per call; OpenAI-compatible providers only.
+    warm_up: bool = False
     extra: dict[str, Any] = Field(default_factory=dict)
     # Backup LLMs for a voice call (#222), each a whole LLM config of its own.
     failover: list["LLMConfigSchema"] = Field(default_factory=list, max_length=5)
