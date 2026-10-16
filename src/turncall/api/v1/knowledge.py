@@ -446,6 +446,16 @@ async def unlink_knowledge_base(
     session: DbSession,
 ) -> None:
     """Unlink a knowledge base from an agent."""
+    from turncall.storage.repositories import agent_repo
+
+    # Scope to the caller's project — without this, any project's key could
+    # unlink any other project's agent↔KB association by id (cross-project BOLA).
+    agent_row = await agent_repo.get_agent_by_id(
+        session, agent_id, project_id=auth.project_id
+    )
+    if agent_row is None:
+        raise NotFoundError("Agent", str(agent_id))
+
     removed = await knowledge_repo.unlink_agent_knowledge_base(
         session, agent_id=agent_id, knowledge_base_id=kb_id
     )
