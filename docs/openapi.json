@@ -9083,6 +9083,11 @@
             ],
             "title": "Reasoning Effort"
           },
+          "warm_up": {
+            "type": "boolean",
+            "title": "Warm Up",
+            "default": false
+          },
           "extra": {
             "additionalProperties": true,
             "type": "object",
