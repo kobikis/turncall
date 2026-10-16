@@ -41,3 +41,20 @@ async def test_s2s_has_no_tts_and_records_as_before() -> None:
     tap, factory = _tap(tts_usable=None)
     await tap._log_transcript("Buona sera")
     factory.assert_called_once()
+
+
+async def test_a_voice_tag_is_not_written_down(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from turncall.events import dispatcher
+    from turncall.storage.repositories import call_repo
+
+    written = AsyncMock()
+    monkeypatch.setattr(call_repo, "get_next_sequence_number", AsyncMock())
+    monkeypatch.setattr(call_repo, "create_call_event", written)
+    monkeypatch.setattr(dispatcher, "dispatch_event", AsyncMock())
+    tap, _ = _tap(tts_usable=True)
+
+    await tap._log_transcript('<emotion value="excited"/>Buona sera!')
+
+    assert written.call_args.kwargs["payload"]["text"] == "Buona sera!"

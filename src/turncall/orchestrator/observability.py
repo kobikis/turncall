@@ -27,6 +27,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from turncall.domain.enums import CallEventType
+from turncall.orchestrator.stage_directions import strip_voice_tags
 
 if TYPE_CHECKING:
     from turncall.orchestrator.pipeline_factory import CallContext
@@ -193,7 +194,8 @@ class AssistantTranscriptTapProcessor(FrameProcessor):
             )
             return
         payload = {
-            "text": text,
+            # A voice's inline tags are for the voice, not the transcript.
+            "text": strip_voice_tags(text),
             "role": "assistant",
         }
         model = self._resolved_model()

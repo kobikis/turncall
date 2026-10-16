@@ -260,6 +260,20 @@ back as [warnings on an agent read](/guides/agents#warnings-on-a-read).
   field is ignored and the agent read says so.
 </Warning>
 
+### Emotion on Cartesia
+
+`tts.extra.emotion` sets one emotion for the whole call. To change it sentence
+by sentence, have the model write Cartesia's inline tags — tell it in the
+system prompt, e.g. *"Start a sentence with `<emotion value="excited"/>` when
+you are excited; use only: excited, content, sympathetic, curious, calm."*
+Sonic-3 reads `emotion`, `speed`, `volume`, `break` and `spell` tags; the full
+emotion list is in Cartesia's docs, and an emotion only works when the words
+agree with it.
+
+Only a Cartesia voice gets the tags. Every other voice — a Deepgram backup in
+`tts.failover` included — would read them aloud, so they are removed before
+they reach it, and they are never written to the transcript.
+
 ## Failover
 
 `stt.failover`, `llm.failover` and `tts.failover` each list backup providers,

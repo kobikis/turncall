@@ -16,6 +16,7 @@ from turncall.orchestrator.pipeline_factory import _create_tts_service
 from turncall.orchestrator.stage_directions import (
     StageDirectionFilter,
     strip_stage_directions,
+    strip_voice_tags,
 )
 
 
@@ -73,3 +74,50 @@ def test_every_tts_provider_carries_the_filter(provider, monkeypatch):
         AgentConfig(tts=TTSConfig(provider=provider)), credentials=creds("x")
     )
     assert any(isinstance(f, StageDirectionFilter) for f in service._text_filters)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("text", "plain"),
+    [
+        ('<emotion value="excited"/>Oh wow, that is great!', "Oh wow, that is great!"),
+        ('Sure. <break time="1s"/> Done.', "Sure. Done."),
+        ("Your code is <spell>A1B</spell>.", "Your code is A1B."),
+        ("Nothing to strip <here>.", "Nothing to strip <here>."),
+    ],
+)
+def test_voice_tags_come_out(text, plain):
+    assert strip_voice_tags(text) == plain
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("provider", "spoken"),
+    [
+        ("cartesia", '<emotion value="excited"/>Oh wow!'),
+        ("deepgram", "Oh wow!"),
+        ("elevenlabs", "Oh wow!"),
+        ("openai", "Oh wow!"),
+    ],
+)
+async def test_only_cartesia_hears_its_tags(provider, spoken, monkeypatch):
+    """Sonic-3 acts on them; any other voice, a Deepgram backup in the same
+    failover group included, would read them out."""
+    monkeypatch.setenv("CARTESIA_API_KEY", "x")
+    service = _create_tts_service(
+        AgentConfig(tts=TTSConfig(provider=provider)), credentials=creds("x")
+    )
+    [text_filter] = service._text_filters
+    assert await text_filter.filter('<emotion value="excited"/>Oh wow!') == spoken
+
+
+@pytest.mark.unit
+async def test_strip_markdown_leaves_the_tags_for_the_voice():
+    """The markdown transform runs on Cartesia's text too; it must not eat the
+    tag the filter kept."""
+    from pipecat.utils.text.transforms import strip_markdown
+
+    tagged = '<emotion value="excited"/>That is **great**!'
+    assert await strip_markdown(tagged, "sentence") == (
+        '<emotion value="excited"/>That is great!'
+    )
