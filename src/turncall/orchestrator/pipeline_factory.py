@@ -770,8 +770,11 @@ def _create_tts_service(
     keeps the model's stage directions unspoken."""
     from turncall.orchestrator.stage_directions import StageDirectionFilter
 
-    kwargs = {"text_filters": [StageDirectionFilter()], **kwargs}
     provider = config.tts.provider
+    kwargs = {
+        "text_filters": [StageDirectionFilter(voice_tags=provider == "cartesia")],
+        **kwargs,
+    }
 
     speed = {"speed": config.tts.speed} if config.tts.speed != 1.0 else {}
     model, voice = _tts_model_voice(config)

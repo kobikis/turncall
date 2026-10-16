@@ -15,6 +15,12 @@ Stateless, so it judges each sentence the aggregator hands it alone. The
 aggregator ends a sentence inside a starred one, so "*Ending the call now.*"
 arrives as "*Ending the call now." and then "*": an opening star with no
 closing one is the head of a narration, a star with nothing after it its tail.
+
+Cartesia's inline tags (`<emotion value="excited"/>`, `<break time="1s"/>`,
+...) are direction too, but for the voice: Sonic-3 acts on them and an agent's
+prompt may ask for them. Every other voice would read them out — including a
+Deepgram backup in the same failover group — so only Cartesia's filter keeps
+them. They never reach the transcript.
 """
 
 import re
@@ -29,6 +35,19 @@ _STARRED_SENTENCE = re.compile(r"\*[^*\n]*[.!?…]\s*\*")
 _OPEN_TO_END = re.compile(r"(\[[^\]]*|(?<!\S)\*(?=\S)[^*]*)$")
 # A closing star or bracket left over from the sentence before.
 _CLOSE_AT_START = re.compile(r"^\s*(\*(?!\S)|[^\[]*\])")
+# Cartesia's SSML-style tags, the set pipecat strips from its word timestamps.
+_VOICE_TAG = re.compile(r"<\s*/?\s*(?:emotion|speed|volume|break|spell)\b[^>]*>", re.I)
+
+
+def _tidy(original: str, stripped: str) -> str:
+    if stripped == original:
+        return original
+    return re.sub(r"\s{2,}", " ", stripped).strip()
+
+
+def strip_voice_tags(text: str) -> str:
+    """`text` without Cartesia's inline tags (a `<spell>`'s content stays)."""
+    return _tidy(text, _VOICE_TAG.sub("", text))
 
 
 def strip_stage_directions(text: str) -> str:
@@ -37,19 +56,23 @@ def strip_stage_directions(text: str) -> str:
     stripped = text
     for pattern in (_BRACKETED, _STARRED_SENTENCE, _CLOSE_AT_START, _OPEN_TO_END):
         stripped = pattern.sub("", stripped)
-    if stripped == text:
-        return text
-    return re.sub(r"\s{2,}", " ", stripped).strip()
+    return _tidy(text, stripped)
 
 
 class StageDirectionFilter(BaseTextFilter):
-    """`strip_stage_directions` as a pipecat TTS text filter."""
+    """`strip_stage_directions` as a pipecat TTS text filter, and
+    `strip_voice_tags` unless the voice reads them (`voice_tags`)."""
+
+    def __init__(self, *, voice_tags: bool = False) -> None:
+        super().__init__()
+        self._voice_tags = voice_tags
 
     async def update_settings(self, settings) -> None:
         return None
 
     async def filter(self, text: str) -> str:
-        return strip_stage_directions(text)
+        text = strip_stage_directions(text)
+        return text if self._voice_tags else strip_voice_tags(text)
 
     async def handle_interruption(self) -> None:
         return None
