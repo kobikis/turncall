@@ -287,6 +287,11 @@ class CallSession:
                 await self._finalize_call()
             except Exception:
                 logger.exception("call_cleanup_error", call_id=str(self.call_id))
+            # Kept a while for a warm transfer's briefing and post-call
+            # analysis, which run after the pipeline (services/live_transcript).
+            from turncall.services import live_transcript
+
+            live_transcript.release(self.call_id)
             # Clean up MCP sessions
             if self._call_context.mcp_manager is not None:
                 try:

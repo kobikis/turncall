@@ -46,6 +46,10 @@ class PgSession:
     def begin_nested(self) -> Savepoint:
         return Savepoint(self)
 
+    async def get(self, *_: Any) -> None:
+        """The exit point reads the project's redaction (#313): no project."""
+        return None
+
     async def commit(self) -> None:
         if self.aborted:
             raise Aborted

@@ -6,7 +6,8 @@ through here, and nothing else in the engine calls
 `call_repo.create_call_event` or `dispatcher.dispatch_event`.
 `tests/unit/test_event_exit_point.py` fails the build if something does.
 Redaction (#313) runs here once per event, in `_redact`, before the store and
-before the send.
+before the send: a project that turned it on has its chosen PII replaced in
+every payload, so what is stored and what subscribers get agree.
 
 What it does not cover, on purpose:
 
@@ -54,6 +55,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # test that patches `dispatcher.dispatch_event` or `call_repo.create_call_event`
 # patches this exit point too.
 from turncall.events import dispatcher
+from turncall.services import redaction
 from turncall.storage.repositories import call_repo
 
 
@@ -146,10 +148,15 @@ async def _redact(
     """What of `payload` may leave the call. Every entry above calls this
     first, and passes only what it returns to `_store` and `_send`.
 
-    Nothing is redacted yet: #313 fills this in (the project's redaction
-    settings, looked up on `session`).
+    The project's redaction (#313, ADR-0024), read on `session` per event: off,
+    and the payload leaves as it came, with the detector never loaded; on, and
+    its chosen entity types are replaced off the event loop
+    (`services/redaction`). The caller's dict is never changed.
     """
-    return payload
+    policy = await redaction.policy_for_project(session, project_id)
+    if policy is None:
+        return payload
+    return await redaction.redact_payload(payload, policy)
 
 
 async def _store(

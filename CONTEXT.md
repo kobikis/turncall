@@ -494,8 +494,12 @@ _Avoid_: "cost" unqualified in UI copy, "spend".
 Replacing PII (entity types the project chooses) in everything that outlives the live
 call or leaves the process: the stored transcript, analysis, takeaways, webhook
 payloads, logs and spans. **Never** what the model hears during the call, which still
-needs the caller's number to book the appointment. Text only; done locally (Presidio),
-opt-in per project. See ADR-0024 (decided, not yet built).
+needs the caller's number to book the appointment, nor what the call itself reads on
+its behalf afterwards (a warm transfer's briefing, post-call analysis and takeaways read
+the conversation as said; their *outputs* are redacted on the way out). Text only; done
+locally (Presidio), opt-in per project. A redacted value reads `<ENTITY_TYPE>`. Built for
+the transcript and call events at the event exit point (#313); analysis as stored,
+tool-invocation rows, text messages, logs and spans are #314. See ADR-0024.
 _Avoid_: "masking" (reads as display-only), "anonymization" (a stronger legal claim).
 
 **Retention policy**:

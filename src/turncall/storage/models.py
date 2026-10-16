@@ -64,6 +64,13 @@ class ProjectRow(Base):
     limit_messages_per_minute: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
+    # Redaction (#313, ADR-0024): off unless an admin turns it on. Entities
+    # null = the platform default list (`services/redaction.DEFAULT_ENTITIES`).
+    # Applied at the event exit point (`events/emit.py`), not here.
+    redaction_enabled: Mapped[bool] = mapped_column(
+        default=False, server_default=text("false")
+    )
+    redaction_entities: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
 
 
 class ApiKeyRow(Base):

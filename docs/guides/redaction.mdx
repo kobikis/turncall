@@ -1,0 +1,62 @@
+---
+title: Redaction
+description: "Replace callers' phone numbers, emails and card numbers in everything a project stores and sends"
+icon: "eye-slash"
+---
+
+With redaction on, PII in a project's calls is replaced before it is stored or sent: in the transcript, on the call's event log and in every webhook. A caller who says "my number is 415 555 0132" reads back as "my number is `<PHONE_NUMBER>`".
+
+The agent is never redacted. The model hears the caller's words and can book the appointment with the number it was given. A warm transfer's operator is briefed on them, and post-call analysis and takeaways read them. Only what they produce is redacted on the way out.
+
+Detection runs inside your deployment, with [Presidio](https://microsoft.github.io/presidio/) and spaCy's small English model. No text is sent to a vendor to be redacted.
+
+## Turn it on
+
+```bash
+curl -X PUT https://api.example.com/v1/projects/$PROJECT_ID/redaction \
+  -H "Authorization: Bearer tc_..." \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+```
+
+This needs an admin key, and a project can only set its own. The `PUT` replaces the whole setting. The project read (`GET /v1/projects/{id}`) shows it under `redaction`.
+
+A change applies from the next event, including on a call that is already live. Nothing stored before it is rewritten.
+
+## Entity types
+
+`entities` chooses what to replace. Leave it out, or send `null`, to get the default:
+
+| Type | Example |
+|------|---------|
+| `PHONE_NUMBER` | 415 555 0132 |
+| `EMAIL_ADDRESS` | jane.doe@example.com |
+| `CREDIT_CARD` | 4111 1111 1111 1111 |
+| `US_SSN` | 536-22-8726 |
+| `IBAN_CODE` | GB82 WEST 1234 5698 7654 32 |
+
+You can also choose `PERSON`, `LOCATION`, `DATE_TIME`, `ORGANIZATION`, `URL`, `IP_ADDRESS`, `US_BANK_NUMBER`, `US_DRIVER_LICENSE`, `US_PASSPORT`, `US_ITIN`, `UK_NHS`, `MEDICAL_LICENSE`, `CRYPTO`, `MAC_ADDRESS`, `AGE` and `NRP`. An unknown name is a `422`.
+
+```json
+{"enabled": true, "entities": ["PHONE_NUMBER", "EMAIL_ADDRESS", "PERSON"]}
+```
+
+`PERSON` is not in the default because the small model gets names wrong. "Hi, this is Ava from Acme Dental" becomes "Hi, this is Ava from `<PERSON>`": the company is taken for a person, and the name is missed.
+
+## What is redacted
+
+- **The transcript**: `GET /v1/calls/{id}/transcript`, and `transcript` in `call.ended`.
+- **Every call event**: on the event log (`GET /v1/calls/{id}/events`) and in every webhook. That includes tool arguments and results in `tool.result`, and a call's `metadata` in `call.ended`.
+- **The numbers in payloads**: with `PHONE_NUMBER` chosen, `from_number`, `to_number`, `customer_number`, `turncall_number`, `target_number` and `number` are replaced whole. The call record keeps them: `GET /v1/calls/{id}` still shows `from_number`, and routing, the suppression list and campaigns work as before.
+- **`summary` and `analysis` in `call.ended`**.
+
+Not yet redacted: the call record itself (`GET /v1/calls/{id}`: its numbers, `metadata` and `analysis`, and `GET /v1/calls/{id}/analysis`), tool-invocation records, SMS and chat messages, logs and traces.
+
+Never redacted: call-init and tool webhooks. These are part of the live call, and your own server answers them with the raw values.
+
+## Limits
+
+- **Recall is the detector's.** It finds what the STT wrote as digits. "Four one five, five five five…" spelled out in words is missed, and so is "jane dot doe at example dot com". Deepgram's default formatting writes digits; check your STT provider's.
+- **English only.**
+- **Text only.** The recording is not bleeped. If it holds PII, turn recording off or keep it for a short time.
+- **Briefings and analysis read from memory.** The server that ran the call holds the conversation for five minutes after it ends. If the carrier's callback or the call's end lands on another server, the briefing and the analysis read the stored, redacted transcript instead.

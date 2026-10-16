@@ -11,6 +11,7 @@ from turncall.api.responses import ok
 from turncall.api.v1.schemas.projects import (
     CreateProjectRequest,
     ProjectLimits,
+    ProjectRedaction,
     ProjectResponse,
 )
 from turncall.auth import AdminAuth, Auth, PlatformKey
@@ -68,6 +69,35 @@ async def set_project_limits(
     )
     if row is None:
         raise NotFoundError("Project", str(project_id))
+    return ok(ProjectResponse.from_row(row))
+
+
+@router.put("/{project_id}/redaction")
+async def set_project_redaction(
+    project_id: UUID,
+    body: ProjectRedaction,
+    auth: AdminAuth,
+    session: DbSession,
+) -> dict:
+    """Turn the project's redaction on or off and choose its entity types
+    (#313, ADR-0024), replacing the whole setting: `entities` left out or null
+    is the default list. Read per event, so it applies to everything stored or
+    sent from now on — a call already live is redacted from its next event.
+    What was stored before is not rewritten. Admin key; a project can only set
+    its own."""
+    if auth.project_id != project_id:
+        raise ForbiddenError("A project can only set its own redaction")
+    row = await project_repo.set_redaction(
+        session, project_id, enabled=body.enabled, entities=body.entities
+    )
+    if row is None:
+        raise NotFoundError("Project", str(project_id))
+    logger.info(
+        "project_redaction_set",
+        project_id=str(project_id),
+        enabled=body.enabled,
+        entities=body.entities,
+    )
     return ok(ProjectResponse.from_row(row))
 
 

@@ -933,6 +933,40 @@ GET    /v1/suppression-list        # ?page= ?limit= ?number= (finds one entry's 
 DELETE /v1/suppression-list/{id}
 ```
 
+## Redaction
+
+Per project, opt-in (#313, ADR-0024): `PUT /v1/projects/{id}/redaction`
+(admin key) `{"enabled", "entities"}`, columns `projects.redaction_enabled` /
+`redaction_entities` (null = `DEFAULT_ENTITIES`: phone, email, card, SSN,
+IBAN; `PERSON` opt-in, the small model is noisy on names). Applied once per
+event in `events/emit._redact`, so the stored log, the transcript read and
+every webhook agree; read per event, so a change applies from the next one.
+
+- **Never the agent.** The pipeline's frames and context never pass the exit
+  point. The warm-transfer briefing (`services/transfer._conversation`) and
+  post-call analysis + takeaways (`call_analysis_trigger._analysis_transcript`)
+  read `services/live_transcript` — the raw lines the transcript taps add,
+  held in the call's process for 5 min after its pipeline stops. Another
+  replica (or a restart) falls back to the stored, redacted transcript. Don't
+  point a new on-the-call's-behalf reader at stored `transcript.final`.
+- **What is analysed:** every string at any depth, except top-level ids,
+  timestamps, URLs and enum fields (`redaction._structural`) and anything
+  UUID- or ISO-timestamp-shaped. Top-level phone fields (`from_number`,
+  `to_number`, `customer_number`, …) are replaced whole when `PHONE_NUMBER` is
+  chosen — the detector misses 555 numbers. The call row keeps raw numbers.
+- **The detector** (Presidio + `en_core_web_sm`, a direct-URL dependency) is
+  imported only inside `services/redaction._build_detector`, built on first
+  use on a one-thread executor and run there — never on the loop (ADR-0004:
+  a long transcript is ~0.5s of CPU). A project with it off never reaches it;
+  `test_redaction.py` fails if the app's import graph pulls Presidio or spaCy.
+  Both runtime downloads are off: a missing model raises instead of
+  pip-installing, and `TLDEXTRACT_PUBLIC_SUFFIX_LIST_URLS=""` (image `ENV`,
+  and `setdefault` before import) keeps the email recognizer offline. A
+  detector that fails withholds every analysed string (`<REDACTED>`) rather
+  than send raw.
+- **Not yet (#314):** `calls.analysis_json`, tool-invocation rows, SMS/chat
+  message rows, logs and spans.
+
 ## Graceful Shutdown
 
 A deploy must not drop live calls (#199). Uvicorn's own SIGTERM closes the
@@ -1826,7 +1860,7 @@ payload, sent instead of `campaign.completed` by the cancel request whose
 UPDATE moved the campaign.
 
 Call events and webhooks leave through one exit point, `events/emit.py`
-(#312), so redaction (ADR-0024, #313) has one place to stand. It covers two
+(#312), so redaction (ADR-0024, #313; see "Redaction") has one place to stand. It covers two
 things: rows on a call's event log (`call_events`) and events sent to webhook
 subscribers. Store and send with `emit_call_event`, store only with
 `record_call_event`, send only with `dispatch_call_event` or, with no call

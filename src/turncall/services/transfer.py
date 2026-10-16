@@ -120,15 +120,10 @@ async def resolve_briefing_text(
     from turncall.services.llm_text import complete_text
     from turncall.storage.repositories import agent_repo, call_repo
 
-    events = await call_repo.list_call_events(
-        session, call_id, event_type="transcript.final", limit=200
-    )
     lines = []
-    for e in events:
-        payload = e.payload or {}
-        speaker = payload.get("role") or payload.get("user_id")
+    for speaker, said in await _conversation(session, call_id):
         role = "Agent" if speaker == "assistant" else "Caller"
-        text = (payload.get("text") or "").strip()
+        text = said.strip()
         if text:
             lines.append(f"{role}: {text}")
     transcript = "\n".join(lines) or "(no transcript captured)"
@@ -158,3 +153,30 @@ async def resolve_briefing_text(
     except Exception:
         logger.exception("transfer_briefing_summary_failed", call_id=str(call_id))
         return "The caller is being transferred to you."
+
+
+_BRIEFING_LINES = 200
+
+
+async def _conversation(session: AsyncSession, call_id: UUID) -> list[tuple[str, str]]:
+    """(speaker, text) for the call so far, as said (#313): the operator is
+    briefed on the caller's own words, which redaction never reaches. The
+    stored transcript only when this process does not hold the call's
+    conversation (services/live_transcript) — redacted if the project
+    redacts."""
+    from turncall.services import live_transcript
+    from turncall.storage.repositories import call_repo
+
+    held = live_transcript.lines(call_id)
+    if held is not None:
+        return [(line.role, line.text) for line in held[:_BRIEFING_LINES]]
+    logger.info("transfer_briefing_from_stored_transcript", call_id=str(call_id))
+    events = await call_repo.list_call_events(
+        session, call_id, event_type="transcript.final", limit=_BRIEFING_LINES
+    )
+    conversation = []
+    for e in events:
+        payload = e.payload or {}
+        speaker = payload.get("role") or payload.get("user_id") or ""
+        conversation.append((speaker, payload.get("text") or ""))
+    return conversation

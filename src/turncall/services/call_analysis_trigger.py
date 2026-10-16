@@ -1,7 +1,8 @@
 """Post-call processing: analysis + comprehensive call.ended webhook.
 
 When a call completes, this module:
-1. Gathers the transcript from DB
+1. Gathers the transcript from DB (for `call.ended`; analysis reads the raw
+   conversation instead, see `_analysis_transcript`)
 2. Fetches recording URL(s) from recording.ready events
 3. Runs LLM analysis (if enabled)
 4. Stores analysis results on the call record
@@ -55,6 +56,39 @@ async def _gather_transcript(
             for e in events
             if e.payload.get("text", "").strip()
         ]
+
+
+def _analysis_transcript(
+    call_id: UUID, stored: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """What analysis and takeaways read: the conversation as said (#313,
+    ADR-0024). Redaction rewrites the stored transcript; extracting the
+    caller's callback number from `<PHONE_NUMBER>` is no extraction, so they
+    read this process's raw copy (services/live_transcript) and only their
+    output is redacted on the way out. `stored` when this process does not
+    hold the conversation (another replica finalized the call, a restart) —
+    redacted if the project redacts."""
+    from turncall.services import live_transcript
+
+    held = live_transcript.lines(call_id)
+    if held is not None:
+        return [
+            {
+                "text": line.text,
+                "user_id": "assistant" if line.is_agent else "customer",
+            }
+            for line in held
+            if line.text.strip()
+        ]
+    if stored:
+        logger.info("post_call_analysis_from_stored_transcript", call_id=str(call_id))
+    return [
+        {
+            "text": e["text"],
+            "user_id": "assistant" if e["role"] == "agent" else "customer",
+        }
+        for e in stored
+    ]
 
 
 # call.ended must wait for the recording to finish persisting, but never block
@@ -146,13 +180,7 @@ async def _run_post_call(
 
             credentials = await _project_credentials(session_factory, project_id)
 
-            transcript_payloads = [
-                {
-                    "text": e["text"],
-                    "user_id": "assistant" if e["role"] == "agent" else "customer",
-                }
-                for e in transcript
-            ]
+            transcript_payloads = _analysis_transcript(call_id, transcript)
 
             result = await analyze_call(
                 transcript_payloads,
