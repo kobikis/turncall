@@ -6,8 +6,8 @@ released under FSL-1.1-Apache-2.0. This records why the line was drawn there.
 
 ## The split
 
-- **`turncall` (this repo): MIT.** The runtime that answers calls. Already
-  public, 277 commits of history, and the thing a self-hoster actually runs.
+- **`turncall` (this repo): MIT.** The runtime that answers calls, and the
+  thing a self-hoster actually runs.
 - **`turncall-builder-*`: FSL-1.1-Apache-2.0.** The conversational agent
   builder. The commercial product.
 
@@ -69,5 +69,8 @@ rational for someone outside the company.
 
 ## Status
 
-Accepted. The engine is public under MIT today. The builders remain private
-until their licence, CI, and documentation are in place.
+Accepted. All three repositories are private until the public release, whose
+timing is the maintainer's call. The licences above apply from that first public
+release: MIT for the engine, FSL-1.1-Apache-2.0 for the builders. What the
+release waits on is tracked in the "Public release" milestone of each repo
+(#305–#308 here).
