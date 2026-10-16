@@ -54,3 +54,23 @@ async def test_a_draining_server_takes_no_call(http, monkeypatch) -> None:
     monkeypatch.setattr(drain, "is_draining", lambda: True)
     assert (await http.get("/ready")).json()["status"] == "draining"
     assert (await http.post("/connect", json=OFFER)).status_code == 503
+
+
+async def test_the_call_path_is_imported_at_startup_not_on_the_first_call(
+    monkeypatch,
+) -> None:
+    """The first offer used to pay the call path's imports — 1.7 s on a demo
+    container's vCPU, between the answer and the pipeline. Startup does them,
+    off the event loop, so the visitor's own setup time covers them."""
+    import asyncio
+
+    from turncall.demo import app as demo_app
+
+    warmed = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(
+        demo_app, "import_call_path", lambda: loop.call_soon_threadsafe(warmed.set)
+    )
+    app = create_demo_app({"front-desk": AgentConfig()}, Settings())
+    async with app.router.lifespan_context(app):
+        await asyncio.wait_for(warmed.wait(), timeout=5)
