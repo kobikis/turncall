@@ -242,3 +242,42 @@ async def test_a_failed_llm_stays_failed_after_a_settings_update() -> None:
     await asyncio.sleep(0.01)  # pipecat runs event handlers as tasks
 
     assert not primary.is_usable
+
+
+async def test_a_speculative_reply_is_held_and_released_through_the_group() -> None:
+    """Flux's eager end of turn: the active member's gate holds the reply until
+    the turn is confirmed, so the group must hand it both the speculative
+    context and the confirming frame."""
+    from pipecat.frames.frames import (
+        LLMFullResponseEndFrame,
+        LLMFullResponseStartFrame,
+        UserStoppedSpeakingFrame,
+    )
+    from pipecat.services.llm_service import LLMService
+    from pipecat.tests.utils import SleepFrame
+
+    class _Speaks(LLMService):
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            if isinstance(frame, LLMContextFrame):
+                await self.push_frame(LLMFullResponseStartFrame())
+                await self.push_frame(LLMTextFrame(text="Seven works."))
+                await self.push_frame(LLMFullResponseEndFrame())
+            else:
+                await self.push_frame(frame, direction)
+
+    async def run(frames: list) -> list[str]:
+        group = FailoverLLM([("a/1", _Speaks()), ("b/2", _Speaks())])
+        down, _ = await run_test(group, frames_to_send=frames)
+        return [f.text for f in down if isinstance(f, LLMTextFrame)]
+
+    guess = LLMContextFrame(context=LLMContext(messages=[]), speculation=True)
+    assert await run([guess, SleepFrame(0.1)]) == []
+    assert await run(
+        [
+            LLMContextFrame(context=LLMContext(messages=[]), speculation=True),
+            SleepFrame(0.1),
+            UserStoppedSpeakingFrame(),
+            SleepFrame(0.1),
+        ]
+    ) == ["Seven works."]

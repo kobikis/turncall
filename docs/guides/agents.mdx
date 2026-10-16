@@ -182,10 +182,17 @@ Smart Turn is not run for a Flux agent whatever `smart_turn_detection` says —
 it would only wait again after Flux had decided — and `silence_timeout_ms` is
 not used. Tune Flux with its own `eot_threshold` (confidence needed to end a
 turn) and `eot_timeout_ms` (silence that ends one regardless) in `stt.extra`;
-`eager_eot_threshold`, `min_confidence` and `language_hints` (for
-`flux-general-multi`) go there too. Other keys are ignored. `stt.language` is
-not sent: `flux-general-en` is English and `flux-general-multi` detects the
-language.
+`min_confidence` and `language_hints` (for `flux-general-multi`) go there too.
+Other keys are ignored. `stt.language` is not sent: `flux-general-en` is English
+and `flux-general-multi` detects the language.
+
+`eager_eot_threshold` (at most `eot_threshold`, e.g. `0.5`) starts the reply
+early: when Flux predicts the turn is ending, the LLM starts answering, and the
+answer is held until Flux confirms the turn — or dropped if the caller keeps
+talking or the final transcript differs. The agent answers sooner by the gap
+between the two, at the price of one extra LLM request for every prediction
+Flux takes back. A tool call is never made on a prediction: it waits for the
+confirmed turn.
 
 Each turn's `metrics.turn` event (`GET /v1/calls/{id}/events?event_type=metrics.turn`)
 carries `turn_end_ms`, the time from the caller going quiet to the turn being
