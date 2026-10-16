@@ -255,17 +255,16 @@ async def _fail(
     session: AsyncSession, call: CallRow, error: Exception, missing_keys: list[str]
 ) -> None:
     """A call that could not be answered: failed, with why, and `call.ended`."""
-    from turncall.events.emit import emit_call_event
+    from turncall.events.emit import emit_call_event, redact
     from turncall.orchestrator.call_session import finalize_call, readable_error
     from turncall.storage.database import get_session_factory
 
     status = getattr(error, "status", None)
-    await emit_call_event(
-        session,
-        call_id=call.id,
-        project_id=call.project_id,
-        event_type=CallEventType.ERROR_RAISED,
-        payload={
+    # The call row is committed already; nothing is held while it waits.
+    raised = await redact(
+        call.project_id,
+        CallEventType.ERROR_RAISED,
+        {
             "stage": "carrier_answer",
             "error": readable_error(error),
             **({"missing_keys": missing_keys} if missing_keys else {}),
@@ -275,6 +274,14 @@ async def _fail(
                 else {}
             ),
         },
+        release=session,
+    )
+    await emit_call_event(
+        session,
+        call_id=call.id,
+        project_id=call.project_id,
+        event_type=CallEventType.ERROR_RAISED,
+        payload=raised,
     )
     await session.commit()
     # No media stream will ever hold the slot the call was admitted with.

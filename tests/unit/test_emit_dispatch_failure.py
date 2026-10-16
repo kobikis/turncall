@@ -46,6 +46,10 @@ class PgSession:
     def begin_nested(self) -> Savepoint:
         return Savepoint(self)
 
+    async def get(self, *_: Any) -> None:
+        """The exit point reads the project's redaction (#313): no project."""
+        return None
+
     async def commit(self) -> None:
         if self.aborted:
             raise Aborted
@@ -89,12 +93,15 @@ def session(monkeypatch) -> PgSession:
 
 
 async def test_a_failed_send_leaves_the_stored_row_to_the_callers_commit(session):
+    project_id = uuid4()
     await emit.emit_call_event(
         session,  # type: ignore[arg-type]
         call_id=uuid4(),
-        project_id=uuid4(),
+        project_id=project_id,
         event_type="transcript.final",
-        payload={"role": "customer", "text": "hello"},
+        payload=await emit.redact(
+            project_id, "transcript.final", {"role": "customer", "text": "hello"}
+        ),
     )
     await session.commit()
 

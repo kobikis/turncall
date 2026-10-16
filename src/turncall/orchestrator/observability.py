@@ -28,6 +28,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from turncall.domain.enums import CallEventType
 from turncall.orchestrator.stage_directions import strip_voice_tags
+from turncall.services import live_transcript
 
 if TYPE_CHECKING:
     from turncall.orchestrator.pipeline_factory import CallContext
@@ -83,16 +84,21 @@ class TranscriptTapProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
     async def _log_transcript(self, text: str, role: str) -> None:
-
-        payload = {
-            "text": text,
-            "role": role,
-        }
-
+        # The raw line, before the exit point redacts the stored one: what the
+        # briefing and post-call analysis read (services/live_transcript).
+        live_transcript.said(self._call_context.call_id, role, text)
         try:
-            async with self._call_context.session_factory() as session:
-                from turncall.events.emit import emit_call_event
+            from turncall.events.emit import emit_call_event, redact
 
+            # Redacted before the session: the store holds the call's
+            # sequence lock, which no detector wait may (events/emit).
+            payload = await redact(
+                self._call_context.project_id,
+                CallEventType.TRANSCRIPT_FINAL,
+                {"text": text, "role": role},
+                sessions=self._call_context.session_factory,
+            )
+            async with self._call_context.session_factory() as session:
                 await emit_call_event(
                     session,
                     call_id=self._call_context.call_id,
@@ -185,20 +191,27 @@ class AssistantTranscriptTapProcessor(FrameProcessor):
             "text": strip_voice_tags(text),
             "role": "assistant",
         }
+        live_transcript.said(self._call_context.call_id, "assistant", payload["text"])
         model = self._resolved_model()
         if model:
             payload["model"] = model
 
         try:
-            async with self._call_context.session_factory() as session:
-                from turncall.events.emit import emit_call_event
+            from turncall.events.emit import emit_call_event, redact
 
+            redacted = await redact(
+                self._call_context.project_id,
+                CallEventType.TRANSCRIPT_FINAL,
+                payload,
+                sessions=self._call_context.session_factory,
+            )
+            async with self._call_context.session_factory() as session:
                 await emit_call_event(
                     session,
                     call_id=self._call_context.call_id,
                     project_id=self._call_context.project_id,
                     event_type=CallEventType.TRANSCRIPT_FINAL,
-                    payload=payload,
+                    payload=redacted,
                     commit=True,
                 )
         except Exception:

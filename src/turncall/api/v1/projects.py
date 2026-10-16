@@ -11,10 +11,12 @@ from turncall.api.responses import ok
 from turncall.api.v1.schemas.projects import (
     CreateProjectRequest,
     ProjectLimits,
+    ProjectRedaction,
     ProjectResponse,
 )
 from turncall.auth import AdminAuth, Auth, PlatformKey
 from turncall.config import get_settings
+from turncall.services import redaction
 from turncall.storage.repositories import project_repo
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -68,6 +70,41 @@ async def set_project_limits(
     )
     if row is None:
         raise NotFoundError("Project", str(project_id))
+    return ok(ProjectResponse.from_row(row))
+
+
+@router.put("/{project_id}/redaction")
+async def set_project_redaction(
+    project_id: UUID,
+    body: ProjectRedaction,
+    auth: AdminAuth,
+    session: DbSession,
+) -> dict:
+    """Turn the project's redaction on or off and choose its entity types
+    (#313, ADR-0024), replacing the whole setting: `enabled` is required, and
+    `entities` left out or null is the default list. It applies to what is
+    stored or sent from then on, a call already live included: at once on the
+    server that took this request, and within 30 seconds on the others (each
+    caches the setting that long). What was stored before is not rewritten.
+    Admin key; a project can only set its own."""
+    if auth.project_id != project_id:
+        raise ForbiddenError("A project can only set its own redaction")
+    row = await project_repo.set_redaction(
+        session, project_id, enabled=body.enabled, entities=body.entities
+    )
+    if row is None:
+        raise NotFoundError("Project", str(project_id))
+    await session.commit()
+    policy = redaction.policy_of(body.enabled, body.entities)
+    redaction.remember_policy(project_id, policy)
+    if policy is not None:
+        redaction.warm()  # in the background: the first call must not pay it
+    logger.info(
+        "project_redaction_set",
+        project_id=str(project_id),
+        enabled=body.enabled,
+        entities=body.entities,
+    )
     return ok(ProjectResponse.from_row(row))
 
 

@@ -353,14 +353,17 @@ async def _dispatch_run_event(
     and `agent_id` is null for an inline target, which is the honest answer
     rather than missing data (ADR-0017).
     """
-    from turncall.events.emit import dispatch_project_event
+    from turncall.events.emit import dispatch_project_event, redact
 
     try:
+        # Every caller has committed the run's row; what the session holds
+        # now is the read-back, ended here before redaction waits.
+        redacted = await redact(project_id, event_type, payload, release=session)
         await dispatch_project_event(
             session,
             project_id=project_id,
             event_type=event_type,
-            payload=payload,
+            payload=redacted,
             eval_run_id=run_id,
             agent_id=agent_id,
         )

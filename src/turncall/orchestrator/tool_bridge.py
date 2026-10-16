@@ -55,13 +55,19 @@ async def _log_tool_result(
 ) -> None:
     """Persist the tool invocation + call event and dispatch tool.result to
     webhook subscribers. Runs in the background; failures are logged, not raised."""
-    payload = {"tool_name": function_name, "arguments": args, "result": result}
     try:
-        async with call_context.session_factory() as session:
-            from turncall.domain.enums import CallEventType
-            from turncall.events.emit import emit_call_event
-            from turncall.storage.repositories import tool_invocation_repo
+        from turncall.domain.enums import CallEventType
+        from turncall.events.emit import emit_call_event, redact
+        from turncall.storage.repositories import tool_invocation_repo
 
+        # Before the session: no detector wait inside a transaction (events/emit).
+        payload = await redact(
+            call_context.project_id,
+            CallEventType.TOOL_RESULT,
+            {"tool_name": function_name, "arguments": args, "result": result},
+            sessions=call_context.session_factory,
+        )
+        async with call_context.session_factory() as session:
             status, output_json = classify_tool_result(result)
             await tool_invocation_repo.create_invocation(
                 session,

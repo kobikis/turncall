@@ -933,6 +933,77 @@ GET    /v1/suppression-list        # ?page= ?limit= ?number= (finds one entry's 
 DELETE /v1/suppression-list/{id}
 ```
 
+## Redaction
+
+Per project, opt-in (#313, ADR-0024): `PUT /v1/projects/{id}/redaction`
+(admin key) `{"enabled", "entities"}` — `enabled` required, so a PUT naming
+only entities can't turn it off. Columns `projects.redaction_enabled` /
+`redaction_entities` (null = `DEFAULT_ENTITIES`: phone, email, card, SSN,
+IBAN; `PERSON` opt-in, the small model is noisy on names). A stored type a
+later build drops is ignored on read (`ProjectRedaction.from_row`,
+`policy_of`), never a 500. Applied once per event at the exit point
+(`events/emit`), so the stored log, the transcript read and every webhook
+agree. The policy is cached per process for `POLICY_TTL_SECONDS` (30 s); the
+PUT refreshes this process's entry, other replicas see it within the TTL.
+
+- **No detector wait inside a transaction.** The entries run in the caller's
+  transaction, after `_store` took the per-call advisory lock; a wait there
+  held the lock and a pooled connection behind the redaction queue. So text
+  reaches an entry only as an `emit.Redacted`, from `await emit.redact(...)`
+  called *before* the transaction (or with `release=session` to end a
+  read-only one first). A plain dict payload must be ids, numbers and
+  structure only: the entry redacts it synchronously (phone fields). Text in
+  a plain dict raises `TextNotRedacted` under `emit.STRICT` (the test suite
+  sets it in `tests/conftest.py`, whatever the policy), and in production is
+  withheld and logged. Only `emit.py` may build a `Redacted`
+  (`test_event_exit_point.py`). Adding a field to an event? If it's an
+  identifier, add it to `redaction._STRUCTURAL_FIELDS` (or
+  `_IDENTIFIERS_BY_EVENT` if the name is text on other events, like
+  `reason`); otherwise redact the payload before the session.
+- **Never the agent.** The pipeline's frames and context never pass the exit
+  point. The warm-transfer briefing (`services/transfer`) and post-call
+  analysis + takeaways (`call_analysis_trigger._analysis_transcript`) read
+  `services/live_transcript` — the raw lines the transcript taps add, held in
+  the call's process for 5 min after its pipeline stops. Another replica (the
+  Twilio whisper or `/status`, the end API) asks the holder over Redis pub/sub
+  (`call:{id}:conversation`, one subscription per process, `serve_holder` in
+  the lifespan): `BRIEFING` answers the briefing text, `POST_CALL` runs
+  post-call in the holder. The request carries only the call id; the raw
+  conversation never goes to Redis or Postgres. Only a redacting project
+  asks. With no holder (restart, after 5 min, a re-run) it falls back to the
+  stored, redacted transcript and logs `*_from_stored_transcript`. Don't point
+  a new on-the-call's-behalf reader at stored `transcript.final`.
+- **Analysis is stored redacted** (`calls.analysis_json`, pulled forward from
+  #314): `_run_post_call` redacts it before `update_call_analysis`, so the
+  call read and `GET /v1/calls/{id}/analysis` serve the redacted copy;
+  `call.ended` passes it, the stored transcript and `failovers` through
+  (`emit.redact(stored=...)`) rather than analysing them again.
+- **What is analysed:** every string at any depth, except top-level ids,
+  timestamps, URLs, enum fields and identifiers such as `tool_name`
+  (`redaction._structural`, plus `_IDENTIFIERS_BY_EVENT`: `provider.failover`'s
+  `from`/`to`, `reason` on `call.failed`/`call.rejected`) and anything UUID-
+  or ISO-timestamp-shaped. A top-level phone field holding a number is
+  replaced whole when `PHONE_NUMBER` is chosen (the detector misses 555
+  numbers) and is never sent to the detector. The call row keeps raw numbers.
+  A payload with no text never reaches the detector.
+- **The detector** (Presidio + `en_core_web_sm`, a direct-URL dependency)
+  runs in one worker *process* (`redaction._Engine`, `ProcessPoolExecutor`,
+  spawn): Presidio holds the GIL, and on a thread it took the loop's p99 lag
+  from ~7-12 ms to ~16-46 ms under load (ADR-0004; numbers in ADR-0024). The
+  app's process never imports it; `test_redaction.py` fails if the import
+  graph pulls Presidio or spaCy. It loads in the background at startup if any
+  project redacts and on a PUT that turns it on (`redaction.warm()`); tests
+  that need it `await redaction.ready()` before the call, never inside a
+  timed request. A failed load opens a breaker: `<REDACTED>` for
+  `RETRY_AFTER_SECONDS` (5 min), logged once per window, then it retries.
+  More than `MAX_PENDING` texts in flight are withheld, not queued; a
+  redaction over `SLOW_SECONDS` logs `redaction_slow` with the backlog. Both
+  runtime downloads are off: a missing model raises instead of
+  pip-installing, and `TLDEXTRACT_PUBLIC_SUFFIX_LIST_URLS=""` keeps the email
+  recognizer offline. Fails closed: never raw because redaction broke.
+- **Not yet (#314):** tool-invocation rows, SMS/chat message rows, logs and
+  spans.
+
 ## Graceful Shutdown
 
 A deploy must not drop live calls (#199). Uvicorn's own SIGTERM closes the
@@ -1826,7 +1897,7 @@ payload, sent instead of `campaign.completed` by the cancel request whose
 UPDATE moved the campaign.
 
 Call events and webhooks leave through one exit point, `events/emit.py`
-(#312), so redaction (ADR-0024, #313) has one place to stand. It covers two
+(#312), so redaction (ADR-0024, #313; see "Redaction") has one place to stand. It covers two
 things: rows on a call's event log (`call_events`) and events sent to webhook
 subscribers. Store and send with `emit_call_event`, store only with
 `record_call_event`, send only with `dispatch_call_event` or, with no call

@@ -76,3 +76,27 @@ def creds(openai: str = "", **platform: str):
     if openai:
         keys["openai"] = openai
     return Credentials(platform=keys)
+
+
+@pytest.fixture(autouse=True)
+def _events_carry_text_only_through_redact(request, monkeypatch):
+    """A call site that hands an exit-point entry a plain dict with text in it,
+    instead of redacting it before its transaction, fails its test whatever
+    the project's redaction (events/emit, #313).
+
+    Unit tests have no database: there, a project's redaction policy read on
+    a session of its own (`emit.redact`) is off. A test that wants it on
+    patches `redaction._read_policy_alone` itself."""
+    from turncall.events import emit
+    from turncall.services import redaction
+
+    emit.STRICT = True
+    redaction.forget_policies()
+    if request.node.get_closest_marker("unit") is not None:
+
+        async def off(_project_id, _sessions=None):
+            return None
+
+        monkeypatch.setattr(redaction, "_read_policy_alone", off)
+    yield
+    redaction.forget_policies()

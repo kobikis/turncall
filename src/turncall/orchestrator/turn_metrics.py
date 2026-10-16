@@ -111,15 +111,19 @@ async def store_call_event(
     """Store one call event and dispatch nothing: for the records only the
     call's event log carries. Best-effort — a lost record is logged."""
     try:
-        from turncall.events.emit import record_call_event
+        from turncall.events.emit import record_call_event, redact
 
+        # Before the session: no detector wait inside a transaction (events/emit).
+        redacted = await redact(
+            ctx.project_id, event_type, payload, sessions=ctx.session_factory
+        )
         async with ctx.session_factory() as session:
             await record_call_event(
                 session,
                 call_id=ctx.call_id,
                 project_id=ctx.project_id,
                 event_type=event_type,
-                payload=payload,
+                payload=redacted,
                 commit=True,
             )
     except Exception:

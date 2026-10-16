@@ -65,6 +65,7 @@
                   "guides/takeaways",
                   "guides/evals",
                   "guides/limits",
+                  "guides/redaction",
                   "guides/campaigns",
                   "guides/observability",
                   "guides/graceful-shutdown",
@@ -104,6 +105,7 @@
               "POST /v1/projects",
               "GET /v1/projects/{project_id}",
               "PUT /v1/projects/{project_id}/limits",
+              "PUT /v1/projects/{project_id}/redaction",
               "DELETE /v1/projects/{project_id}"
             ]
           },

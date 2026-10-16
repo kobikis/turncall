@@ -43,9 +43,16 @@ RUN --mount=type=cache,target=/root/.cache/pip     if [ -n "$INSTALL_EXTRAS" ]; 
 # ---- runtime: slim image, just the venv + migrations, no compilers ----
 FROM python:3.12-slim AS runtime
 
+# TLDEXTRACT_PUBLIC_SUFFIX_LIST_URLS empty: redaction's email recognizer
+# (Presidio, via tldextract) would otherwise fetch the Public Suffix List from
+# GitHub on its first email, and hang behind a firewall that drops packets.
+# Empty means the snapshot tldextract ships, offline. Redaction's other
+# runtime download, spaCy installing a missing model, is refused in code
+# (services/redaction.py): the model is a dependency, installed above.
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    TLDEXTRACT_PUBLIC_SUFFIX_LIST_URLS=""
 
 WORKDIR /app
 

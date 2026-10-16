@@ -1,5 +1,6 @@
 """FastAPI application factory."""
 
+import asyncio
 import gc
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -90,11 +91,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         logger.warning("Could not load agents on startup")
 
+    # Redaction (#313): this process answers for the conversations it holds
+    # (services/live_transcript), and the detector loads in the background if
+    # any project redacts, so no call pays the model's load.
+    from turncall.services import live_transcript, redaction
+
+    await live_transcript.serve_holder()
+    redaction_warmup = asyncio.create_task(redaction.warm_if_any_project_redacts())
+
     logger.info("turncall_started")
 
     # Start background session cleanup task
-    import asyncio
-
     async def _cleanup_expired_sessions() -> None:
         """Periodically expire stale SMS sessions."""
         from turncall.storage.database import create_session_factory, get_engine
@@ -164,6 +171,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     uninstall_sigterm_drain()
+    redaction_warmup.cancel()
+    await live_transcript.stop_holder()
+    redaction.shutdown()
     cleanup_task.cancel()
     purge_task.cancel()
     asterisk_task.cancel()

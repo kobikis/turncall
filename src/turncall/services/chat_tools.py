@@ -55,12 +55,18 @@ async def _record_invocation(
     row must not cost someone their reply.
     """
     from turncall.domain.enums import CallEventType
-    from turncall.events.emit import dispatch_project_event
+    from turncall.events.emit import dispatch_project_event, redact
     from turncall.storage.database import get_session_factory
     from turncall.storage.repositories import tool_invocation_repo
 
     status, output_json = classify_tool_result(result)
     try:
+        # Before the session: no detector wait inside a transaction (events/emit).
+        payload = await redact(
+            project_id,
+            CallEventType.TOOL_RESULT,
+            {"tool_name": tool_name, "arguments": args, "result": result},
+        )
         async with get_session_factory()() as db:
             await tool_invocation_repo.create_invocation(
                 db,
@@ -77,11 +83,7 @@ async def _record_invocation(
                 db,
                 project_id=project_id,
                 event_type=CallEventType.TOOL_RESULT,
-                payload={
-                    "tool_name": tool_name,
-                    "arguments": args,
-                    "result": result,
-                },
+                payload=payload,
                 session_id=session_id,
             )
     except Exception:

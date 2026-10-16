@@ -360,6 +360,78 @@
         }
       }
     },
+    "/v1/projects/{project_id}/redaction": {
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Set Project Redaction",
+        "description": "Turn the project's redaction on or off and choose its entity types\n(#313, ADR-0024), replacing the whole setting: `enabled` is required, and\n`entities` left out or null is the default list. It applies to what is\nstored or sent from then on, a call already live included: at once on the\nserver that took this request, and within 30 seconds on the others (each\ncaches the setting that long). What was stored before is not rewritten.\nAdmin key; a project can only set its own.",
+        "operationId": "set_project_redaction_v1_projects__project_id__redaction_put",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectRedaction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Set Project Redaction V1 Projects  Project Id  Redaction Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/api-keys": {
       "post": {
         "tags": [
@@ -9300,6 +9372,37 @@
         "type": "object",
         "title": "ProjectLimits",
         "description": "A project's limits (#206). Null means the platform default (`LIMIT_*`),\nwhich is unlimited unless the deployment set one. A `PUT` replaces all of\nthem, so a field left out goes back to that default."
+      },
+      "ProjectRedaction": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "description": "Redact this project's calls. Required: a PUT replaces the whole setting, so one naming only `entities` must not turn it off"
+          },
+          "entities": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entities",
+            "description": "Entity types to replace (Presidio's names, e.g. PHONE_NUMBER, EMAIL_ADDRESS, PERSON). Null = the default: PHONE_NUMBER, EMAIL_ADDRESS, CREDIT_CARD, US_SSN, IBAN_CODE"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "ProjectRedaction",
+        "description": "A project's redaction (#313, ADR-0024): PII of these entity types is\nreplaced in the transcript and every call event before it is stored or\nsent to a webhook. Never in what the agent hears during the call. A `PUT`\nreplaces the whole setting."
       },
       "ProjectRole": {
         "type": "string",
