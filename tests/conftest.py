@@ -100,3 +100,16 @@ def _events_carry_text_only_through_redact(request, monkeypatch):
         monkeypatch.setattr(redaction, "_read_policy_alone", off)
     yield
     redaction.forget_policies()
+
+
+@pytest.fixture(autouse=True)
+def _logs_redacted_as_in_the_app():
+    """loguru's patcher is installed as `setup_logging` installs it (the
+    harness skips that), and no test starts inside a project's redaction
+    another one left behind (services/telemetry_redaction, #314)."""
+    from turncall.services import telemetry_redaction
+
+    telemetry_redaction.install()
+    telemetry_redaction.use(None)
+    yield
+    telemetry_redaction.use(None)

@@ -55,6 +55,7 @@ async def serve(
 
 async def run_worker() -> None:
     """Start the worker and serve until signalled."""
+    from turncall.services import telemetry_redaction
     from turncall.storage.database import (
         close_database,
         get_session_factory,
@@ -63,6 +64,8 @@ async def run_worker() -> None:
     from turncall.storage.redis import close_redis, get_redis, init_redis
     from turncall.storage.repositories import credential_repo
 
+    # A redacting project's log records are redacted (#314).
+    telemetry_redaction.install()
     settings = get_settings()
     await init_database(settings.database)
     await init_redis(settings.redis)

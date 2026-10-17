@@ -34,7 +34,7 @@ from turncall.api.deps import DbSession
 from turncall.config import get_settings
 from turncall.domain.carriers import TELNYX
 from turncall.domain.enums import CallDirection, CallEventType, CallStatus
-from turncall.services import telnyx_transfer
+from turncall.services import telemetry_redaction, telnyx_transfer
 from turncall.services.limits import release_live_call
 from turncall.services.telnyx_accounts import (
     CONNECTION_KEY,
@@ -136,6 +136,9 @@ async def call_control_webhook(request: Request, session: DbSession) -> Response
     ):
         logger.warning("telnyx_invalid_signature", event_type=event_type)
         return Response(status_code=403)
+    if project_id is not None:
+        # This event's logs follow the project's redaction (#314).
+        await telemetry_redaction.for_project(project_id)
 
     if event_type == "call.initiated" and payload.get("direction") == "incoming":
         # A retried webhook names a call already opened: answer it once.

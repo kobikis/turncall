@@ -20,6 +20,7 @@ from turncall.domain.call_state import (
 )
 from turncall.domain.carriers import TWILIO
 from turncall.domain.enums import CallEventType, CallStatus
+from turncall.services import telemetry_redaction
 from turncall.services.limits import release_live_call
 from turncall.services.media_token import media_token
 from turncall.storage.models import CallRow
@@ -146,6 +147,11 @@ async def inbound_sms_webhook(
     if not from_number.startswith("+"):
         from_number = f"+{from_number}"
 
+    # Verify the phone number exists and has SMS enabled. Its project known,
+    # this request's logs follow the project's redaction (#314).
+    phone_number = await phone_number_repo.get_by_e164(session, to_number)
+    if phone_number is not None:
+        await telemetry_redaction.for_project(phone_number.project_id)
     logger.info(
         "twilio_inbound_sms",
         message_sid=message_sid,
@@ -153,9 +159,6 @@ async def inbound_sms_webhook(
         to_number=to_number,
         body_length=len(body),
     )
-
-    # Verify the phone number exists and has SMS enabled
-    phone_number = await phone_number_repo.get_by_e164(session, to_number)
     if phone_number is None:
         logger.warning("twilio_sms_unknown_number", to_number=to_number)
         return _sms_twiml("This number is not configured for SMS.")
@@ -231,6 +234,11 @@ async def inbound_voice_webhook(
         logger.warning("twilio_invalid_signature")
         return Response(status_code=403)
 
+    # Resolve phone number to routing target. Its project known, this
+    # request's logs follow the project's redaction (#314).
+    phone_number = await phone_number_repo.get_by_e164(session, to_number)
+    if phone_number is not None:
+        await telemetry_redaction.for_project(phone_number.project_id)
     logger.info(
         "twilio_inbound_call",
         call_sid=call_sid,
@@ -238,9 +246,6 @@ async def inbound_voice_webhook(
         to_number=to_number,
         status=call_status,
     )
-
-    # Resolve phone number to routing target
-    phone_number = await phone_number_repo.get_by_e164(session, to_number)
     if phone_number is None or phone_number.provider != TWILIO:
         logger.warning("twilio_inbound_unknown_number", to_number=to_number)
         return Response(
@@ -349,6 +354,8 @@ async def status_callback(
     if call is None:
         logger.warning("twilio_status_unknown_call", call_sid=call_sid)
         return Response(status_code=204)
+    # The call's ending (post-call analysis, its webhooks) logs from here.
+    await telemetry_redaction.for_project(call.project_id)
 
     # Map Twilio status to internal status
     new_status = TWILIO_STATUS_MAP.get(call_status)

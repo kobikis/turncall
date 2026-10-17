@@ -29,6 +29,7 @@ from turncall.orchestrator.transport_factory import (
     WEBRTC_SAMPLE_RATE,
     create_whatsapp_transport,
 )
+from turncall.services import telemetry_redaction
 from turncall.services.limits import admit_inbound_call, release_live_call
 from turncall.storage.database import create_session_factory, get_engine
 from turncall.storage.repositories import (
@@ -174,6 +175,9 @@ async def _handle_call_event(
         if _is_connect(body)
         else None
     )
+    if phone_row is not None:
+        # This call's logs follow its project's redaction (#314).
+        await telemetry_redaction.for_project(phone_row.project_id)
     if phone_row is not None and not await admit_inbound_call(
         session,
         project_id=phone_row.project_id,
@@ -261,6 +265,7 @@ async def _start_voice_pipeline(
                 whatsapp_call_id=whatsapp_call_id,
             )
             return
+        await telemetry_redaction.for_project(phone_row.project_id)
 
         agent = None
         dynamic_config = None
@@ -446,6 +451,10 @@ async def _handle_message_event(
         to_number = _normalize_phone(display_phone)
         from_number = _normalize_phone(from_number)
 
+        # The message's logs follow its project's redaction (#314).
+        ours = await phone_number_repo.get_by_e164(db, to_number)
+        if ours is not None:
+            await telemetry_redaction.for_project(ours.project_id)
         logger.info(
             "whatsapp_inbound_text",
             from_number=from_number,

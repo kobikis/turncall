@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.domain.enums import CallEventType, EndedReason
 from turncall.domain.models import AnalysisConfig, AWSConfig, LLMConfig
-from turncall.services import live_transcript, redaction
+from turncall.services import live_transcript, redaction, telemetry_redaction
 from turncall.services.call_view import call_view_fields, public_metadata
 
 if TYPE_CHECKING:
@@ -182,6 +182,8 @@ async def _run_post_call(
         policy = await redaction.policy_for_project(
             project_id, sessions=session_factory
         )
+        # This task's logs, the analysis LLM's included, follow the project.
+        telemetry_redaction.use(policy)
         if (
             analysis_config.enabled
             and policy is not None

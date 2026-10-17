@@ -44,6 +44,7 @@ and is not part of this repository's history.
   digits spoken as words ("four one five…") are not caught, so an STT that
   does not format numbers (Deepgram's `smart_format` does) leaves them.
   Migration `d7f2a4c9e5b8`. See the Redaction guide.
+
 - **Redaction: tool invocations** (#314). With redaction on, a tool call's
   arguments and result are stored redacted on its `tool_invocations` row, so
   `GET /v1/tools/invocations/{call_id}`, a chat session's tool invocations
@@ -52,6 +53,21 @@ and is not part of this repository's history.
   `customer_id` holding an email is redacted); the same holds for takeaway
   and `structured_data` fields in the stored analysis. The tool's webhook is
   still sent the raw arguments and the model still reads the raw result.
+
+- **Redaction in logs and traces** (#314). A redacting project's log lines
+  and OpenTelemetry spans are redacted before they leave the process: the
+  carrier webhooks' caller numbers, the pipeline observers' transcripts, the
+  STT/LLM/TTS spans' text and the model's input and output, tool calls,
+  transfers, post-call analysis, SMS and WhatsApp messages, and every request
+  made with the project's API key. Regular expressions rather than the
+  detector, which is too slow for the audio path: `PHONE_NUMBER`,
+  `EMAIL_ADDRESS`, `CREDIT_CARD`, `US_SSN` and `IBAN_CODE`, as the project
+  chose them; other types are not found in logs and spans. For such a
+  project a logged exception's traceback is written without its local
+  variables, redacted, in the message (JSON `exception` is `null`), and the
+  call's `turncall.from_number` / `turncall.to_number` are left off its spans
+  whatever `PIPECAT_TRACE_INCLUDE_PII` says. A project with redaction off logs
+  as before. See the Redaction guide.
 
 - **Helm chart** (#210), in its own repo,
   [turncall-charts](https://github.com/kobikis/turncall-charts). Runs the API, the eval worker and

@@ -54,12 +54,27 @@ def init_tracing(*, enabled: bool, service_name: str, is_production: bool) -> bo
     console = (not is_production) and exporter is None
     if exporter is None and not console:
         return False  # prod path already handled; nothing to export to
+    if exporter is None:
+        from opentelemetry.sdk.trace.export import ConsoleSpanExporter
 
+        # Ours rather than pipecat's console_export, so it is wrapped below.
+        exporter = ConsoleSpanExporter()
+
+    from opentelemetry import trace
+
+    from turncall.services import telemetry_redaction
+
+    # A redacting project's spans are redacted on the way out (#314): marked
+    # when they start, in the call's context, and rewritten at export.
     _tracing_active = bool(
         setup_tracing(
-            service_name=service_name, exporter=exporter, console_export=console
+            service_name=service_name,
+            exporter=telemetry_redaction.RedactingSpanExporter(exporter),
+            console_export=False,
         )
     )
+    if _tracing_active:
+        telemetry_redaction.install_span_redaction(trace.get_tracer_provider())
     logger.info(
         "otel_tracing_initialized",
         active=_tracing_active,

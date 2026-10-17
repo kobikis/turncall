@@ -13,6 +13,12 @@ webhook, before they are stored or sent. The agent still hears them during
 the call. Detection runs locally, and nothing changes until an admin turns it
 on. See [Redaction](/guides/redaction).
 
+**Redaction in logs and traces.** A redacting project's log lines and
+OpenTelemetry spans have its callers' phone numbers, emails, card numbers,
+SSNs and IBANs replaced before they leave the server: the transcripts the
+observers log, the text on the pipeline's spans, the numbers the webhooks
+log. See [Logs and traces](/guides/redaction#logs-and-traces).
+
 **A website demo server.** `turncall-demo` runs agents from a JSON file over
 WebRTC with no database, Redis or project — the real voice pipeline behind a
 "talk to an agent" button, in a container per visitor. See
