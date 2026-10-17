@@ -87,12 +87,26 @@ default that deletes would surprise every upgrade.
   its takeaways, which restate what was said. **Events** are the rest of the
   call's log. The call row is never deleted; `*_expired_at` columns say what
   went, and `ended_reason`, derived from the events, is frozen on it before
-  they go. Recording objects are deleted before the row is marked, so a
-  failed delete is retried rather than orphaned. The janitor runs hourly on
-  every API replica, claiming calls with `FOR UPDATE SKIP LOCKED`, and writes
-  only `calls`, `call_events` and `tool_invocations` (a test holds that, so
-  the audit log stays out of its reach). Calls only: text conversations are
-  not covered yet.
+  they go. Text other events quote from the conversation (the fields
+  redaction analyses: a handoff's reason and context, a transfer's words)
+  is cleared with the transcript; the events stay with the events kind,
+  since `ended_reason` depends on them. An agent's `retention` overrides an
+  admin-only setting, so changing what applies to an agent's calls needs an
+  admin key too. A recording goes from storage, from the Twilio account
+  when its `recording.ready` names a carrier copy, and from the event log's
+  URLs; `recording_status` becomes `expired`, and `recording.ready` stays
+  while the recording does. The carrier's copy is deleted only where
+  TurnCall heard of it and holds the account's credentials: otherwise your
+  carrier may keep its own copy; delete it there or turn carrier recording
+  storage off. Objects are deleted before the row is marked, outside any
+  transaction (collect, delete, then mark only rows unchanged since), so a
+  failed delete is retried rather than orphaned and no row is locked while
+  storage answers. Transcripts and events are claimed with `FOR UPDATE SKIP
+  LOCKED`; the janitor runs hourly on every API replica and writes only
+  `calls`, `call_events` and `tool_invocations` (a test holds that, so the
+  audit log stays out of its reach). An analysis write is conditional on the
+  transcript still being there, so a re-run racing the janitor stores
+  nothing. Calls only: text conversations are not covered yet.
 
 **The audit log is append-only and keyed by API key.** The engine has no notion
 of a person (it is identity-free, and the [[platform credential]] identifies the

@@ -1026,26 +1026,46 @@ null = kept for good (the default; a PUT replaces all three). Columns
 `projects.retention_*_days`. An agent overrides field by field with
 `config.retention`, read by the janitor from the agent's **live version**
 (published, else newest) for the calls of every version; an inline agent
-takes the project's. `services/retention.py` holds the rules and the janitor:
+takes the project's. Changing what applies to an agent needs an admin key
+(`api/v1/agents`: a developer key may not write a `retention` other than the
+applied one, nor make another apply by publish/rollback/delete; checked
+after the change via `retention.applied_by_name`, the 403 rolls it back).
+One model of the triple: `domain.models.RetentionConfig` (one Field factory,
+`days`/`over`/`as_payload`); `ProjectRetention` and `RetentionSchema`
+subclass it with `extra="forbid"`. `services/retention.py` holds the rules
+and the janitor:
 
-- **Kinds.** Recording: the objects (`recordings/{call_id}.wav` and the
-  `recording_url`'s key) and `recording_url`. Transcript: `TRANSCRIPT_EVENTS`
-  (`transcript.*`, `tool.called`/`tool.result`, `context.injected`), the
-  call's `tool_invocations`, `analysis_json`. Events: every other call event.
+- **Kinds.** Recording: the objects (`recording_storage.recording_keys`,
+  shared with the project purge), the Twilio copy each `recording.ready`'s
+  `recording_sid` names (`TwilioAdapter.delete_recording`, on
+  `account_for_call`'s account), `recording_url`; `recording_status` →
+  `expired` (enum value) where there was one, and `recording.ready`'s `*_url`
+  fields nulled. Transcript: `TRANSCRIPT_EVENTS` (`transcript.*`,
+  `tool.called`/`tool.result`, `context.injected`), the call's
+  `tool_invocations`, `analysis_json`, and every other event's free-text
+  fields (`redaction.text_fields`) nulled. Events: every other call event,
+  but `recording.ready` stays while the recording does (deleted with it).
 - **The row stays.** `calls.recording_expired_at` / `transcript_expired_at` /
   `events_expired_at` mark what went (on the call read); `calls.ended_reason`
-  is frozen from the events before they go (`call_view.ended_reasons`; the
-  read prefers it). The analysis read says `expired`, a rerun is a 409, the
-  transcript read gains `expired_at`.
-- **The janitor** (`run_janitor`, hourly in the API lifespan; `sweep(now=)`
-  takes the clock) plans only projects with a retention set (on the project
-  or an agent), then per kind and distinct days claims batches of
-  `BATCH` calls with `FOR UPDATE SKIP LOCKED` in a keyset over the partial
-  indexes `ix_calls_<kind>_retention`. Recording objects are deleted before
-  the row is marked; a failed delete leaves the call for the next sweep.
-  It writes only `calls`, `call_events`, `tool_invocations`
-  (`test_retention_janitor.py` holds that: the audit log, #317, keeps its own
-  retention). Event deletes go through `call_repo.delete_call_events`.
+  is frozen from the events before they go (`call_view.ended_reasons`, the
+  same `_ended_reason_facts` loader as the read; the read prefers it). The
+  analysis read says `expired`, a rerun is a 409, the transcript read gains
+  `expired_at`. `call_repo.update_call_analysis` writes only while
+  `transcript_expired_at IS NULL`; post-call stops (no `call.ended`) when it
+  did not, or when the call's transcript has expired.
+- **The janitor** (`run_janitor`, hourly in the API lifespan; `sweep(now=,
+  carrier=)` takes the clock and the carrier deleter) plans only projects
+  with a retention set (on the project or an agent), then per kind and
+  distinct days walks batches of `BATCH` calls in a keyset over the partial
+  indexes `ix_calls_<kind>_retention` (built CONCURRENTLY). Transcripts and
+  events: one `FOR UPDATE SKIP LOCKED` transaction per batch. Recordings:
+  collect (short read), delete outside any transaction
+  (`storage.delete_many`: one S3 DeleteObjects per 1000 keys; then the
+  carrier), then mark only rows whose `recording_url` is unchanged; a failed
+  delete leaves the call for the next sweep. It writes only `calls`,
+  `call_events`, `tool_invocations` (`test_retention_janitor.py` holds that:
+  the audit log, #317, keeps its own retention), event rows through
+  `call_repo` (the exit-point guard).
 - `call.ended` carries `retention` (`retention.for_call`, the policy as it
   stands at the call's end). Text conversations are not covered yet.
 

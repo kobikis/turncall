@@ -64,7 +64,7 @@ There is no separate `analysis.completed` event — the analysis is part of the 
 TurnCall gates `call.ended` on both the recording and the analysis being ready:
 
 1. Analysis runs first, in parallel with the recording upload that started when the call disconnected.
-2. TurnCall polls `recording_status` until it reaches `completed` or `failed` (or a 15-second timeout elapses).
+2. TurnCall polls `recording_status` until it reaches `completed`, `failed` or `expired` (or a 15-second timeout elapses).
 3. `call.ended` is dispatched once, with `recording_status` always included and `recording_url` included when present.
 
 `call.ended` always fires — even if the recording fails or the timeout trips, the webhook still goes out so subscribers can rely on it as the end-of-call signal. Use `recording_status` to tell "no recording" apart from "still pending":

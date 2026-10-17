@@ -325,8 +325,9 @@ no clean caller track to reprocess. _Avoid_: "mixed recording".
 
 **Recording status** (`recording_status`):
 Lifecycle of a call's recording: `none` (default, never started) → `in_progress`
-(capture started, set on StartFrame) → `completed` (WAV written) / `failed`. A
-value stuck at `in_progress` means the [[recording flush]] never ran.
+(capture started, set on StartFrame) → `completed` (WAV written) / `failed`, and
+`expired` once the [[retention policy]] deleted it. A value stuck at `in_progress`
+means the [[recording flush]] never ran.
 
 **Recording flush**:
 The `stop_recording` → `on_audio_data` step that writes the buffered audio. It
@@ -515,7 +516,8 @@ behaviour before it existed. The **transcript** is the conversation and what was
 it: the lines, tool calls and their invocation rows, injected messages, and the post-call
 analysis with its takeaways. **Events** are the rest of the call's event log. The
 **call row** always stays, with `*_expired_at` saying what went and `ended_reason` frozen
-on it. Calls only: text conversations are not covered yet. Never applies to the
+on it. Changing an agent's `retention` needs an admin key, as the project's does. Calls
+only: text conversations are not covered yet. Never applies to the
 [[audit log]]: the janitor writes only `calls`, `call_events` and `tool_invocations`. See
 ADR-0024 (#316).
 _Avoid_: "TTL", "auto-delete", confusing it with the soft-delete purge of whole

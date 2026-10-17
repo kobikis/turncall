@@ -9,7 +9,8 @@ description: "Latest updates and improvements to TurnCall"
 
 **Retention.** A project can choose how long its calls' recordings,
 transcripts and events are kept, and an agent can override it. A janitor
-deletes what has expired; the call record stays and says what was deleted.
+deletes what has expired, including a Twilio copy of the recording it was told
+about; the call record stays and says what was deleted.
 `call.ended` states the retention that applies. Unset, everything is kept, as
 before. See [Retention](/guides/retention).
 
