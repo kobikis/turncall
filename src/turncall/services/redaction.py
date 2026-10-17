@@ -295,6 +295,21 @@ def texts_in(
     return found
 
 
+def text_fields(
+    payload: dict[str, Any], *, event_type: str | None = None
+) -> frozenset[str]:
+    """The top-level fields of `payload` holding text: those redaction
+    analyses (a handoff's `reason` and `context_payload`, a transfer's
+    `reason` and `transfer_message`, an error's text), where the rest are ids,
+    numbers and structure. Retention clears these when a call's transcript
+    expires (#316): they quote, or were made from, the conversation."""
+    return frozenset(
+        key
+        for key, value in payload.items()
+        if texts_in({key: value}, event_type=event_type)
+    )
+
+
 def redact_fields(
     payload: dict[str, Any],
     policy: RedactionPolicy,

@@ -10,7 +10,7 @@ used to be computed only on the webhook side.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -104,6 +104,23 @@ def _ended_reason(call: Any, facts: CallFacts) -> str | None:
     ).value
 
 
+async def _ended_reason_facts(
+    session: AsyncSession, call_ids: list[UUID]
+) -> dict[UUID, CallFacts]:
+    """The facts `ended_reason` is derived from, for a page of calls: the one
+    loader the read and the retention janitor's freeze share, so the two
+    cannot derive it from different facts."""
+    event_types = await call_repo.list_event_types_by_call(session, call_ids)
+    control_ended = await call_repo.list_control_ended_calls(session, call_ids)
+    return {
+        call_id: CallFacts(
+            event_types=frozenset(event_types.get(call_id, ())),
+            assistant_ended=call_id in control_ended,
+        )
+        for call_id in call_ids
+    }
+
+
 async def ended_reasons(
     session: AsyncSession, calls: list[CallRow]
 ) -> dict[UUID, str | None]:
@@ -111,19 +128,8 @@ async def ended_reasons(
     what the retention janitor freezes before the events go (#316)."""
     if not calls:
         return {}
-    call_ids = [c.id for c in calls]
-    event_types = await call_repo.list_event_types_by_call(session, call_ids)
-    control_ended = await call_repo.list_control_ended_calls(session, call_ids)
-    return {
-        c.id: _ended_reason(
-            c,
-            CallFacts(
-                event_types=frozenset(event_types.get(c.id, ())),
-                assistant_ended=c.id in control_ended,
-            ),
-        )
-        for c in calls
-    }
+    facts = await _ended_reason_facts(session, [c.id for c in calls])
+    return {c.id: _ended_reason(c, facts[c.id]) for c in calls}
 
 
 def derived_fields(call: Any, facts: CallFacts) -> dict[str, Any]:
@@ -151,8 +157,7 @@ async def load_call_facts(
     if not calls:
         return {}
     call_ids = [c.id for c in calls]
-    event_types = await call_repo.list_event_types_by_call(session, call_ids)
-    control_ended = await call_repo.list_control_ended_calls(session, call_ids)
+    ended = await _ended_reason_facts(session, call_ids)
     turn_metrics = await call_repo.list_payloads_by_call(
         session, call_ids, CallEventType.METRICS_TURN
     )
@@ -166,9 +171,8 @@ async def load_call_facts(
     facts = {}
     for call in calls:
         agent = agents.get(call.active_agent_id) if call.active_agent_id else None
-        facts[call.id] = CallFacts(
-            event_types=frozenset(event_types.get(call.id, ())),
-            assistant_ended=call.id in control_ended,
+        facts[call.id] = replace(
+            ended[call.id],
             agent_name=agent[0] if agent else None,
             agent_version=agent[1] if agent else None,
             turn_metrics=tuple(turn_metrics.get(call.id, ())),

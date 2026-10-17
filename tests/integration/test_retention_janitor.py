@@ -122,6 +122,7 @@ async def _call(
     ended_at: datetime | None = ENDED,
     created_at: datetime | None = None,
     status: str = "completed",
+    events: tuple[tuple[str, dict[str, Any]], ...] = (),
 ) -> uuid.UUID:
     """A call with all three kinds of data: a recording, a transcript (lines,
     a tool call and its invocation row, an analysis) and other events,
@@ -152,6 +153,15 @@ async def _call(
         types = [*SAID, *OTHER, CallEventType.CALL_ENDED]
         for seq, event_type in enumerate(types):
             payload = {"source": "control"} if event_type == "call.ended" else {}
+            db.add(
+                CallEventRow(
+                    call_id=call_id,
+                    event_type=event_type,
+                    payload=payload,
+                    sequence_number=seq,
+                )
+            )
+        for seq, (event_type, payload) in enumerate(events, start=len(types)):
             db.add(
                 CallEventRow(
                     call_id=call_id,
@@ -266,7 +276,8 @@ async def test_each_kind_goes_at_its_own_cutoff_and_the_row_stays(
     )
     assert call.duration_ms == 60_000 and call.ended_at == ENDED
     assert call.metadata_json == {"crm_id": "42"}
-    assert call.recording_status == "completed"
+    # There was a recording, and retention deleted it.
+    assert call.recording_status == "expired"
 
 
 async def test_an_agent_overrides_its_project_for_every_version(
@@ -396,3 +407,205 @@ async def test_the_janitor_writes_nothing_but_call_data(db, storage, projects) -
     assert swept.recording and swept.transcript and swept.events
     assert (await _state(factory, call_id))["events"] == []
     assert written and written <= CALL_DATA, written
+
+
+READY = CallEventType.RECORDING_READY.value
+
+
+def _ready(call_id: uuid.UUID) -> dict[str, Any]:
+    """A `recording.ready` from Twilio's callback: the account recorded the
+    call itself, so a copy is on Twilio too."""
+    return {
+        "recording_sid": "RE123",
+        "recording_url": f"/srv/storage/recordings/{call_id}/RE123.wav",
+        "twilio_recording_url": "https://api.twilio.com/2010-04-01/Recordings/RE123",
+        "recording_status": "completed",
+        "recording_duration": "42",
+    }
+
+
+async def _payloads(factory: Any, call_id: uuid.UUID, event_type: str) -> list[dict]:
+    async with factory() as db:
+        return list(
+            (
+                await db.execute(
+                    select(CallEventRow.payload).where(
+                        CallEventRow.call_id == call_id,
+                        CallEventRow.event_type == event_type,
+                    )
+                )
+            ).scalars()
+        )
+
+
+@pytest.fixture
+def twilio(monkeypatch):
+    """The call's Twilio account, and the recordings deleted from it."""
+    from turncall.services import twilio_accounts
+
+    account = twilio_accounts.TwilioAccount("AC1", "token")
+
+    async def account_for_call(*_args: Any) -> Any:
+        return account
+
+    monkeypatch.setattr(twilio_accounts, "account_for_call", account_for_call)
+    deleted: list[tuple[str, str]] = []
+
+    async def carrier(on: Any, sid: str) -> None:
+        deleted.append((on.account_sid, sid))
+
+    return carrier, deleted
+
+
+async def test_an_expired_recording_goes_everywhere_it_was_named(
+    factory, storage, projects, twilio
+) -> None:
+    """Our object, the carrier's copy, and every URL to either on the event
+    log; the status says it expired."""
+    carrier, deleted = twilio
+    project_id = await _project(factory, projects, recordings_days=1)
+    call_id = await _call(
+        factory, storage, project_id, events=((READY, _ready(uuid.uuid4())),)
+    )
+    before = await _payloads(factory, call_id, READY)
+
+    swept = await retention.sweep(factory, storage, now=_days(2), carrier=carrier)
+
+    call = (await _state(factory, call_id))["call"]
+    after = await _payloads(factory, call_id, READY)
+    assert swept.recording == 1
+    assert deleted == [("AC1", "RE123")]
+    assert not _recorded(storage, call_id)
+    assert call.recording_url is None and call.recording_status == "expired"
+    assert before[0]["twilio_recording_url"]
+    assert after == [
+        {
+            **before[0],
+            "recording_url": None,
+            "twilio_recording_url": None,
+        }
+    ]
+
+
+async def test_a_carrier_copy_that_could_not_be_deleted_is_retried(
+    factory, storage, projects, twilio
+) -> None:
+    _, deleted = twilio
+    project_id = await _project(factory, projects, recordings_days=1)
+    call_id = await _call(
+        factory, storage, project_id, events=((READY, _ready(uuid.uuid4())),)
+    )
+
+    async def down(_account: Any, _sid: str) -> None:
+        raise OSError("twilio unreachable")
+
+    await retention.sweep(factory, storage, now=_days(2), carrier=down)
+    call = (await _state(factory, call_id))["call"]
+    assert call.recording_expired_at is None and call.recording_url is not None
+    assert (await _payloads(factory, call_id, READY))[0]["twilio_recording_url"]
+
+    carrier, deleted = twilio
+    await retention.sweep(factory, storage, now=_days(3), carrier=carrier)
+    assert (await _state(factory, call_id))["call"].recording_expired_at == _days(3)
+    assert deleted == [("AC1", "RE123")]
+
+
+async def test_recording_ready_stays_while_the_recording_does(
+    factory, storage, projects, twilio
+) -> None:
+    """Events go at 1 day, the recording at 10: `recording.ready` names the
+    recording (and its carrier copy), so it stays until the recording goes,
+    then goes with it."""
+    carrier, deleted = twilio
+    project_id = await _project(factory, projects, recordings_days=10, events_days=1)
+    call_id = await _call(
+        factory, storage, project_id, events=((READY, _ready(uuid.uuid4())),)
+    )
+
+    await retention.sweep(factory, storage, now=_days(2), carrier=carrier)
+    assert (await _state(factory, call_id))["events"] == [*SAID, READY]
+
+    await retention.sweep(factory, storage, now=_days(11), carrier=carrier)
+    assert (await _state(factory, call_id))["events"] == list(SAID)
+    assert deleted == [("AC1", "RE123")]
+
+
+async def test_the_text_other_events_quote_goes_with_the_transcript(
+    factory, storage, projects
+) -> None:
+    """A handoff's reason and context restate the conversation: cleared with
+    the transcript. The event stays, with the events: how the call ended is
+    derived from which ones exist."""
+    project_id = await _project(factory, projects, transcripts_days=1)
+    target = str(uuid.uuid4())
+    handoff = {
+        "source_agent_id": str(uuid.uuid4()),
+        "target_agent_id": target,
+        "reason": "caller disputes a charge",
+        "context_payload": {"card": "ending 4242", "amount": "$120"},
+    }
+    call_id = await _call(
+        factory,
+        storage,
+        project_id,
+        events=(
+            (CallEventType.CALL_AGENT_HANDOFF.value, handoff),
+            (
+                CallEventType.CALL_TRANSFERRED.value,
+                {"transfer_mode": "cold", "reason": "wants a manager"},
+            ),
+        ),
+    )
+
+    await retention.sweep(factory, storage, now=_days(2))
+
+    [kept] = await _payloads(factory, call_id, "call.agent_handoff")
+    assert kept == {**handoff, "reason": None, "context_payload": None}
+    assert kept["target_agent_id"] == target
+    [transferred] = await _payloads(factory, call_id, "call.transferred")
+    assert transferred == {"transfer_mode": "cold", "reason": None}
+
+
+async def test_an_analysis_that_lost_the_race_to_the_janitor_is_not_stored(
+    factory, storage, projects
+) -> None:
+    """A re-run passed the 409 check; the janitor deleted the transcript
+    while the LLM was reading it. Its verdict is not stored on the expired
+    call, and no `call.ended` goes out."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from turncall.domain.models import AnalysisConfig, LLMConfig
+    from turncall.services import call_analysis_trigger
+
+    project_id = await _project(factory, projects, transcripts_days=1)
+    call_id = await _call(factory, storage, project_id)
+    async with factory() as db:
+        await db.execute(
+            CallRow.__table__.update()
+            .where(CallRow.id == call_id)
+            .values(analysis_json=None)
+        )
+        await db.commit()
+
+    async def analyze_while_the_janitor_runs(*_args: Any, **_kwargs: Any) -> Any:
+        await retention.sweep(factory, storage, now=_days(2))
+        result = MagicMock(model="stub", duration_ms=1)
+        result.to_dict.return_value = {"summary": "The caller asked for a refund."}
+        return result
+
+    dispatch = AsyncMock()
+    with (
+        patch(
+            "turncall.services.call_analysis.analyze_call",
+            analyze_while_the_janitor_runs,
+        ),
+        patch("turncall.events.dispatcher.dispatch_event", dispatch),
+    ):
+        await call_analysis_trigger._run_post_call(
+            factory, call_id, project_id, AnalysisConfig(enabled=True), LLMConfig(), ""
+        )
+
+    call = (await _state(factory, call_id))["call"]
+    assert call.transcript_expired_at == _days(2)
+    assert call.analysis_json is None
+    dispatch.assert_not_awaited()

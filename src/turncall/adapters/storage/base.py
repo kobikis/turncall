@@ -1,6 +1,7 @@
 """Abstract object storage adapter interface."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 
 
 class ObjectStorageAdapter(ABC):
@@ -31,3 +32,15 @@ class ObjectStorageAdapter(ABC):
     @abstractmethod
     async def exists(self, key: str) -> bool:
         """Check if an object exists."""
+
+    async def delete_many(self, keys: Iterable[str]) -> dict[str, Exception]:
+        """Delete every key, each failure kept rather than raised: the keys
+        that could not be deleted, with why. A key already gone is deleted.
+        One at a time here; a backend with a batch delete overrides it."""
+        failed: dict[str, Exception] = {}
+        for key in keys:
+            try:
+                await self.delete(key)
+            except Exception as exc:
+                failed[key] = exc
+        return failed

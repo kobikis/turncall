@@ -67,6 +67,8 @@ class RecordingStatus(StrEnum):
     PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
+    # Deleted under the project's retention (#316): there was one, and it is gone.
+    EXPIRED = "expired"
 
 
 class RoutingTargetType(StrEnum):

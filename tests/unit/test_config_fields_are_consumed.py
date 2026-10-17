@@ -38,6 +38,15 @@ NOT_CONSUMED: dict[str, str] = {
         "the greeting ends, which is not what the field promises. Needs either "
         "TurnCall-side behaviour or removal on the next major"
     ),
+    **{
+        f"RetentionConfig.{name}": (
+            "consumed, but through the model's own `days(kind)` and `over()` "
+            "(domain/models.py), which services/retention plans and sweeps "
+            "with, and through the stored blob's keys in its SQL: the one "
+            "model of the triple carries its own reads (#316)"
+        )
+        for name in ("recordings_days", "transcripts_days", "events_days")
+    },
     "AgentConfig.analysis": (
         "consumed, but through the raw blob rather than the attribute: "
         "call_analysis_trigger rebuilds it with "

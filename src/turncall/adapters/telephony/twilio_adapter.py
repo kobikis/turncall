@@ -1,9 +1,11 @@
 """Twilio telephony adapter implementation."""
 
+import asyncio
 import xml.etree.ElementTree as ET
 from typing import Any
 
 from loguru import logger
+from twilio.base.exceptions import TwilioRestException
 from twilio.request_validator import RequestValidator
 from twilio.rest import Client as TwilioClient
 
@@ -108,6 +110,19 @@ class TwilioAdapter(TelephonyAdapter):
         """Get the URL for a call recording."""
         recording = self._client.recordings(recording_sid).fetch()
         return f"https://api.twilio.com{recording.uri.replace('.json', '.mp3')}"
+
+    async def delete_recording(self, recording_sid: str) -> None:
+        """Delete a recording from the account (retention, #316). One that is
+        already gone counts as deleted. Off the event loop: the SDK blocks."""
+
+        def _delete() -> None:
+            try:
+                self._client.recordings(recording_sid).delete()
+            except TwilioRestException as exc:
+                if exc.status != 404:
+                    raise
+
+        await asyncio.to_thread(_delete)
 
     async def configure_number_webhook(
         self,

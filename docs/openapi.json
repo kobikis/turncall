@@ -9493,7 +9493,7 @@
               }
             ],
             "title": "Recordings Days",
-            "description": "Days the project's calls keep their recording (the audio file in object storage), counted from the call's end. Null = kept for good"
+            "description": "Days a call keeps its recording (the audio file in object storage, and the carrier's copy if it kept one), counted from the call's end. Null on a project keeps it for good; null on an agent takes the project's"
           },
           "transcripts_days": {
             "anyOf": [
@@ -9507,7 +9507,7 @@
               }
             ],
             "title": "Transcripts Days",
-            "description": "Days the project's calls keep their transcript: what was said, the tool calls made from it, and the post-call analysis and takeaways, counted from the call's end. Null = kept for good"
+            "description": "Days a call keeps its transcript: what was said, the tool calls made from it, and the post-call analysis and takeaways, counted from the call's end. Null on a project keeps it for good; null on an agent takes the project's"
           },
           "events_days": {
             "anyOf": [
@@ -9521,7 +9521,7 @@
               }
             ],
             "title": "Events Days",
-            "description": "Days the project's calls keep their other events (the rest of the call's event log), counted from the call's end. Null = kept for good"
+            "description": "Days a call keeps its other events (the rest of the call's event log), counted from the call's end. Null on a project keeps it for good; null on an agent takes the project's"
           }
         },
         "additionalProperties": false,
@@ -9611,7 +9611,7 @@
               }
             ],
             "title": "Recordings Days",
-            "description": "Days this agent's calls keep their recording, counted from the call's end. Null = the project's retention"
+            "description": "Days a call keeps its recording (the audio file in object storage, and the carrier's copy if it kept one), counted from the call's end. Null on a project keeps it for good; null on an agent takes the project's"
           },
           "transcripts_days": {
             "anyOf": [
@@ -9625,7 +9625,7 @@
               }
             ],
             "title": "Transcripts Days",
-            "description": "Days this agent's calls keep their transcript (with tool calls and the post-call analysis), counted from the call's end. Null = the project's retention"
+            "description": "Days a call keeps its transcript: what was said, the tool calls made from it, and the post-call analysis and takeaways, counted from the call's end. Null on a project keeps it for good; null on an agent takes the project's"
           },
           "events_days": {
             "anyOf": [
@@ -9639,13 +9639,13 @@
               }
             ],
             "title": "Events Days",
-            "description": "Days this agent's calls keep their other events, counted from the call's end. Null = the project's retention"
+            "description": "Days a call keeps its other events (the rest of the call's event log), counted from the call's end. Null on a project keeps it for good; null on an agent takes the project's"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "title": "RetentionSchema",
-        "description": "This agent's override of its project's retention (#316, ADR-0024),\nfield by field. Applies to the calls of every version of the agent: the\njanitor reads it from the live version (the newest, if none is live).\nIgnored on an inline agent, whose calls take the project's."
+        "description": "This agent's override of its project's retention (#316, ADR-0024),\nfield by field. Applies to the calls of every version of the agent: the\njanitor reads it from the live version (the newest, if none is live).\nChanging what applies (at create, update, publish, rollback or delete)\nneeds an admin key, as the project's does. Ignored on an inline agent,\nwhose calls take the project's."
       },
       "RetryRule": {
         "properties": {

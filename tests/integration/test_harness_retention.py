@@ -214,3 +214,60 @@ async def test_only_an_admin_key_sets_retention(monkeypatch) -> None:
     }
     assert other.status_code == 403
     assert agent.status_code == 422
+
+
+async def test_only_an_admin_key_changes_what_an_agent_keeps(monkeypatch) -> None:
+    """An agent's `retention` overrides the project's, which only an admin
+    sets: a developer key may carry it over unchanged, never change what
+    applies to the agent's calls, at create, update, publish or rollback."""
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        key = await app.api.post(
+            "/v1/api-keys/authenticated", json={"name": "dev", "role": "developer"}
+        )
+        dev = {"Authorization": f"Bearer {key.json()['data']['raw_key']}"}
+        kept_30 = {**AGENT, "retention": {"transcripts_days": 30}}
+        kept_1 = {**AGENT, "retention": {"transcripts_days": 1}}
+
+        async def agent(config: dict[str, Any], headers: Any = None) -> Any:
+            return await app.api.post(
+                "/v1/agents",
+                json={"name": "support", "config": config},
+                headers=headers or {},
+            )
+
+        refused_create = await agent(kept_30, dev)
+        listed = (await app.api.get("/v1/agents")).json()["data"]
+        plain = await agent(AGENT, dev)  # no retention: nothing changes
+        v2 = await agent(kept_30)  # admin: v2 is the newest, and applies
+        v2_id = v2.json()["data"]["id"]
+        await app.api.post(f"/v1/agents/{v2_id}/publish")
+        # A developer's v3 carries v2's retention over: allowed. Its own
+        # retention changed is refused, on update and on publish.
+        v3 = await agent(kept_30, dev)
+        v3_id = v3.json()["data"]["id"]
+        refused_update = await app.api.put(
+            f"/v1/agents/{v3_id}", json={"config": kept_1}, headers=dev
+        )
+        # The admin changes the draft; the developer may not publish it.
+        await app.api.put(f"/v1/agents/{v3_id}", json={"config": kept_1})
+        refused_publish = await app.api.post(f"/v1/agents/{v3_id}/publish", headers=dev)
+        published = await app.api.post(f"/v1/agents/{v3_id}/publish")
+        refused_rollback = await app.api.post(
+            f"/v1/agents/{v2_id}/rollback", headers=dev
+        )
+        v3_read = (await app.api.get(f"/v1/agents/{v3_id}")).json()["data"]
+
+    assert refused_create.status_code == 403, refused_create.text
+    error = refused_create.json()
+    assert "admin key" in error["error"] and error["code"] == "forbidden"
+    assert error["details"]["requested"]["transcripts_days"] == 30
+    assert listed == []  # the refused create was rolled back
+    assert plain.status_code == 201
+    assert v2.status_code == 201 and v3.status_code == 201, v3.text
+    assert refused_update.status_code == 403
+    assert refused_publish.status_code == 403
+    assert published.status_code == 200
+    assert refused_rollback.status_code == 403
+    assert v3_read["state"] == "published"

@@ -250,6 +250,7 @@ class CallRow(Base):
             "paused",
             "completed",
             "failed",
+            "expired",  # retention deleted it (#316)
             name="recording_status",
         ),
         nullable=False,

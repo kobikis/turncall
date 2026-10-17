@@ -16,7 +16,9 @@ from turncall.api.v1.schemas.agents import (
     CreateAgentRequest,
     UpdateAgentRequest,
 )
-from turncall.auth import Auth, WriteAuth
+from turncall.auth import Auth, AuthContext, WriteAuth
+from turncall.domain.models import RetentionConfig
+from turncall.services import retention
 from turncall.storage.repositories import agent_repo, ambience_repo, knowledge_repo
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -54,6 +56,79 @@ def _refuse_inline_knowledge_bases(config: AgentConfigSchema | None) -> None:
     )
 
 
+# Changing what an agent keeps needs an admin key (#316): its `retention`
+# overrides the project's, which only an admin sets, and decides when its
+# calls' recordings, transcripts and events are deleted. A developer key may
+# carry a retention over unchanged, never write a different one or make a
+# different one apply.
+
+
+async def _retention_before(
+    session: AsyncSession, auth: AuthContext, names: set[str]
+) -> dict[str, RetentionConfig] | None:
+    """What retention each named agent's calls get before a change (its
+    live version's); None for an admin key, which may change it."""
+    if auth.can_admin():
+        return None
+    return await retention.applied_by_name(session, auth.project_id, names)
+
+
+def _retention_forbidden(
+    name: str, current: RetentionConfig, requested: RetentionConfig
+) -> ApiError:
+    return ApiError(
+        status_code=403,
+        code=ErrorCode.FORBIDDEN,
+        message=(
+            f"Changing the retention of agent {name!r} needs an admin key: it "
+            "decides when the agent's calls' recordings, transcripts and "
+            "events are deleted. Keep `retention` as it is, or use an admin key."
+        ),
+        details={
+            "field": "retention",
+            "agent": name,
+            "current": current.as_payload(),
+            "requested": requested.as_payload(),
+        },
+    )
+
+
+def _refuse_written_retention(
+    before: dict[str, RetentionConfig] | None,
+    name: str,
+    config_blob: dict[str, Any],
+    *,
+    own: dict[str, Any] | None = None,
+) -> None:
+    """A version written with a retention other than the one that applies to
+    the agent (or, on an update, the one the version already had)."""
+    if before is None:
+        return
+    written = retention.of_agent_config(config_blob)
+    if written == before[name]:
+        return
+    if own is not None and written == retention.of_agent_config(own):
+        return
+    raise _retention_forbidden(name, before[name], written)
+
+
+async def _refuse_applied_change(
+    session: AsyncSession,
+    auth: AuthContext,
+    before: dict[str, RetentionConfig] | None,
+) -> None:
+    """A change that made a different retention apply to an agent's calls.
+    What applies is the live version's, so a publish, rollback or delete can
+    change it as well as a write. Checked after the change, in its
+    transaction: the 403 rolls it back."""
+    if before is None:
+        return
+    after = await retention.applied_by_name(session, auth.project_id, set(before))
+    for name in sorted(before):
+        if after[name] != before[name]:
+            raise _retention_forbidden(name, before[name], after[name])
+
+
 async def _with_kb_warnings(
     session: AsyncSession, rows: list[Any]
 ) -> list[AgentResponse]:
@@ -72,6 +147,8 @@ async def create_agent(
     """Create a new draft agent."""
     _refuse_inline_knowledge_bases(body.config)
     await _check_ambience(session, auth.project_id, body.config)
+    before = await _retention_before(session, auth, {body.name})
+    _refuse_written_retention(before, body.name, body.config.model_dump())
     next_version = await agent_repo.get_next_version(
         session, auth.project_id, body.name
     )
@@ -84,6 +161,7 @@ async def create_agent(
         version=next_version,
         config_blob=body.config.model_dump(),
     )
+    await _refuse_applied_change(session, auth, before)
 
     return ok(AgentResponse.from_row(row))
 
@@ -159,6 +237,9 @@ async def update_agent(
     _refuse_inline_knowledge_bases(body.config)
     await _check_ambience(session, auth.project_id, body.config)
     config_blob = body.config.model_dump() if body.config else existing.config_blob
+    name = body.name or existing.name
+    before = await _retention_before(session, auth, {existing.name, name})
+    _refuse_written_retention(before, name, config_blob, own=existing.config_blob)
     row = await agent_repo.update_agent_config(
         session,
         agent_id,
@@ -167,6 +248,7 @@ async def update_agent(
     )
     if row is None:
         raise ConflictError("Agent was modified concurrently")
+    await _refuse_applied_change(session, auth, before)
 
     return ok((await _with_kb_warnings(session, [row]))[0])
 
@@ -183,7 +265,9 @@ async def delete_agent(
     )
     if existing is None:
         raise NotFoundError("Agent", str(agent_id))
+    before = await _retention_before(session, auth, {existing.name})
     await agent_repo.retire_agent(session, agent_id)
+    await _refuse_applied_change(session, auth, before)
     return ok({"deleted": True})
 
 
@@ -206,6 +290,7 @@ async def publish_agent(
             details={"state": existing.state, "version": existing.version},
         )
 
+    before = await _retention_before(session, auth, {existing.name})
     row = await agent_repo.publish_agent(session, agent_id)
     if row is None:
         raise ConflictError(
@@ -224,6 +309,7 @@ async def publish_agent(
         promoted_count += await agent_repo.update_phone_number_routing(
             session, old_id, agent_id
         )
+    await _refuse_applied_change(session, auth, before)
 
     if archived_ids:
         logger.info(
@@ -273,6 +359,7 @@ async def rollback_agent(
             details={"state": target.state, "version": target.version},
         )
 
+    before = await _retention_before(session, auth, {target.name})
     # Archive current published version(s) of same name
     archived_ids = await agent_repo.archive_previous_published(
         session,
@@ -294,6 +381,7 @@ async def rollback_agent(
         promoted_count += await agent_repo.update_phone_number_routing(
             session, old_id, agent_id
         )
+    await _refuse_applied_change(session, auth, before)
 
     logger.info(
         "agent_rollback",

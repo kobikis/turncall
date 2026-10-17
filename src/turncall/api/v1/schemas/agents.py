@@ -21,7 +21,7 @@ from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
 from turncall.domain.models import (
     BUILTIN_TOOL_NAMES,
-    MAX_RETENTION_DAYS,
+    RetentionConfig,
     resolve_delegation,
 )
 from turncall.domain.providers import (
@@ -637,31 +637,15 @@ class AWSConfigSchema(AWSCredentialSetSchema):
         return self
 
 
-def _days(kind: str) -> Any:
-    return Field(
-        default=None,
-        ge=1,
-        le=MAX_RETENTION_DAYS,
-        description=(
-            f"Days this agent's calls keep their {kind}, counted from the "
-            "call's end. Null = the project's retention"
-        ),
-    )
-
-
-class RetentionSchema(BaseModel):
+class RetentionSchema(RetentionConfig):
     """This agent's override of its project's retention (#316, ADR-0024),
     field by field. Applies to the calls of every version of the agent: the
     janitor reads it from the live version (the newest, if none is live).
-    Ignored on an inline agent, whose calls take the project's."""
+    Changing what applies (at create, update, publish, rollback or delete)
+    needs an admin key, as the project's does. Ignored on an inline agent,
+    whose calls take the project's."""
 
-    model_config = ConfigDict(extra="forbid")
-
-    recordings_days: int | None = _days("recording")
-    transcripts_days: int | None = _days(
-        "transcript (with tool calls and the post-call analysis)"
-    )
-    events_days: int | None = _days("other events")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class AgentConfigSchema(BaseModel):

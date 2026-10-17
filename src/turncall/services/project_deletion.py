@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.adapters.storage import create_storage_adapter, delete_objects
 from turncall.config.settings import Settings
-from turncall.services.recording_storage import recording_storage_key
+from turncall.services.recording_storage import recording_keys
 from turncall.storage.models import CallRow, DocumentRow, KnowledgeBaseRow, utc_now
 from turncall.storage.repositories import (
     ambience_repo,
@@ -79,9 +79,8 @@ async def _sweep_storage(
         .scalars()
         .all()
     )
-    # The recorder writes recordings/{call_id}.wav; Twilio's callback writes
-    # recordings/{call_id}/{sid}.wav and overwrites recording_url, which can
-    # then hide the first. Sweep both (#168).
+    # Every key a call's recording can have (`recording_keys`, #168), as
+    # retention deletes them.
     recordings = (
         await session.execute(
             select(CallRow.id, CallRow.recording_url).where(
@@ -95,12 +94,10 @@ async def _sweep_storage(
     # nothing else would ever name these objects again.
     ambience_keys = await ambience_repo.rendition_keys_for_project(session, project_id)
 
-    rec_keys = {f"recordings/{cid}.wav" for cid, _ in recordings} | {
-        recording_storage_key(url) for _, url in recordings
-    }
+    rec_keys = set().union(*(recording_keys(cid, url) for cid, url in recordings))
     await delete_objects(
         storage,
-        [k for k in doc_keys if k] + [k for k in rec_keys if k] + ambience_keys,
+        [k for k in doc_keys if k] + sorted(rec_keys) + ambience_keys,
     )
 
 
