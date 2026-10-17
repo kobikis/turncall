@@ -19,7 +19,11 @@ from pydantic import (
 from turncall.api.v1.schemas.knowledge import LinkKnowledgeBaseRequest
 from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
-from turncall.domain.models import BUILTIN_TOOL_NAMES, resolve_delegation
+from turncall.domain.models import (
+    BUILTIN_TOOL_NAMES,
+    RetentionConfig,
+    resolve_delegation,
+)
 from turncall.domain.providers import (
     AVATAR_PROVIDERS,
     LLM_PROVIDERS,
@@ -633,6 +637,17 @@ class AWSConfigSchema(AWSCredentialSetSchema):
         return self
 
 
+class RetentionSchema(RetentionConfig):
+    """This agent's override of its project's retention (#316, ADR-0024),
+    field by field. Applies to the calls of every version of the agent: the
+    janitor reads it from the live version (the newest, if none is live).
+    Changing what applies (at create, update, publish, rollback or delete)
+    needs an admin key, as the project's does. Ignored on an inline agent,
+    whose calls take the project's."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
 class AgentConfigSchema(BaseModel):
     # Reject unknown fields instead of silently dropping them — a typo'd or
     # schema-lagging config section (e.g. a mis-nested "avatar") used to vanish
@@ -694,6 +709,7 @@ class AgentConfigSchema(BaseModel):
     aws: AWSConfigSchema = Field(default_factory=AWSConfigSchema)
     avatar: AvatarConfigSchema = Field(default_factory=AvatarConfigSchema)
     ambience: AmbienceConfigSchema | None = None
+    retention: RetentionSchema = Field(default_factory=RetentionSchema)
     # Inline agents only — an eval `inline` target here; call-init's `agent`
     # reaches the domain model directly. A stored agent's KBs are its links, so
     # the agent endpoints refuse this, and it is never dumped into a config_blob.

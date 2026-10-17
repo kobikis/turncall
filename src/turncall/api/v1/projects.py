@@ -13,6 +13,7 @@ from turncall.api.v1.schemas.projects import (
     ProjectLimits,
     ProjectRedaction,
     ProjectResponse,
+    ProjectRetention,
 )
 from turncall.auth import AdminAuth, Auth, PlatformKey
 from turncall.config import get_settings
@@ -104,6 +105,42 @@ async def set_project_redaction(
         project_id=str(project_id),
         enabled=body.enabled,
         entities=body.entities,
+    )
+    return ok(ProjectResponse.from_row(row))
+
+
+@router.put("/{project_id}/retention")
+async def set_project_retention(
+    project_id: UUID,
+    body: ProjectRetention,
+    auth: AdminAuth,
+    session: DbSession,
+) -> dict:
+    """Set how long the project keeps its calls' recordings, transcripts and
+    events (#316, ADR-0024), replacing all three: a field left out or null
+    keeps that kind for good. Counted in days from each call's end, and
+    enforced by an hourly janitor, so data goes within the hour after it
+    expires. Applies to calls already stored too: shortening it deletes what
+    is now past it, lengthening it keeps what is not yet deleted. An agent's
+    `retention` overrides it for that agent's calls. The call row itself is
+    kept. Admin key; a project can only set its own."""
+    if auth.project_id != project_id:
+        raise ForbiddenError("A project can only set its own retention")
+    row = await project_repo.set_retention(
+        session,
+        project_id,
+        recordings_days=body.recordings_days,
+        transcripts_days=body.transcripts_days,
+        events_days=body.events_days,
+    )
+    if row is None:
+        raise NotFoundError("Project", str(project_id))
+    logger.info(
+        "project_retention_set",
+        project_id=str(project_id),
+        recordings_days=body.recordings_days,
+        transcripts_days=body.transcripts_days,
+        events_days=body.events_days,
     )
     return ok(ProjectResponse.from_row(row))
 

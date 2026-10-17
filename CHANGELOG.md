@@ -13,6 +13,40 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Retention** (#316, ADR-0024). A project can choose how long its calls'
+  recordings, transcripts and events are kept: `PUT
+  /v1/projects/{id}/retention` (admin key) with `recordings_days`,
+  `transcripts_days` and `events_days`, whole days from the call's end, `null`
+  (the default) to keep for good. An agent overrides any of them with an
+  additive `retention` block in its config, read from its live version and
+  applied to the calls of all its versions; an inline agent's calls take the
+  project's. Changing what applies to an agent needs an admin key too: a
+  developer key that writes a different `retention`, or publishes or rolls
+  back to one, gets a `403`. A janitor on every API server deletes what has
+  expired, hourly: a recording's object in storage, its copy on the call's
+  Twilio account when a `recording.ready` names one, and its
+  `recording_url`, with `recording_status` set to the new value `expired`
+  and the URLs on `recording.ready` cleared; a transcript's lines, tool
+  events and tool-invocation rows, injected messages, the post-call analysis
+  with its takeaways, and the free-text fields other events quote (a
+  handoff's reason and context, a transfer's reason and message); and the
+  rest of the call's event log (`recording.ready` stays while the recording
+  does). A carrier recording TurnCall never heard about, or on an account it
+  holds no credentials for, it cannot delete: your carrier may keep its own
+  copy; delete it there or turn carrier recording storage off. The call
+  record stays, with `recording_expired_at`,
+  `transcript_expired_at` and `events_expired_at` on the call read saying what
+  went, and `ended_reason` kept. `GET /v1/calls/{id}/transcript` gains
+  `expired_at`, `GET /v1/calls/{id}/analysis` answers `status: "expired"`, and
+  re-running the analysis of an expired transcript is a `409` (a re-run
+  already under way when it expires stores nothing and sends no
+  `call.ended`). `call.ended`
+  carries `retention`, what applies to the call. A change applies to calls
+  already stored. Text conversations and the audit log are not touched.
+  Migration `e2c6a8f4b9d1` (three partial indexes on `calls`, built
+  `CONCURRENTLY` so writes to `calls` never wait on them, and `expired` on
+  the `recording_status` enum). See the Retention guide.
+
 - **Redaction** (#313, ADR-0024). A project can have PII replaced in
   everything it stores and sends about its calls: `PUT
   /v1/projects/{id}/redaction` (admin key) with `{"enabled": true}` and,

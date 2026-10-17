@@ -124,6 +124,8 @@ async def get_call_transcript(
             "call_id": str(call_id),
             "entries": transcript_entries,
             "count": len(transcript_entries),
+            # Set once retention deleted it (#316): empty, not unspoken.
+            "expired_at": call.transcript_expired_at,
         }
     )
 
@@ -180,6 +182,10 @@ async def get_call_analysis(
     if call is None:
         raise NotFoundError("Call", str(call_id))
 
+    if call.transcript_expired_at is not None:
+        # Deleted with the transcript (#316), not still coming.
+        return ok(AnalysisResponse(call_id=call_id, status="expired"))
+
     if call.analysis_json is not None:
         return ok(
             AnalysisResponse(
@@ -217,6 +223,15 @@ async def rerun_call_analysis(
         from turncall.api.errors import BadRequestError
 
         raise BadRequestError("Can only analyze completed or failed calls")
+
+    if call.transcript_expired_at is not None:
+        from turncall.api.errors import ConflictError
+
+        # Analysis would read an empty transcript and store its verdict on it.
+        raise ConflictError(
+            "The call's transcript was deleted under the project's retention",
+            details={"transcript_expired_at": call.transcript_expired_at.isoformat()},
+        )
 
     if not call.active_agent_id:
         from turncall.api.errors import BadRequestError

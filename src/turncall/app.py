@@ -152,6 +152,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     purge_task = asyncio.create_task(_purge_soft_deleted_projects())
 
+    # Retention (#316, ADR-0024): hourly, delete call data past the project's
+    # (or agent's) retention. Unset everywhere, it reads no call. The engine
+    # is read inside the task, as the purge's is, never by the lifespan.
+    async def _retention_janitor() -> None:
+        from turncall.adapters.storage import create_storage_adapter
+        from turncall.services import retention
+        from turncall.storage.database import create_session_factory, get_engine
+
+        await retention.run_janitor(
+            create_session_factory(get_engine()),
+            lambda: create_storage_adapter(
+                settings.storage.backend,
+                local_path=settings.storage.local_path,
+                s3_bucket=settings.storage.s3_bucket,
+                aws_region=settings.storage.aws_region,
+            ),
+        )
+
+    retention_task = asyncio.create_task(_retention_janitor())
+
     # Asterisk's inbound edge: an ARI connection to every Asterisk served (#209).
     from turncall.webhooks.asterisk_edge import EDGES
 
@@ -179,6 +199,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     redaction.shutdown()
     cleanup_task.cancel()
     purge_task.cancel()
+    retention_task.cancel()
     asterisk_task.cancel()
     await asyncio.gather(asterisk_task, return_exceptions=True)
 

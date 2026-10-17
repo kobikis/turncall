@@ -3,7 +3,7 @@
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.storage.models import ToolInvocationRow
@@ -104,3 +104,11 @@ async def get_by_idempotency_key(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def delete_for_calls(session: AsyncSession, call_ids: list[UUID]) -> None:
+    """Delete calls' invocation rows: the retention janitor's, with the
+    transcript they were made from (#316)."""
+    await session.execute(
+        delete(ToolInvocationRow).where(ToolInvocationRow.call_id.in_(call_ids))
+    )

@@ -339,6 +339,74 @@ class KnowledgeBaseAttachment(DomainModel):
     tool_description: str | None = None  # LLM instruction (tool mode only)
 
 
+# A century: past it, a number of days is a typo for "keep it", which is null.
+MAX_RETENTION_DAYS = 36500
+
+
+def _retention_days(kind: str) -> Any:
+    """The one definition of a retention field, for every model of it."""
+    return Field(
+        default=None,
+        ge=1,
+        le=MAX_RETENTION_DAYS,
+        description=(
+            f"Days a call keeps its {kind}, counted from the call's end. Null "
+            "on a project keeps it for good; null on an agent takes the "
+            "project's"
+        ),
+    )
+
+
+class RetentionConfig(DomainModel):
+    """How long a call's data is kept, in days from the call's end (#316,
+    ADR-0024). On an agent each field overrides the project's for that kind;
+    null takes the project's, and the project's null keeps it for good. The
+    one model of the triple: the project setting and the agent block in the
+    API subclass it, and the retention janitor plans with it."""
+
+    recordings_days: int | None = _retention_days(
+        "recording (the audio file in object storage, and the carrier's copy "
+        "if it kept one)"
+    )
+    transcripts_days: int | None = _retention_days(
+        "transcript: what was said, the tool calls made from it, and the "
+        "post-call analysis and takeaways"
+    )
+    events_days: int | None = _retention_days(
+        "other events (the rest of the call's event log)"
+    )
+
+    def days(self, kind: str) -> int | None:
+        """Days for one kind, as the janitor names them: `recording`,
+        `transcript` or `events`."""
+        return {
+            "recording": self.recordings_days,
+            "transcript": self.transcripts_days,
+            "events": self.events_days,
+        }[kind]
+
+    def over(self, base: "RetentionConfig") -> "RetentionConfig":
+        """This override on `base`: each kind set here wins."""
+        return RetentionConfig(
+            **{
+                name: value if value is not None else getattr(base, name)
+                for name, value in self.as_payload().items()
+            }
+        )
+
+    @property
+    def empty(self) -> bool:
+        return all(value is None for value in self.as_payload().values())
+
+    def as_payload(self) -> dict[str, int | None]:
+        """As `call.ended` states it."""
+        return {
+            "recordings_days": self.recordings_days,
+            "transcripts_days": self.transcripts_days,
+            "events_days": self.events_days,
+        }
+
+
 class AgentConfig(DomainModel):
     pipeline_mode: str = "cascade"  # "cascade" | "s2s"
     system_prompt: str = ""
@@ -372,6 +440,10 @@ class AgentConfig(DomainModel):
     aws: AWSConfig = Field(default_factory=AWSConfig)
     avatar: AvatarConfig = Field(default_factory=AvatarConfig)
     ambience: AmbienceConfig | None = None
+    # A stored agent's override of its project's retention (#316). Read by the
+    # janitor from the agent's live version, so it covers every version's
+    # calls; an inline agent's is ignored (its calls take the project's).
+    retention: RetentionConfig = Field(default_factory=RetentionConfig)
 
     @field_validator("ambience", mode="wrap")
     @classmethod

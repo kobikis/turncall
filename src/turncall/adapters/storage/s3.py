@@ -1,9 +1,14 @@
 """AWS S3 storage adapter (async via aioboto3)."""
 
+from collections.abc import Iterable
+
 import aioboto3
 from botocore.exceptions import ClientError
 
 from turncall.adapters.storage.base import ObjectStorageAdapter
+
+# DeleteObjects takes at most this many keys per request.
+_DELETE_BATCH = 1000
 
 
 class S3StorageAdapter(ObjectStorageAdapter):
@@ -47,6 +52,34 @@ class S3StorageAdapter(ObjectStorageAdapter):
     async def delete(self, key: str) -> None:
         async with self._session.client("s3", region_name=self._region) as s3:
             await s3.delete_object(Bucket=self._bucket, Key=key)
+
+    async def delete_many(self, keys: Iterable[str]) -> dict[str, Exception]:
+        """One client and one DeleteObjects request per 1000 keys, where
+        `delete` opens a client per key. A key S3 reports an error for, or
+        every key of a request that failed whole, is returned."""
+        keys = list(dict.fromkeys(keys))
+        failed: dict[str, Exception] = {}
+        if not keys:
+            return failed
+        async with self._session.client("s3", region_name=self._region) as s3:
+            for start in range(0, len(keys), _DELETE_BATCH):
+                chunk = keys[start : start + _DELETE_BATCH]
+                try:
+                    response = await s3.delete_objects(
+                        Bucket=self._bucket,
+                        Delete={
+                            "Objects": [{"Key": key} for key in chunk],
+                            "Quiet": True,
+                        },
+                    )
+                except Exception as exc:
+                    failed.update(dict.fromkeys(chunk, exc))
+                    continue
+                for error in response.get("Errors", []):
+                    failed[error["Key"]] = OSError(
+                        f"{error.get('Code', 'Error')}: {error.get('Message', '')}"
+                    )
+        return failed
 
     async def exists(self, key: str) -> bool:
         try:

@@ -2,7 +2,7 @@
 
 **Status:** Accepted (redaction of the transcript and call events built in
 #313; the rest of redaction in #314; `trace_include_pii` off by default in
-#315; retention and the audit log not yet)
+#315; retention in #316; the audit log not yet)
 **Date:** 2026-10-16
 **Relates to:** ADR-0005 (call recording), ADR-0010 (OTel tracing), ADR-0011
 (project deletion), ADR-0013 (takeaways), ADR-0015 (open-core licensing).
@@ -75,6 +75,38 @@ stored transcript, analysis, takeaways, webhook payloads, logs and spans.
 project, overridable per agent, set separately for recordings, transcripts and
 events. A janitor enforces it, and `call.ended` states what will be kept. A
 default that deletes would surprise every upgrade.
+
+- **Retention as built** (#316). Whole days from the call's end, 1 to 36500,
+  null = kept for good; `PUT /v1/projects/{id}/retention` (admin key) and an
+  additive `retention` block in the agent config, field by field over the
+  project's. The agent's is read from its live version, so it covers the
+  calls of all its versions, as a project change covers its stored calls: a
+  policy applies retroactively, both ways. The **transcript** is the
+  conversation and what was made from it: the transcript and tool events,
+  injected messages, tool-invocation rows, and the post-call analysis with
+  its takeaways, which restate what was said. **Events** are the rest of the
+  call's log. The call row is never deleted; `*_expired_at` columns say what
+  went, and `ended_reason`, derived from the events, is frozen on it before
+  they go. Text other events quote from the conversation (the fields
+  redaction analyses: a handoff's reason and context, a transfer's words)
+  is cleared with the transcript; the events stay with the events kind,
+  since `ended_reason` depends on them. An agent's `retention` overrides an
+  admin-only setting, so changing what applies to an agent's calls needs an
+  admin key too. A recording goes from storage, from the Twilio account
+  when its `recording.ready` names a carrier copy, and from the event log's
+  URLs; `recording_status` becomes `expired`, and `recording.ready` stays
+  while the recording does. The carrier's copy is deleted only where
+  TurnCall heard of it and holds the account's credentials: otherwise your
+  carrier may keep its own copy; delete it there or turn carrier recording
+  storage off. Objects are deleted before the row is marked, outside any
+  transaction (collect, delete, then mark only rows unchanged since), so a
+  failed delete is retried rather than orphaned and no row is locked while
+  storage answers. Transcripts and events are claimed with `FOR UPDATE SKIP
+  LOCKED`; the janitor runs hourly on every API replica and writes only
+  `calls`, `call_events` and `tool_invocations` (a test holds that, so the
+  audit log stays out of its reach). An analysis write is conditional on the
+  transcript still being there, so a re-run racing the janitor stores
+  nothing. Calls only: text conversations are not covered yet.
 
 **The audit log is append-only and keyed by API key.** The engine has no notion
 of a person (it is identity-free, and the [[platform credential]] identifies the

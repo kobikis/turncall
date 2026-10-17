@@ -1,6 +1,7 @@
 """The derived half of a call's representation.
 
-Everything here is worked out from the call row and its events, never stored.
+Everything here is worked out from the call row and its events, never stored
+(but `ended_reason`, frozen on the row when retention deletes the events, #316).
 The call read (`GET /v1/calls[/{id}]`) and the `call.ended` payload both merge
 `derived_fields`, so the two views of one call cannot disagree — `ended_reason`
 used to be computed only on the webhook side.
@@ -9,7 +10,7 @@ used to be computed only on the webhook side.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -90,6 +91,47 @@ def latency_summary(turns: tuple[dict[str, Any], ...]) -> dict[str, Any] | None:
     }
 
 
+def _ended_reason(call: Any, facts: CallFacts) -> str | None:
+    # Frozen on the row when the call's events expired (#316): what it was
+    # derived from is gone.
+    frozen: str | None = getattr(call, "ended_reason", None)
+    if frozen is not None:
+        return frozen
+    if call.ended_at is None and is_active_state(CallStatus(call.status)):
+        return None
+    return infer_ended_reason(
+        call.status, set(facts.event_types), assistant_ended=facts.assistant_ended
+    ).value
+
+
+async def _ended_reason_facts(
+    session: AsyncSession, call_ids: list[UUID]
+) -> dict[UUID, CallFacts]:
+    """The facts `ended_reason` is derived from, for a page of calls: the one
+    loader the read and the retention janitor's freeze share, so the two
+    cannot derive it from different facts."""
+    event_types = await call_repo.list_event_types_by_call(session, call_ids)
+    control_ended = await call_repo.list_control_ended_calls(session, call_ids)
+    return {
+        call_id: CallFacts(
+            event_types=frozenset(event_types.get(call_id, ())),
+            assistant_ended=call_id in control_ended,
+        )
+        for call_id in call_ids
+    }
+
+
+async def ended_reasons(
+    session: AsyncSession, calls: list[CallRow]
+) -> dict[UUID, str | None]:
+    """Each call's `ended_reason` as the read derives it, and nothing else:
+    what the retention janitor freezes before the events go (#316)."""
+    if not calls:
+        return {}
+    facts = await _ended_reason_facts(session, [c.id for c in calls])
+    return {c.id: _ended_reason(c, facts[c.id]) for c in calls}
+
+
 def derived_fields(call: Any, facts: CallFacts) -> dict[str, Any]:
     """The derived fields of one call. Pure.
 
@@ -98,14 +140,7 @@ def derived_fields(call: Any, facts: CallFacts) -> dict[str, Any]:
     whatever the status. Agent fields are null for an inline agent (ADR-0017)
     and for an agent row deleted since.
     """
-    live = call.ended_at is None and is_active_state(CallStatus(call.status))
-    ended_reason = (
-        None
-        if live
-        else infer_ended_reason(
-            call.status, set(facts.event_types), assistant_ended=facts.assistant_ended
-        ).value
-    )
+    ended_reason = _ended_reason(call, facts)
     return {
         "ended_reason": ended_reason,
         "agent_name": facts.agent_name,
@@ -122,8 +157,7 @@ async def load_call_facts(
     if not calls:
         return {}
     call_ids = [c.id for c in calls]
-    event_types = await call_repo.list_event_types_by_call(session, call_ids)
-    control_ended = await call_repo.list_control_ended_calls(session, call_ids)
+    ended = await _ended_reason_facts(session, call_ids)
     turn_metrics = await call_repo.list_payloads_by_call(
         session, call_ids, CallEventType.METRICS_TURN
     )
@@ -137,9 +171,8 @@ async def load_call_facts(
     facts = {}
     for call in calls:
         agent = agents.get(call.active_agent_id) if call.active_agent_id else None
-        facts[call.id] = CallFacts(
-            event_types=frozenset(event_types.get(call.id, ())),
-            assistant_ended=call.id in control_ended,
+        facts[call.id] = replace(
+            ended[call.id],
             agent_name=agent[0] if agent else None,
             agent_version=agent[1] if agent else None,
             turn_metrics=tuple(turn_metrics.get(call.id, ())),

@@ -1,10 +1,11 @@
 """Call repository - data access for calls and call events."""
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.domain.carriers import DEFAULT_CARRIER
@@ -298,15 +299,81 @@ async def list_call_events(
     return list(result.scalars().all())
 
 
+async def delete_call_events(
+    session: AsyncSession,
+    call_ids: list[UUID],
+    *,
+    types: Iterable[str] | None = None,
+    except_types: Iterable[str] = (),
+) -> None:
+    """Delete calls' events, of `types` only or of every type but
+    `except_types`. The retention janitor's (#316); nothing else deletes
+    events but a project's purge cascade."""
+    query = delete(CallEventRow).where(CallEventRow.call_id.in_(call_ids))
+    if types is not None:
+        query = query.where(CallEventRow.event_type.in_(list(types)))
+    if except_types := list(except_types):
+        query = query.where(CallEventRow.event_type.not_in(except_types))
+    await session.execute(query)
+
+
+async def list_call_event_payloads(
+    session: AsyncSession,
+    call_ids: list[UUID],
+    *,
+    types: Iterable[str] | None = None,
+) -> list[tuple[UUID, UUID, str, dict[str, Any]]]:
+    """`(event id, call id, type, payload)` of calls' events, of `types`
+    only if given, in order. For the retention janitor (#316), which clears
+    fields of them."""
+    query = select(
+        CallEventRow.id,
+        CallEventRow.call_id,
+        CallEventRow.event_type,
+        CallEventRow.payload,
+    ).where(CallEventRow.call_id.in_(call_ids))
+    if types is not None:
+        query = query.where(CallEventRow.event_type.in_(list(types)))
+    result = await session.execute(
+        query.order_by(CallEventRow.call_id, CallEventRow.sequence_number)
+    )
+    return [(r.id, r.call_id, r.event_type, r.payload) for r in result.all()]
+
+
+async def clear_event_fields(
+    session: AsyncSession, event_id: UUID, payload: dict[str, Any], keys: Iterable[str]
+) -> None:
+    """Set `keys` of one event's payload to null: the retention janitor's,
+    when what they held expired (#316). Takes text out, never puts it in."""
+    cleared = set(keys)
+    await session.execute(
+        update(CallEventRow)
+        .where(CallEventRow.id == event_id)
+        .values(payload={k: None if k in cleared else v for k, v in payload.items()})
+    )
+
+
+async def delete_call_events_by_id(
+    session: AsyncSession, event_ids: list[UUID]
+) -> None:
+    """Delete events by id: the retention janitor's (#316)."""
+    if event_ids:
+        await session.execute(
+            delete(CallEventRow).where(CallEventRow.id.in_(event_ids))
+        )
+
+
 async def update_call_analysis(
     session: AsyncSession,
     call_id: UUID,
     analysis_json: dict,
 ) -> CallRow | None:
-    """Store analysis results on a call record."""
+    """Store analysis results on a call record. None, and nothing written,
+    when the call's transcript has expired (#316): a run that read it before
+    the janitor deleted it must not store what it made from it after."""
     result = await session.execute(
         update(CallRow)
-        .where(CallRow.id == call_id)
+        .where(CallRow.id == call_id, CallRow.transcript_expired_at.is_(None))
         .values(analysis_json=analysis_json)
         .returning(CallRow)
     )

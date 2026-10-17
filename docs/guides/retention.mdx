@@ -1,0 +1,75 @@
+---
+title: Retention
+description: "Choose how long a project keeps its calls' recordings, transcripts and events"
+icon: "clock-rotate-left"
+---
+
+A retention policy says how long a project keeps each kind of call data. A janitor deletes what has expired. Unset, which is the default, everything is kept, as it was before retention existed.
+
+## Set it
+
+```bash
+curl -X PUT https://api.example.com/v1/projects/$PROJECT_ID/retention \
+  -H "Authorization: Bearer tc_..." \
+  -H "Content-Type: application/json" \
+  -d '{"recordings_days": 30, "transcripts_days": 90, "events_days": 365}'
+```
+
+This needs an admin key, and a project can only set its own. Each field is a whole number of days from 1 to 36500, counted from the call's end, or `null` to keep that kind for good. The `PUT` replaces all three, so a field you leave out goes back to being kept for good. The project read (`GET /v1/projects/{id}`) shows the setting under `retention`.
+
+An agent can override any of the three for its calls, in its config:
+
+```json
+{"retention": {"recordings_days": 7}}
+```
+
+A field the agent leaves `null` takes the project's. The override is read from the agent's live version (the published one, or the newest if none is published) and applies to the calls of all its versions, so publishing a new retention covers the agent's earlier calls too. After a handoff, the agent the call ended with decides. An inline agent from call-init has no stored version, and its calls take the project's retention.
+
+Changing an agent's retention needs an admin key too, since it overrides the project's. A developer key can create, update, publish, roll back and delete agents as before, and can carry an agent's `retention` over unchanged. But a request that writes a different `retention` than the one that applies to the agent, or that makes a different one apply (publishing or rolling back to a version with another `retention`), is refused with `403` and `code: "forbidden"`, and the change is not made. The error's `details` give the agent's `current` retention and the `requested` one.
+
+## What each kind covers
+
+- **Recordings**: the call's audio in your object storage (local or S3), the copy on your Twilio account if it recorded the call too (see below), and `recording_url` on the call. `recording_status` becomes `expired`, and the call's `recording.ready` event loses its URLs: `recording_url`, `twilio_recording_url` and any other `*_url` field are set to `null`.
+- **Transcripts**: what was said and what was made from it. The `transcript.final` lines, the `tool.result` events and the call's tool invocations (a tool's arguments and result come from the conversation), `context.injected` messages, and the post-call analysis, which includes the summary, `structured_data` and takeaways. Other events can quote the conversation too, so every field of theirs that holds free text is set to `null` at the same time: a `call.agent_handoff`'s `reason` and `context_payload`, a `call.transferred`'s `reason` and `transfer_message`, the digits of `dtmf.sent`, and the error text of `error.raised` and `provider.failover`. These are the fields [redaction](/guides/redaction) analyses. The events themselves stay until the events kind expires, because `ended_reason` depends on them.
+- **Events**: every other event on the call's event log: lifecycle and carrier events, `metrics.turn`, `provider.failover`, `error.raised` and the rest. `recording.ready` is the exception: it names the recording, so it stays as long as the recording does, and is deleted with the recording if the other events went first.
+
+## What stays
+
+The call record itself is never deleted: its id, numbers, direction, status, times, duration, agent and `metadata`. `recording_status` stays too, as `expired` once the recording is deleted (a call that never had a recording keeps `none` or `failed`). Three fields on `GET /v1/calls/{id}` say what was deleted and when: `recording_expired_at`, `transcript_expired_at` and `events_expired_at`.
+
+After a kind expires, its reads return nothing for it:
+
+| Expired | Read |
+|---------|------|
+| Recording | `recording_url` is `null`, `recording_status` is `expired`, `GET /v1/calls/{id}/recording` is `404` |
+| Transcript | `GET /v1/calls/{id}/transcript` has no entries and an `expired_at`; `analysis` is `null`, `GET /v1/calls/{id}/analysis` answers `status: "expired"`, and a re-run is a `409`; the call's tool invocations are gone |
+| Events | `GET /v1/calls/{id}/events` returns what is left of the transcript kind, or nothing; `latency_summary` is `null` and `failovers` empty |
+
+`ended_reason` is worked out from the events, so it is saved on the call before they are deleted, and the read keeps saying how the call ended.
+
+## In `call.ended`
+
+Every `call.ended` webhook states the retention that applies to the call, with the agent's override already applied:
+
+```json
+"retention": {"recordings_days": 30, "transcripts_days": 90, "events_days": 365}
+```
+
+`null` means kept for good. It is the policy when the call ended; a later change applies to stored calls too.
+
+## When it runs
+
+Each server runs the janitor once an hour, so data is deleted within the hour after it expires. Several servers can run it at once: each takes the calls it deletes, and the others skip them.
+
+A change applies to calls already stored. Shortening a retention deletes what is now past it on the next run; lengthening it keeps what has not been deleted yet, but nothing already deleted comes back. A call with no recorded end (a server that died mid-call) is counted from its start.
+
+A recording object that cannot be deleted (storage unreachable) is logged as `retention_recording_delete_failed`, and a Twilio copy that cannot be deleted as `retention_carrier_recording_delete_failed`. Either way the call is tried again on the next run, so a call is never marked expired with its recording still in storage or on your Twilio account.
+
+A run that re-analyses a call (`POST /v1/calls/{id}/analysis/rerun`) while its transcript expires stores nothing and sends no `call.ended`.
+
+## What it does not touch
+
+- **The audit log.** It has its own retention; call retention never deletes from it.
+- **Text conversations** (SMS, WhatsApp, the Chat API) are not covered yet.
+- **A carrier copy TurnCall does not know about.** TurnCall records calls itself, in your storage. If your Twilio account also records them and its recording callback reaches TurnCall, the `recording.ready` event names that recording, and TurnCall deletes it from the Twilio account (the number's own, or the platform's) when the recording expires. A recording whose callback never reached TurnCall, or one on an account TurnCall holds no credentials for (logged as `retention_carrier_recording_unreachable`), it cannot delete. Your carrier may keep its own copy: delete it there, or turn carrier recording storage off.
+- **Logs, traces and webhook deliveries** that already left the server. Redact them with [redaction](/guides/redaction).

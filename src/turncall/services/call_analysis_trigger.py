@@ -31,8 +31,18 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.domain.enums import CallEventType, EndedReason
-from turncall.domain.models import AnalysisConfig, AWSConfig, LLMConfig
-from turncall.services import live_transcript, redaction, telemetry_redaction
+from turncall.domain.models import (
+    AnalysisConfig,
+    AWSConfig,
+    LLMConfig,
+    RetentionConfig,
+)
+from turncall.services import (
+    live_transcript,
+    redaction,
+    retention,
+    telemetry_redaction,
+)
 from turncall.services.call_view import call_view_fields, public_metadata
 
 if TYPE_CHECKING:
@@ -105,7 +115,7 @@ def _analysis_transcript(
 # signal. Cap the wait and fire regardless of the recording outcome.
 RECORDING_WAIT_TIMEOUT_S = 15.0
 RECORDING_POLL_INTERVAL_S = 0.5
-_TERMINAL_RECORDING = {"completed", "failed"}
+_TERMINAL_RECORDING = {"completed", "failed", "expired"}
 
 
 async def _wait_for_recording(
@@ -265,8 +275,15 @@ async def _run_post_call(
             if policy is not None:
                 analysis_dict = await redaction.redact_payload(analysis_dict, policy)
             async with session_factory() as session:
-                await call_repo.update_call_analysis(session, call_id, analysis_dict)
+                stored = await call_repo.update_call_analysis(
+                    session, call_id, analysis_dict
+                )
                 await session.commit()
+            if stored is None:
+                # The janitor deleted the transcript while this ran (#316): the
+                # verdict is on data that is gone, and so is call.ended.
+                logger.info("post_call_transcript_expired", call_id=str(call_id))
+                return
 
         # 3. Wait for the recording to finish persisting (bounded — see
         # _wait_for_recording). Gates call.ended on the recording being done
@@ -277,9 +294,17 @@ async def _run_post_call(
 
         # 4. Load the call and its derived fields (ended_reason, ADR-0008) —
         # the same function the call read uses, so the two cannot disagree.
+        # And the retention that applies to it (#316): call.ended states what
+        # will be kept, and for how long.
         async with session_factory() as session:
             call = await call_repo.get_call_by_id(session, call_id)
             derived = (await call_view_fields(session, [call]))[call.id] if call else {}
+            kept = await retention.for_call(session, call) if call else None
+        if call is not None and getattr(call, "transcript_expired_at", None):
+            # A re-run on a call whose transcript expired since it was asked
+            # for (#316): there is nothing left to report on.
+            logger.info("post_call_transcript_expired", call_id=str(call_id))
+            return
 
         # 5. Build comprehensive call.ended payload
         call_ended_payload: dict[str, Any] = {
@@ -302,6 +327,7 @@ async def _run_post_call(
             call_ended_payload["ended_at"] = (
                 call.ended_at.isoformat() if call.ended_at else None
             )
+        call_ended_payload["retention"] = (kept or RetentionConfig()).as_payload()
         call_ended_payload["recording_status"] = recording_status
         if recording_url:
             call_ended_payload["recording_url"] = recording_url

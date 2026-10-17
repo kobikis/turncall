@@ -90,3 +90,15 @@ def recording_storage_key(url: str | None) -> str | None:
     if url.startswith("s3://"):
         return url.split("/", 3)[3]  # s3://<bucket>/<key>
     return url[url.rindex("recordings/") :]  # local path ends with the key
+
+
+def recording_keys(call_id: UUID, url: str | None) -> set[str]:
+    """Every storage key a call's recording can have: the recorder's
+    `recordings/{call_id}.wav`, and the key inside its `recording_url`.
+    Twilio's callback writes `recordings/{call_id}/{sid}.wav` and overwrites
+    the URL, which can then hide the first (#168). The project purge and
+    retention (#316) both delete exactly these."""
+    keys = {f"recordings/{call_id}.wav"}
+    if key := recording_storage_key(url):
+        keys.add(key)
+    return keys

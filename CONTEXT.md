@@ -325,8 +325,9 @@ no clean caller track to reprocess. _Avoid_: "mixed recording".
 
 **Recording status** (`recording_status`):
 Lifecycle of a call's recording: `none` (default, never started) → `in_progress`
-(capture started, set on StartFrame) → `completed` (WAV written) / `failed`. A
-value stuck at `in_progress` means the [[recording flush]] never ran.
+(capture started, set on StartFrame) → `completed` (WAV written) / `failed`, and
+`expired` once the [[retention policy]] deleted it. A value stuck at `in_progress`
+means the [[recording flush]] never ran.
 
 **Recording flush**:
 The `stop_recording` → `on_audio_data` step that writes the buffered audio. It
@@ -506,9 +507,19 @@ fixed shape). See ADR-0024.
 _Avoid_: "masking" (reads as display-only), "anonymization" (a stronger legal claim).
 
 **Retention policy**:
-How long a project keeps recordings, transcripts and events, set separately for each,
-overridable per agent, enforced by a janitor. Unset means keep everything, the
-behaviour before it existed. Never applies to the [[audit log]]. See ADR-0024.
+How long a project keeps recordings, transcripts and events, set separately for each, in
+days from the call's end (`PUT /v1/projects/{id}/retention`), overridable per agent by the
+agent config's `retention` (read from the agent's live version, so it covers every
+version's calls; an inline agent takes the project's). Enforced by an hourly janitor;
+`call.ended` states the retention that applies. Unset means keep everything, the
+behaviour before it existed. The **transcript** is the conversation and what was made from
+it: the lines, tool calls and their invocation rows, injected messages, and the post-call
+analysis with its takeaways. **Events** are the rest of the call's event log. The
+**call row** always stays, with `*_expired_at` saying what went and `ended_reason` frozen
+on it. Changing an agent's `retention` needs an admin key, as the project's does. Calls
+only: text conversations are not covered yet. Never applies to the
+[[audit log]]: the janitor writes only `calls`, `call_events` and `tool_invocations`. See
+ADR-0024 (#316).
 _Avoid_: "TTL", "auto-delete", confusing it with the soft-delete purge of whole
 projects (`PROJECT_PURGE_RETENTION_DAYS`, ADR-0011).
 
