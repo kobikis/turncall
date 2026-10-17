@@ -83,9 +83,9 @@ and is not part of this repository's history.
   `PERSON` and the rest opt-in. A detected value becomes `<ENTITY_TYPE>` in the
   transcript, on the call's event log and in every webhook payload, before it
   is stored or sent, so a subscriber never sees the original. With
-  `PHONE_NUMBER` chosen, the payloads' `from_number`, `to_number`,
-  `customer_number` (and `turncall_number`, `target_number`, `number`) are
-  replaced too; the call record keeps the number, so `GET /v1/calls/{id}`,
+  `PHONE_NUMBER` chosen, the payloads' number fields are replaced too
+  ([which, and when](docs/guides/redaction.mdx#number-fields)); the call
+  record keeps the number, so `GET /v1/calls/{id}`,
   routing, the suppression list and campaigns are unaffected. The agent is
   never redacted: the model hears the caller's words, a warm transfer's
   operator is briefed on them, and post-call analysis and takeaways read them.
@@ -590,6 +590,15 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **Numbers in event payloads are redacted** (#313, #336 review). With
+  redaction on, a JSON number of seven digits or more inside a payload (a
+  tool's `arguments` or `result` on `tool.result`, the call's `metadata` on
+  `call.ended`) went out raw in webhooks and on the event log, while the
+  tool invocation row stored it redacted: only strings were analysed. Such a
+  number is now analysed as the digits it is written with, as tool
+  invocations and takeaways already were, so `{"phone": 4155550132}` reads
+  `{"phone": "<PHONE_NUMBER>"}`. Numbers at a payload's top level
+  (`duration_ms`) are TurnCall's own and are not analysed.
 - **A Twilio call that rings out no longer reports `call.started`.** Every
   status callback but `completed` and `failed` went out as `call.started`, so
   an outbound call that rang and was never answered sent it at `ringing` and
@@ -817,6 +826,36 @@ and is not part of this repository's history.
   (`recordings/{call_id}/{sid}.wav`); it now sweeps both recording shapes.
   The `ambience_storage_orphan` and `project_delete_storage_orphan` log events
   are now one event, `storage_orphan`. Update any alert on the old names.
+
+### Documentation
+
+- **A compliance mapping** (#318, ADR-0024): the Compliance guide maps
+  redaction, caller numbers off spans, retention, recordings, the audit log,
+  self-hosting, encrypted project credentials and signed webhooks to GDPR
+  articles, then to HIPAA Security and Privacy Rule sections. It says plainly
+  that TurnCall holds no certification and is not legal advice, states the
+  controls' limits (the call record kept raw and never deleted by retention;
+  signing, call-init and MCP secrets stored unencrypted, #338; Twilio and
+  WhatsApp webhooks unverified without their token or app secret, #337, #339;
+  `http://` URLs accepted, #340), and lists what stays the operator's: DPAs
+  and BAAs with the STT, LLM, TTS and carrier vendors, infrastructure and
+  encryption at rest of call data, access control, backups, the carrier's own
+  recording copy, the call record, text conversations (not covered by
+  retention) and audio (not redacted).
+- **What redaction does to webhooks.** Server Events gains a Redaction
+  section: every payload is redacted before it is sent, so a subscriber never
+  sees a redacted value, except in the `call.ended` transcript of a call that
+  was live when redaction was turned on; text at any depth, and long numbers
+  below the top level, become `<ENTITY_TYPE>`, number fields `<PHONE_NUMBER>` (the Redaction
+  guide's new [Number fields](docs/guides/redaction.mdx#number-fields) section
+  says which and when), identifiers are never analysed, and text is
+  `<REDACTED>` while the detector is unavailable. The call record keeps the
+  numbers. Signature verification now advises refusing a timestamp more than
+  five minutes old.
+- **Recording cannot be turned off.** The Redaction guide said to turn
+  recording off for audio that holds PII; there is no such setting, as every
+  voice call is recorded. It now says to keep recordings briefly with
+  `recordings_days`.
 
 ### Upgrade notes
 

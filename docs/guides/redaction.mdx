@@ -48,8 +48,8 @@ You can also choose `PERSON`, `LOCATION`, `DATE_TIME`, `ORGANIZATION`, `URL`, `I
 ## What is redacted
 
 - **The transcript**: `GET /v1/calls/{id}/transcript`, and `transcript` in `call.ended`.
-- **Every call event**: on the event log (`GET /v1/calls/{id}/events`) and in every webhook. That includes tool arguments and results in `tool.result`, and a call's `metadata` in `call.ended`.
-- **The numbers in payloads**: with `PHONE_NUMBER` chosen, `from_number`, `to_number`, `customer_number`, `turncall_number`, `target_number` and `number` are replaced whole. The call record keeps them: `GET /v1/calls/{id}` still shows `from_number`, and routing, the suppression list and campaigns work as before.
+- **Every call event**: on the event log (`GET /v1/calls/{id}/events`) and in every webhook. That includes tool arguments and results in `tool.result`, and a call's `metadata` in `call.ended`. A JSON number of seven digits or more inside them is analysed as the digits it is written with, as in tool invocations below: `{"phone": 4155550132}` reads `{"phone": "<PHONE_NUMBER>"}`.
+- **The numbers in payloads**: see [Number fields](#number-fields). The call record keeps them: `GET /v1/calls/{id}` still shows `from_number`, and routing, the suppression list and campaigns work as before.
 - **Post-call analysis and takeaways**: stored redacted on the call, so `analysis` on `GET /v1/calls/{id}` and `GET /v1/calls/{id}/analysis` match `summary` and `analysis` in `call.ended`. A takeaway's fields, and `structured_data`'s, are yours, so every value is analysed whatever its field is called: a field named `customer_id` or `callback_url` is redacted like any other.
 - **Tool invocations**: the arguments (`input_json`) and the result (`output_json`) of every tool call are stored redacted, so `GET /v1/tools/invocations/{call_id}` and a chat session's invocations read back redacted. As with takeaways, the fields are the tool's, and every value is analysed. A JSON number of seven digits or more is analysed as the digits it is written with: `{"card_number": 4111111111111111}` is stored as `{"card_number": "<CREDIT_CARD>"}`, while an order number the detector finds nothing in stays a number. The status is read from the result before it is redacted. Your tool's webhook still gets the raw arguments during the call, and the model the raw result. A scenario drafted from a call or a session (`POST /v1/eval-scenarios/from-call`, `/from-session`) is built from these records and the transcript, so its arguments and tool mocks are redacted too.
 - **Logs and traces**: see [below](#logs-and-traces).
@@ -60,6 +60,18 @@ TurnCall's own identifiers are never analysed: ids, timestamps, statuses, provid
 Not yet redacted: the call record's own `metadata` and numbers (the numbers stay on purpose, see above).
 
 Never redacted: call-init and tool webhooks. These are part of the live call, and your own server answers them with the raw values.
+
+## Number fields
+
+With `PHONE_NUMBER` chosen (it is in the default), these fields at the top of a payload are replaced whole by `<PHONE_NUMBER>`, on every event and webhook that carries them, your own TurnCall number included:
+
+`from_number`, `to_number`, `customer_number`, `turncall_number`, `target_number`, `number`
+
+A field is replaced whole only when its value is a string that is a phone number and nothing else: digits with an optional `+`, spaces, dots, dashes and brackets, at least seven digits, after an optional scheme such as `tel:` or `whatsapp:` (`+1 (415) 555-0132`, `whatsapp:+14155550132`, a WhatsApp id). That needs no detector, so it holds while the detector is unavailable.
+
+Any other value in these fields is analysed as text, like every other string: a WebRTC call's `"webrtc"`, a SIP address such as `sip:+14155550132@pbx.example.com`, a short code of fewer than seven digits. The detector decides what it finds there, so a SIP address is not guaranteed to read `<PHONE_NUMBER>`, and while the detector is unavailable such a value reads `<REDACTED>`. A field with one of these names deeper in a payload (inside `metadata` or a tool's arguments) is analysed as text too.
+
+Without `PHONE_NUMBER` chosen, a value that is a phone number stays as it is.
 
 ## Logs and traces
 
@@ -96,7 +108,7 @@ The reply to `POST /v1/chat` and the text sent to the customer by SMS or WhatsAp
 
 - **Recall is the detector's.** It finds what the STT wrote as digits. "Four one five, five five five…" spelled out in words is missed, and so is "jane dot doe at example dot com". Deepgram's default formatting writes digits; check your STT provider's.
 - **English only.**
-- **Text only.** The recording is not bleeped. If it holds PII, turn recording off or keep it for a short time.
+- **Text only.** The recording is not bleeped. Every voice call is recorded and there is no setting that turns it off, so if recordings hold PII, keep them for a short time with `recordings_days` (see [Retention](/guides/retention)).
 - **Briefings and analysis read from memory.** The server that ran the call holds the conversation for five minutes after it ends, and nowhere else: it is never written to Redis or the database. When the carrier's callback or the call's end lands on another server, that server asks the one holding the conversation to build the briefing or run the analysis (over Redis, naming only the call). When no server holds it any more (a restart, after the five minutes, or `POST /v1/calls/{id}/analysis/rerun` later on), they read the stored, redacted transcript instead, and the server logs `transfer_briefing_from_stored_transcript` or `post_call_analysis_from_stored_transcript`.
 - **When the detector can't keep up, text is withheld.** It never goes out raw. If the detector fails to load, every analysed string becomes `<REDACTED>` for five minutes (logged once, as `redaction_unavailable`), then the load is tried again. If a server falls far behind, text is withheld rather than queued (`redaction_backlog_full_withheld`), and a redaction that takes over a second is logged as `redaction_slow`.
 - **It runs in a process of its own.** Each server runs the detector in one worker process, which holds about 200 MB once loaded, so its CPU work stays out of the process that carries live calls' audio.

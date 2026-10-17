@@ -7,6 +7,13 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**A compliance mapping.** One page maps redaction, retention, the audit log,
+self-hosting, encrypted project credentials and signed webhooks to the GDPR
+and then HIPAA, and lists what stays your responsibility. TurnCall holds no
+certification, and the page says so. See [Compliance](/guides/compliance).
+[Server Events](/guides/server-events#redaction) now describes what redaction
+does to webhook payloads.
+
 **Audit log.** Every change made through the API to a project's agents,
 credentials, phone numbers, API keys and settings is recorded: which API key
 made it, what it did, and what changed, with secrets never recorded. Admin
@@ -283,6 +290,13 @@ the caller heard it. The docs said it was left out, but it has always been in
 the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
+
+**Numbers in event payloads are redacted.** With redaction on, a phone or
+card number a tool's arguments or a call's `metadata` carried as a JSON number
+(`{"phone": 4155550132}`) went out raw in `tool.result` and `call.ended`
+webhooks and on the event log. It is now analysed as the digits it is
+written with, as tool invocations already were. See
+[Redaction](/guides/redaction#what-is-redacted).
 
 **A WebRTC call's greeting is no longer lost.** The agent's first message was
 spoken as the pipeline started, and audio written before the browser's

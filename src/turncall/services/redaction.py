@@ -15,13 +15,18 @@ analysis) read the raw copy in `services/live_transcript`.
 `PUT` on this process replaces its entry at once; another replica picks the
 change up within the TTL.
 
-**What is analysed** in a payload: every string, at any depth, except
+**What is analysed** in a payload: every string, at any depth, and every
+integer of `NUMBER_DIGITS` digits or more below the top level (a phone or card
+number a tool's arguments or the call's metadata carry as a JSON number, the
+rule `redact_json` applies), except
 - at the top level, TurnCall's own structural and identifier fields: ids,
   timestamps, URLs, enum-valued fields, provider and tool names
   (`_structural`), plus a few event-specific ones (`_IDENTIFIERS_BY_EVENT`:
   `provider.failover`'s `from`/`to`, `call.ended`'s `reason`). They carry no
   caller text, and a detector could mangle them (a digit run in a UUID read
   as a phone number, a provider name read as an ORGANIZATION);
+- at the top level, a number: TurnCall's own measure (`duration_ms`, a
+  count), never what the caller said;
 - anywhere, a value that is a UUID or an ISO-8601 timestamp.
 The top-level phone fields (`from_number`, `to_number`, `customer_number` and
 friends) are replaced whole when PHONE_NUMBER is chosen and the value holds a
@@ -129,9 +134,9 @@ MAX_PENDING = 256
 # A redaction that took longer than this is logged, with the backlog.
 SLOW_SECONDS = 1.0
 
-# Free JSON's integers this long or longer are analysed (`redact_json`): the
-# fewest digits a phone number has. A count, a duration or a party size is
-# shorter and never reaches the detector.
+# Integers this long or longer are analysed, in free JSON and below a
+# payload's top level (`_deep`): the fewest digits a phone number has. A
+# count, a duration or a party size is shorter and never reaches the detector.
 NUMBER_DIGITS = 7
 
 # Top-level payload fields holding a phone number (decision 5 on #313).
@@ -283,7 +288,8 @@ def texts_in(
     payload: dict[str, Any], *, event_type: str | None = None, keep: Iterable[str] = ()
 ) -> list[str]:
     """The strings of `payload` that are text, which only the detector can
-    redact. Whatever the policy: empty means the payload is ids, numbers and
+    redact, and the long integers below its top level, as their digits.
+    Whatever the policy: empty means the payload is ids, short numbers and
     structure only."""
     found: list[str] = []
 
@@ -381,9 +387,9 @@ async def redact_json(
         texts.append(text)
         return text
 
-    _deep(value, collect, numbers=True)
+    _deep(value, collect)
     replaced = await _detect(texts, policy.entities, strict) if texts else {}
-    return _deep(value, lambda text: replaced.get(text, WITHHELD), numbers=True)
+    return _deep(value, lambda text: replaced.get(text, WITHHELD))
 
 
 async def redact_text(text: str, policy: RedactionPolicy) -> str:
@@ -426,7 +432,7 @@ def _walk(
     identifiers = _IDENTIFIERS_BY_EVENT.get(event_type or "", frozenset())
     out: dict[str, Any] = {}
     for key, value in payload.items():
-        if key in keep or key in identifiers or _structural(key):
+        if key in keep or key in identifiers or _structural(key) or _a_measure(value):
             out[key] = value
         elif key in PHONE_FIELDS and isinstance(value, str) and _a_number(value):
             # A number and nothing else: no other type to find in it.
@@ -436,21 +442,23 @@ def _walk(
     return out
 
 
-def _deep(value: Any, redact: Callable[[str], str], *, numbers: bool = False) -> Any:
-    """`value` with its text passed through `redact`; with `numbers`, its
-    long integers too (`redact_json`), kept as numbers unless redacted."""
+def _deep(value: Any, redact: Callable[[str], str]) -> Any:
+    """`value` with its text passed through `redact`, and its long integers
+    too, as the digits they are written with: kept as numbers unless
+    redacted. The one rule for free JSON (`redact_json`) and for what a
+    payload carries (`_walk`)."""
     if isinstance(value, str):
         if not value.strip() or _shaped_structural(value):
             return value
         return redact(value)
-    if numbers and _a_long_integer(value):
+    if _a_long_integer(value):
         written = str(value)
         redacted = redact(written)
         return value if redacted == written else redacted
     if isinstance(value, dict):
-        return {k: _deep(v, redact, numbers=numbers) for k, v in value.items()}
+        return {k: _deep(v, redact) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_deep(v, redact, numbers=numbers) for v in value]
+        return [_deep(v, redact) for v in value]
     return value
 
 
@@ -462,6 +470,13 @@ def _a_long_integer(value: Any) -> bool:
         and not isinstance(value, bool)
         and len(str(abs(value))) >= NUMBER_DIGITS
     )
+
+
+def _a_measure(value: Any) -> bool:
+    """A number at a payload's top level: TurnCall's own (`duration_ms`, a
+    count, a flag). The caller's numbers come nested, in a tool's arguments
+    or the call's metadata, where `_deep` analyses them."""
+    return isinstance(value, (int, float))
 
 
 def _a_number(value: str) -> bool:

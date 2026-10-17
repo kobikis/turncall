@@ -118,6 +118,7 @@ locally through Ollama and no audio leaves your network except to the telco.
 - **Evals** — Behavioural tests for agents: scripted conversations or LLM-played personas, run against the real pipeline in text or audio, tools mocked and failing closed. A CLI whose exit code gates a pull request
 - **Vocabulary control** — `stt.keyterms` for words the model mishears, `tts.pronunciations` (word → IPA) for words the voice says wrong, both mapped to each provider's own dialect
 - **Multi-tenant** — Project-scoped API keys with RBAC
+- **Compliance kit** — Redaction of callers' PII in transcripts, webhooks, logs and traces (detected locally); retention for recordings, transcripts and events; an append-only audit log of API changes. All in the MIT engine. See how they [map to GDPR and HIPAA](https://docs.turncall.io/guides/compliance) (TurnCall holds no certification)
 - **Observability** — Call events, transcripts, tool invocations, webhook delivery
 - **Production** — Helm chart, graceful shutdown that lets live calls finish, `/metrics` for autoscaling on live calls
 
@@ -368,6 +369,7 @@ See [examples/knowledge-base/](examples/knowledge-base/) for a complete setup de
 | [Campaigns](https://docs.turncall.io/guides/campaigns) | Outbound call lists, windows, retries |
 | [Limits](https://docs.turncall.io/guides/limits) | Live calls, dialling rate, message rate |
 | [Kubernetes](https://docs.turncall.io/guides/kubernetes) | Helm chart, scaling, graceful shutdown |
+| [Compliance](https://docs.turncall.io/guides/compliance) | Redaction, retention and the audit log, mapped to GDPR and HIPAA |
 | [QUICKSTART.md](QUICKSTART.md) | The same setup, in-repo |
 
 ## Tools
