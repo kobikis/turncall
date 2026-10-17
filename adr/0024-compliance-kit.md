@@ -1,7 +1,8 @@
 # ADR-0024: The compliance kit: redaction, retention and an audit log in the engine
 
 **Status:** Accepted (redaction of the transcript and call events built in
-#313; the rest of redaction in #314; retention and the audit log not yet)
+#313; the rest of redaction in #314; `trace_include_pii` off by default in
+#315; retention and the audit log not yet)
 **Date:** 2026-10-16
 **Relates to:** ADR-0005 (call recording), ADR-0010 (OTel tracing), ADR-0011
 (project deletion), ADR-0013 (takeaways), ADR-0015 (open-core licensing).

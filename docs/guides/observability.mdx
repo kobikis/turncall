@@ -23,7 +23,7 @@ conversation (call_id)
     └── tts   (metrics.ttfb, character_count)
 ```
 
-Span attributes also carry `turncall.project_id`, `turncall.agent_id`, `turncall.direction`, and `turncall.transport` — plus `turncall.from_number` / `turncall.to_number` unless you turn PII off (below).
+Span attributes also carry `turncall.project_id`, `turncall.agent_id`, `turncall.call_sid`, `turncall.direction`, and `turncall.transport`. Caller numbers (`turncall.from_number` / `turncall.to_number`) are added only if you opt in with `PIPECAT_TRACE_INCLUDE_PII=true` (below).
 
 ### Enable it
 

@@ -465,9 +465,9 @@ _Avoid_: "latency logs".
 The switch (default **off**) that puts `from_number`/`to_number` on spans. Phone
 numbers are PII landing in an external tracing backend, so they get there only
 when the operator opts in (`PIPECAT_TRACE_INCLUDE_PII=true`). The non-PII
-attributes (`project_id`, `agent_id`, `direction`, `transport`) are always
-present. A project with [[redaction]] on never gets the numbers on its spans,
-whatever the switch says. See ADR-0010; ADR-0024 made off the default.
+attributes (`project_id`, `agent_id`, `call_sid`, `direction`, `transport`) are
+always present. A project with [[redaction]] on never gets the numbers on its
+spans, whatever the switch says. See ADR-0010; ADR-0024 made off the default.
 
 **Caller-ear latency** (vs **pipeline latency**):
 The wait a caller actually hears: from the end of their speech to the agent's first
