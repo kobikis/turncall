@@ -206,3 +206,11 @@ async def any_has_own_twilio_account(session: AsyncSession) -> bool:
         .limit(1)
     )
     return found is not None
+
+
+async def any_whatsapp_enabled(session: AsyncSession) -> bool:
+    """Whether any number on this deployment takes WhatsApp."""
+    found = await session.scalar(
+        select(PhoneNumberRow.id).where(PhoneNumberRow.whatsapp_enabled).limit(1)
+    )
+    return found is not None

@@ -90,7 +90,7 @@ turncall-demo         # the website demo: agents from a file over WebRTC, no DB/
 | `HEYGEN_LIVE_AVATAR_API_KEY` | No | LiveAvatar API key for the HeyGen video avatar. From app.liveavatar.com (NOT a HeyGen key — Pipecat targets the LiveAvatar API) |
 | `WHATSAPP_TOKEN` | No | WhatsApp API access token (Meta Developer Console > WhatsApp > API Setup) |
 | `WHATSAPP_PHONE_NUMBER_ID` | No | WhatsApp Business phone number ID |
-| `WHATSAPP_APP_SECRET` | No | Meta App Secret for webhook signature validation (App Settings > Basic > App Secret, 32 hex chars) |
+| `WHATSAPP_APP_SECRET` | Prod | Meta App Secret for webhook signature validation (App Settings > Basic > App Secret, 32 hex chars). In production a WhatsApp webhook is refused (`403`) without it, and startup warns when WhatsApp is configured (another `WHATSAPP_*` setting, or a `whatsapp_enabled` number) but it is not (#339); development accepts them unverified |
 | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | No | Arbitrary token for webhook URL verification handshake |
 | `STORAGE_BACKEND` | No | Object storage backend: `local` (default) or `s3` |
 | `LOCAL_STORAGE_PATH` | No | Local storage directory (default: `./storage`) |

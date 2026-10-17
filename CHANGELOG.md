@@ -588,6 +588,17 @@ and is not part of this repository's history.
   (`calls.media_attached_at`). A call answered before the upgrade and not yet
   streaming when it lands has no token and is refused.
 
+- **A WhatsApp webhook nothing can verify is refused in production** (#339).
+  Without `WHATSAPP_APP_SECRET`, every WhatsApp webhook (voice calls and text
+  messages) was accepted unverified, in production too. Production now
+  refuses it with a `403` before anything is read, and startup warns when
+  WhatsApp is configured (`WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` or
+  `WHATSAPP_WEBHOOK_VERIFY_TOKEN` set, or a `whatsapp_enabled` number) without
+  it. Meta's subscription handshake (`GET`, `hub.challenge`) is unaffected,
+  and development accepts unsigned webhooks as before. Set
+  `WHATSAPP_APP_SECRET` before upgrading a production deployment that takes
+  WhatsApp.
+
 ### Fixed
 
 - **A viewer key can no longer link or unlink an agent's knowledge bases**

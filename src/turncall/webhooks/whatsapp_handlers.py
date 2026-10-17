@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.deps import DbSession
 from turncall.api.errors import RateLimitedError
-from turncall.config import get_settings
+from turncall.config import Settings, get_settings
 from turncall.domain.enums import CallDirection, CallEventType
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.ambience import build_ambience_mixer
@@ -62,6 +62,43 @@ async def close_http_session() -> None:
         if _http_session is not None and not _http_session.closed:
             await _http_session.close()
             _http_session = None
+
+
+async def warn_if_unverifiable(settings: Settings, session: AsyncSession) -> str | None:
+    """At startup, warn when WhatsApp is configured but WHATSAPP_APP_SECRET is not (#339).
+
+    WhatsApp counts as configured when any other WHATSAPP_* setting is set
+    (the access token, phone number id or webhook verify token) or a phone
+    number is bound with `whatsapp_enabled`. Returns the warning, or None.
+    """
+    whatsapp = settings.whatsapp
+    if whatsapp.app_secret:
+        return None
+    configured = [
+        name
+        for name, value in (
+            ("WHATSAPP_TOKEN", whatsapp.token),
+            ("WHATSAPP_PHONE_NUMBER_ID", whatsapp.phone_number_id),
+            ("WHATSAPP_WEBHOOK_VERIFY_TOKEN", whatsapp.webhook_verify_token),
+        )
+        if value
+    ]
+    if await phone_number_repo.any_whatsapp_enabled(session):
+        configured.append("a whatsapp_enabled phone number")
+    if not configured:
+        return None
+    consequence = (
+        "every WhatsApp webhook is refused (403)"
+        if settings.is_production
+        else "WhatsApp webhooks are accepted unverified"
+    )
+    message = (
+        f"whatsapp_app_secret_missing | WhatsApp is configured "
+        f"({', '.join(configured)}) but WHATSAPP_APP_SECRET is not set: "
+        f"{consequence}"
+    )
+    logger.warning(message)
+    return message
 
 
 @router.get("")
@@ -107,8 +144,16 @@ async def handle_webhook(
     """
     raw_body = await request.body()
 
-    # Validate signature for ALL webhook events (CRITICAL security check)
+    # Validate signature for ALL webhook events (CRITICAL security check).
+    # Without WHATSAPP_APP_SECRET nothing can verify one: production refuses it
+    # before anything is read (#339); development accepts it unverified.
     settings = get_settings()
+    if not settings.whatsapp.app_secret and settings.is_production:
+        logger.warning(
+            "whatsapp_webhook_refused | WHATSAPP_APP_SECRET is not set, so its "
+            "X-Hub-Signature-256 cannot be verified"
+        )
+        return Response(status_code=403)
     if settings.whatsapp.app_secret:
         sha256_signature = request.headers.get("X-Hub-Signature-256", "")
         if not validate_whatsapp_signature(
