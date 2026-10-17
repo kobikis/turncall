@@ -13,6 +13,27 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Retention** (#316, ADR-0024). A project can choose how long its calls'
+  recordings, transcripts and events are kept: `PUT
+  /v1/projects/{id}/retention` (admin key) with `recordings_days`,
+  `transcripts_days` and `events_days`, whole days from the call's end, `null`
+  (the default) to keep for good. An agent overrides any of them with an
+  additive `retention` block in its config, read from its live version and
+  applied to the calls of all its versions; an inline agent's calls take the
+  project's. A janitor on every API server deletes what has expired, hourly:
+  a recording's object in storage and its `recording_url`; a transcript's
+  lines, tool events and tool-invocation rows, injected messages, and the
+  post-call analysis with its takeaways; and the rest of the call's event
+  log. The call record stays, with `recording_expired_at`,
+  `transcript_expired_at` and `events_expired_at` on the call read saying what
+  went, and `ended_reason` kept. `GET /v1/calls/{id}/transcript` gains
+  `expired_at`, `GET /v1/calls/{id}/analysis` answers `status: "expired"`, and
+  re-running the analysis of an expired transcript is a `409`. `call.ended`
+  carries `retention`, what applies to the call. A change applies to calls
+  already stored. Text conversations and the audit log are not touched.
+  Migration `e2c6a8f4b9d1` (three partial indexes on `calls`). See the
+  Retention guide.
+
 - **Redaction** (#313, ADR-0024). A project can have PII replaced in
   everything it stores and sends about its calls: `PUT
   /v1/projects/{id}/redaction` (admin key) with `{"enabled": true}` and,

@@ -1018,6 +1018,37 @@ PUT refreshes this process's entry, other replicas see it within the TTL.
   project comes from a contextvar set by `for_project` (pass `session=` when
   one is open) where a call, request or text message starts.
 
+## Retention
+
+Per project (#316, ADR-0024): `PUT /v1/projects/{id}/retention` (admin key)
+`{recordings_days, transcripts_days, events_days}`, days from the call's end,
+null = kept for good (the default; a PUT replaces all three). Columns
+`projects.retention_*_days`. An agent overrides field by field with
+`config.retention`, read by the janitor from the agent's **live version**
+(published, else newest) for the calls of every version; an inline agent
+takes the project's. `services/retention.py` holds the rules and the janitor:
+
+- **Kinds.** Recording: the objects (`recordings/{call_id}.wav` and the
+  `recording_url`'s key) and `recording_url`. Transcript: `TRANSCRIPT_EVENTS`
+  (`transcript.*`, `tool.called`/`tool.result`, `context.injected`), the
+  call's `tool_invocations`, `analysis_json`. Events: every other call event.
+- **The row stays.** `calls.recording_expired_at` / `transcript_expired_at` /
+  `events_expired_at` mark what went (on the call read); `calls.ended_reason`
+  is frozen from the events before they go (`call_view.ended_reasons`; the
+  read prefers it). The analysis read says `expired`, a rerun is a 409, the
+  transcript read gains `expired_at`.
+- **The janitor** (`run_janitor`, hourly in the API lifespan; `sweep(now=)`
+  takes the clock) plans only projects with a retention set (on the project
+  or an agent), then per kind and distinct days claims batches of
+  `BATCH` calls with `FOR UPDATE SKIP LOCKED` in a keyset over the partial
+  indexes `ix_calls_<kind>_retention`. Recording objects are deleted before
+  the row is marked; a failed delete leaves the call for the next sweep.
+  It writes only `calls`, `call_events`, `tool_invocations`
+  (`test_retention_janitor.py` holds that: the audit log, #317, keeps its own
+  retention). Event deletes go through `call_repo.delete_call_events`.
+- `call.ended` carries `retention` (`retention.for_call`, the policy as it
+  stands at the call's end). Text conversations are not covered yet.
+
 ## Graceful Shutdown
 
 A deploy must not drop live calls (#199). Uvicorn's own SIGTERM closes the
@@ -1807,7 +1838,7 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 `call.ended` payload: `status`, `ended_reason`, `from_number`, `to_number`, `direction`,
 `duration_ms`, `provider_call_sid`, `metadata`, `started_at`, `ended_at`,
 `recording_status`, `recording_url`, `summary`, `analysis`, `agent_name`,
-`agent_version`, `latency_summary`, `failovers` (`[{role, from, to, error}]`, `role` `stt`\|`llm`\|`tts`, #222/#223), and `transcript` (`[{role, text, timestamp}]`).
+`agent_version`, `latency_summary`, `failovers` (`[{role, from, to, error}]`, `role` `stt`\|`llm`\|`tts`, #222/#223), `retention` (`{recordings_days, transcripts_days, events_days}`, null = kept for good, #316), and `transcript` (`[{role, text, timestamp}]`).
 
 `latency_summary` is derived from the call's `metrics.turn` events (#179):
 `{turns, user_to_bot, stages: {stt|llm|tts}, slowest_turn}`, each spread being

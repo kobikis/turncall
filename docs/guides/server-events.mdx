@@ -80,6 +80,8 @@ Tool calls go to each tool's own `webhook_url` — see [Tools](/guides/tools).
 
 If the project has [redaction](/guides/redaction) on, every payload is redacted before it is sent: a caller's number reads `<PHONE_NUMBER>`, and so do `from_number` and `to_number`. What was redacted is not recoverable from the webhook or the event log; the call record (`GET /v1/calls/{id}`) keeps the numbers. call-init and tool webhooks are part of the live call and are never redacted.
 
+`call.ended` carries the call's `retention`: how many days its recording, transcript and events are kept, `null` for good. See [Retention](/guides/retention).
+
 ## Signature Verification
 
 All server events include HMAC-SHA256 signatures:
