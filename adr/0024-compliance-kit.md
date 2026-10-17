@@ -175,9 +175,12 @@ certification.
   the carrier's recording copy, text conversations (not under retention)
   and audio (not redacted). It cites a provision only where the control
   plainly bears on it, and says where one does not reach: redaction is not
-  de-identification, and only project credentials (and a number's Twilio
-  token) are encrypted by TurnCall, not call data or the secrets in agent
-  config. There is no switch that turns recording off (every voice call is
+  de-identification, the call record's numbers and metadata are neither
+  redacted nor deleted by retention, and only project credentials (and a
+  number's Twilio token) are encrypted by TurnCall, not call data, webhook
+  signing secrets, call-init secrets or the secrets in agent config. It
+  does not rely on the builder's audit of people (builder-api #101, #102),
+  which is not built yet. There is no switch that turns recording off (every voice call is
   recorded, ADR-0005), so of the audio guidance above only a short
   `recordings_days` is available today, and the guides say so. The webhook guide
   (`server-events.mdx`) states what redaction does to payloads.

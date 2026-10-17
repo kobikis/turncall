@@ -291,6 +291,13 @@ the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
 
+**Numbers in event payloads are redacted.** With redaction on, a phone or
+card number a tool's arguments or a call's `metadata` carried as a JSON number
+(`{"phone": 4155550132}`) went out raw in `tool.result` and `call.ended`
+webhooks and on the event log. It is now analysed as the digits it is
+written with, as tool invocations already were. See
+[Redaction](/guides/redaction#what-is-redacted).
+
 **A WebRTC call's greeting is no longer lost.** The agent's first message was
 spoken as the pipeline started, and audio written before the browser's
 connection is up is dropped — so a greeting ready before ICE and DTLS finished

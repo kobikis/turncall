@@ -82,7 +82,7 @@ Tool calls go to each tool's own `webhook_url` — see [Tools](/guides/tools).
 
 ## Redaction
 
-If the project has [redaction](/guides/redaction) on, every webhook payload is redacted before it is sent, and a call's events before they are stored on its event log. A subscriber never sees a redacted value, and it cannot be recovered from the webhook, from a redelivery or from `GET /v1/calls/{id}/events`, which hold the same redacted payload.
+If the project has [redaction](/guides/redaction) on, every webhook payload is redacted before it is sent, and a call's events before they are stored on its event log. A subscriber never sees a redacted value, and it cannot be recovered from the webhook, from a redelivery or from `GET /v1/calls/{id}/events`, which hold the same redacted payload. The one exception is a call that was live when redaction was turned on: see "A change applies to the next event" below.
 
 A detected value is replaced by its type in angle brackets, and the rest of the text is kept:
 
@@ -93,15 +93,15 @@ A detected value is replaced by its type in angle brackets, and the rest of the 
 }
 ```
 
-- **Text, at any depth.** Every string in the payload is analysed: `text` on `transcript.final`, a tool's arguments and result on `tool.result`, a transfer's or a handoff's reason and message, an error's text, and in `call.ended` the `transcript`, `summary`, `analysis` (takeaways included) and the call's `metadata`. The `session.*` and `chat.created` events of text conversations are redacted the same way. Campaign and eval-run events go through the same step.
-- **Number fields, whole.** With `PHONE_NUMBER` chosen (it is in the default), `from_number`, `to_number`, `customer_number`, `turncall_number`, `target_number` and `number` read `<PHONE_NUMBER>` on every event that carries them, your own TurnCall number included. A WebRTC call's `"webrtc"` is not a number and stays.
-- **Never analysed**: the envelope (`call_id`, `event_id` and the rest), and TurnCall's own fields at the top of a payload: ids, timestamps, statuses, `ended_reason`, `direction`, provider and model names, `tool_name`, and URL fields such as `recording_url`. So you can still join an event to its call and dedupe it. Fields inside your own data (`metadata`, a tool's arguments, a takeaway) are analysed whatever they are called.
+- **Text, at any depth.** Every string in the payload is analysed: `text` on `transcript.final`, a tool's arguments and result on `tool.result`, a transfer's or a handoff's reason and message, an error's text, and in `call.ended` the `transcript`, `summary`, `analysis` (takeaways included) and the call's `metadata`. A JSON number of seven digits or more inside them is analysed as the digits it is written with, so `{"phone": 4155550132}` in a tool's arguments reads `{"phone": "<PHONE_NUMBER>"}`. The `session.*` and `chat.created` events of text conversations are redacted the same way. Campaign and eval-run events go through the same step.
+- **Number fields, whole.** With `PHONE_NUMBER` chosen (it is in the default), the phone number fields at the top of a payload (`from_number`, `to_number` and the others, your own TurnCall number included) read `<PHONE_NUMBER>` when they hold a phone number. Which fields, and what happens to a value that is not a phone number (a WebRTC call's `"webrtc"`, a SIP address): [Number fields](/guides/redaction#number-fields).
+- **Never analysed**: the envelope (`call_id`, `event_id` and the rest), and TurnCall's own fields at the top of a payload: ids, timestamps, statuses, `ended_reason`, `direction`, provider and model names, `tool_name`, URL fields such as `recording_url`, and numbers such as `duration_ms`. So you can still join an event to its call and dedupe it. Fields inside your own data (`metadata`, a tool's arguments, a takeaway) are analysed whatever they are called.
 
 If you need a caller's number, read the call record: `GET /v1/calls/{id}` keeps `from_number` and `to_number`, and routing, the suppression list and campaigns use them as before. Redaction applies to what is stored and sent, not to the call itself.
 
-**When the detector is unavailable**, text is withheld, never sent raw. If the detector fails to load, every string it would have analysed arrives as `<REDACTED>` for five minutes, and then the load is tried again; a server that falls far behind withholds text the same way rather than queue it. Number fields do not need the detector and still read `<PHONE_NUMBER>`. The event log holds `<REDACTED>` too, so the original cannot be read back later.
+**When the detector is unavailable**, text is withheld, never sent raw. If the detector fails to load, every string it would have analysed arrives as `<REDACTED>` for five minutes, and then the load is tried again; a server that falls far behind withholds text the same way rather than queue it. A number field that holds a phone number does not need the detector and still reads `<PHONE_NUMBER>`; one that holds anything else is withheld with the text. The event log holds `<REDACTED>` too, so the original cannot be read back later.
 
-**A change applies to the next event.** Turning redaction on or off, or changing its types, applies at once on the server that took the change and within 30 seconds on the others. Events already sent are not sent again, and a call that was live during the change can have both kinds of payload.
+**A change applies to the next event.** Turning redaction on or off, or changing its types, applies at once on the server that took the change and within 30 seconds on the others. Events already sent are not sent again, and a call that was live during the change can have both kinds of payload. Its `call.ended` is sent after the change, but its `transcript` is the one stored on the call's event log: lines stored before redaction was turned on are sent as they were, unredacted.
 
 **Not redacted:**
 
