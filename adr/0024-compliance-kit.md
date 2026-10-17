@@ -1,8 +1,9 @@
 # ADR-0024: The compliance kit: redaction, retention and an audit log in the engine
 
-**Status:** Accepted (redaction of the transcript and call events built in
-#313; the rest of redaction in #314; `trace_include_pii` off by default in
-#315; retention in #316; the audit log in #317)
+**Status:** Accepted, fully built (redaction of the transcript and call
+events in #313; the rest of redaction in #314; `trace_include_pii` off by
+default in #315; retention in #316; the audit log in #317; the mapping
+document in #318)
 **Date:** 2026-10-16
 **Relates to:** ADR-0005 (call recording), ADR-0010 (OTel tracing), ADR-0011
 (project deletion), ADR-0013 (takeaways), ADR-0015 (open-core licensing).
@@ -165,6 +166,21 @@ change and goes in the changelog.
 **A mapping document, not a certification.** One page that maps each control to
 GDPR first, then HIPAA, and says plainly that TurnCall itself holds no
 certification.
+
+- **Mapping as built** (#318). `docs/guides/compliance.mdx` maps redaction,
+  `trace_include_pii`, retention, recordings, the audit log, self-hosting,
+  encrypted project credentials and signed webhooks to GDPR articles, then
+  to HIPAA Security and Privacy Rule sections, and lists what stays the
+  operator's: vendor DPAs and BAAs, infrastructure, access control, backups,
+  the carrier's recording copy, text conversations (not under retention)
+  and audio (not redacted). It cites a provision only where the control
+  plainly bears on it, and says where one does not reach: redaction is not
+  de-identification, and only project credentials (and a number's Twilio
+  token) are encrypted by TurnCall, not call data or the secrets in agent
+  config. There is no switch that turns recording off (every voice call is
+  recorded, ADR-0005), so of the audio guidance above only a short
+  `recordings_days` is available today, and the guides say so. The webhook guide
+  (`server-events.mdx`) states what redaction does to payloads.
 
 ## Considered options
 

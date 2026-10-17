@@ -68,6 +68,7 @@
                   "guides/redaction",
                   "guides/retention",
                   "guides/audit-log",
+                  "guides/compliance",
                   "guides/campaigns",
                   "guides/observability",
                   "guides/graceful-shutdown",

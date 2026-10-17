@@ -108,3 +108,5 @@ Use `session_id` (group messages) or `previous_chat_id` (linear chain) to mainta
 - `session.updated`
 - `session.deleted`
 - `chat.created`
+
+With [redaction](/guides/redaction) on, these payloads are redacted before they are sent, `customer_number` and `turncall_number` included. See [Redaction](/guides/server-events#redaction) in Server Events.

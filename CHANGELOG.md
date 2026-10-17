@@ -818,6 +818,29 @@ and is not part of this repository's history.
   The `ambience_storage_orphan` and `project_delete_storage_orphan` log events
   are now one event, `storage_orphan`. Update any alert on the old names.
 
+### Documentation
+
+- **A compliance mapping** (#318, ADR-0024): the Compliance guide maps
+  redaction, caller numbers off spans, retention, recordings, the audit log,
+  self-hosting, encrypted project credentials and signed webhooks to GDPR
+  articles, then to HIPAA Security and Privacy Rule sections. It says plainly
+  that TurnCall holds no certification and is not legal advice, and lists what
+  stays the operator's: DPAs and BAAs with the STT, LLM, TTS and carrier
+  vendors, infrastructure and encryption at rest of call data, access control,
+  backups, the carrier's own recording copy, text conversations (not covered
+  by retention) and audio (not redacted).
+- **What redaction does to webhooks.** Server Events gains a Redaction
+  section: every payload is redacted before it is sent, so a subscriber never
+  sees a redacted value; text at any depth becomes `<ENTITY_TYPE>`, the number
+  fields `<PHONE_NUMBER>`, identifiers are never analysed, and text is
+  `<REDACTED>` while the detector is unavailable. The call record keeps the
+  numbers. Signature verification now advises refusing a timestamp more than
+  five minutes old.
+- **Recording cannot be turned off.** The Redaction guide said to turn
+  recording off for audio that holds PII; there is no such setting, as every
+  voice call is recorded. It now says to keep recordings briefly with
+  `recordings_days`.
+
 ### Upgrade notes
 
 - **Spans no longer carry caller numbers.** `PIPECAT_TRACE_INCLUDE_PII` defaults

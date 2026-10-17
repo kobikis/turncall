@@ -78,9 +78,35 @@ Every delivery is one envelope:
 
 Tool calls go to each tool's own `webhook_url` — see [Tools](/guides/tools).
 
-If the project has [redaction](/guides/redaction) on, every payload is redacted before it is sent: a caller's number reads `<PHONE_NUMBER>`, and so do `from_number` and `to_number`. What was redacted is not recoverable from the webhook or the event log; the call record (`GET /v1/calls/{id}`) keeps the numbers. call-init and tool webhooks are part of the live call and are never redacted.
-
 `call.ended` carries the call's `retention`: how many days its recording, transcript and events are kept, `null` for good. See [Retention](/guides/retention).
+
+## Redaction
+
+If the project has [redaction](/guides/redaction) on, every webhook payload is redacted before it is sent, and a call's events before they are stored on its event log. A subscriber never sees a redacted value, and it cannot be recovered from the webhook, from a redelivery or from `GET /v1/calls/{id}/events`, which hold the same redacted payload.
+
+A detected value is replaced by its type in angle brackets, and the rest of the text is kept:
+
+```json
+{
+  "event": "transcript.final",
+  "payload": {"role": "customer", "text": "Call me back on <PHONE_NUMBER> or at <EMAIL_ADDRESS>."}
+}
+```
+
+- **Text, at any depth.** Every string in the payload is analysed: `text` on `transcript.final`, a tool's arguments and result on `tool.result`, a transfer's or a handoff's reason and message, an error's text, and in `call.ended` the `transcript`, `summary`, `analysis` (takeaways included) and the call's `metadata`. The `session.*` and `chat.created` events of text conversations are redacted the same way. Campaign and eval-run events go through the same step.
+- **Number fields, whole.** With `PHONE_NUMBER` chosen (it is in the default), `from_number`, `to_number`, `customer_number`, `turncall_number`, `target_number` and `number` read `<PHONE_NUMBER>` on every event that carries them, your own TurnCall number included. A WebRTC call's `"webrtc"` is not a number and stays.
+- **Never analysed**: the envelope (`call_id`, `event_id` and the rest), and TurnCall's own fields at the top of a payload: ids, timestamps, statuses, `ended_reason`, `direction`, provider and model names, `tool_name`, and URL fields such as `recording_url`. So you can still join an event to its call and dedupe it. Fields inside your own data (`metadata`, a tool's arguments, a takeaway) are analysed whatever they are called.
+
+If you need a caller's number, read the call record: `GET /v1/calls/{id}` keeps `from_number` and `to_number`, and routing, the suppression list and campaigns use them as before. Redaction applies to what is stored and sent, not to the call itself.
+
+**When the detector is unavailable**, text is withheld, never sent raw. If the detector fails to load, every string it would have analysed arrives as `<REDACTED>` for five minutes, and then the load is tried again; a server that falls far behind withholds text the same way rather than queue it. Number fields do not need the detector and still read `<PHONE_NUMBER>`. The event log holds `<REDACTED>` too, so the original cannot be read back later.
+
+**A change applies to the next event.** Turning redaction on or off, or changing its types, applies at once on the server that took the change and within 30 seconds on the others. Events already sent are not sent again, and a call that was live during the change can have both kinds of payload.
+
+**Not redacted:**
+
+- **call-init and tool webhooks.** They are part of the live call, and your server answers them with the raw values: call-init receives the caller's number, and a tool's `webhook_url` receives the arguments the model gave it.
+- **The recording.** Redaction is text only. `recording.ready` and `recording_url` point at the full audio; keep it briefly with a [retention](/guides/retention) policy.
 
 ## Signature Verification
 
@@ -91,4 +117,4 @@ X-TurnCall-Signature: v1=<hex_hmac>
 X-TurnCall-Timestamp: 1712345678
 ```
 
-Verify by computing HMAC-SHA256 over `"timestamp.body"` with the signing secret: for call-init, the one returned when you bound the phone number; for webhook events, the one returned when you created the subscription.
+Verify by computing HMAC-SHA256 over `"timestamp.body"` with the signing secret: for call-init, the one returned when you bound the phone number; for webhook events, the one returned when you created the subscription. Compare in constant time, and refuse a timestamp more than five minutes old so a captured delivery cannot be replayed (a retry is sent within about two minutes, with its original timestamp and signature).
