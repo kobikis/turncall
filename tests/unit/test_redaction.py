@@ -330,6 +330,27 @@ async def test_free_text_and_json_withhold_when_the_detector_fails(
     assert value == {"customer_id": "<REDACTED>", "n": 1, "from_number": "<REDACTED>"}
 
 
+async def test_strict_raises_rather_than_withholds(monkeypatch) -> None:
+    """For a rewrite of stored rows, which would rather try again later than
+    store `<REDACTED>` for good."""
+
+    def broken() -> None:
+        raise RuntimeError("model missing")
+
+    _use(monkeypatch, broken)
+    try:
+        with pytest.raises(redaction.RedactionWithheld):
+            await redaction.redact_json([SECRET], POLICY, strict=True)
+        with pytest.raises(redaction.RedactionWithheld):
+            await redaction.redact_payload({"text": SECRET}, POLICY, strict=True)
+        # No text, no detector: nothing to withhold.
+        assert await redaction.redact_payload(
+            {"customer_number": "+15550001234"}, POLICY, strict=True
+        ) == {"customer_number": "<PHONE_NUMBER>"}
+    finally:
+        redaction.ENGINE.shutdown()
+
+
 async def test_free_json_past_the_backlog_is_withheld(monkeypatch) -> None:
     slow = _Marks(delay=0.2)
     _use(monkeypatch, lambda: slow)

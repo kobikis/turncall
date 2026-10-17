@@ -1,13 +1,15 @@
 """SMS session repository - data access for chat sessions."""
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
-from turncall.domain.session_state import SESSION_TTL_HOURS
-from turncall.storage.models import SmsSessionRow
+from turncall.domain.session_state import PENDING, REDACTION, SESSION_TTL_HOURS
+from turncall.storage.models import ProjectRow, SmsSessionRow
 
 
 async def create_session(
@@ -111,6 +113,27 @@ async def update_session_activity(
     return result.scalar_one_or_none()
 
 
+def _ended_metadata() -> ColumnElement[Any]:
+    """A session's metadata as it expires: marked for its rows' rewrite when
+    its project redacts then (#314, `services/text_redaction`). Read off the
+    project row, in the expiring statement, so every way a session ends marks
+    it and a crash between the two cannot lose the mark."""
+    redacts = (
+        select(ProjectRow.redaction_enabled)
+        .where(ProjectRow.id == SmsSessionRow.project_id)
+        .scalar_subquery()
+    )
+    return case(
+        (
+            redacts.is_(True),
+            SmsSessionRow.metadata_json.op("||")(
+                func.jsonb_build_object(REDACTION, PENDING)
+            ),
+        ),
+        else_=SmsSessionRow.metadata_json,
+    )
+
+
 async def expire_session(
     session: AsyncSession,
     session_id: UUID,
@@ -120,7 +143,7 @@ async def expire_session(
         update(SmsSessionRow)
         .where(SmsSessionRow.id == session_id)
         .where(SmsSessionRow.status == "active")
-        .values(status="expired")
+        .values(status="expired", metadata_json=_ended_metadata())
         .returning(SmsSessionRow)
     )
     return result.scalar_one_or_none()
@@ -166,6 +189,52 @@ async def expire_stale_sessions(session: AsyncSession) -> int:
         update(SmsSessionRow)
         .where(SmsSessionRow.status == "active")
         .where(SmsSessionRow.expires_at < now)
-        .values(status="expired")
+        .values(status="expired", metadata_json=_ended_metadata())
     )
     return result.rowcount
+
+
+async def list_pending_redaction(
+    session: AsyncSession, *, limit: int = 50
+) -> list[SmsSessionRow]:
+    """Expired sessions whose rows are still to be rewritten redacted, the
+    longest-waiting first."""
+    result = await session.execute(
+        select(SmsSessionRow)
+        .where(SmsSessionRow.status == "expired")
+        .where(SmsSessionRow.metadata_json[REDACTION].astext == PENDING)
+        .order_by(SmsSessionRow.expires_at.asc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def set_session_redacted(
+    session: AsyncSession,
+    session_id: UUID,
+    *,
+    customer_number: str,
+    turncall_number: str,
+    state: str,
+) -> None:
+    """Store a session's numbers as redacted, and its redaction `state`."""
+    await session.execute(
+        update(SmsSessionRow)
+        .where(SmsSessionRow.id == session_id)
+        .values(
+            customer_number=customer_number,
+            turncall_number=turncall_number,
+            metadata_json=SmsSessionRow.metadata_json.op("||")(
+                func.jsonb_build_object(REDACTION, state)
+            ),
+        )
+    )
+
+
+async def clear_pending_redaction(session: AsyncSession, session_id: UUID) -> None:
+    """Drop the mark: the project stopped redacting before the rewrite ran."""
+    await session.execute(
+        update(SmsSessionRow)
+        .where(SmsSessionRow.id == session_id)
+        .values(metadata_json=SmsSessionRow.metadata_json.op("-")(REDACTION))
+    )

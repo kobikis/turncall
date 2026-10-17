@@ -28,3 +28,12 @@ def is_session_expired(expires_at: datetime) -> bool:
     """Check if a session has expired based on its expiry timestamp."""
     now = datetime.now(UTC)
     return now >= expires_at
+
+
+# Redaction of a text conversation (#314), kept in `metadata_json` under
+# REDACTION: on a session, PENDING from its expiry while its project redacts
+# until its rows are rewritten, then DONE; on a message, DONE once its content
+# is. A row without it holds what was said, raw.
+REDACTION = "redaction"
+PENDING = "pending"
+DONE = "done"

@@ -53,10 +53,11 @@ You can also choose `PERSON`, `LOCATION`, `DATE_TIME`, `ORGANIZATION`, `URL`, `I
 - **Post-call analysis and takeaways**: stored redacted on the call, so `analysis` on `GET /v1/calls/{id}` and `GET /v1/calls/{id}/analysis` match `summary` and `analysis` in `call.ended`. A takeaway's fields, and `structured_data`'s, are yours, so every value is analysed whatever its field is called: a field named `customer_id` or `callback_url` is redacted like any other.
 - **Tool invocations**: the arguments (`input_json`) and the result (`output_json`) of every tool call are stored redacted, so `GET /v1/tools/invocations/{call_id}` and a chat session's invocations read back redacted. As with takeaways, the fields are the tool's, and every value is analysed. The status is read from the result before it is redacted. Your tool's webhook still gets the raw arguments during the call, and the model the raw result. A scenario drafted from a call or a session (`POST /v1/eval-scenarios/from-call`, `/from-session`) is built from these records and the transcript, so its arguments and tool mocks are redacted too.
 - **Logs and traces**: see [below](#logs-and-traces).
+- **Text conversations** (SMS, WhatsApp and the Chat API): see [below](#text-conversations).
 
 TurnCall's own identifiers are never analysed: ids, timestamps, statuses, provider names (the `from` and `to` of `provider.failover`) and tool names (`tool_name`). With `ORGANIZATION` chosen, "Azure" in a provider name stays as it is.
 
-Not yet redacted: the call record's own `metadata` and numbers (the numbers stay on purpose, see above), SMS and chat messages.
+Not yet redacted: the call record's own `metadata` and numbers (the numbers stay on purpose, see above).
 
 Never redacted: call-init and tool webhooks. These are part of the live call, and your own server answers them with the raw values.
 
@@ -70,6 +71,19 @@ This is not the detector. A log line is written on the path that carries the cal
 - **Spans**: a span started during the project's call is marked `turncall.redaction` (the chosen types), and its attributes, event attributes and status description are redacted as it is exported. The call's `turncall.from_number` and `turncall.to_number` are left off its spans altogether, whatever `PIPECAT_TRACE_INCLUDE_PII` says.
 - **What is outside a project** is logged as before: startup, a webhook for a number no project owns, a request without a valid key.
 - **A call follows the setting it started with.** Logs and spans read the project's setting when the call (or the request, or the text message) starts, not on every line.
+
+## Text conversations
+
+An SMS, WhatsApp or Chat API session works differently from a call, because its agent rereads the stored messages on every turn. If they were stored redacted, the agent would forget the number it was given one message earlier. So while a session is live, its messages are stored as written, and everything that reads them is redacted:
+
+- `GET /v1/chat/sessions/{id}/messages`: each message's `content`.
+- `GET /v1/chat/sessions` and `GET /v1/chat/sessions/{id}`: `customer_number` and `turncall_number` (with `PHONE_NUMBER` chosen; a Chat API session's `api` stays as it is).
+- `POST /v1/eval-scenarios/from-session`: the derived scenario, as `/from-call` reads a call's redacted transcript.
+- The `chat.created` and `session.*` webhooks.
+
+Once a session ends, the agent never reads it again, so its messages and numbers are rewritten redacted in the database, as a call's are stored. A session ends when it expires (24 hours after its last message), when you `DELETE /v1/chat/sessions/{id}`, or when a new session replaces it. The rewrite runs in the session sweep, every 15 minutes, and covers sessions that ended while the project had redaction on. A session that ended before redaction was turned on is not rewritten, but while redaction is on its reads are redacted all the same. If the detector cannot answer, the rewrite waits for the next sweep rather than storing `<REDACTED>`.
+
+The reply to `POST /v1/chat` and the text sent to the customer by SMS or WhatsApp are the live conversation, so they are never redacted.
 
 ## Limits
 

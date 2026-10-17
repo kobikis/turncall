@@ -314,6 +314,7 @@ async def redact_payload(
     *,
     event_type: str | None = None,
     keep: Iterable[str] = (),
+    strict: bool = False,
 ) -> dict[str, Any]:
     """`payload` with the policy's entity types replaced by `<ENTITY_TYPE>`.
 
@@ -321,11 +322,12 @@ async def redact_payload(
     from this project's stored events, which were redacted when stored. Never
     mutates `payload`: the caller may still hold it. Its text is analysed in
     the redaction worker, off the event loop; a payload with no text never
-    reaches the worker at all.
+    reaches the worker at all. `strict`: raise `RedactionWithheld` rather than
+    withhold the text when the detector does not answer.
     """
     keep = frozenset(keep)
     texts = texts_in(payload, event_type=event_type, keep=keep)
-    replaced = await _detect(texts, policy.entities) if texts else {}
+    replaced = await _detect(texts, policy.entities, strict) if texts else {}
     return _walk(
         payload,
         policy.entities,
@@ -335,7 +337,9 @@ async def redact_payload(
     )
 
 
-async def redact_json(value: Any, policy: RedactionPolicy) -> Any:
+async def redact_json(
+    value: Any, policy: RedactionPolicy, *, strict: bool = False
+) -> Any:
     """Free JSON (`value`: any JSON value) with the policy's entity types
     replaced: a tool's arguments or result, a takeaway (#314).
 
@@ -345,7 +349,8 @@ async def redact_json(value: Any, policy: RedactionPolicy) -> Any:
     number in it is the detector's to find rather than replaced whole by its
     field's name. Keys themselves are not analysed. UUIDs and ISO-8601
     timestamps are skipped by their shape, as everywhere. The same worker,
-    the same failure mode (withheld, never raw), and never mutates `value`.
+    the same failure mode (withheld, never raw, or `RedactionWithheld` when
+    `strict`), and never mutates `value`.
     """
     texts: list[str] = []
 
@@ -354,7 +359,7 @@ async def redact_json(value: Any, policy: RedactionPolicy) -> Any:
         return text
 
     _deep(value, collect)
-    replaced = await _detect(texts, policy.entities) if texts else {}
+    replaced = await _detect(texts, policy.entities, strict) if texts else {}
     return _deep(value, lambda text: replaced.get(text, WITHHELD))
 
 
@@ -364,11 +369,21 @@ async def redact_text(text: str, policy: RedactionPolicy) -> str:
     return redacted
 
 
-async def _detect(texts: list[str], entities: tuple[str, ...]) -> dict[str, str]:
+class RedactionWithheld(RuntimeError):
+    """The detector did not answer (unavailable, saturated or failed), for a
+    `strict` caller: one rewriting stored rows, which would rather try again
+    later than store `<REDACTED>` for good."""
+
+
+async def _detect(
+    texts: list[str], entities: tuple[str, ...], strict: bool = False
+) -> dict[str, str]:
     """Each distinct text, redacted; a text left out is withheld."""
     unique = list(dict.fromkeys(texts))
     redacted = await ENGINE.redact(unique, entities)
     if redacted is None:
+        if strict:
+            raise RedactionWithheld(f"{len(unique)} text(s) not redacted")
         return {}
     return dict(zip(unique, redacted, strict=True))
 

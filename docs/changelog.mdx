@@ -19,6 +19,12 @@ SSNs and IBANs replaced before they leave the server: the transcripts the
 observers log, the text on the pipeline's spans, the numbers the webhooks
 log. See [Logs and traces](/guides/redaction#logs-and-traces).
 
+**Redaction of text conversations.** With redaction on, SMS, WhatsApp and Chat
+API sessions read back redacted through the Chat API, and a session's stored
+messages and numbers are rewritten redacted once it ends. The agent still
+reads them while the session is live. See
+[Text conversations](/guides/redaction#text-conversations).
+
 **A website demo server.** `turncall-demo` runs agents from a JSON file over
 WebRTC with no database, Redis or project — the real voice pipeline behind a
 "talk to an agent" button, in a container per visitor. See

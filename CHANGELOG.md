@@ -29,7 +29,7 @@ and is not part of this repository's history.
   operator is briefed on them, and post-call analysis and takeaways read them.
   Their results are redacted before they are stored on the call, so `analysis`
   on the call read, `GET /v1/calls/{id}/analysis` and `call.ended` agree;
-  tool-invocation rows, SMS and chat messages, logs and spans are not yet
+  tool-invocation rows, logs and spans are not yet
   (#314). TurnCall's own identifiers (ids, statuses, provider and tool names)
   are never analysed. Detection is local — Presidio over spaCy's small English
   model, no text leaves the deployment — and runs in a worker process of its
@@ -44,6 +44,18 @@ and is not part of this repository's history.
   digits spoken as words ("four one five…") are not caught, so an STT that
   does not format numbers (Deepgram's `smart_format` does) leaves them.
   Migration `d7f2a4c9e5b8`. See the Redaction guide.
+- **Redaction of text conversations** (#314): SMS, WhatsApp and the Chat API.
+  A text session's model rereads the stored messages every turn, so they stay
+  as written while the session is live; with redaction on, every read of them
+  is redacted — `GET /v1/chat/sessions[/{id}]` (`customer_number`,
+  `turncall_number`), `GET /v1/chat/sessions/{id}/messages` and
+  `POST /v1/eval-scenarios/from-session`. A session that ends while its
+  project redacts (its 24-hour expiry, `DELETE /v1/chat/sessions/{id}`, or a
+  new session replacing it) has its messages and numbers rewritten redacted in
+  the database by the session sweep, within 15 minutes. A session that ended
+  before redaction was turned on is not rewritten. The reply to
+  `POST /v1/chat` and the text sent to the customer are the live conversation
+  and are never redacted. No migration: the state is kept in `metadata_json`.
 
 - **Redaction: tool invocations** (#314). With redaction on, a tool call's
   arguments and result are stored redacted on its `tool_invocations` row, so

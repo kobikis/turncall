@@ -480,6 +480,13 @@ async def scenario_from_session(
     invocations = await tool_invocation_repo.list_invocations_for_session(
         session, body.session_id
     )
+    # Redacted as `/from-call` reads a call's stored transcript: the scenario
+    # leaves the conversation, whose rows may still be raw (#314).
+    from turncall.services import text_redaction
+
+    messages = await text_redaction.readable_messages(
+        session, auth.project_id, messages
+    )
 
     name = body.name or f"session-{str(body.session_id)[:8]}"
     try:

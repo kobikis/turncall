@@ -14,6 +14,7 @@ from turncall.api.v1.schemas.chat import (
 )
 from turncall.api.v1.schemas.tools import ToolInvocationResponse
 from turncall.auth import Auth, WriteAuth
+from turncall.services import text_redaction
 from turncall.services.sms_chat import handle_chat_message
 from turncall.storage.repositories import (
     sms_message_repo,
@@ -74,6 +75,7 @@ async def list_sessions(
     total = await sms_session_repo.count_sessions(
         session, auth.project_id, status=status
     )
+    rows = await text_redaction.readable_sessions(session, auth.project_id, rows)
     return paginated(
         data=[ChatSessionResponse.from_row(r) for r in rows],
         total=total,
@@ -94,6 +96,7 @@ async def get_session_detail(
     )
     if row is None:
         raise NotFoundError("ChatSession", str(session_id))
+    [row] = await text_redaction.readable_sessions(session, auth.project_id, [row])
     return ok(ChatSessionResponse.from_row(row))
 
 
@@ -117,6 +120,7 @@ async def list_session_messages(
         session, session_id, limit=limit, offset=offset
     )
     total = await sms_message_repo.count_messages_for_session(session, session_id)
+    rows = await text_redaction.readable_messages(session, auth.project_id, rows)
     return paginated(
         data=[ChatMessageResponse.from_row(r) for r in rows],
         total=total,

@@ -2,9 +2,10 @@
 
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from turncall.domain.session_state import DONE, REDACTION
 from turncall.storage.models import SmsMessageRow
 
 
@@ -76,3 +77,32 @@ async def count_messages_for_session(
         )
     )
     return result.scalar_one()
+
+
+async def list_unredacted_messages(
+    session: AsyncSession, session_id: UUID
+) -> list[tuple[UUID, str]]:
+    """(id, content) of a session's messages not yet rewritten redacted."""
+    result = await session.execute(
+        select(SmsMessageRow.id, SmsMessageRow.content)
+        .where(SmsMessageRow.session_id == session_id)
+        .where(SmsMessageRow.metadata_json[REDACTION].astext.is_distinct_from(DONE))
+        .order_by(SmsMessageRow.created_at.asc())
+    )
+    return [(row.id, row.content) for row in result]
+
+
+async def set_message_redacted(
+    session: AsyncSession, message_id: UUID, content: str
+) -> None:
+    """Store a message's content as redacted, and mark it so."""
+    await session.execute(
+        update(SmsMessageRow)
+        .where(SmsMessageRow.id == message_id)
+        .values(
+            content=content,
+            metadata_json=SmsMessageRow.metadata_json.op("||")(
+                func.jsonb_build_object(REDACTION, DONE)
+            ),
+        )
+    )

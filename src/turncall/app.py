@@ -103,7 +103,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Start background session cleanup task
     async def _cleanup_expired_sessions() -> None:
-        """Periodically expire stale SMS sessions."""
+        """Periodically expire stale SMS sessions, then rewrite redacted the
+        rows of those that ended while their project redacted (#314)."""
+        from turncall.services.text_redaction import seal_ended_sessions
         from turncall.storage.database import create_session_factory, get_engine
         from turncall.storage.repositories import sms_session_repo
 
@@ -116,6 +118,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     await db.commit()
                     if count > 0:
                         logger.info(f"Expired {count} stale SMS session(s)")
+                await seal_ended_sessions(session_factory)
             except asyncio.CancelledError:
                 break
             except Exception:
