@@ -18,6 +18,7 @@ from uuid import uuid4
 import pytest
 from loguru import logger
 
+from tests.conftest import FROM_NUMBER, telemetry_call_session
 from turncall.services import redaction, telemetry_redaction
 from turncall.services.redaction import DEFAULT_ENTITIES, RedactionPolicy
 from turncall.services.telemetry_redaction import redact_line
@@ -347,39 +348,15 @@ async def test_a_span_started_in_a_redacting_projects_context_is_redacted(
 async def test_a_redacting_projects_numbers_stay_off_the_calls_spans(
     monkeypatch,
 ) -> None:
-    """`PIPECAT_TRACE_INCLUDE_PII` on (the default), the call's numbers go on
-    its spans unless its project redacts."""
-    from contextlib import asynccontextmanager
-    from types import SimpleNamespace
+    """`PIPECAT_TRACE_INCLUDE_PII` turned on, the call's numbers go on its
+    spans unless its project redacts."""
+    from turncall.config import get_settings
 
-    from turncall.orchestrator.call_session import CallSession
-    from turncall.storage.repositories import call_repo
-
-    @asynccontextmanager
-    async def sessions():
-        yield None
-
-    async def the_call(_session, _call_id):
-        return SimpleNamespace(
-            direction="inbound",
-            provider="twilio",
-            from_number="+15550001234",
-            to_number="+15550009999",
-        )
-
-    monkeypatch.setattr(call_repo, "get_call_by_id", the_call)
-    session = CallSession.__new__(CallSession)
-    session._call_context = SimpleNamespace(
-        project_id=uuid4(),
-        agent_id=uuid4(),
-        call_id=uuid4(),
-        call_sid="CA1",
-        records=True,
-        session_factory=sessions,
-    )
+    monkeypatch.setattr(get_settings().pipecat, "trace_include_pii", True)
+    session = telemetry_call_session(monkeypatch)
 
     _, attrs = await session._build_telemetry()
-    assert attrs["turncall.from_number"] == "+15550001234"
+    assert attrs["turncall.from_number"] == FROM_NUMBER
     telemetry_redaction.use(POLICY)
     _, attrs = await session._build_telemetry()
     assert "turncall.from_number" not in attrs

@@ -56,8 +56,11 @@ the taps are *product data* (transcripts → DB + webhooks); the observers are
 `additional_span_attributes`: `project_id`, `agent_id`, `direction`, `transport`,
 and **`from_number` / `to_number`**. Phone numbers are PII landing in an external
 tracing backend; this is a deliberate choice for debugging convenience, gated by
-`trace_include_pii` (default **on**) so a compliance-sensitive deployment redacts
-them without a code change.
+`trace_include_pii` (default **on**; off since ADR-0024) so a
+compliance-sensitive deployment redacts them without a code change.
+
+**Superseded (#315, ADR-0024):** `trace_include_pii` defaults to **off**; caller
+numbers reach the tracing backend only when the operator opts in.
 
 ## Scope
 

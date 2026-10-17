@@ -415,9 +415,9 @@ class PipecatSettings(BaseSettings):
     # prod and self-disables there without an OTLP endpoint).
     enable_observers: bool = True
     enable_tracing: bool = True
-    # Put from_number/to_number on spans (PII in the tracing backend). Flip off for
-    # compliance-sensitive deployments; non-PII attrs are always present.
-    trace_include_pii: bool = True
+    # Put from_number/to_number on spans (PII in the tracing backend). Off unless
+    # the operator opts in (ADR-0024); non-PII attrs are always present.
+    trace_include_pii: bool = False
     otel_service_name: str = "turncall"
 
 

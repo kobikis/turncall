@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests.conftest import telemetry_call_session
 from turncall.orchestrator import telemetry
 
 pytestmark = pytest.mark.unit
@@ -86,3 +87,24 @@ def test_tracing_dev_without_endpoint_uses_console():
         telemetry.init_tracing(enabled=True, service_name="t", is_production=False)
         is True
     )
+
+
+async def test_a_calls_spans_carry_no_numbers_by_default(monkeypatch):
+    """`PIPECAT_TRACE_INCLUDE_PII` unset, a call's spans carry no caller numbers:
+    they reach the tracing backend only if the operator opts in (#315,
+    ADR-0024). Opting in: `test_telemetry_redaction.py`."""
+    from types import SimpleNamespace
+
+    from turncall.config.settings import PipecatSettings
+    from turncall.orchestrator import call_session
+
+    monkeypatch.delenv("PIPECAT_TRACE_INCLUDE_PII", raising=False)
+    settings = SimpleNamespace(pipecat=PipecatSettings())
+    monkeypatch.setattr(call_session, "get_settings", lambda: settings)
+
+    _, attrs = await telemetry_call_session(monkeypatch)._build_telemetry()
+    assert "turncall.from_number" not in attrs
+    assert "turncall.to_number" not in attrs
+    assert attrs["turncall.call_sid"] == "CA1"
+    assert attrs["turncall.direction"] == "inbound"
+    assert attrs["turncall.transport"] == "twilio"

@@ -78,6 +78,49 @@ def creds(openai: str = "", **platform: str):
     return Credentials(platform=keys)
 
 
+FROM_NUMBER = "+15550001234"
+TO_NUMBER = "+15550009999"
+
+
+def telemetry_call_session(monkeypatch):
+    """A `CallSession` with just enough of a call for `_build_telemetry`.
+
+    A recording live call whose row is an inbound Twilio call from
+    `FROM_NUMBER` to `TO_NUMBER`; the repository read is faked, so no database.
+    """
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from turncall.orchestrator.call_session import CallSession
+    from turncall.storage.repositories import call_repo
+
+    @asynccontextmanager
+    async def sessions():
+        yield None
+
+    async def the_call(_session, _call_id):
+        return SimpleNamespace(
+            direction="inbound",
+            provider="twilio",
+            from_number=FROM_NUMBER,
+            to_number=TO_NUMBER,
+        )
+
+    monkeypatch.setattr(call_repo, "get_call_by_id", the_call)
+    session = CallSession.__new__(CallSession)
+    session._call_context = SimpleNamespace(
+        project_id=uuid4(),
+        agent_id=uuid4(),
+        call_id=uuid4(),
+        call_sid="CA1",
+        records=True,
+        is_eval=False,
+        session_factory=sessions,
+    )
+    return session
+
+
 @pytest.fixture(autouse=True)
 def _events_carry_text_only_through_redact(request, monkeypatch):
     """A call site that hands an exit-point entry a plain dict with text in it,
