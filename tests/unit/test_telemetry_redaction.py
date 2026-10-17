@@ -347,11 +347,12 @@ async def test_a_span_started_in_a_redacting_projects_context_is_redacted(
 async def test_a_redacting_projects_numbers_stay_off_the_calls_spans(
     monkeypatch,
 ) -> None:
-    """`PIPECAT_TRACE_INCLUDE_PII` on (the default), the call's numbers go on
-    its spans unless its project redacts."""
+    """`PIPECAT_TRACE_INCLUDE_PII` turned on, the call's numbers go on its
+    spans unless its project redacts."""
     from contextlib import asynccontextmanager
     from types import SimpleNamespace
 
+    from turncall.config import get_settings
     from turncall.orchestrator.call_session import CallSession
     from turncall.storage.repositories import call_repo
 
@@ -368,6 +369,7 @@ async def test_a_redacting_projects_numbers_stay_off_the_calls_spans(
         )
 
     monkeypatch.setattr(call_repo, "get_call_by_id", the_call)
+    monkeypatch.setattr(get_settings().pipecat, "trace_include_pii", True)
     session = CallSession.__new__(CallSession)
     session._call_context = SimpleNamespace(
         project_id=uuid4(),

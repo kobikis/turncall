@@ -176,6 +176,14 @@ and is not part of this repository's history.
 
 ### Changed
 
+- **Caller numbers are off spans by default** (#315, ADR-0024). Behaviour
+  change: `PIPECAT_TRACE_INCLUDE_PII` now defaults to `false`, so a call's
+  spans no longer carry `turncall.from_number` / `turncall.to_number` unless
+  the operator opts in with `PIPECAT_TRACE_INCLUDE_PII=true`. Caller numbers
+  in an external tracing backend are a choice, not a default. The non-PII
+  attributes (`project_id`, `agent_id`, `call_sid`, `direction`, `transport`)
+  are unchanged. If you search traces by caller number, set it to `true`; a
+  project with redaction on still never gets the numbers on its spans.
 - **The image carries a PII detector** (#313): Presidio, spaCy and its small
   English model (`en_core_web_sm`, pinned in `pyproject.toml`), ~255 MB
   unpacked and ~74 MB of the pull. With it, numpy resolves to 2.4.x

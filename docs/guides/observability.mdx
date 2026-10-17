@@ -61,7 +61,7 @@ They **supplement** the [server events](/guides/server-events) / webhook transcr
 |---|---|---|
 | `PIPECAT_ENABLE_OBSERVERS` | `true` | Toggle the five observers |
 | `PIPECAT_ENABLE_TRACING` | `true` | Toggle OTel tracing |
-| `PIPECAT_TRACE_INCLUDE_PII` | `true` | Put caller phone numbers (`from`/`to`) on spans. Set `false` for compliance-sensitive deployments — non-PII attributes stay. A project with [redaction](/guides/redaction) on never gets them, whatever this says. |
+| `PIPECAT_TRACE_INCLUDE_PII` | `false` | Put caller phone numbers (`from`/`to`) on spans. Off by default, so caller numbers reach your tracing backend only if you opt in with `true`; the non-PII attributes are always there. A project with [redaction](/guides/redaction) on never gets them, whatever this says. |
 | `PIPECAT_OTEL_SERVICE_NAME` | `turncall` | `service.name` in traces |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | (unset) | OTLP collector URL; required for tracing in production |
 

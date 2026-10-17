@@ -140,7 +140,8 @@ def build_span_attributes(
     to_number: str | None = None,
     include_pii: bool,
 ) -> dict[str, str]:
-    """Span attributes for a call. Phone numbers only when include_pii (ADR-0010)."""
+    """Span attributes for a call. Phone numbers only when include_pii (ADR-0010;
+    off unless the operator opts in, ADR-0024)."""
     attrs: dict[str, str] = {
         "turncall.project_id": str(project_id),
         "turncall.agent_id": str(agent_id),

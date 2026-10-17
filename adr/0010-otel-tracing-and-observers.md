@@ -59,6 +59,9 @@ tracing backend; this is a deliberate choice for debugging convenience, gated by
 `trace_include_pii` (default **on**) so a compliance-sensitive deployment redacts
 them without a code change.
 
+**Superseded (#315, ADR-0024):** `trace_include_pii` defaults to **off**; caller
+numbers reach the tracing backend only when the operator opts in.
+
 ## Scope
 
 **In:** the five observers, OTel tracing to OTLP, the `pipecat-ai[tracing]` extra +
