@@ -61,6 +61,9 @@ def test_create_project_succeeds_with_platform_key(app, monkeypatch) -> None:
         limit_messages_per_minute=None,
         redaction_enabled=False,
         redaction_entities=None,
+        retention_recordings_days=None,
+        retention_transcripts_days=None,
+        retention_events_days=None,
     )
     monkeypatch.setattr(
         "turncall.storage.repositories.project_repo.create_project",

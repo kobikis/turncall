@@ -7,6 +7,7 @@ from uuid import UUID
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from turncall.domain.models import MAX_RETENTION_DAYS
 from turncall.services.redaction import DEFAULT_ENTITIES, SUPPORTED_ENTITIES
 
 
@@ -105,6 +106,46 @@ class ProjectRedaction(BaseModel):
         return cls(enabled=row.redaction_enabled, entities=known or None)
 
 
+def _retention_days(kind: str) -> Any:
+    return Field(
+        default=None,
+        ge=1,
+        le=MAX_RETENTION_DAYS,
+        description=(
+            f"Days the project's calls keep their {kind}, counted from the "
+            "call's end. Null = kept for good"
+        ),
+    )
+
+
+class ProjectRetention(BaseModel):
+    """How long the project keeps each kind of call data (#316, ADR-0024).
+    Unset keeps everything, as before retention existed. An agent's
+    `retention` overrides any of them for its calls. A `PUT` replaces all
+    three, so a field left out goes back to keeping for good."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    recordings_days: int | None = _retention_days(
+        "recording (the audio file in object storage)"
+    )
+    transcripts_days: int | None = _retention_days(
+        "transcript: what was said, the tool calls made from it, and the "
+        "post-call analysis and takeaways"
+    )
+    events_days: int | None = _retention_days(
+        "other events (the rest of the call's event log)"
+    )
+
+    @classmethod
+    def from_row(cls, row: Any) -> "ProjectRetention":
+        return cls(
+            recordings_days=row.retention_recordings_days,
+            transcripts_days=row.retention_transcripts_days,
+            events_days=row.retention_events_days,
+        )
+
+
 class ProjectResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -114,6 +155,7 @@ class ProjectResponse(BaseModel):
     updated_at: datetime
     limits: ProjectLimits
     redaction: ProjectRedaction
+    retention: ProjectRetention
 
     @classmethod
     def from_row(cls, row: Any) -> "ProjectResponse":
@@ -124,4 +166,5 @@ class ProjectResponse(BaseModel):
             updated_at=row.updated_at,
             limits=ProjectLimits.from_row(row),
             redaction=ProjectRedaction.from_row(row),
+            retention=ProjectRetention.from_row(row),
         )

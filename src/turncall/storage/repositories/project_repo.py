@@ -67,6 +67,26 @@ async def set_redaction(
     return row
 
 
+async def set_retention(
+    session: AsyncSession,
+    project_id: UUID,
+    *,
+    recordings_days: int | None,
+    transcripts_days: int | None,
+    events_days: int | None,
+) -> ProjectRow | None:
+    """Replace a live project's retention (#316); None = kept for good."""
+    row = await get_project_by_id(session, project_id)
+    if row is None:
+        return None
+    row.retention_recordings_days = recordings_days
+    row.retention_transcripts_days = transcripts_days
+    row.retention_events_days = events_days
+    await session.flush()
+    await session.refresh(row)
+    return row
+
+
 async def list_projects(
     session: AsyncSession,
     *,

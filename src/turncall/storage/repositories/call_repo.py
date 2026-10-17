@@ -1,10 +1,11 @@
 """Call repository - data access for calls and call events."""
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.domain.carriers import DEFAULT_CARRIER
@@ -296,6 +297,24 @@ async def list_call_events(
     )
     result = await session.execute(query)
     return list(result.scalars().all())
+
+
+async def delete_call_events(
+    session: AsyncSession,
+    call_ids: list[UUID],
+    *,
+    types: Iterable[str] | None = None,
+    except_types: Iterable[str] = (),
+) -> None:
+    """Delete calls' events, of `types` only or of every type but
+    `except_types`. The retention janitor's (#316); nothing else deletes
+    events but a project's purge cascade."""
+    query = delete(CallEventRow).where(CallEventRow.call_id.in_(call_ids))
+    if types is not None:
+        query = query.where(CallEventRow.event_type.in_(list(types)))
+    if except_types := list(except_types):
+        query = query.where(CallEventRow.event_type.not_in(except_types))
+    await session.execute(query)
 
 
 async def update_call_analysis(

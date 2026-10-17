@@ -432,6 +432,78 @@
         }
       }
     },
+    "/v1/projects/{project_id}/retention": {
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Set Project Retention",
+        "description": "Set how long the project keeps its calls' recordings, transcripts and\nevents (#316, ADR-0024), replacing all three: a field left out or null\nkeeps that kind for good. Counted in days from each call's end, and\nenforced by an hourly janitor, so data goes within the hour after it\nexpires. Applies to calls already stored too: shortening it deletes what\nis now past it, lengthening it keeps what is not yet deleted. An agent's\n`retention` overrides it for that agent's calls. The call row itself is\nkept. Admin key; a project can only set its own.",
+        "operationId": "set_project_retention_v1_projects__project_id__retention_put",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectRetention"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Set Project Retention V1 Projects  Project Id  Retention Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/api-keys": {
       "post": {
         "tags": [
@@ -7537,6 +7609,9 @@
               }
             ]
           },
+          "retention": {
+            "$ref": "#/components/schemas/RetentionSchema"
+          },
           "knowledge_bases": {
             "items": {
               "$ref": "#/components/schemas/InlineKnowledgeBaseSchema"
@@ -9404,6 +9479,56 @@
         "title": "ProjectRedaction",
         "description": "A project's redaction (#313, ADR-0024): PII of these entity types is\nreplaced in the transcript and every call event before it is stored or\nsent to a webhook. Never in what the agent hears during the call. A `PUT`\nreplaces the whole setting."
       },
+      "ProjectRetention": {
+        "properties": {
+          "recordings_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 36500.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recordings Days",
+            "description": "Days the project's calls keep their recording (the audio file in object storage), counted from the call's end. Null = kept for good"
+          },
+          "transcripts_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 36500.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcripts Days",
+            "description": "Days the project's calls keep their transcript: what was said, the tool calls made from it, and the post-call analysis and takeaways, counted from the call's end. Null = kept for good"
+          },
+          "events_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 36500.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Events Days",
+            "description": "Days the project's calls keep their other events (the rest of the call's event log), counted from the call's end. Null = kept for good"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ProjectRetention",
+        "description": "How long the project keeps each kind of call data (#316, ADR-0024).\nUnset keeps everything, as before retention existed. An agent's\n`retention` overrides any of them for its calls. A `PUT` replaces all\nthree, so a field left out goes back to keeping for good."
+      },
       "ProjectRole": {
         "type": "string",
         "enum": [
@@ -9471,6 +9596,56 @@
           "description"
         ],
         "title": "RegisterToolRequest"
+      },
+      "RetentionSchema": {
+        "properties": {
+          "recordings_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 36500.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recordings Days",
+            "description": "Days this agent's calls keep their recording, counted from the call's end. Null = the project's retention"
+          },
+          "transcripts_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 36500.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcripts Days",
+            "description": "Days this agent's calls keep their transcript (with tool calls and the post-call analysis), counted from the call's end. Null = the project's retention"
+          },
+          "events_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 36500.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Events Days",
+            "description": "Days this agent's calls keep their other events, counted from the call's end. Null = the project's retention"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RetentionSchema",
+        "description": "This agent's override of its project's retention (#316, ADR-0024),\nfield by field. Applies to the calls of every version of the agent: the\njanitor reads it from the live version (the newest, if none is live).\nIgnored on an inline agent, whose calls take the project's."
       },
       "RetryRule": {
         "properties": {

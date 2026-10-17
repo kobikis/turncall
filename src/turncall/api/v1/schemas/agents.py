@@ -19,7 +19,11 @@ from pydantic import (
 from turncall.api.v1.schemas.knowledge import LinkKnowledgeBaseRequest
 from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
-from turncall.domain.models import BUILTIN_TOOL_NAMES, resolve_delegation
+from turncall.domain.models import (
+    BUILTIN_TOOL_NAMES,
+    MAX_RETENTION_DAYS,
+    resolve_delegation,
+)
 from turncall.domain.providers import (
     AVATAR_PROVIDERS,
     LLM_PROVIDERS,
@@ -633,6 +637,33 @@ class AWSConfigSchema(AWSCredentialSetSchema):
         return self
 
 
+def _days(kind: str) -> Any:
+    return Field(
+        default=None,
+        ge=1,
+        le=MAX_RETENTION_DAYS,
+        description=(
+            f"Days this agent's calls keep their {kind}, counted from the "
+            "call's end. Null = the project's retention"
+        ),
+    )
+
+
+class RetentionSchema(BaseModel):
+    """This agent's override of its project's retention (#316, ADR-0024),
+    field by field. Applies to the calls of every version of the agent: the
+    janitor reads it from the live version (the newest, if none is live).
+    Ignored on an inline agent, whose calls take the project's."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recordings_days: int | None = _days("recording")
+    transcripts_days: int | None = _days(
+        "transcript (with tool calls and the post-call analysis)"
+    )
+    events_days: int | None = _days("other events")
+
+
 class AgentConfigSchema(BaseModel):
     # Reject unknown fields instead of silently dropping them — a typo'd or
     # schema-lagging config section (e.g. a mis-nested "avatar") used to vanish
@@ -694,6 +725,7 @@ class AgentConfigSchema(BaseModel):
     aws: AWSConfigSchema = Field(default_factory=AWSConfigSchema)
     avatar: AvatarConfigSchema = Field(default_factory=AvatarConfigSchema)
     ambience: AmbienceConfigSchema | None = None
+    retention: RetentionSchema = Field(default_factory=RetentionSchema)
     # Inline agents only — an eval `inline` target here; call-init's `agent`
     # reaches the domain model directly. A stored agent's KBs are its links, so
     # the agent endpoints refuse this, and it is never dumped into a config_blob.

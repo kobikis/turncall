@@ -32,7 +32,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.domain.enums import CallEventType, EndedReason
 from turncall.domain.models import AnalysisConfig, AWSConfig, LLMConfig
-from turncall.services import live_transcript, redaction, telemetry_redaction
+from turncall.services import (
+    live_transcript,
+    redaction,
+    retention,
+    telemetry_redaction,
+)
 from turncall.services.call_view import call_view_fields, public_metadata
 
 if TYPE_CHECKING:
@@ -277,9 +282,12 @@ async def _run_post_call(
 
         # 4. Load the call and its derived fields (ended_reason, ADR-0008) —
         # the same function the call read uses, so the two cannot disagree.
+        # And the retention that applies to it (#316): call.ended states what
+        # will be kept, and for how long.
         async with session_factory() as session:
             call = await call_repo.get_call_by_id(session, call_id)
             derived = (await call_view_fields(session, [call]))[call.id] if call else {}
+            kept = await retention.for_call(session, call) if call else None
 
         # 5. Build comprehensive call.ended payload
         call_ended_payload: dict[str, Any] = {
@@ -302,6 +310,7 @@ async def _run_post_call(
             call_ended_payload["ended_at"] = (
                 call.ended_at.isoformat() if call.ended_at else None
             )
+        call_ended_payload["retention"] = (kept or retention.Retention()).as_payload()
         call_ended_payload["recording_status"] = recording_status
         if recording_url:
             call_ended_payload["recording_url"] = recording_url

@@ -339,6 +339,20 @@ class KnowledgeBaseAttachment(DomainModel):
     tool_description: str | None = None  # LLM instruction (tool mode only)
 
 
+# A century: past it, a number of days is a typo for "keep it", which is null.
+MAX_RETENTION_DAYS = 36500
+
+
+class RetentionConfig(DomainModel):
+    """How long a call's data is kept, in days from the call's end (#316,
+    ADR-0024). On an agent each field overrides the project's for that kind;
+    null takes the project's, and the project's null keeps it for good."""
+
+    recordings_days: int | None = None
+    transcripts_days: int | None = None
+    events_days: int | None = None
+
+
 class AgentConfig(DomainModel):
     pipeline_mode: str = "cascade"  # "cascade" | "s2s"
     system_prompt: str = ""
@@ -372,6 +386,10 @@ class AgentConfig(DomainModel):
     aws: AWSConfig = Field(default_factory=AWSConfig)
     avatar: AvatarConfig = Field(default_factory=AvatarConfig)
     ambience: AmbienceConfig | None = None
+    # A stored agent's override of its project's retention (#316). Read by the
+    # janitor from the agent's live version, so it covers every version's
+    # calls; an inline agent's is ignored (its calls take the project's).
+    retention: RetentionConfig = Field(default_factory=RetentionConfig)
 
     @field_validator("ambience", mode="wrap")
     @classmethod

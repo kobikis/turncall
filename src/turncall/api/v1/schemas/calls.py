@@ -56,6 +56,10 @@ class CallResponse(BaseModel):
     latency_summary: dict[str, Any] | None = None
     # `{role, from, to, error}` per provider failover, in order (#222).
     failovers: list[dict[str, Any]] = []
+    # When retention deleted each kind of the call's data (#316), null = kept.
+    recording_expired_at: datetime | None = None
+    transcript_expired_at: datetime | None = None
+    events_expired_at: datetime | None = None
 
     @classmethod
     def from_row(
@@ -80,6 +84,9 @@ class CallResponse(BaseModel):
             metadata=public_metadata(row.metadata_json),
             analysis=row.analysis_json,
             created_at=row.created_at,
+            recording_expired_at=getattr(row, "recording_expired_at", None),
+            transcript_expired_at=getattr(row, "transcript_expired_at", None),
+            events_expired_at=getattr(row, "events_expired_at", None),
         )
 
 
@@ -99,5 +106,7 @@ class AnalysisResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     call_id: UUID
-    status: str  # "completed" | "pending" | "not_configured"
+    # "completed" | "pending" | "not_configured" | "expired" (deleted with the
+    # transcript under the project's retention, #316)
+    status: str
     analysis: dict[str, Any] | None = None

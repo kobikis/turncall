@@ -71,6 +71,16 @@ class ProjectRow(Base):
         default=False, server_default=text("false")
     )
     redaction_entities: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    # Retention (#316, ADR-0024), in days from the call's end; null = kept for
+    # good, the default. An agent's `retention` overrides each one. Enforced
+    # by the janitor (`services/retention`), not here.
+    retention_recordings_days: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    retention_transcripts_days: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    retention_events_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class ApiKeyRow(Base):
@@ -253,6 +263,20 @@ class CallRow(Base):
     media_attached_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Retention (#316): when the janitor deleted each kind of the call's data
+    # (`services/retention`), null = not yet. The row itself is never deleted.
+    recording_expired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    transcript_expired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    events_expired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Derived from the events while they exist (`services/call_view`); frozen
+    # here when they expire, so the read still says how the call ended.
+    ended_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )
@@ -263,6 +287,17 @@ class CallRow(Base):
         # GET /v1/calls filters project_id and sorts created_at DESC — this
         # composite serves both, so an append-forever table stays fast.
         Index("ix_calls_project_created", "project_id", "created_at"),
+        # The retention janitor's sweep, one per kind: only calls whose data of
+        # that kind is still there (#316).
+        *(
+            Index(
+                f"ix_calls_{kind}_retention",
+                "project_id",
+                "created_at",
+                postgresql_where=text(f"{kind}_expired_at IS NULL"),
+            )
+            for kind in ("recording", "transcript", "events")
+        ),
     )
 
 
