@@ -69,7 +69,10 @@ async def upsert(
 ) -> ProjectCredentialRow:
     """Write a credential, replacing any the project holds for this provider.
 
-    One statement, so a replace can never half-apply.
+    One statement, so a replace can never half-apply. The row returned is
+    what was written even when the session already holds the credential (a
+    read before the replace): RETURNING refreshes it rather than handing
+    back the stale copy the session has.
     """
     ciphertext = encrypt(document, settings)
     stmt = (
@@ -81,7 +84,7 @@ async def upsert(
         )
         .returning(ProjectCredentialRow)
     )
-    result = await session.execute(stmt)
+    result = await session.execute(stmt, execution_options={"populate_existing": True})
     return result.scalar_one()
 
 

@@ -680,10 +680,12 @@ class AuditEntryRow(Base):
     # A UUID for most resources; a credential's is its provider account name.
     resource_id: Mapped[str] = mapped_column(String(64), nullable=False)
     action: Mapped[str] = mapped_column(String(32), nullable=False)
-    # {"<dotted.field.path>": {"before": ..., "after": ...}}, values as the
-    # API reads them, secrets masked (`services/audit_log.diff`).
+    # {"<RFC 6901 JSON Pointer>": {"before": ..., "after": ...}}, values as
+    # the API reads them, secrets masked (`services/audit_log.diff`).
     changes: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # One per request, shared by every entry it wrote: the id of its first
+    # entry, the one `X-TurnCall-Audit-Id` names.
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -698,6 +700,8 @@ class AuditEntryRow(Base):
             "resource_id",
             "created_at",
         ),
+        # Everything one request wrote (`?request_id=`).
+        Index("ix_audit_log_project_request", "project_id", "request_id"),
         # The retention janitor's cutoff, across projects.
         Index("ix_audit_log_created_at", "created_at"),
     )

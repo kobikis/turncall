@@ -7,6 +7,7 @@ in the API, updates or deletes an entry.
 
 from datetime import UTC, datetime
 from typing import Annotated, Any
+from uuid import UUID
 
 from fastapi import APIRouter, Query
 
@@ -36,6 +37,13 @@ async def list_audit_log(
     resource_type: AuditResource | None = None,
     resource_id: Annotated[str | None, Query(max_length=64)] = None,
     action: AuditAction | None = None,
+    request_id: Annotated[
+        UUID | None,
+        Query(
+            description="Every entry one request wrote: the id its response "
+            "named in `X-TurnCall-Audit-Id`"
+        ),
+    ] = None,
     since: Annotated[
         datetime | None, Query(description="Entries at or after this time")
     ] = None,
@@ -50,6 +58,8 @@ async def list_audit_log(
     """The project's audit log, newest first: each change made through the
     API to its agents, credentials, phone numbers, API keys and settings, the
     API key that made it, and what changed (secrets never recorded).
+    `request_id` reads back everything one request wrote: a publish's
+    archived versions and re-pointed numbers as well as the version.
 
     Paged by cursor, not by page number: entries keep arriving at the head of
     the list, so a page number would shift under the reader. Pass
@@ -66,6 +76,7 @@ async def list_audit_log(
         resource_type=resource_type.value if resource_type else None,
         resource_id=resource_id,
         action=action.value if action else None,
+        request_id=request_id,
         since=_utc(since),
         until=_utc(until),
         after=after,

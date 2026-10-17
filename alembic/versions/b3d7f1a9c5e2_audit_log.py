@@ -59,7 +59,8 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("'{}'::jsonb"),
         ),
-        sa.Column("request_id", sa.String(128), nullable=True),
+        # The id of the request's first entry, on every entry it wrote.
+        sa.Column("request_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index(
@@ -71,6 +72,9 @@ def upgrade() -> None:
         "ix_audit_log_project_resource",
         "audit_log",
         ["project_id", "resource_type", "resource_id", "created_at"],
+    )
+    op.create_index(
+        "ix_audit_log_project_request", "audit_log", ["project_id", "request_id"]
     )
     op.create_index("ix_audit_log_created_at", "audit_log", ["created_at"])
     op.execute(APPEND_ONLY)

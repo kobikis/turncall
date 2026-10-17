@@ -7,8 +7,10 @@ What this guards:
   publish, rollback and knowledge bases; credentials; phone numbers; API
   keys; projects and their settings) takes an audit trail. A new one that
   does not fails here, by name.
-- A request on such a route that succeeds without recording is refused, and
-  its change rolled back: the trail's teardown runs before the commit.
+- A request on such a route that would commit without recording is refused,
+  and its change rolled back: the commit itself checks (`before_commit`),
+  whoever makes it. With a real database, a route that commits itself:
+  `test_harness_audit_log.py`.
 - The read is admin-only, and the API has no route that writes an entry.
 - No module but the audit repository names the entry's row or writes the
   `audit_log` table in raw SQL.
@@ -26,6 +28,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.audit import (
     AUDIT_HEADER,
@@ -35,7 +38,7 @@ from turncall.api.audit import (
     api_routes,
     uses_audit,
 )
-from turncall.api.deps import get_session
+from turncall.api.deps import DbSession, get_session
 from turncall.api.errors import register_error_handlers
 from turncall.app import create_app
 from turncall.auth.context import AuthContext
@@ -131,32 +134,41 @@ def test_an_admin_key_reads_it(monkeypatch) -> None:
     }
 
 
-class _Session:
-    """A session that says whether it was committed or rolled back."""
-
+class _Outcome:
     def __init__(self) -> None:
-        self.outcome: str | None = None
-        self.execute = AsyncMock()
+        self.state: str | None = None
+        self.inserts: list[list[dict]] = []
 
 
-def _app_with(route_body) -> tuple[TestClient, _Session]:
-    """A one-route app on the real trail and the real session teardown."""
-    session = _Session()
+def _app_with(route_body, monkeypatch) -> tuple[TestClient, _Outcome]:
+    """A one-route app on the real trail and a real session (bound to
+    nothing), torn down as DbSession is: commit, or roll back on an error."""
+    from turncall.services import audit_log
+
+    outcome = _Outcome()
+    monkeypatch.setattr(
+        audit_log.audit_repo,
+        "insert_entries",
+        lambda _s, rows: outcome.inserts.append(list(rows)),
+    )
 
     async def get_test_session():
+        session = AsyncSession()
         try:
             yield session
-            session.outcome = "committed"
+            await session.commit()
+            outcome.state = "committed"
         except Exception:
-            session.outcome = "rolled back"
+            await session.rollback()
+            outcome.state = "rolled back"
             raise
 
     app = FastAPI()
     register_error_handlers(app)
 
     @app.put("/v1/agents/{agent_id}")
-    async def change(agent_id: str, audit: Audit) -> dict:
-        await route_body(audit, agent_id)
+    async def change(agent_id: str, audit: Audit, session: DbSession) -> dict:
+        await route_body(audit, session, agent_id)
         return {"success": True}
 
     ctx = AuthContext(
@@ -164,31 +176,57 @@ def _app_with(route_body) -> tuple[TestClient, _Session]:
     )
     app.dependency_overrides[resolve_auth_context] = lambda: ctx
     app.dependency_overrides[get_session] = get_test_session
-    return TestClient(app, raise_server_exceptions=False), session
+    return TestClient(app, raise_server_exceptions=False), outcome
 
 
-def test_a_change_recorded_is_committed_and_named_on_the_response() -> None:
-    async def records_twice(audit, agent_id) -> None:
-        await audit.record(AuditResource.AGENT, agent_id, AuditAction.UPDATED)
-        await audit.record(AuditResource.AGENT, agent_id, AuditAction.ARCHIVED)
+def test_a_change_recorded_is_committed_and_named_on_the_response(
+    monkeypatch,
+) -> None:
+    async def records_three(audit, _session, agent_id) -> None:
+        for action in (AuditAction.PUBLISHED, AuditAction.ARCHIVED):
+            audit.record(AuditResource.AGENT, agent_id, action)
+        audit.record(AuditResource.PHONE_NUMBER, "n", AuditAction.UPDATED)
 
-    client, session = _app_with(records_twice)
+    client, outcome = _app_with(records_three, monkeypatch)
     response = client.put("/v1/agents/a")
-    assert response.status_code == 200
-    ids = [uuid.UUID(i) for i in response.headers[AUDIT_HEADER].split(", ")]
-    assert len(ids) == 2 and session.outcome == "committed"
-    assert session.execute.await_count == 2
+    assert response.status_code == 200 and outcome.state == "committed"
+    # One id however many entries: the primary one, which names the request.
+    primary = uuid.UUID(response.headers[AUDIT_HEADER])
+    (rows,) = outcome.inserts  # one INSERT for the request
+    assert [r["action"] for r in rows] == ["published", "archived", "updated"]
+    assert rows[0]["id"] == primary
+    assert {r["request_id"] for r in rows} == {primary}
 
 
-def test_a_change_not_recorded_is_refused_and_rolled_back() -> None:
-    async def forgets(_audit, _agent_id) -> None:
+def test_a_change_not_recorded_is_refused_and_rolled_back(monkeypatch) -> None:
+    async def forgets(_audit, _session, _agent_id) -> None:
         return None
 
-    client, session = _app_with(forgets)
+    client, outcome = _app_with(forgets, monkeypatch)
     response = client.put("/v1/agents/a")
     assert response.status_code == 500
-    assert session.outcome == "rolled back"
+    assert outcome.state == "rolled back" and outcome.inserts == []
     assert AUDIT_HEADER not in response.headers
+
+
+def test_a_route_committing_itself_before_recording_is_refused(monkeypatch) -> None:
+    """The check is the commit's, not the end of the request's: a route that
+    commits its change and records after (or never) commits nothing."""
+    commits: list[str] = []
+
+    async def commits_then_records(audit, session, agent_id) -> None:
+        try:
+            await session.commit()
+        except Exception as exc:
+            commits.append(type(exc).__name__)
+            raise
+        audit.record(AuditResource.AGENT, agent_id, AuditAction.UPDATED)
+
+    client, outcome = _app_with(commits_then_records, monkeypatch)
+    response = client.put("/v1/agents/a")
+    assert response.status_code == 500
+    assert commits == ["AuditEntryMissing"]
+    assert outcome.state == "rolled back" and outcome.inserts == []
 
 
 def test_only_the_audit_repository_writes_the_log() -> None:
@@ -213,4 +251,4 @@ def test_only_the_audit_repository_writes_the_log() -> None:
             offenders.append(f"{rel}: writes audit_log in SQL")
     assert offenders == [], offenders
     # The trail itself goes through the repository.
-    assert "audit_repo.append" in (SRC / "services/audit_log.py").read_text()
+    assert "audit_repo.insert_entries" in (SRC / "services/audit_log.py").read_text()

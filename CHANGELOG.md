@@ -24,17 +24,20 @@ and is not part of this repository's history.
   after, as the API reads it. No secret is recorded: a credential's value, an
   API key's raw key, hash and prefix, the secrets the agent read masks, and a
   number's `server_url_secret` and auth token read `***`, so a changed secret
-  shows as changed and nothing more. The entry is written in the change's
-  transaction; a request on these routes that succeeded without one is
+  shows as changed and nothing more. Each changed field is named by its
+  JSON Pointer (`/config/llm/model`). The entry is written in the change's
+  transaction; a request on these routes that would commit without one is
   refused with a `500` and rolled back. `GET /v1/audit-log` (admin key; a
   developer or viewer key gets `403`) reads the project's entries newest
-  first, filtered by `resource_type`, `resource_id`, `action`, `since` and
-  `until`, paged by `cursor`/`next_cursor`. Each audited response names its
-  entries in the new `X-TurnCall-Audit-Id` header (comma-separated) so a
-  client such as the builder can link to them. Append-only: no route writes
+  first, filtered by `resource_type`, `resource_id`, `action`, `request_id`,
+  `since` and `until`, paged by `cursor`/`next_cursor`. Each audited
+  response names its primary entry in the new `X-TurnCall-Audit-Id` header,
+  so a client such as the builder can link to it; that id is the
+  `request_id` of every entry the request wrote, so `?request_id=` reads
+  back a publish's archived versions and re-pointed numbers too. Append-only: no route writes
   an entry, and a database trigger refuses every `UPDATE`, `TRUNCATE` and
   `DELETE` but the retention janitor's. Retention is the operator's new
-  `AUDIT_LOG_RETENTION_DAYS` (unset = kept for good), swept hourly; call
+  `AUDIT_LOG_RETENTION_DAYS` (unset or empty = kept for good), swept hourly; call
   retention never touches the log, and a deleted project's entries outlive
   its purge. Migration `b3d7f1a9c5e2`. See the Audit log guide.
 

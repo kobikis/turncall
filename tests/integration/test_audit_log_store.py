@@ -3,7 +3,8 @@
 Append-only in the database, not only in the API: a trigger refuses every
 UPDATE and TRUNCATE, and every DELETE but the audit retention janitor's. The
 janitor deletes entries past `AUDIT_LOG_RETENTION_DAYS`, every project's, and
-nothing else; unset, it deletes nothing. That call retention never touches the
+nothing else; unset, it deletes nothing. Every API replica runs it: two at once
+skip each other's rows rather than wait on them, and both run to the end. That call retention never touches the
 log is `test_retention_janitor.py`. What the API writes and reads is
 `test_harness_audit_log.py`.
 """
@@ -71,18 +72,22 @@ async def _entry(factory, projects, *, age_days: float, project=None) -> uuid.UU
         projects.append(project_id)
     entry_id = uuid.uuid4()
     async with factory() as session:
-        await audit_repo.append(
-            session,
-            id=entry_id,
-            project_id=project_id,
-            api_key_id=uuid.uuid4(),
-            actor="api_key",
-            resource_type="agent",
-            resource_id=str(uuid.uuid4()),
-            action="updated",
-            changes={"name": {"before": "a", "after": "b"}},
-            request_id=None,
-            created_at=NOW - timedelta(days=age_days),
+        await session.run_sync(
+            audit_repo.insert_entries,
+            [
+                {
+                    "id": entry_id,
+                    "project_id": project_id,
+                    "api_key_id": uuid.uuid4(),
+                    "actor": "api_key",
+                    "resource_type": "agent",
+                    "resource_id": str(uuid.uuid4()),
+                    "action": "updated",
+                    "changes": {"/name": {"before": "a", "after": "b"}},
+                    "request_id": entry_id,
+                    "created_at": NOW - timedelta(days=age_days),
+                }
+            ],
         )
         await session.commit()
     return entry_id
@@ -159,10 +164,9 @@ async def test_the_janitor_deletes_past_the_retention_only(factory, projects) ->
 
 async def test_unset_keeps_everything(factory, projects) -> None:
     ancient = await _entry(factory, projects, age_days=36500)
-    assert await audit_log.sweep(factory, days=None, now=NOW) == 0
+    # The janitor does not even start: it returns, sweeping nothing.
+    await asyncio.wait_for(audit_log.run_janitor(factory, days=None, interval=0), 1)
     assert await _kept(factory, [ancient]) == {ancient}
-    # And the janitor does not even start.
-    await asyncio.wait_for(audit_log.run_janitor(factory, days=None), 1)
 
 
 async def test_the_janitor_sweeps_in_batches(factory, projects, monkeypatch) -> None:
@@ -170,6 +174,45 @@ async def test_the_janitor_sweeps_in_batches(factory, projects, monkeypatch) -> 
     old = [await _entry(factory, projects, age_days=400) for _ in range(5)]
     await audit_log.sweep(factory, days=365, now=NOW)
     assert await _kept(factory, old) == set()
+
+
+async def test_a_sweep_skips_rows_another_holds_and_does_not_wait(
+    factory, projects, monkeypatch
+) -> None:
+    """Another replica's batch holds its rows: this sweep takes the rest
+    rather than blocking on them, and those are left for the holder."""
+    monkeypatch.setattr(audit_log, "BATCH", 2)
+    held = [await _entry(factory, projects, age_days=400) for _ in range(2)]
+    free = [await _entry(factory, projects, age_days=400) for _ in range(3)]
+    async with factory() as other:
+        await other.execute(
+            select(AuditEntryRow.id).where(AuditEntryRow.id.in_(held)).with_for_update()
+        )
+        await asyncio.wait_for(audit_log.sweep(factory, days=365, now=NOW), 10)
+        await other.rollback()
+    assert await _kept(factory, held + free) == set(held)
+
+
+async def test_two_sweeps_at_once_share_the_work(
+    factory, projects, monkeypatch
+) -> None:
+    """Every replica sweeps hourly: two sweeps at once delete every entry
+    past the cutoff between them, each once, and neither stops early because
+    the other took rows from under it."""
+    monkeypatch.setattr(audit_log, "BATCH", 3)
+    old = [await _entry(factory, projects, age_days=400) for _ in range(20)]
+    young = await _entry(factory, projects, age_days=1)
+
+    counts = await asyncio.wait_for(
+        asyncio.gather(
+            audit_log.sweep(factory, days=365, now=NOW),
+            audit_log.sweep(factory, days=365, now=NOW),
+        ),
+        30,
+    )
+
+    assert await _kept(factory, [*old, young]) == {young}
+    assert sum(counts) >= len(old)
 
 
 _WRITE = re.compile(r"^\s*(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(\w+)", re.I)
@@ -194,6 +237,7 @@ async def test_the_janitor_writes_nothing_but_the_audit_log(db, projects) -> Non
 
 
 async def test_the_read_is_a_projects_newest_first(factory, projects) -> None:
+    """And `request_id` reads back what one request wrote."""
     mine = uuid.uuid4()
     ids = [
         await _entry(factory, projects, age_days=age, project=mine) for age in (3, 1, 2)
@@ -205,6 +249,9 @@ async def test_the_read_is_a_projects_newest_first(factory, projects) -> None:
         rest = await audit_repo.list_entries(
             session, mine, limit=10, after=(first[0].created_at, first[0].id)
         )
+        (one,) = await audit_repo.list_entries(
+            session, mine, request_id=ids[2], limit=10
+        )
         count = await session.scalar(
             select(func.count())
             .select_from(AuditEntryRow)
@@ -213,3 +260,4 @@ async def test_the_read_is_a_projects_newest_first(factory, projects) -> None:
     assert [r.id for r in rows] == [ids[1], ids[2], ids[0]]
     assert [r.id for r in first + rest] == [r.id for r in rows]
     assert count == 3
+    assert one.id == ids[2]

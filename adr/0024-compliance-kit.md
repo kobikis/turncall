@@ -121,16 +121,23 @@ ADR-0028).
   credentials, phone numbers, API keys and project settings (limits,
   redaction, retention, deletion) takes one audit trail
   (`api/audit.py`); a test lists every such route and fails on one without
-  it, and the trail's teardown, which runs before the session commits,
-  refuses a successful request that recorded nothing, rolling its change
-  back. So an entry is written in the change's transaction: a change rolled
-  back has none, and a saved one always has one. A request writes one entry
-  per resource it changed (a publish writes the version, each version it
-  archived and each number it re-pointed), and names them on its response in
-  `X-TurnCall-Audit-Id`, which is how the builder links its entry to the
-  engine's. The platform credential's bootstrap of a project and its first
+  it. The trail is bound to the request's session: its entries are written
+  in one INSERT as the session commits, and a commit with no entry is
+  refused, rolling the change back, whichever code commits (a route that
+  must commit before a side effect is held to it too). So an entry is
+  written in the change's transaction: a change rolled back has none, and a
+  saved one always has one. A request writes one entry per resource it
+  changed (a publish writes the version, each version it archived and each
+  number it re-pointed), all sharing a `request_id`: the id of its first
+  entry, the one for its primary resource, which is the single id its
+  response names in `X-TurnCall-Audit-Id`. One id rather than all of them
+  keeps the header bounded however many numbers a publish re-points; the
+  builder links its entry to that one and reads the rest by
+  `?request_id=`. The platform credential's bootstrap of a project and its first
   key is recorded too, as `actor: platform` with no key. **What changed** is
-  a diff of the resource as the API reads it, field by field: values come
+  a diff of the resource as the API reads it, field by field (each named by
+  its RFC 6901 JSON Pointer, so a key holding a `.` never collides with a
+  nested one), its "before" taken by the trail before the write: values come
   only from the masked read, and the unmasked one is only compared, so a
   changed secret reads `***` on both sides. A credential is recorded only as
   present, an API key never by its raw key, hash or prefix, and a number's
@@ -139,7 +146,8 @@ ADR-0028).
   every `UPDATE` and `TRUNCATE` on the table, and every `DELETE` but the
   retention janitor's, which marks its transaction. It guards against the
   application, not the table's owner. **Retention** is the operator's
-  (`AUDIT_LOG_RETENTION_DAYS`, unset = kept for good, swept hourly) rather
+  (`AUDIT_LOG_RETENTION_DAYS`, unset = kept for good, swept hourly on every
+  replica, each batch skipping rows another holds) rather
   than a project setting: an admin key must not be able to shorten the trail
   that records its own changes. **A deleted project keeps its entries**: the
   table has no foreign keys, so the ADR-0011 purge leaves the trail

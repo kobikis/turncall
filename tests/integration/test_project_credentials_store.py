@@ -90,6 +90,43 @@ async def test_written_is_read_back_and_replaced_in_place(factory, settings):
     assert creds.api_key("deepgram") == settings.deepgram.api_key
 
 
+async def test_a_replace_returns_what_it_wrote_to_a_session_that_read_it(
+    factory, settings
+):
+    """The audit log reads the credential before a replace, in the same
+    session (#317): the upsert must hand back the row as written, not the
+    copy that read left in the session, or the replace records no change."""
+    from turncall.services import audit_log
+
+    pid = await _project(factory)
+    async with factory() as session:
+        await credential_repo.upsert(
+            session,
+            project_id=pid,
+            provider="openai",
+            document={"api_key": "first"},
+            settings=settings,
+        )
+        await session.commit()
+    async with factory() as session:
+        held = await credential_repo.get(session, pid, "openai")  # kept alive
+        assert held is not None
+        before = audit_log.credential_state(held)
+        old = held.ciphertext
+        row = await credential_repo.upsert(
+            session,
+            project_id=pid,
+            provider="openai",
+            document={"api_key": "second"},
+            settings=settings,
+        )
+        assert row.ciphertext != old
+        assert audit_log.diff(before, audit_log.credential_state(row)) == {
+            "/value": {"before": "***", "after": "***"}
+        }
+        await session.commit()
+
+
 async def test_another_project_never_sees_it(factory, settings):
     mine, theirs = await _project(factory), await _project(factory)
     async with factory() as session:

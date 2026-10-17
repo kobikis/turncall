@@ -89,7 +89,8 @@ class TestRevokeProjectScoping:
         captured = {}
 
         class _Result:
-            rowcount = 1
+            def scalar_one_or_none(self):
+                return None
 
         async def fake_execute(query):
             captured["sql"] = str(

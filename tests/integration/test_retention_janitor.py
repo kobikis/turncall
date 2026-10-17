@@ -397,18 +397,22 @@ async def test_the_janitor_writes_nothing_but_call_data(db, storage, projects) -
     # An audit entry made before the call ended, so older than every cutoff.
     entry_id = uuid.uuid4()
     async with factory() as db:
-        await audit_repo.append(
-            db,
-            id=entry_id,
-            project_id=project_id,
-            api_key_id=None,
-            actor="platform",
-            resource_type="project",
-            resource_id=str(project_id),
-            action="retention_set",
-            changes={},
-            request_id=None,
-            created_at=ENDED - timedelta(days=1),
+        await db.run_sync(
+            audit_repo.insert_entries,
+            [
+                {
+                    "id": entry_id,
+                    "project_id": project_id,
+                    "api_key_id": None,
+                    "actor": "platform",
+                    "resource_type": "project",
+                    "resource_id": str(project_id),
+                    "action": "retention_set",
+                    "changes": {},
+                    "request_id": entry_id,
+                    "created_at": ENDED - timedelta(days=1),
+                }
+            ],
         )
         await db.commit()
     written: set[str] = set()

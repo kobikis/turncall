@@ -71,21 +71,17 @@ async def revoke_api_key(
     api_key_id: UUID,
     *,
     project_id: UUID | None = None,
-) -> bool:
-    """Revoke an API key. Returns True if a key was revoked. When project_id is
-    given, only revokes a key belonging to that project — without it any project
+) -> datetime | None:
+    """Revoke an API key. Returns when it was revoked, as stored, or None if
+    no key was (not found, or already revoked). When project_id is given,
+    only revokes a key belonging to that project — without it any project
     could revoke another's keys by id."""
     query = update(ApiKeyRow).where(
         ApiKeyRow.id == api_key_id, ApiKeyRow.revoked_at.is_(None)
     )
     if project_id is not None:
         query = query.where(ApiKeyRow.project_id == project_id)
-    result = await session.execute(query.values(revoked_at=datetime.now(UTC)))
-    return result.rowcount > 0  # type: ignore[union-attr]
-
-
-async def revoked_at(session: AsyncSession, api_key_id: UUID) -> datetime | None:
-    """When the key was revoked, as stored (None if it is not)."""
-    return await session.scalar(
-        select(ApiKeyRow.revoked_at).where(ApiKeyRow.id == api_key_id)
+    result = await session.execute(
+        query.values(revoked_at=datetime.now(UTC)).returning(ApiKeyRow.revoked_at)
     )
+    return result.scalar_one_or_none()

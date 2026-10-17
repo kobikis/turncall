@@ -54,30 +54,32 @@ async def put_credential(
     The audit log records that it was set, never its value.
     """
     document = parse_credential(provider, body)
-    # Taken before the write, which updates the same row in place.
-    before = audit_log.credential_state(
-        await credential_repo.get(session, auth.project_id, provider)
-    )
-    try:
-        row = await credential_repo.upsert(
-            session,
-            project_id=auth.project_id,
-            provider=provider,
-            document=document,
-            settings=get_settings(),
-        )
-    except credential_repo.CredentialKeyError as exc:
-        # Fail closed, legibly: the operator must set the key, not read a 500.
-        raise ApiError(
-            status_code=503, code=ErrorCode.CREDENTIAL_KEY_UNAVAILABLE, message=str(exc)
-        ) from exc
-    await audit.record(
+    existing = await credential_repo.get(session, auth.project_id, provider)
+    with audit.change(
         AuditResource.CREDENTIAL,
         provider,
-        AuditAction.UPDATED if before else AuditAction.CREATED,
-        before=before,
-        after=audit_log.credential_state(row),
-    )
+        AuditAction.UPDATED if existing else AuditAction.CREATED,
+        audit_log.credential_state,
+        existing,
+    ) as change:
+        try:
+            row = await credential_repo.upsert(
+                session,
+                project_id=auth.project_id,
+                provider=provider,
+                document=document,
+                settings=get_settings(),
+            )
+        except credential_repo.CredentialKeyError as exc:
+            # Fail closed, legibly: the operator must set the key, not read a 500.
+            raise ApiError(
+                status_code=503,
+                code=ErrorCode.CREDENTIAL_KEY_UNAVAILABLE,
+                message=str(exc),
+            ) from exc
+        change.to(row)
+    # Committed here, not by DbSession, so the edge reconnects to what is
+    # stored; the commit still writes the audit entry or is refused.
     await session.commit()
     _changed(provider)
     return ok(CredentialResponse.from_row(row))
@@ -100,19 +102,18 @@ async def delete_credential(
     way: an entry with no changes says the request found nothing to delete.
     """
     require_known_provider(provider)
-    before = audit_log.credential_state(
-        await credential_repo.get(session, auth.project_id, provider)
-    )
-    deleted = await credential_repo.delete_credential(
-        session, auth.project_id, provider
-    )
-    await audit.record(
+    with audit.change(
         AuditResource.CREDENTIAL,
         provider,
         AuditAction.DELETED,
-        before=before if deleted else None,
-    )
-    await session.commit()
+        audit_log.credential_state,
+        await credential_repo.get(session, auth.project_id, provider),
+    ) as change:
+        deleted = await credential_repo.delete_credential(
+            session, auth.project_id, provider
+        )
+        change.gone()
+    await session.commit()  # before the edge reconnects, as above
     _changed(provider)
     return ok({"provider": provider, "deleted": deleted})
 

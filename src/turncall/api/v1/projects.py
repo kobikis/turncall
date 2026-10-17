@@ -1,5 +1,6 @@
 """Project management endpoints."""
 
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -35,7 +36,7 @@ async def create_project(
     """Create a new project. Requires the platform credential (X-Platform-Key) —
     only the builder can provision projects (ADR-0011)."""
     row = await project_repo.create_project(session, name=body.name)
-    await audit.record(
+    audit.record(
         AuditResource.PROJECT,
         row.id,
         AuditAction.CREATED,
@@ -45,12 +46,12 @@ async def create_project(
     return ok(ProjectResponse.from_row(row))
 
 
-async def _before(session: AsyncSession, project_id: UUID) -> audit_log.State:
-    """The project's settings before a change; 404 if it is gone."""
+async def _project(session: AsyncSession, project_id: UUID) -> Any:
+    """The project about to change; 404 if it is gone."""
     row = await project_repo.get_project_by_id(session, project_id)
     if row is None:
         raise NotFoundError("Project", str(project_id))
-    return audit_log.project_state(row)
+    return row
 
 
 @router.get("/{project_id}")
@@ -82,23 +83,23 @@ async def set_project_limits(
     limit. Admin key; a project can only set its own."""
     if auth.project_id != project_id:
         raise ForbiddenError("A project can only set its own limits")
-    before = await _before(session, project_id)
-    row = await project_repo.set_limits(
-        session,
-        project_id,
-        limit_live_calls=body.live_calls,
-        limit_outbound_calls_per_second=body.outbound_calls_per_second,
-        limit_messages_per_minute=body.messages_per_minute,
-    )
-    if row is None:
-        raise NotFoundError("Project", str(project_id))
-    await audit.record(
+    with audit.change(
         AuditResource.PROJECT,
         project_id,
         AuditAction.LIMITS_SET,
-        before=before,
-        after=audit_log.project_state(row),
-    )
+        audit_log.project_state,
+        await _project(session, project_id),
+    ) as change:
+        row = await project_repo.set_limits(
+            session,
+            project_id,
+            limit_live_calls=body.live_calls,
+            limit_outbound_calls_per_second=body.outbound_calls_per_second,
+            limit_messages_per_minute=body.messages_per_minute,
+        )
+        if row is None:
+            raise NotFoundError("Project", str(project_id))
+        change.to(row)
     return ok(ProjectResponse.from_row(row))
 
 
@@ -119,19 +120,21 @@ async def set_project_redaction(
     Admin key; a project can only set its own."""
     if auth.project_id != project_id:
         raise ForbiddenError("A project can only set its own redaction")
-    before = await _before(session, project_id)
-    row = await project_repo.set_redaction(
-        session, project_id, enabled=body.enabled, entities=body.entities
-    )
-    if row is None:
-        raise NotFoundError("Project", str(project_id))
-    await audit.record(
+    with audit.change(
         AuditResource.PROJECT,
         project_id,
         AuditAction.REDACTION_SET,
-        before=before,
-        after=audit_log.project_state(row),
-    )
+        audit_log.project_state,
+        await _project(session, project_id),
+    ) as change:
+        row = await project_repo.set_redaction(
+            session, project_id, enabled=body.enabled, entities=body.entities
+        )
+        if row is None:
+            raise NotFoundError("Project", str(project_id))
+        change.to(row)
+    # Committed here, before this process caches the policy; the commit
+    # still writes the audit entry or is refused.
     await session.commit()
     policy = redaction.policy_of(body.enabled, body.entities)
     redaction.remember_policy(project_id, policy)
@@ -164,23 +167,23 @@ async def set_project_retention(
     kept. Admin key; a project can only set its own."""
     if auth.project_id != project_id:
         raise ForbiddenError("A project can only set its own retention")
-    before = await _before(session, project_id)
-    row = await project_repo.set_retention(
-        session,
-        project_id,
-        recordings_days=body.recordings_days,
-        transcripts_days=body.transcripts_days,
-        events_days=body.events_days,
-    )
-    if row is None:
-        raise NotFoundError("Project", str(project_id))
-    await audit.record(
+    with audit.change(
         AuditResource.PROJECT,
         project_id,
         AuditAction.RETENTION_SET,
-        before=before,
-        after=audit_log.project_state(row),
-    )
+        audit_log.project_state,
+        await _project(session, project_id),
+    ) as change:
+        row = await project_repo.set_retention(
+            session,
+            project_id,
+            recordings_days=body.recordings_days,
+            transcripts_days=body.transcripts_days,
+            events_days=body.events_days,
+        )
+        if row is None:
+            raise NotFoundError("Project", str(project_id))
+        change.to(row)
     logger.info(
         "project_retention_set",
         project_id=str(project_id),
@@ -205,34 +208,31 @@ async def delete_project(
     IRREVERSIBLE for storage (recordings/KB files are purged)."""
     if auth.project_id != project_id:
         raise ForbiddenError("A project can only delete itself")
-    row = await project_repo.get_project_by_id(session, project_id)
-    if row is None:
-        raise NotFoundError("Project", str(project_id))
-    before = audit_log.project_state(row)
+    row = await _project(session, project_id)
 
     from turncall.services.project_deletion import delete_project as run_delete
 
-    try:
-        await run_delete(session, get_settings(), project_id)
-    except ApiError:
-        raise
-    except Exception as exc:
-        logger.exception("project_delete_failed for {pid}", pid=str(project_id))
-        raise ApiError(
-            status_code=502,
-            code=ErrorCode.INTERNAL_ERROR,
-            message=(
-                "Failed to clear the project's phone numbers — nothing was "
-                "deleted; please retry."
-            ),
-        ) from exc
-
     # The entry outlives the project, its keys and the purge (ADR-0024).
-    await audit.record(
+    with audit.change(
         AuditResource.PROJECT,
         project_id,
         AuditAction.DELETED,
-        before=before,
-        after=audit_log.project_state(row),
-    )
+        audit_log.project_state,
+        row,
+    ) as change:
+        try:
+            await run_delete(session, get_settings(), project_id)
+        except ApiError:
+            raise
+        except Exception as exc:
+            logger.exception("project_delete_failed for {pid}", pid=str(project_id))
+            raise ApiError(
+                status_code=502,
+                code=ErrorCode.INTERNAL_ERROR,
+                message=(
+                    "Failed to clear the project's phone numbers — nothing was "
+                    "deleted; please retry."
+                ),
+            ) from exc
+        change.to(row)  # soft-deleted in place: the same row, `deleted_at` set
     return ok({"deleted": True, "project_id": str(project_id)})

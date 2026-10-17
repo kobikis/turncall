@@ -4,8 +4,11 @@ Every change made through the API to an agent, a project credential, a phone
 number, an API key or a project setting writes an entry, in the transaction of
 the change: a change rolled back leaves no entry, and a committed one always
 has one. Routes record through an `AuditTrail`, which the API hands them
-(`api/audit.py`); it refuses to let a successful request on those resources
-commit without an entry.
+(`api/audit.py`) bound to the request's session. The trail holds its entries
+until the session commits, then writes them in one INSERT just before the
+commit; a commit of a session whose trail recorded nothing is refused
+(`before_commit`), whoever commits it, so a change on those resources is never
+saved unrecorded.
 
 What changed is a diff of two `State`s, field by field. A State holds what the
 API reads (`public`, secrets masked) and what is compared (`raw`), so a
@@ -22,14 +25,17 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
 from loguru import logger
 from pydantic_core import to_jsonable_python
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import Session
 
 from turncall.domain.config_secrets import MASK, sanitize_config
 from turncall.domain.enums import AuditAction, AuditActor, AuditResource
@@ -39,7 +45,8 @@ from turncall.storage.repositories import audit_repo
 BATCH = 1000
 SWEEP_INTERVAL_SECONDS = 3600  # retention is in days; an hour late is in it
 
-Clock = Callable[[], datetime]
+# Where a session holds its request's trail (`AuditTrail.bind`).
+TRAIL = "turncall.audit_trail"
 
 
 class AuditEntryMissing(RuntimeError):
@@ -69,8 +76,17 @@ class State:
 _MISSING = object()
 
 
+def pointer(path: tuple[Any, ...]) -> str:
+    """The RFC 6901 JSON Pointer to `path`: `/config/llm/api_key`. A key
+    holding `~` or `/` is escaped (`~0`, `~1`), so a key with a `.` or a `/`
+    in it never reads as a nested path, and two paths never collide."""
+    return "".join(
+        "/" + str(part).replace("~", "~0").replace("/", "~1") for part in path
+    )
+
+
 def diff(before: State | None, after: State | None) -> dict[str, dict[str, Any]]:
-    """`{"dotted.path": {"before": ..., "after": ...}}` for every field that
+    """`{"/json/pointer": {"before": ..., "after": ...}}` for every field that
     changed, values from `public` only. Dicts are compared key by key and
     lists of one length item by item; anything else is one field. A field
     absent on one side reads as null."""
@@ -79,7 +95,7 @@ def diff(before: State | None, after: State | None) -> dict[str, dict[str, Any]]
     public_before = before.public if before else {}
     public_after = after.public if after else {}
     return {
-        ".".join(str(part) for part in path): {
+        pointer(path): {
             "before": _at(public_before, path),
             "after": _at(public_after, path),
         }
@@ -143,15 +159,18 @@ def agent_state(row: Any) -> State:
     return State.of({**raw, "config": sanitize_config(raw["config"])}, raw)
 
 
-def knowledge_base_link(row: Any) -> dict[str, Any]:
-    return {
-        "knowledge_base_id": row.knowledge_base_id,
-        "mode": row.mode,
-        "priority": row.priority,
-        "top_k": row.top_k,
-        "similarity_threshold": row.similarity_threshold,
-        "tool_description": row.tool_description,
-    }
+def knowledge_base_link(row: Any) -> State:
+    """An agent's link to a knowledge base, as one field of the agent."""
+    return fields(
+        knowledge_base={
+            "knowledge_base_id": row.knowledge_base_id,
+            "mode": row.mode,
+            "priority": row.priority,
+            "top_k": row.top_k,
+            "similarity_threshold": row.similarity_threshold,
+            "tool_description": row.tool_description,
+        }
+    )
 
 
 def phone_number_state(row: Any) -> State:
@@ -210,20 +229,55 @@ def project_state(row: Any) -> State:
 
 
 @dataclass
-class AuditTrail:
-    """One request's entries. `record` writes one in the request's session,
-    so it commits or rolls back with the change. `on_record` is told every
-    id so far (the API puts them on the response)."""
+class Change:
+    """One resource being changed (`AuditTrail.change`): its state before,
+    taken when the change began, and the state it ends in."""
 
-    session: AsyncSession
+    state: Callable[[Any], State | None]
+    before: State | None
+    after: State | None = None
+    ended: bool = False
+
+    def to(self, row: Any) -> None:
+        """The resource after the change: `row`, read through the same state."""
+        self.after = self.state(row)
+        self.ended = True
+
+    def gone(self) -> None:
+        """The change removed the resource."""
+        self.after = None
+        self.ended = True
+
+
+@dataclass
+class AuditTrail:
+    """One request's entries. `record` adds one; they are written in the
+    request's session, in one INSERT, when it commits (`bind`), so they
+    commit or roll back with the change.
+
+    `request_id` is the id of the request's first entry, the one for its
+    primary resource, and every entry the request writes carries it: the API
+    names it on the response (`on_first`), and reading by it returns the
+    whole request (a publish's archived versions and re-pointed numbers)."""
+
     actor: AuditActor
     api_key_id: UUID | None
     project_id: UUID | None
-    request_id: str | None = None
-    on_record: Callable[[list[UUID]], None] = lambda _ids: None
-    ids: list[UUID] = field(default_factory=list)
+    where: str = "a request"
+    on_first: Callable[[UUID], None] = lambda _id: None
+    request_id: UUID | None = None
+    recorded: int = 0
+    pending: list[dict[str, Any]] = field(default_factory=list)
 
-    async def record(
+    @classmethod
+    def bind(cls, session: AsyncSession | Session, **values: Any) -> AuditTrail:
+        """A trail whose entries `session` writes when it commits, and whose
+        commit is refused if it recorded nothing."""
+        trail = cls(**values)
+        session.info[TRAIL] = trail
+        return trail
+
+    def record(
         self,
         resource_type: AuditResource,
         resource_id: UUID | str,
@@ -233,68 +287,121 @@ class AuditTrail:
         after: State | None = None,
         project_id: UUID | None = None,
     ) -> UUID:
-        """Write an entry for one change, in the request's transaction. Call it
-        before any commit the route makes, and after the change itself."""
+        """Add an entry for one change, written with the request's commit.
+        The first entry is the request's primary one. A change of a resource
+        that existed goes through `change`, which takes its "before"."""
         project = project_id or self.project_id
         if project is None:
             raise ValueError("an audit entry needs a project")
         entry_id = uuid4()
-        await audit_repo.append(
-            self.session,
-            id=entry_id,
-            project_id=project,
-            api_key_id=self.api_key_id,
-            actor=self.actor.value,
-            resource_type=resource_type.value,
-            resource_id=str(resource_id),
-            action=action.value,
-            changes=diff(before, after),
-            request_id=self.request_id,
-            created_at=utc_now(),
+        if self.request_id is None:
+            self.request_id = entry_id
+            self.on_first(entry_id)
+        self.pending.append(
+            {
+                "id": entry_id,
+                "project_id": project,
+                "api_key_id": self.api_key_id,
+                "actor": self.actor.value,
+                "resource_type": resource_type.value,
+                "resource_id": str(resource_id),
+                "action": action.value,
+                "changes": diff(before, after),
+                "request_id": self.request_id,
+                "created_at": utc_now(),
+            }
         )
-        self.ids.append(entry_id)
-        self.on_record(list(self.ids))
+        self.recorded += 1
         return entry_id
 
-    def require_entry(self, where: str) -> None:
-        """A request that succeeded must have recorded its change."""
-        if not self.ids:
-            raise AuditEntryMissing(f"{where} changed an audited resource unrecorded")
+    @contextmanager
+    def change(
+        self,
+        resource_type: AuditResource,
+        resource_id: UUID | str,
+        action: AuditAction,
+        state: Callable[[Any], State | None],
+        current: Any | None,
+        *,
+        project_id: UUID | None = None,
+    ) -> Iterator[Change]:
+        """Record a change of `current` (the row as read, None if there is
+        none) made in the block: its state is taken on entry, before the
+        block can write, so the repos updating that same ORM object in place
+        cannot rewrite the "before". The block ends by saying what the
+        resource became, `change.to(row)` or `change.gone()`; it is recorded
+        when the block exits without an error.
+
+            with audit.change(AGENT, agent_id, UPDATED, agent_state, existing) as c:
+                row = await agent_repo.update_agent_config(...)
+                c.to(row)
+        """
+        change = Change(state, state(current) if current is not None else None)
+        yield change
+        if not change.ended:
+            raise RuntimeError(
+                "an audited change must end with change.to(row) or change.gone()"
+            )
+        self.record(
+            resource_type,
+            resource_id,
+            action,
+            before=change.before,
+            after=change.after,
+            project_id=project_id,
+        )
+
+    def committing(self, session: Session) -> None:
+        """The session is about to commit: write what is pending, or refuse
+        the commit of a request that recorded nothing."""
+        if not self.recorded:
+            raise AuditEntryMissing(
+                f"{self.where} changed an audited resource unrecorded"
+            )
+        if self.pending:
+            audit_repo.insert_entries(session, self.pending)
+            self.pending = []
+
+
+@event.listens_for(Session, "before_commit")
+def _before_commit(session: Session) -> None:
+    trail = session.info.get(TRAIL)
+    if trail is not None:
+        trail.committing(session)
 
 
 # --- retention ------------------------------------------------------------
 
 
-def system_clock() -> datetime:
-    return datetime.now(UTC)
-
-
 async def sweep(
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    days: int | None,
+    days: int,
     now: datetime,
 ) -> int:
     """Delete every project's entries older than `days`, in batches of
-    `BATCH`, one transaction each. None keeps them all. The count deleted."""
-    if days is None:
-        return 0
+    `BATCH`, one transaction each. The count deleted.
+
+    Every API replica sweeps: a batch skips the rows another replica's batch
+    has locked, so they never wait on or deadlock with each other, and the
+    sweep goes on until a batch finds nothing left to take, not until one
+    comes up short (it is short when another replica took rows)."""
     cutoff = now - timedelta(days=days)
     total = 0
     while True:
         async with session_factory() as session:
             deleted = await audit_repo.delete_older_than(session, cutoff, batch=BATCH)
             await session.commit()
-        total += deleted
-        if deleted < BATCH:
+        if not deleted:
             return total
+        total += deleted
 
 
 async def run_janitor(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     days: int | None,
-    clock: Clock = system_clock,
+    clock: Callable[[], datetime] = utc_now,
     interval: float = SWEEP_INTERVAL_SECONDS,
 ) -> None:
     """Sweep every `interval` seconds until cancelled (the API's lifespan).

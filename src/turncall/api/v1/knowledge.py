@@ -419,13 +419,12 @@ async def link_knowledge_base(
         similarity_threshold=body.similarity_threshold,
         tool_description=body.tool_description,
     )
-    await audit.record(
+    audit.record(
         AuditResource.AGENT,
         agent_id,
         AuditAction.KNOWLEDGE_BASE_LINKED,
-        after=audit_log.fields(knowledge_base=audit_log.knowledge_base_link(row)),
+        after=audit_log.knowledge_base_link(row),
     )
-    await session.commit()
     return ok(AgentKnowledgeBaseResponse.from_row(row))
 
 
@@ -469,21 +468,22 @@ async def unlink_knowledge_base(
 
     link = next(
         (
-            audit_log.knowledge_base_link(r)
+            r
             for r in await knowledge_repo.get_agent_knowledge_bases(session, agent_id)
             if r.knowledge_base_id == kb_id
         ),
         None,
     )
-    removed = await knowledge_repo.unlink_agent_knowledge_base(
-        session, agent_id=agent_id, knowledge_base_id=kb_id
-    )
-    if not removed:
-        raise NotFoundError("AgentKnowledgeBase", f"{agent_id}/{kb_id}")
-    await audit.record(
+    with audit.change(
         AuditResource.AGENT,
         agent_id,
         AuditAction.KNOWLEDGE_BASE_UNLINKED,
-        before=audit_log.fields(knowledge_base=link),
-    )
-    await session.commit()
+        audit_log.knowledge_base_link,
+        link,
+    ) as change:
+        removed = await knowledge_repo.unlink_agent_knowledge_base(
+            session, agent_id=agent_id, knowledge_base_id=kb_id
+        )
+        if not removed:
+            raise NotFoundError("AgentKnowledgeBase", f"{agent_id}/{kb_id}")
+        change.gone()

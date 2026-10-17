@@ -18,7 +18,7 @@ Entries are append-only. Nothing in the API updates or deletes one, and they are
 | `api_key` | create (the first key and later ones), revoke | `created`, `revoked` |
 | `project` | create, set limits, redaction or retention, delete | `created`, `limits_set`, `redaction_set`, `retention_set`, `deleted` |
 
-A request that changes several things writes an entry for each. Publishing version 2 of an agent whose version 1 is live writes three: version 2 `published`, version 1 `archived`, and the number that pointed at version 1 `updated`.
+A request that changes several things writes an entry for each, and every one of them carries the same `request_id`. Publishing version 2 of an agent whose version 1 is live writes three: version 2 `published`, version 1 `archived`, and the number that pointed at version 1 `updated`.
 
 Every successful request on these routes writes at least one entry, even one that changed nothing: deleting a credential that is not there writes a `deleted` entry with no changes. A request that fails writes none.
 
@@ -38,15 +38,15 @@ The project and its first API key are created with the platform credential (`X-P
   "resource_id": "c41f...",
   "action": "updated",
   "changes": {
-    "config.system_prompt": {"before": "You are a receptionist.", "after": "Be brief."},
-    "config.llm.api_key": {"before": "***", "after": "***"}
+    "/config/system_prompt": {"before": "You are a receptionist.", "after": "Be brief."},
+    "/config/llm/api_key": {"before": "***", "after": "***"}
   },
-  "request_id": "f3b1...",
+  "request_id": "6f1c0e8a-6c1d-4f43-9a8e-2b0f8c1d3e57",
   "created_at": "2026-10-17T09:12:44.512Z"
 }
 ```
 
-Nested fields are named by their path (`config.llm.model`, `limits.live_calls`, `config.tools.0.webhook_secret`). A field that was not set reads `null`. When something is created, every field it was created with is listed with `before: null`; when it is deleted, every field it had, with `after: null`.
+Each field is named by its [JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901) (`/config/llm/model`, `/limits/live_calls`, `/config/tools/0/webhook_secret`): one `/` per level, a list item by its index. A `~` or `/` inside a field's own name is written `~0` or `~1`, so a metadata key such as `team.name` or `a/b` is `/metadata/team.name` or `/metadata/a~1b` and never reads as a nested field. A field that was not set reads `null`. When something is created, every field it was created with is listed with `before: null`; when it is deleted, every field it had, with `after: null`.
 
 **No secret is ever recorded.** A secret that changed shows as `"***"` on both sides, so you can see that it changed but not what it was or became. This covers:
 
@@ -71,6 +71,7 @@ This needs an admin key; a developer or viewer key gets `403`. A key reads only 
 | `resource_type` | `agent`, `credential`, `phone_number`, `api_key` or `project` |
 | `resource_id` | The resource's id; a credential's is its provider account (`openai`, `aws`, ...) |
 | `action` | One of the actions above |
+| `request_id` | Every entry one request wrote: the id in its response's `X-TurnCall-Audit-Id` (see below) |
 | `since`, `until` | ISO 8601 times: entries at or after `since` and before `until`. A time without a zone is UTC |
 | `limit` | 1 to 200, default 50 |
 | `cursor` | The previous page's `next_cursor` |
@@ -83,23 +84,30 @@ The audit log pages by cursor rather than by page number, because new entries ke
 
 ## Link to an entry
 
-Every response to an audited request names the entries it wrote in the `X-TurnCall-Audit-Id` header, comma-separated in the order they were written:
+Every response to an audited request names one entry in the `X-TurnCall-Audit-Id` header: the one for the resource the request was about, such as the version a publish published.
 
 ```
-X-TurnCall-Audit-Id: 6f1c0e8a-6c1d-4f43-9a8e-2b0f8c1d3e57, 1a9b...
+X-TurnCall-Audit-Id: 6f1c0e8a-6c1d-4f43-9a8e-2b0f8c1d3e57
 ```
 
-Store the ids next to your own record of the change (the TurnCall builder does, for the person who made it) and read the entry back with `GET /v1/audit-log`. The header is on successful responses only; a request that failed wrote no entry.
+That id is also the `request_id` of every entry the request wrote, so one read returns all of them, the versions a publish archived and the numbers it re-pointed included, however many there are:
+
+```bash
+curl "https://api.example.com/v1/audit-log?request_id=6f1c0e8a-6c1d-4f43-9a8e-2b0f8c1d3e57" \
+  -H "Authorization: Bearer tc_..."
+```
+
+Store the id next to your own record of the change (the TurnCall builder does, for the person who made it). The header is on successful responses only; a request that failed wrote no entry.
 
 ## Append-only
 
 - **No route writes an entry.** The only route is `GET /v1/audit-log`.
-- **The entry is written in the change's transaction.** A change that is rolled back leaves no entry, and a change that is saved always has one. If a request on these routes ever succeeded without writing an entry, it is refused with a `500` and its change rolled back, rather than saved unrecorded.
+- **The entry is written in the change's transaction.** A change that is rolled back leaves no entry, and a change that is saved always has one: the entries are written as the change commits, and a commit on these routes that has no entry is refused with a `500` and its change rolled back, rather than saved unrecorded.
 - **The database refuses changes too.** A trigger on the `audit_log` table refuses every `UPDATE` and `TRUNCATE`, and every `DELETE` except the retention janitor's. It protects the trail from the application and anything connecting as it; the table's owner can still drop the trigger, so restrict who owns the database if that matters to you.
 
 ## Retention
 
-Entries are kept for good unless the operator sets `AUDIT_LOG_RETENTION_DAYS` on the server (1 to 36500). With it set, each server deletes entries older than that many days once an hour, for every project. It is a setting of the deployment, not of a project, so an admin key cannot shorten the trail that records its own changes.
+Entries are kept for good unless the operator sets `AUDIT_LOG_RETENTION_DAYS` on the server (1 to 36500; set but empty is the same as unset). With it set, each server deletes entries older than that many days once an hour, for every project. Servers sweeping at the same time skip each other's rows rather than wait on them. It is a setting of the deployment, not of a project, so an admin key cannot shorten the trail that records its own changes.
 
 Call [retention](/guides/retention) never touches the audit log, and the audit log's retention never touches calls.
 

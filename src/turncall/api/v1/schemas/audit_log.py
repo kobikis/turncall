@@ -17,10 +17,7 @@ class AuditEntryResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
-    id: UUID = Field(
-        description="The entry's id: what `X-TurnCall-Audit-Id` named on the "
-        "response to the change"
-    )
+    id: UUID = Field(description="The entry's id")
     project_id: UUID
     api_key_id: UUID | None = Field(
         description="The API key that made the change; null when the platform "
@@ -33,10 +30,16 @@ class AuditEntryResponse(BaseModel):
     )
     action: str
     changes: dict[str, Any] = Field(
-        description='`{"field.path": {"before": ..., "after": ...}}` for each '
-        "field that changed, as the API reads it, secrets masked as `***`"
+        description='`{"/field/path": {"before": ..., "after": ...}}` for each '
+        "field that changed, as the API reads it, secrets masked as `***`. "
+        "Each key is an RFC 6901 JSON Pointer: `~` and `/` in a field's name "
+        "read `~0` and `~1`"
     )
-    request_id: str | None
+    request_id: UUID = Field(
+        description="The request that made the change, shared by every entry "
+        "it wrote: the id of its first entry, the one `X-TurnCall-Audit-Id` "
+        "named on its response. Filter by it to read the whole request"
+    )
     created_at: datetime
 
 

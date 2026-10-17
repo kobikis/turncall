@@ -583,7 +583,8 @@ platform`, with no key). An entry is one change to one resource: an **action**
 after as the API reads it, secrets masked, never their values. Written in the change's
 transaction, so a change rolled back has no entry and one saved always has; one request
 can write several (a publish: the version, the one it archived, the numbers it
-re-pointed), named on its response in `X-TurnCall-Audit-Id`. Read by admin keys only.
+re-pointed), sharing a **request id**: the id of its primary entry, the one its
+response names in `X-TurnCall-Audit-Id`. Read by admin keys only.
 Kept under its own retention, the operator's `AUDIT_LOG_RETENTION_DAYS` rather than a
 project's, never the call [[retention policy]]; a deleted project's entries outlive
 its purge. The builder audits the person behind a console change and links to these

@@ -59,7 +59,7 @@ async def create_api_key(
         role=body.role.value,
         environment=body.environment,
     )
-    await audit.record(
+    audit.record(
         AuditResource.API_KEY,
         row.id,
         AuditAction.CREATED,
@@ -106,7 +106,7 @@ async def create_api_key_authenticated(
         role=body.role.value,
         environment=body.environment,
     )
-    await audit.record(
+    audit.record(
         AuditResource.API_KEY,
         row.id,
         AuditAction.CREATED,
@@ -145,18 +145,16 @@ async def revoke_api_key(
     audit: Audit,
 ) -> dict:
     """Revoke an API key (must belong to the authenticated project)."""
-    revoked = await api_key_repo.revoke_api_key(
+    revoked_at = await api_key_repo.revoke_api_key(
         session, api_key_id, project_id=auth.project_id
     )
-    if not revoked:
+    if revoked_at is None:
         raise NotFoundError("ApiKey", str(api_key_id))
-    await audit.record(
+    audit.record(
         AuditResource.API_KEY,
         api_key_id,
         AuditAction.REVOKED,
         before=audit_log.fields(revoked_at=None),
-        after=audit_log.fields(
-            revoked_at=await api_key_repo.revoked_at(session, api_key_id)
-        ),
+        after=audit_log.fields(revoked_at=revoked_at),
     )
     return ok({"revoked": True})

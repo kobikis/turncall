@@ -526,6 +526,15 @@ class Settings(BaseSettings):
         default=None, ge=1, le=36500, alias="AUDIT_LOG_RETENTION_DAYS"
     )
 
+    @field_validator("audit_log_retention_days", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        """`AUDIT_LOG_RETENTION_DAYS=""`, as a template renders a value left
+        out, is unset (kept for good), not a failed boot."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     twilio: TwilioSettings = Field(default_factory=TwilioSettings)

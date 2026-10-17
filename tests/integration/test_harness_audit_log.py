@@ -4,7 +4,9 @@ Every change made through the API to an agent, a project credential, a phone
 number, an API key or a project setting is an entry: which key made it, what
 it did to which resource, and what changed, with no secret in it. Admin keys
 read it; a developer or viewer key cannot. Each change's response names its
-entries in `X-TurnCall-Audit-Id`. Driven through Seam A (the real app, stub
+primary entry in `X-TurnCall-Audit-Id`, and `?request_id=` with that id reads
+back everything the request wrote. A request that would commit unrecorded,
+whoever commits it, commits nothing. Driven through Seam A (the real app, stub
 providers, a fake carrier). The store itself (append-only, retention) is
 `test_audit_log_store.py`.
 """
@@ -36,9 +38,10 @@ TOOL_SECRET = "tool-webhook-secret-0001"
 MCP_TOKEN = "Bearer mcp-token-0001"
 
 
-def _ids(response: httpx.Response) -> list[str]:
+def _id(response: httpx.Response) -> str:
+    """The entry the response names: one, however many the request wrote."""
     assert response.status_code < 300, response.text
-    return [i.strip() for i in response.headers[HEADER].split(",")]
+    return str(uuid.UUID(response.headers[HEADER]))
 
 
 async def _key(app: Harness, role: str) -> tuple[dict[str, str], dict[str, Any]]:
@@ -92,7 +95,7 @@ async def test_an_agent_update_and_a_credential_change_are_recorded(
 
     entries = log.json()["data"]
     by_id = {e["id"]: e for e in entries}
-    update = by_id[_ids(updated)[0]]
+    update = by_id[_id(updated)]
     assert update["api_key_id"] == admin["id"] and update["actor"] == "api_key"
     assert update["project_id"] == app.project_id
     assert (update["resource_type"], update["resource_id"], update["action"]) == (
@@ -101,7 +104,7 @@ async def test_an_agent_update_and_a_credential_change_are_recorded(
         "updated",
     )
     assert update["changes"] == {
-        "config.system_prompt": {
+        "/config/system_prompt": {
             "before": HARNESS_AGENT["system_prompt"],
             "after": "Be brief.",
         }
@@ -110,11 +113,11 @@ async def test_an_agent_update_and_a_credential_change_are_recorded(
         minutes=5
     )
 
-    first, second = by_id[_ids(stored)[0]], by_id[_ids(replaced)[0]]
+    first, second = by_id[_id(stored)], by_id[_id(replaced)]
     assert (first["resource_type"], first["resource_id"]) == ("credential", "openai")
     assert first["action"] == "created" and second["action"] == "updated"
-    assert first["changes"] == {"value": {"before": None, "after": "***"}}
-    assert second["changes"] == {"value": {"before": "***", "after": "***"}}
+    assert first["changes"] == {"/value": {"before": None, "after": "***"}}
+    assert second["changes"] == {"/value": {"before": "***", "after": "***"}}
     assert first["api_key_id"] == second["api_key_id"] == admin["id"]
     assert CREDENTIAL not in log.text and CREDENTIAL_2 not in log.text
 
@@ -150,7 +153,9 @@ async def test_every_audited_resource_is_recorded(monkeypatch) -> None:
         number_id = next(n["id"] for n in numbers if n["e164_number"] == number)
         v2 = await _agent(app, "support", {**HARNESS_AGENT, "first_message": "Hi."})
         published_v2 = await app.api.post(f"/v1/agents/{v2}/publish")
+        published_v2_all = await _log(app, request_id=_id(published_v2))
         rolled_back = await app.api.post(f"/v1/agents/{v1}/rollback")
+        rolled_back_all = await _log(app, request_id=_id(rolled_back))
 
         kb = await app.api.post("/v1/knowledge-bases", json={"name": "faq"})
         kb_id = kb.json()["data"]["id"]
@@ -186,9 +191,15 @@ async def test_every_audited_resource_is_recorded(monkeypatch) -> None:
         agent_deleted = await app.api.delete(f"/v1/agents/{draft}")
         log = {e["id"]: e for e in await _log(app, limit=200)}
 
-    def entry(response: httpx.Response, n: int = 0) -> tuple[str, str, str]:
-        e = log[_ids(response)[n]]
+    def entry(response: httpx.Response) -> tuple[str, str, str]:
+        e = log[_id(response)]
         return e["resource_type"], e["resource_id"], e["action"]
+
+    def changes(response: httpx.Response) -> dict[str, Any]:
+        return log[_id(response)]["changes"]
+
+    def request(entries: list[dict[str, Any]]) -> set[tuple[str, str, str]]:
+        return {(e["resource_type"], e["resource_id"], e["action"]) for e in entries}
 
     # The bootstrap: no API key made these, the platform credential did.
     project, first_key = sorted(
@@ -197,74 +208,72 @@ async def test_every_audited_resource_is_recorded(monkeypatch) -> None:
     assert (project["resource_type"], project["action"]) == ("project", "created")
     assert project["resource_id"] == pid and project["actor"] == "platform"
     assert project["api_key_id"] is None
-    assert project["changes"]["name"] == {"before": None, "after": "harness"}
+    assert project["changes"]["/name"] == {"before": None, "after": "harness"}
     assert (first_key["resource_type"], first_key["action"]) == ("api_key", "created")
     assert first_key["actor"] == "platform" and first_key["api_key_id"] is None
-    assert first_key["changes"]["role"] == {"before": None, "after": "admin"}
+    assert first_key["changes"]["/role"] == {"before": None, "after": "admin"}
 
     assert entry(revoked) == ("api_key", dev["id"], "revoked")
-    assert log[_ids(revoked)[0]]["changes"]["revoked_at"]["before"] is None
-    assert log[_ids(revoked)[0]]["changes"]["revoked_at"]["after"]
+    assert changes(revoked)["/revoked_at"]["before"] is None
+    assert changes(revoked)["/revoked_at"]["after"]
 
     assert entry(limits) == ("project", pid, "limits_set")
-    assert log[_ids(limits)[0]]["changes"] == {
-        "limits.live_calls": {"before": None, "after": 3}
-    }
+    assert changes(limits) == {"/limits/live_calls": {"before": None, "after": 3}}
     assert entry(redaction) == ("project", pid, "redaction_set")
     assert entry(retention) == ("project", pid, "retention_set")
-    assert log[_ids(retention)[0]]["changes"] == {
-        "retention.transcripts_days": {"before": None, "after": 30}
+    assert changes(retention) == {
+        "/retention/transcripts_days": {"before": None, "after": 30}
     }
 
     assert entry(published_v1) == ("agent", v1, "published")
-    assert log[_ids(published_v1)[0]]["changes"]["state"] == {
+    assert changes(published_v1)["/state"] == {
         "before": "draft",
         "after": "published",
     }
     # A publish writes an entry for each thing it changed: the version
-    # published, the one it archived, and the number it re-pointed.
-    assert len(_ids(published_v2)) == 3
-    assert [entry(published_v2, n) for n in range(3)] == [
+    # published (the one the response names), the one it archived, and the
+    # number it re-pointed. Each carries the request's id: the named one's.
+    assert entry(published_v2) == ("agent", v2, "published")
+    assert request(published_v2_all) == {
         ("agent", v2, "published"),
         ("agent", v1, "archived"),
         ("phone_number", number_id, "updated"),
-    ]
-    assert log[_ids(published_v2)[2]]["changes"] == {
-        "routing_target_id": {"before": v1, "after": v2}
     }
-    assert [entry(rolled_back, n) for n in range(3)] == [
+    assert {e["request_id"] for e in published_v2_all} == {_id(published_v2)}
+    (repointed,) = [e for e in published_v2_all if e["resource_id"] == number_id]
+    assert repointed["changes"] == {"/routing_target_id": {"before": v1, "after": v2}}
+    assert entry(rolled_back) == ("agent", v1, "rolled_back")
+    assert request(rolled_back_all) == {
         ("agent", v1, "rolled_back"),
         ("agent", v2, "archived"),
         ("phone_number", number_id, "updated"),
-    ]
+    }
 
     assert entry(linked) == ("agent", v1, "knowledge_base_linked")
-    link = log[_ids(linked)[0]]["changes"]["knowledge_base"]["after"]
+    link = changes(linked)["/knowledge_base"]["after"]
     assert link["knowledge_base_id"] == kb_id and link["mode"] == "prompt"
     assert entry(unlinked) == ("agent", v1, "knowledge_base_unlinked")
-    assert log[_ids(unlinked)[0]]["changes"]["knowledge_base"]["before"] == link
+    assert changes(unlinked)["/knowledge_base"]["before"] == link
 
     assert entry(number_update) == ("phone_number", number_id, "updated")
-    assert log[_ids(number_update)[0]]["changes"]["sms_enabled"] == {
+    assert changes(number_update)["/sms_enabled"] == {
         "before": False,
         "after": True,
     }
     assert entry(routing) == ("phone_number", number_id, "routing_set")
     assert entry(routing_cleared) == ("phone_number", number_id, "routing_cleared")
     assert entry(unbound) == ("phone_number", number_id, "deleted")
-    assert log[_ids(unbound)[0]]["changes"]["e164_number"] == {
+    assert changes(unbound)["/e164_number"] == {
         "before": number,
         "after": None,
     }
     assert entry(credential_deleted) == ("credential", "deepgram", "deleted")
-    assert log[_ids(credential_deleted)[0]]["changes"] == {
-        "value": {"before": "***", "after": None}
-    }
+    assert changes(credential_deleted) == {"/value": {"before": "***", "after": None}}
     # Idempotent and audited: nothing there to delete, nothing changed.
     assert entry(nothing_deleted) == ("credential", "deepgram", "deleted")
-    assert log[_ids(nothing_deleted)[0]]["changes"] == {}
+    assert changes(nothing_deleted) == {}
     assert entry(agent_deleted) == ("agent", draft, "deleted")
-    assert log[_ids(agent_deleted)[0]]["changes"]["state"] == {
+    assert changes(agent_deleted)["/state"] == {
         "before": "draft",
         "after": "archived",
     }
@@ -326,11 +335,11 @@ async def test_no_secret_reaches_the_log(monkeypatch) -> None:
     ):
         assert secret not in log.text, secret
     entries = {e["id"]: e for e in log.json()["data"]}
-    assert entries[_ids(rotated)[0]]["changes"] == {
-        "config.llm.api_key": {"before": "***", "after": "***"}
+    assert entries[_id(rotated)]["changes"] == {
+        "/config/llm/api_key": {"before": "***", "after": "***"}
     }
-    created_number = entries[_ids(number)[0]]["changes"]
-    assert created_number["server_url_secret"] == {"before": None, "after": "***"}
+    created_number = entries[_id(number)]["changes"]
+    assert created_number["/server_url_secret"] == {"before": None, "after": "***"}
 
 
 async def test_a_change_rolled_back_leaves_no_entry(monkeypatch) -> None:
@@ -356,6 +365,45 @@ async def test_a_change_rolled_back_leaves_no_entry(monkeypatch) -> None:
     assert refused.status_code == 403
     assert HEADER not in refused.headers
     assert before == after == [] and agents == []
+
+
+async def test_a_change_not_recorded_is_not_saved(monkeypatch) -> None:
+    """A route that forgets its entry commits nothing, whoever commits: an
+    agent update (DbSession commits at the end), and a credential and a
+    redaction setting (the route commits itself, before its side effect)."""
+    from turncall.services.audit_log import AuditTrail
+
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        pid = app.project_id
+        agent_id = await _agent(app, "support", HARNESS_AGENT)
+        before = await _log(app, limit=200)
+        with pytest.MonkeyPatch.context() as forgetful:
+            forgetful.setattr(AuditTrail, "record", lambda *_a, **_k: uuid.uuid4())
+            responses = [
+                await app.api.put(
+                    f"/v1/agents/{agent_id}",
+                    json={"config": {**HARNESS_AGENT, "system_prompt": "Unsaved."}},
+                ),
+                await app.api.put(
+                    "/v1/credentials/openai", json={"api_key": CREDENTIAL}
+                ),
+                await app.api.put(
+                    f"/v1/projects/{pid}/redaction", json={"enabled": True}
+                ),
+            ]
+        agent = (await app.api.get(f"/v1/agents/{agent_id}")).json()["data"]
+        credentials = (await app.api.get("/v1/credentials")).json()["data"]
+        project = (await app.api.get(f"/v1/projects/{pid}")).json()["data"]
+        after = await _log(app, limit=200)
+
+    assert [r.status_code for r in responses] == [500, 500, 500]
+    assert all(HEADER not in r.headers for r in responses)
+    assert agent["config"]["system_prompt"] == HARNESS_AGENT["system_prompt"]
+    assert credentials == []
+    assert project["redaction"]["enabled"] is False
+    assert after == before
 
 
 async def test_filters_and_pages(monkeypatch) -> None:
@@ -392,7 +440,7 @@ async def test_filters_and_pages(monkeypatch) -> None:
 
     assert [e["action"] for e in of_a] == ["updated"] * 3 + ["created"]
     assert {e["resource_id"] for e in of_a} == {a}
-    assert [e["changes"]["config.system_prompt"]["after"] for e in updates] == [
+    assert [e["changes"]["/config/system_prompt"]["after"] for e in updates] == [
         "three",
         "two",
         "one",
@@ -457,10 +505,9 @@ async def test_a_deleted_project_keeps_its_trail(monkeypatch) -> None:
         await engine.dispose()
 
     assert deleted.status_code == 200
-    (entry_id,) = _ids(deleted)
-    assert str(kept[("project", "deleted")].id) == entry_id
-    assert kept[("project", "deleted")].changes["deleted_at"]["before"] is None
-    assert kept[("project", "deleted")].changes["deleted_at"]["after"]
+    assert str(kept[("project", "deleted")].id) == _id(deleted)
+    assert kept[("project", "deleted")].changes["/deleted_at"]["before"] is None
+    assert kept[("project", "deleted")].changes["/deleted_at"]["after"]
     assert ("agent", "created") in kept and ("project", "created") in kept
     assert left
     # Its keys stop working with it, so only the database reads them now.

@@ -2,24 +2,26 @@
 
 A route that changes an agent, a project credential, a phone number, an API
 key or a project setting takes `Audit` (or `PlatformAudit`, on the bootstrap
-routes the platform credential calls) and records each change with
-`await audit.record(...)`, before any commit of its own. Three things hold the
-rest:
+routes the platform credential calls) and records each change: `with
+audit.change(...)` for a resource that existed, which takes its "before"
+itself, or `audit.record(...)` for one it created. Three things hold the rest:
 
 - **Every such route takes one.** `tests/unit/test_audit_wiring.py` lists
   every mutating route under `AUDITED_PREFIXES` and fails on one without it.
-- **A successful request records.** The trail's teardown runs before the
-  session commits (both are function-scoped), and raises if the request
-  succeeded with no entry: the change is rolled back, and the client gets a
-  500, rather than a change committed unrecorded.
-- **The ids reach the client.** Each entry's id is put on the response as
-  `X-TurnCall-Audit-Id` (comma-separated when one request wrote several), so
-  the builder can link its own entry to the engine's.
+- **A committed request recorded.** The trail is bound to the request's
+  session, whose `before_commit` writes its entries and refuses the commit if
+  it recorded nothing: the change is rolled back and the client gets a 500,
+  rather than a change saved unrecorded. Whoever commits, DbSession at the
+  end or the route itself before a side effect, the check is the commit's.
+- **The client can find them.** The request's first entry, the one for its
+  primary resource, is named on the response as `X-TurnCall-Audit-Id`; every
+  entry the request wrote carries that id as its `request_id`, so
+  `GET /v1/audit-log?request_id=` returns the whole request.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -47,24 +49,22 @@ MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 def _trail(
     session: Any, request: Request, response: Response, **who: Any
 ) -> AuditTrail:
-    def on_record(ids: list[UUID]) -> None:
-        response.headers[AUDIT_HEADER] = ", ".join(str(i) for i in ids)
+    # Named when the first entry is recorded: FastAPI copies the injected
+    # response's headers onto the real one before a dependency's teardown
+    # runs, so a teardown is too late to set one.
+    def name(entry_id: UUID) -> None:
+        response.headers[AUDIT_HEADER] = str(entry_id)
 
-    # The client may send its own X-Request-ID; the column holds 128.
-    request_id = getattr(request.state, "request_id", None)
-    return AuditTrail(
-        session=session,
-        request_id=request_id[:128] if request_id else None,
-        on_record=on_record,
-        **who,
+    return AuditTrail.bind(
+        session, where=f"{request.method} {request.url.path}", on_first=name, **who
     )
 
 
-async def api_key_trail(
+def api_key_trail(
     auth: Auth, session: DbSession, request: Request, response: Response
-) -> AsyncIterator[AuditTrail]:
+) -> AuditTrail:
     """The trail of a request made with a project's API key."""
-    trail = _trail(
+    return _trail(
         session,
         request,
         response,
@@ -72,16 +72,14 @@ async def api_key_trail(
         api_key_id=auth.api_key_id,
         project_id=auth.project_id,
     )
-    yield trail
-    trail.require_entry(f"{request.method} {request.url.path}")
 
 
-async def platform_trail(
+def platform_trail(
     session: DbSession, request: Request, response: Response
-) -> AsyncIterator[AuditTrail]:
+) -> AuditTrail:
     """The trail of a bootstrap request, made with the platform credential:
     no API key, and the project is the one it creates or keys."""
-    trail = _trail(
+    return _trail(
         session,
         request,
         response,
@@ -89,14 +87,10 @@ async def platform_trail(
         api_key_id=None,
         project_id=None,
     )
-    yield trail
-    trail.require_entry(f"{request.method} {request.url.path}")
 
 
-# scope="function", like DbSession's: the teardown's check runs before the
-# commit, so a request that recorded nothing commits nothing.
-Audit = Annotated[AuditTrail, Depends(api_key_trail, scope="function")]
-PlatformAudit = Annotated[AuditTrail, Depends(platform_trail, scope="function")]
+Audit = Annotated[AuditTrail, Depends(api_key_trail)]
+PlatformAudit = Annotated[AuditTrail, Depends(platform_trail)]
 
 TRAILS = (api_key_trail, platform_trail)
 
@@ -122,10 +116,12 @@ def uses_audit(route: APIRoute) -> bool:
 
 HEADER_DOC = {
     "description": (
-        "The id of each audit log entry this request wrote, comma-separated, "
-        "in order (`GET /v1/audit-log` returns them)."
+        "The id of the audit log entry for this request's primary resource. "
+        "Every entry the request wrote (a publish also archives versions and "
+        "re-points numbers) carries it as `request_id`: "
+        "`GET /v1/audit-log?request_id=<this id>` returns them all."
     ),
-    "schema": {"type": "string"},
+    "schema": {"type": "string", "format": "uuid"},
 }
 
 

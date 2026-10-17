@@ -154,9 +154,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -284,9 +285,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -364,9 +366,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -444,9 +447,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -524,9 +528,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -604,9 +609,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -724,9 +730,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -794,9 +801,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -864,9 +872,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -1106,9 +1115,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -1174,9 +1184,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -1244,9 +1255,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -1376,9 +1388,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -2391,9 +2404,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -2601,9 +2615,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -2669,9 +2684,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -2749,9 +2765,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -2877,9 +2894,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -4741,9 +4759,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -4872,9 +4891,10 @@
             "description": "Successful Response",
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -5554,9 +5574,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -5621,9 +5642,10 @@
             },
             "headers": {
               "X-TurnCall-Audit-Id": {
-                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -7048,7 +7070,7 @@
           "audit-log"
         ],
         "summary": "List Audit Log",
-        "description": "The project's audit log, newest first: each change made through the\nAPI to its agents, credentials, phone numbers, API keys and settings, the\nAPI key that made it, and what changed (secrets never recorded).\n\nPaged by cursor, not by page number: entries keep arriving at the head of\nthe list, so a page number would shift under the reader. Pass\n`next_cursor` back as `cursor` for the next page; it is null on the last.\nAdmin key only.",
+        "description": "The project's audit log, newest first: each change made through the\nAPI to its agents, credentials, phone numbers, API keys and settings, the\nAPI key that made it, and what changed (secrets never recorded).\n`request_id` reads back everything one request wrote: a publish's\narchived versions and re-pointed numbers as well as the version.\n\nPaged by cursor, not by page number: entries keep arriving at the head of\nthe list, so a page number would shift under the reader. Pass\n`next_cursor` back as `cursor` for the next page; it is null on the last.\nAdmin key only.",
         "operationId": "list_audit_log_v1_audit_log_get",
         "parameters": [
           {
@@ -7099,6 +7121,25 @@
               ],
               "title": "Action"
             }
+          },
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Every entry one request wrote: the id its response named in `X-TurnCall-Audit-Id`",
+              "title": "Request Id"
+            },
+            "description": "Every entry one request wrote: the id its response named in `X-TurnCall-Audit-Id`"
           },
           {
             "name": "since",

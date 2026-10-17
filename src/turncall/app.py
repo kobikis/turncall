@@ -175,8 +175,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # The audit log's own retention (#317, ADR-0024): the operator's
     # AUDIT_LOG_RETENTION_DAYS, never a project's; unset, nothing is deleted.
     async def _audit_log_janitor() -> None:
-        if settings.audit_log_retention_days is None:
-            return  # kept for good: nothing to sweep, ever
         from turncall.services import audit_log
         from turncall.storage.database import create_session_factory, get_engine
 

@@ -76,7 +76,7 @@ async def bind_phone_number(
         twilio_account=own,
         carrier=body.carrier,
     )
-    await audit.record(
+    audit.record(
         AuditResource.PHONE_NUMBER,
         row.id,
         AuditAction.CREATED,
@@ -349,25 +349,25 @@ async def update_phone_number(
             body, row.e164_number, row.external_number_sid, get_settings()
         )
 
-    before = audit_log.phone_number_state(row)  # the update rewrites `row`
-    updated = await phone_number_repo.update_phone_number(
-        session,
-        phone_number_id,
-        routing_target_type=body.routing_target_type,
-        routing_target_id=body.routing_target_id,
-        server_url=body.server_url,
-        server_url_secret=secret,
-        sms_enabled=body.sms_enabled,
-        metadata_json=body.metadata,
-        twilio_account=own,
-    )
-    await audit.record(
+    with audit.change(
         AuditResource.PHONE_NUMBER,
         phone_number_id,
         AuditAction.UPDATED,
-        before=before,
-        after=audit_log.phone_number_state(updated),
-    )
+        audit_log.phone_number_state,
+        row,
+    ) as change:
+        updated = await phone_number_repo.update_phone_number(
+            session,
+            phone_number_id,
+            routing_target_type=body.routing_target_type,
+            routing_target_id=body.routing_target_id,
+            server_url=body.server_url,
+            server_url_secret=secret,
+            sms_enabled=body.sms_enabled,
+            metadata_json=body.metadata,
+            twilio_account=own,
+        )
+        change.to(updated)
     # Re-run the full carrier config on every update: it's idempotent, and it's
     # the recovery path after PUBLIC_BASE_URL changes (ngrok rotation) or a
     # bind that happened before PUBLIC_BASE_URL was set.
@@ -403,14 +403,15 @@ async def unbind_phone_number(
         if row.provider == TELNYX
         else None
     )
-    before = audit_log.phone_number_state(row)
-    await phone_number_repo.delete_phone_number(session, phone_number_id)
-    await audit.record(
+    with audit.change(
         AuditResource.PHONE_NUMBER,
         phone_number_id,
         AuditAction.DELETED,
-        before=before,
-    )
+        audit_log.phone_number_state,
+        row,
+    ) as change:
+        await phone_number_repo.delete_phone_number(session, phone_number_id)
+        change.gone()
 
     if telnyx and telnyx.api_key:
         try:
@@ -455,17 +456,17 @@ async def set_routing_weights(
         raise NotFoundError("PhoneNumber", str(phone_number_id))
 
     weights = [{"agent_id": str(w.agent_id), "weight": w.weight} for w in body.weights]
-    before = audit_log.phone_number_state(row)
-    updated = await phone_number_repo.set_routing_weights(
-        session, phone_number_id, weights
-    )
-    await audit.record(
+    with audit.change(
         AuditResource.PHONE_NUMBER,
         phone_number_id,
         AuditAction.ROUTING_SET,
-        before=before,
-        after=audit_log.phone_number_state(updated),
-    )
+        audit_log.phone_number_state,
+        row,
+    ) as change:
+        updated = await phone_number_repo.set_routing_weights(
+            session, phone_number_id, weights
+        )
+        change.to(updated)
     return ok(PhoneNumberResponse.from_row(updated))
 
 
@@ -511,13 +512,15 @@ async def clear_routing_weights(
     if row is None:
         raise NotFoundError("PhoneNumber", str(phone_number_id))
 
-    before = audit_log.phone_number_state(row)
-    updated = await phone_number_repo.clear_routing_weights(session, phone_number_id)
-    await audit.record(
+    with audit.change(
         AuditResource.PHONE_NUMBER,
         phone_number_id,
         AuditAction.ROUTING_CLEARED,
-        before=before,
-        after=audit_log.phone_number_state(updated),
-    )
+        audit_log.phone_number_state,
+        row,
+    ) as change:
+        updated = await phone_number_repo.clear_routing_weights(
+            session, phone_number_id
+        )
+        change.to(updated)
     return ok(PhoneNumberResponse.from_row(updated))
