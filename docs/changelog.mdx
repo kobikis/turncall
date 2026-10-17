@@ -7,6 +7,15 @@ description: "Latest updates and improvements to TurnCall"
 
 ## Added
 
+**Audit log.** Every change made through the API to a project's agents,
+credentials, phone numbers, API keys and settings is recorded: which API key
+made it, what it did, and what changed, with secrets never recorded. Admin
+keys read it with `GET /v1/audit-log`, and each change's response names its
+entry in `X-TurnCall-Audit-Id`, which also reads back everything the request
+changed (`?request_id=`). Entries are append-only and kept until the
+operator's `AUDIT_LOG_RETENTION_DAYS`, which call retention does not touch.
+See [Audit log](/guides/audit-log).
+
 **Retention.** A project can choose how long its calls' recordings,
 transcripts and events are kept, and an agent can override it. A janitor
 deletes what has expired, including a Twilio copy of the recording it was told

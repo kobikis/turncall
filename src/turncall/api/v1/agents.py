@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from turncall.api.audit import Audit
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.api.responses import ok, paginated
@@ -17,8 +18,10 @@ from turncall.api.v1.schemas.agents import (
     UpdateAgentRequest,
 )
 from turncall.auth import Auth, AuthContext, WriteAuth
+from turncall.domain.enums import AuditAction, AuditResource
 from turncall.domain.models import RetentionConfig
-from turncall.services import retention
+from turncall.services import audit_log, retention
+from turncall.services.audit_log import AuditTrail
 from turncall.storage.repositories import agent_repo, ambience_repo, knowledge_repo
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -129,6 +132,40 @@ async def _refuse_applied_change(
             raise _retention_forbidden(name, before[name], after[name])
 
 
+async def _promote(
+    session: AsyncSession, audit: AuditTrail, name: str, project_id: UUID, to: UUID
+) -> tuple[list[UUID], int]:
+    """Archive the published versions of `name` other than `to`, and point
+    their phone numbers at `to`: what a publish and a rollback both do.
+    Each version archived and each number re-pointed is an audit entry of
+    its own, after the request's primary one. The archived ids, and how
+    many numbers moved."""
+    archived_ids = await agent_repo.archive_previous_published(
+        session, project_id, name, exclude_agent_id=to
+    )
+    moved = 0
+    for old_id in archived_ids:
+        audit.record(
+            AuditResource.AGENT,
+            old_id,
+            AuditAction.ARCHIVED,
+            before=audit_log.fields(state="published"),
+            after=audit_log.fields(state="archived"),
+        )
+        for number_id in await agent_repo.update_phone_number_routing(
+            session, old_id, to
+        ):
+            moved += 1
+            audit.record(
+                AuditResource.PHONE_NUMBER,
+                number_id,
+                AuditAction.UPDATED,
+                before=audit_log.fields(routing_target_id=old_id),
+                after=audit_log.fields(routing_target_id=to),
+            )
+    return archived_ids, moved
+
+
 async def _with_kb_warnings(
     session: AsyncSession, rows: list[Any]
 ) -> list[AgentResponse]:
@@ -143,6 +180,7 @@ async def create_agent(
     body: CreateAgentRequest,
     auth: WriteAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Create a new draft agent."""
     _refuse_inline_knowledge_bases(body.config)
@@ -162,6 +200,12 @@ async def create_agent(
         config_blob=body.config.model_dump(),
     )
     await _refuse_applied_change(session, auth, before)
+    audit.record(
+        AuditResource.AGENT,
+        row.id,
+        AuditAction.CREATED,
+        after=audit_log.agent_state(row),
+    )
 
     return ok(AgentResponse.from_row(row))
 
@@ -220,6 +264,7 @@ async def update_agent(
     body: UpdateAgentRequest,
     auth: WriteAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Update a draft agent's config. Published agents cannot be updated."""
     existing = await agent_repo.get_agent_by_id(
@@ -240,15 +285,23 @@ async def update_agent(
     name = body.name or existing.name
     before = await _retention_before(session, auth, {existing.name, name})
     _refuse_written_retention(before, name, config_blob, own=existing.config_blob)
-    row = await agent_repo.update_agent_config(
-        session,
+    with audit.change(
+        AuditResource.AGENT,
         agent_id,
-        config_blob=config_blob,
-        name=body.name,
-    )
-    if row is None:
-        raise ConflictError("Agent was modified concurrently")
-    await _refuse_applied_change(session, auth, before)
+        AuditAction.UPDATED,
+        audit_log.agent_state,
+        existing,
+    ) as change:
+        row = await agent_repo.update_agent_config(
+            session,
+            agent_id,
+            config_blob=config_blob,
+            name=body.name,
+        )
+        if row is None:
+            raise ConflictError("Agent was modified concurrently")
+        await _refuse_applied_change(session, auth, before)
+        change.to(row)
 
     return ok((await _with_kb_warnings(session, [row]))[0])
 
@@ -258,6 +311,7 @@ async def delete_agent(
     agent_id: UUID,
     auth: WriteAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Delete an agent (archives it — call history stays queryable)."""
     existing = await agent_repo.get_agent_by_id(
@@ -266,8 +320,19 @@ async def delete_agent(
     if existing is None:
         raise NotFoundError("Agent", str(agent_id))
     before = await _retention_before(session, auth, {existing.name})
-    await agent_repo.retire_agent(session, agent_id)
-    await _refuse_applied_change(session, auth, before)
+    with audit.change(
+        AuditResource.AGENT,
+        agent_id,
+        AuditAction.DELETED,
+        audit_log.agent_state,
+        existing,
+    ) as change:
+        row = await agent_repo.retire_agent(session, agent_id)
+        await _refuse_applied_change(session, auth, before)
+        if row is None:
+            change.gone()
+        else:
+            change.to(row)
     return ok({"deleted": True})
 
 
@@ -276,6 +341,7 @@ async def publish_agent(
     agent_id: UUID,
     auth: WriteAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Publish a draft agent. Freezes the version immutably."""
     existing = await agent_repo.get_agent_by_id(
@@ -291,24 +357,24 @@ async def publish_agent(
         )
 
     before = await _retention_before(session, auth, {existing.name})
-    row = await agent_repo.publish_agent(session, agent_id)
-    if row is None:
-        raise ConflictError(
-            "Failed to publish - agent may have been modified concurrently"
-        )
+    with audit.change(
+        AuditResource.AGENT,
+        agent_id,
+        AuditAction.PUBLISHED,
+        audit_log.agent_state,
+        existing,
+    ) as change:
+        row = await agent_repo.publish_agent(session, agent_id)
+        if row is None:
+            raise ConflictError(
+                "Failed to publish - agent may have been modified concurrently"
+            )
+        change.to(row)
 
     # Auto-archive previous published versions + auto-promote phone numbers
-    archived_ids = await agent_repo.archive_previous_published(
-        session,
-        auth.project_id,
-        existing.name,
-        exclude_agent_id=agent_id,
+    archived_ids, promoted_count = await _promote(
+        session, audit, existing.name, auth.project_id, agent_id
     )
-    promoted_count = 0
-    for old_id in archived_ids:
-        promoted_count += await agent_repo.update_phone_number_routing(
-            session, old_id, agent_id
-        )
     await _refuse_applied_change(session, auth, before)
 
     if archived_ids:
@@ -345,6 +411,7 @@ async def rollback_agent(
     agent_id: UUID,
     auth: WriteAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Rollback to a previous version: un-archive it, archive current, update routing."""
     target = await agent_repo.get_agent_by_id(
@@ -360,27 +427,27 @@ async def rollback_agent(
         )
 
     before = await _retention_before(session, auth, {target.name})
-    # Archive current published version(s) of same name
-    archived_ids = await agent_repo.archive_previous_published(
-        session,
-        auth.project_id,
-        target.name,
-        exclude_agent_id=agent_id,
-    )
 
     # Un-archive the target version
-    row = await agent_repo.unarchive_agent(session, agent_id)
-    if row is None:
-        raise ConflictError(
-            "Failed to rollback - agent may have been modified concurrently"
-        )
+    with audit.change(
+        AuditResource.AGENT,
+        agent_id,
+        AuditAction.ROLLED_BACK,
+        audit_log.agent_state,
+        target,
+    ) as change:
+        row = await agent_repo.unarchive_agent(session, agent_id)
+        if row is None:
+            raise ConflictError(
+                "Failed to rollback - agent may have been modified concurrently"
+            )
+        change.to(row)
 
-    # Update phone numbers from old published version(s) to this one
-    promoted_count = 0
-    for old_id in archived_ids:
-        promoted_count += await agent_repo.update_phone_number_routing(
-            session, old_id, agent_id
-        )
+    # Archive the current published version(s) of the same name, and point
+    # their phone numbers at this one
+    archived_ids, promoted_count = await _promote(
+        session, audit, target.name, auth.project_id, agent_id
+    )
     await _refuse_applied_change(session, auth, before)
 
     logger.info(

@@ -69,7 +69,7 @@ A run that re-analyses a call (`POST /v1/calls/{id}/analysis/rerun`) while its t
 
 ## What it does not touch
 
-- **The audit log.** It has its own retention; call retention never deletes from it.
+- **The [audit log](/guides/audit-log).** It has its own retention, set by the operator; call retention never deletes from it.
 - **Text conversations** (SMS, WhatsApp, the Chat API) are not covered yet.
 - **A carrier copy TurnCall does not know about.** TurnCall records calls itself, in your storage. If your Twilio account also records them and its recording callback reaches TurnCall, the `recording.ready` event names that recording, and TurnCall deletes it from the Twilio account (the number's own, or the platform's) when the recording expires. A recording whose callback never reached TurnCall, or one on an account TurnCall holds no credentials for (logged as `retention_carrier_recording_unreachable`), it cannot delete. Your carrier may keep its own copy: delete it there, or turn carrier recording storage off.
 - **Logs, traces and webhook deliveries** that already left the server. Redact them with [redaction](/guides/redaction).

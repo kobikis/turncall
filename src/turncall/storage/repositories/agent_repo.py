@@ -258,10 +258,10 @@ async def update_phone_number_routing(
     session: AsyncSession,
     old_agent_id: UUID,
     new_agent_id: UUID,
-) -> int:
+) -> list[UUID]:
     """Update all phone numbers pointing to old_agent_id to new_agent_id.
 
-    Returns count of updated phone numbers.
+    Returns the ids of the numbers updated.
     """
     result = await session.execute(
         update(PhoneNumberRow)
@@ -270,5 +270,6 @@ async def update_phone_number_routing(
             PhoneNumberRow.routing_target_id == old_agent_id,
         )
         .values(routing_target_id=new_agent_id)
+        .returning(PhoneNumberRow.id)
     )
-    return result.rowcount  # type: ignore[return-value]
+    return list(result.scalars().all())

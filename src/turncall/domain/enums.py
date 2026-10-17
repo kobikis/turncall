@@ -167,6 +167,46 @@ class ProjectRole(StrEnum):
         return {"viewer": 1, "developer": 2, "admin": 3}[self.value]
 
 
+class AuditResource(StrEnum):
+    """What an audit log entry is about (#317, ADR-0024)."""
+
+    AGENT = "agent"
+    CREDENTIAL = "credential"
+    PHONE_NUMBER = "phone_number"
+    API_KEY = "api_key"
+    PROJECT = "project"
+
+
+class AuditAction(StrEnum):
+    """What was done to the resource. `archived` is an agent version a
+    publish or rollback took out of service; `deleted` is an agent deleted
+    through the API (archived too, but asked for)."""
+
+    CREATED = "created"
+    UPDATED = "updated"
+    DELETED = "deleted"
+    PUBLISHED = "published"
+    ROLLED_BACK = "rolled_back"
+    ARCHIVED = "archived"
+    KNOWLEDGE_BASE_LINKED = "knowledge_base_linked"
+    KNOWLEDGE_BASE_UNLINKED = "knowledge_base_unlinked"
+    ROUTING_SET = "routing_set"
+    ROUTING_CLEARED = "routing_cleared"
+    REVOKED = "revoked"
+    LIMITS_SET = "limits_set"
+    REDACTION_SET = "redaction_set"
+    RETENTION_SET = "retention_set"
+
+
+class AuditActor(StrEnum):
+    """Who made the change: a project's API key, or the platform credential
+    (`X-Platform-Key`, the builder bootstrapping a project and its first key),
+    which is no key at all."""
+
+    API_KEY = "api_key"
+    PLATFORM = "platform"
+
+
 class SmsSessionStatus(StrEnum):
     ACTIVE = "active"
     EXPIRED = "expired"

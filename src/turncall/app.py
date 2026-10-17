@@ -172,6 +172,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     retention_task = asyncio.create_task(_retention_janitor())
 
+    # The audit log's own retention (#317, ADR-0024): the operator's
+    # AUDIT_LOG_RETENTION_DAYS, never a project's; unset, nothing is deleted.
+    async def _audit_log_janitor() -> None:
+        from turncall.services import audit_log
+        from turncall.storage.database import create_session_factory, get_engine
+
+        await audit_log.run_janitor(
+            create_session_factory(get_engine()),
+            days=settings.audit_log_retention_days,
+        )
+
+    audit_log_task = asyncio.create_task(_audit_log_janitor())
+
     # Asterisk's inbound edge: an ARI connection to every Asterisk served (#209).
     from turncall.webhooks.asterisk_edge import EDGES
 
@@ -200,6 +213,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     cleanup_task.cancel()
     purge_task.cancel()
     retention_task.cancel()
+    audit_log_task.cancel()
     asterisk_task.cancel()
     await asyncio.gather(asterisk_task, return_exceptions=True)
 
@@ -320,6 +334,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(webrtc_router, prefix="/v1")
 
+    from turncall.api.v1.audit_log import router as audit_log_router
+
+    app.include_router(audit_log_router, prefix="/v1")
+
     # Twilio's inbound edge (no /v1 prefix): webhooks + its media stream
     # WebSocket, which hands over to the shared media entry point (ADR-0022).
     from turncall.webhooks.twilio_handlers import router as twilio_webhook_router
@@ -345,5 +363,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from turncall.webhooks.whatsapp_handlers import router as whatsapp_webhook_router
 
     app.include_router(whatsapp_webhook_router)
+
+    # Each audited route's response names the entries it wrote (#317).
+    from turncall.api.audit import document_audit_header
+
+    document_audit_header(app)
 
     return app

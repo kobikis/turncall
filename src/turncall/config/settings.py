@@ -517,6 +517,24 @@ class Settings(BaseSettings):
         default=30, alias="PROJECT_PURGE_RETENTION_DAYS"
     )
 
+    # The audit log (#317, ADR-0024): entries older than this many days are
+    # deleted by an hourly janitor. Unset (the default) keeps them for good.
+    # An operator's setting, not a project's: an admin key must not be able
+    # to shorten the trail that records its own changes. Call retention never
+    # touches the audit log.
+    audit_log_retention_days: int | None = Field(
+        default=None, ge=1, le=36500, alias="AUDIT_LOG_RETENTION_DAYS"
+    )
+
+    @field_validator("audit_log_retention_days", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        """`AUDIT_LOG_RETENTION_DAYS=""`, as a template renders a value left
+        out, is unset (kept for good), not a failed boot."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     twilio: TwilioSettings = Field(default_factory=TwilioSettings)

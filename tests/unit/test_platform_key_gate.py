@@ -128,6 +128,7 @@ def test_create_api_key_succeeds_with_platform_key(app, monkeypatch) -> None:
         role="developer",
         environment=None,
         created_at=now,
+        revoked_at=None,
     )
     monkeypatch.setattr(
         "turncall.storage.repositories.api_key_repo.create_api_key",

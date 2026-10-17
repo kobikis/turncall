@@ -110,6 +110,7 @@ turncall-demo         # the website demo: agents from a file over WebRTC, no DB/
 | `EVAL_TTS_CACHE_DIR` | No | Where the caller's synthesized turns are cached in audio runs (default `./storage/eval-tts-cache`). Pipecat's own default lives under `$HOME`, which a container loses on recreate — every repeat run would then re-synthesize every caller turn. Mount it |
 | `EVAL_MAX_CONCURRENT_RUNS` | No | Scenario-iterations the eval worker runs at once (default `4`). The worker runs the bot pipeline **and** the harness — which itself runs a persona LLM, a TTS, an STT and the judge — so in audio mode one run is roughly double a real call's service load in one event loop. A starting point, not a measurement. `EVAL_MAX_RUN_DURATION_SECONDS` (default `900`) is the janitor's cutoff for reclaiming a run a crashed worker left claimed, as `errored`; `EVAL_MAX_QUEUED_SECONDS` (`3600`) is the same cutoff for a run **nothing ever claimed** — the API committed the row then died before the queue push — and is longer, because waiting behind a backlog is normal where running for 15 minutes is not. `EVAL_JANITOR_INTERVAL_SECONDS` (`60`) bounds the sweep. One request's paid LLM work has **two** axes and needs both: `EVAL_MAX_ITERATIONS` (`50`) per run, and `EVAL_MAX_SCENARIOS_PER_REQUEST` (`50`) on a `tag`'s fan-out — a tag matching more than that is refused naming the count, never truncated, because a batch that ran 50 of 200 scenarios reports a verdict for a suite that never ran. See `adr/0018` |
 | `EVAL_JUDGE_PROVIDER` | No | What decides every verdict, set once for the platform (#119) — one of `ollama` (pipecat's own, the default when nothing is set), `openai`, `anthropic`, `jev` (#141: TypeSafe's classifier — a few hundred ms per verdict with a *calibrated* probability, judge-only, needs `TYPESAFE_API_KEY` + the `evals-jev` extra, and supplies no prose so the **explainer** comes from this same setting). With `EVAL_JUDGE_MODEL` (that provider's own default when empty) and `EVAL_JUDGE_TEMPERATURE` (unset by default — a verdict that varies run to run is not a verdict; dropped entirely for Anthropic and the OpenAI reasoning families, as on the call path). `EVAL_SIMULATOR_PROVIDER` / `_MODEL` / `_TEMPERATURE` are the same three for the LLM that plays the caller in a simulation. A **scenario's** own `judge:`/`simulator:` block wins, taken whole; a `judge` on a **run** request is a 422, since a run is what it was queued as |
+| `AUDIT_LOG_RETENTION_DAYS` | No | Days audit log entries are kept (#317, ADR-0024), 1-36500; unset or empty (default) = for good. The operator's, never a project's: an admin key can't shorten the trail of its own changes. Swept hourly on every API replica (`SKIP LOCKED`: replicas share the work) |
 | `PROJECT_PURGE_RETENTION_DAYS` | No | Days a soft-deleted project (ADR-0011) is kept before the hourly purge job hard-deletes it (cascade). Default `30`; `0` disables |
 | `TYPESAFE_API_KEY` | No | Jev, for a `jev` eval judge (#141). A fallback: a project's `typesafe` credential wins (ADR-0020). Evals only — no live call contacts this vendor, which is why the dependency is the optional `evals-jev` extra rather than a base one. Neither the key nor the extra is checked at scenario create: both are properties of a *deployment* and a stored scenario outlives the one it was written against, so the **run** fails, naming which of the two is missing |
 | `LIMIT_LIVE_CALLS` | No | Platform default for a project's live-call concurrency limit (#224), `0` (default) = unlimited. A project's own value (`PUT /v1/projects/{id}/limits`) wins in either direction — a default, not a ceiling. See "Limits" |
@@ -1068,6 +1069,41 @@ and the janitor:
   `call_repo` (the exit-point guard).
 - `call.ended` carries `retention` (`retention.for_call`, the policy as it
   stands at the call's end). Text conversations are not covered yet.
+
+## Audit log
+
+Every change through the API to agents, project credentials, phone numbers,
+API keys and project settings is an entry in `audit_log` (#317, ADR-0024):
+api key (or `actor: platform` for the bootstrap), resource, action, `changes`
+(RFC 6901 JSON Pointer → before/after), `request_id`. `GET /v1/audit-log`,
+admin key, newest first, filters `resource_type`/`resource_id`/`action`/
+`request_id`/`since`/`until`, `cursor`/`next_cursor` paging.
+
+- **Adding a mutating route** under `/v1/agents`, `/v1/credentials`,
+  `/v1/phone-numbers`, `/v1/api-keys` or `/v1/projects`? It takes `audit:
+  Audit` (`api/audit.py`; `PlatformAudit` on a platform-key route) and
+  records once per resource it changed, the primary one first: `with
+  audit.change(resource, id, action, state, row) as change:` around the write
+  of a resource that existed (it takes the "before" on entry, so the repos
+  updating that ORM object in place can't rewrite it; end with
+  `change.to(row)` or `change.gone()`), `audit.record(..., after=)` for one
+  created. Never snapshot a "before" by hand. `test_audit_wiring.py` fails on
+  a route without the trail. The trail is bound to the session: its entries
+  are one INSERT in `before_commit`, and a commit with no entry is refused
+  (500, rolled back), **whoever commits** — DbSession, or a route that
+  commits itself before a side effect (credentials, redaction). The first
+  entry's id is `X-TurnCall-Audit-Id` and every entry's `request_id`.
+- **States** (`services/audit_log`): `agent_state`, `phone_number_state`,
+  `api_key_state`, `credential_state`, `project_state`,
+  `knowledge_base_link`, or `fields(...)` for a part. `public` (the masked
+  read) is what is written; `raw` is only compared. A new secret on one of
+  these resources must be masked in its state, as a new agent-config secret
+  must be in `config_secrets`.
+- **Append-only**: only `audit_repo` names `AuditEntryRow` (the wiring test).
+  A trigger refuses UPDATE/TRUNCATE and any DELETE not in a transaction that
+  ran `set_config('turncall.audit_log_retention', 'on', true)`, which only
+  `audit_repo.delete_older_than` does. No FKs: a purged project keeps its
+  entries. Call retention never writes it (`test_retention_janitor.py`).
 
 ## Graceful Shutdown
 

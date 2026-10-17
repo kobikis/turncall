@@ -8,6 +8,7 @@ from uuid import UUID
 
 from fastapi import APIRouter
 
+from turncall.api.audit import Audit, PlatformAudit
 from turncall.api.deps import DbSession
 from turncall.api.errors import ForbiddenError, NotFoundError
 from turncall.api.responses import ok
@@ -18,6 +19,8 @@ from turncall.api.v1.schemas.api_keys import (
 )
 from turncall.auth import Auth, PlatformKey, WriteAuth
 from turncall.auth.api_keys import generate_api_key
+from turncall.domain.enums import AuditAction, AuditResource
+from turncall.services import audit_log
 from turncall.storage.repositories import api_key_repo, project_repo
 
 router = APIRouter(prefix="/api-keys", tags=["api-keys"])
@@ -28,6 +31,7 @@ async def create_api_key(
     project_id: UUID,
     body: CreateApiKeyRequest,
     session: DbSession,
+    audit: PlatformAudit,
 ) -> dict:
     """Create the first API key for a project. Requires the platform credential
     (X-Platform-Key) — only the builder bootstraps keys (ADR-0011).
@@ -55,6 +59,13 @@ async def create_api_key(
         role=body.role.value,
         environment=body.environment,
     )
+    audit.record(
+        AuditResource.API_KEY,
+        row.id,
+        AuditAction.CREATED,
+        after=audit_log.api_key_state(row),
+        project_id=project_id,
+    )
 
     return ok(
         ApiKeyCreatedResponse(
@@ -75,6 +86,7 @@ async def create_api_key_authenticated(
     body: CreateApiKeyRequest,
     auth: WriteAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Create an additional API key. Requires a write role (admin/developer);
     the new key's role may not exceed the caller's — otherwise a lower-privilege
@@ -93,6 +105,12 @@ async def create_api_key_authenticated(
         name=body.name,
         role=body.role.value,
         environment=body.environment,
+    )
+    audit.record(
+        AuditResource.API_KEY,
+        row.id,
+        AuditAction.CREATED,
+        after=audit_log.api_key_state(row),
     )
 
     return ok(
@@ -124,11 +142,19 @@ async def revoke_api_key(
     api_key_id: UUID,
     auth: WriteAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Revoke an API key (must belong to the authenticated project)."""
-    revoked = await api_key_repo.revoke_api_key(
+    revoked_at = await api_key_repo.revoke_api_key(
         session, api_key_id, project_id=auth.project_id
     )
-    if not revoked:
+    if revoked_at is None:
         raise NotFoundError("ApiKey", str(api_key_id))
+    audit.record(
+        AuditResource.API_KEY,
+        api_key_id,
+        AuditAction.REVOKED,
+        before=audit_log.fields(revoked_at=None),
+        after=audit_log.fields(revoked_at=revoked_at),
+    )
     return ok({"revoked": True})

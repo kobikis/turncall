@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter
 from loguru import logger
 
+from turncall.api.audit import Audit
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.api.responses import ok, paginated
@@ -22,7 +23,8 @@ from turncall.api.v1.schemas.phone_numbers import (
 from turncall.auth import Auth, WriteAuth
 from turncall.config.settings import Settings, get_settings
 from turncall.domain.carriers import TELNYX, TWILIO
-from turncall.services import telnyx_accounts, twilio_accounts
+from turncall.domain.enums import AuditAction, AuditResource
+from turncall.services import audit_log, telnyx_accounts, twilio_accounts
 from turncall.services.telnyx_accounts import TelnyxAccount
 from turncall.services.twilio_accounts import TwilioAccount
 from turncall.storage.repositories import credential_repo, phone_number_repo
@@ -36,6 +38,7 @@ async def bind_phone_number(
     body: BindPhoneNumberRequest,
     auth: WriteAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Bind a Twilio or Telnyx phone number to a routing target."""
     existing = await phone_number_repo.get_by_e164(session, body.e164_number)
@@ -72,6 +75,12 @@ async def bind_phone_number(
         metadata_json=body.metadata,
         twilio_account=own,
         carrier=body.carrier,
+    )
+    audit.record(
+        AuditResource.PHONE_NUMBER,
+        row.id,
+        AuditAction.CREATED,
+        after=audit_log.phone_number_state(row),
     )
 
     configured = await _configure_webhooks(session, row, body.sms_enabled)
@@ -304,6 +313,7 @@ async def update_phone_number(
     body: UpdatePhoneNumberRequest,
     auth: WriteAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Update a binding in place — id and server_url_secret stay stable, so
     call-init endpoints keep verifying with the same secret across edits."""
@@ -339,17 +349,25 @@ async def update_phone_number(
             body, row.e164_number, row.external_number_sid, get_settings()
         )
 
-    updated = await phone_number_repo.update_phone_number(
-        session,
+    with audit.change(
+        AuditResource.PHONE_NUMBER,
         phone_number_id,
-        routing_target_type=body.routing_target_type,
-        routing_target_id=body.routing_target_id,
-        server_url=body.server_url,
-        server_url_secret=secret,
-        sms_enabled=body.sms_enabled,
-        metadata_json=body.metadata,
-        twilio_account=own,
-    )
+        AuditAction.UPDATED,
+        audit_log.phone_number_state,
+        row,
+    ) as change:
+        updated = await phone_number_repo.update_phone_number(
+            session,
+            phone_number_id,
+            routing_target_type=body.routing_target_type,
+            routing_target_id=body.routing_target_id,
+            server_url=body.server_url,
+            server_url_secret=secret,
+            sms_enabled=body.sms_enabled,
+            metadata_json=body.metadata,
+            twilio_account=own,
+        )
+        change.to(updated)
     # Re-run the full carrier config on every update: it's idempotent, and it's
     # the recovery path after PUBLIC_BASE_URL changes (ngrok rotation) or a
     # bind that happened before PUBLIC_BASE_URL was set.
@@ -362,6 +380,7 @@ async def unbind_phone_number(
     phone_number_id: UUID,
     auth: WriteAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Remove a phone number binding and point the number away from TurnCall
     on its carrier — an unbound number must not keep reaching TurnCall."""
@@ -384,7 +403,15 @@ async def unbind_phone_number(
         if row.provider == TELNYX
         else None
     )
-    await phone_number_repo.delete_phone_number(session, phone_number_id)
+    with audit.change(
+        AuditResource.PHONE_NUMBER,
+        phone_number_id,
+        AuditAction.DELETED,
+        audit_log.phone_number_state,
+        row,
+    ) as change:
+        await phone_number_repo.delete_phone_number(session, phone_number_id)
+        change.gone()
 
     if telnyx and telnyx.api_key:
         try:
@@ -419,6 +446,7 @@ async def set_routing_weights(
     body: SetRoutingWeightsRequest,
     auth: WriteAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Set A/B routing weights on a phone number."""
     row = await phone_number_repo.get_by_id(
@@ -428,9 +456,17 @@ async def set_routing_weights(
         raise NotFoundError("PhoneNumber", str(phone_number_id))
 
     weights = [{"agent_id": str(w.agent_id), "weight": w.weight} for w in body.weights]
-    updated = await phone_number_repo.set_routing_weights(
-        session, phone_number_id, weights
-    )
+    with audit.change(
+        AuditResource.PHONE_NUMBER,
+        phone_number_id,
+        AuditAction.ROUTING_SET,
+        audit_log.phone_number_state,
+        row,
+    ) as change:
+        updated = await phone_number_repo.set_routing_weights(
+            session, phone_number_id, weights
+        )
+        change.to(updated)
     return ok(PhoneNumberResponse.from_row(updated))
 
 
@@ -467,6 +503,7 @@ async def clear_routing_weights(
     phone_number_id: UUID,
     auth: WriteAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Clear A/B routing weights, revert to single-agent routing."""
     row = await phone_number_repo.get_by_id(
@@ -475,5 +512,15 @@ async def clear_routing_weights(
     if row is None:
         raise NotFoundError("PhoneNumber", str(phone_number_id))
 
-    updated = await phone_number_repo.clear_routing_weights(session, phone_number_id)
+    with audit.change(
+        AuditResource.PHONE_NUMBER,
+        phone_number_id,
+        AuditAction.ROUTING_CLEARED,
+        audit_log.phone_number_state,
+        row,
+    ) as change:
+        updated = await phone_number_repo.clear_routing_weights(
+            session, phone_number_id
+        )
+        change.to(updated)
     return ok(PhoneNumberResponse.from_row(updated))

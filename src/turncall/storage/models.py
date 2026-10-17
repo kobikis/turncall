@@ -653,6 +653,60 @@ class ProjectCredentialRow(Base):
     )
 
 
+class AuditEntryRow(Base):
+    """One change made through the API (#317, ADR-0024): which API key did
+    what to which resource, and what changed.
+
+    Append-only: written in the transaction of the change it records
+    (`services/audit_log.AuditTrail`), never updated, and deleted only by the
+    audit retention janitor. A trigger refuses any other UPDATE, DELETE or
+    TRUNCATE (migration b3d7f1a9c5e2). No foreign keys: an entry outlives the
+    key that made it and the project it was made in (ADR-0011's purge leaves
+    the trail), so `project_id` and `api_key_id` are plain ids.
+    """
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    # Null when the platform credential made the change (actor `platform`).
+    api_key_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    actor: Mapped[str] = mapped_column(String(16), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    # A UUID for most resources; a credential's is its provider account name.
+    resource_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    # {"<RFC 6901 JSON Pointer>": {"before": ..., "after": ...}}, values as
+    # the API reads them, secrets masked (`services/audit_log.diff`).
+    changes: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # One per request, shared by every entry it wrote: the id of its first
+    # entry, the one `X-TurnCall-Audit-Id` names.
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+    __table_args__ = (
+        # The read: a project's entries, newest first, keyset on (created_at, id).
+        Index("ix_audit_log_project_created", "project_id", "created_at", "id"),
+        Index(
+            "ix_audit_log_project_resource",
+            "project_id",
+            "resource_type",
+            "resource_id",
+            "created_at",
+        ),
+        # Everything one request wrote (`?request_id=`).
+        Index("ix_audit_log_project_request", "project_id", "request_id"),
+        # The retention janitor's cutoff, across projects.
+        Index("ix_audit_log_created_at", "created_at"),
+    )
+
+
 class TakeawayRow(Base):
     """A reusable post-call structured-output definition (Takeaway, ADR-0013).
 

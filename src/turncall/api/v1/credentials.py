@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body
 
+from turncall.api.audit import Audit
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ErrorCode
 from turncall.api.responses import ok
@@ -19,7 +20,9 @@ from turncall.api.v1.schemas.credentials import (
 )
 from turncall.auth import Auth, WriteAuth
 from turncall.config.settings import get_settings
+from turncall.domain.enums import AuditAction, AuditResource
 from turncall.domain.providers import AWS_ACCOUNT, ROLE_PROVIDERS, accounts
+from turncall.services import audit_log
 from turncall.services.asterisk_accounts import ASTERISK_ACCOUNT
 from turncall.services.credentials import ambient_aws_available, platform_keys
 from turncall.storage.repositories import credential_repo
@@ -42,26 +45,41 @@ async def put_credential(
     provider: str,
     auth: WriteAuth,
     session: DbSession,
+    audit: Audit,
     body: dict[str, Any] = Body(...),  # noqa: B008
 ) -> dict:
     """Store (or replace) the project's credential for one provider account.
 
     Takes effect on the project's next call — resolved per call, no restart.
+    The audit log records that it was set, never its value.
     """
     document = parse_credential(provider, body)
-    try:
-        row = await credential_repo.upsert(
-            session,
-            project_id=auth.project_id,
-            provider=provider,
-            document=document,
-            settings=get_settings(),
-        )
-    except credential_repo.CredentialKeyError as exc:
-        # Fail closed, legibly: the operator must set the key, not read a 500.
-        raise ApiError(
-            status_code=503, code=ErrorCode.CREDENTIAL_KEY_UNAVAILABLE, message=str(exc)
-        ) from exc
+    existing = await credential_repo.get(session, auth.project_id, provider)
+    with audit.change(
+        AuditResource.CREDENTIAL,
+        provider,
+        AuditAction.UPDATED if existing else AuditAction.CREATED,
+        audit_log.credential_state,
+        existing,
+    ) as change:
+        try:
+            row = await credential_repo.upsert(
+                session,
+                project_id=auth.project_id,
+                provider=provider,
+                document=document,
+                settings=get_settings(),
+            )
+        except credential_repo.CredentialKeyError as exc:
+            # Fail closed, legibly: the operator must set the key, not read a 500.
+            raise ApiError(
+                status_code=503,
+                code=ErrorCode.CREDENTIAL_KEY_UNAVAILABLE,
+                message=str(exc),
+            ) from exc
+        change.to(row)
+    # Committed here, not by DbSession, so the edge reconnects to what is
+    # stored; the commit still writes the audit entry or is refused.
     await session.commit()
     _changed(provider)
     return ok(CredentialResponse.from_row(row))
@@ -74,17 +92,28 @@ async def list_credentials(auth: Auth, session: DbSession) -> dict:
 
 
 @router.delete("/{provider}")
-async def delete_credential(provider: str, auth: WriteAuth, session: DbSession) -> dict:
+async def delete_credential(
+    provider: str, auth: WriteAuth, session: DbSession, audit: Audit
+) -> dict:
     """Remove a credential; the project falls back to the platform key.
 
     Idempotent: deleting one that is not there answers `deleted: false`, so a
-    revocation retried under incident pressure never errors.
+    revocation retried under incident pressure never errors. Audited either
+    way: an entry with no changes says the request found nothing to delete.
     """
     require_known_provider(provider)
-    deleted = await credential_repo.delete_credential(
-        session, auth.project_id, provider
-    )
-    await session.commit()
+    with audit.change(
+        AuditResource.CREDENTIAL,
+        provider,
+        AuditAction.DELETED,
+        audit_log.credential_state,
+        await credential_repo.get(session, auth.project_id, provider),
+    ) as change:
+        deleted = await credential_repo.delete_credential(
+            session, auth.project_id, provider
+        )
+        change.gone()
+    await session.commit()  # before the edge reconnects, as above
     _changed(provider)
     return ok({"provider": provider, "deleted": deleted})
 

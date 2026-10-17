@@ -13,6 +13,34 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Audit log** (#317, ADR-0024). Every change made through the API to a
+  project's agents (create, update, delete, publish, rollback, knowledge base
+  links, and the versions a publish or rollback archives), credentials, phone
+  numbers (including A/B routing, and the numbers a publish or rollback
+  re-points), API keys and project settings (limits, redaction, retention,
+  deletion) is an entry: the API key that made it (or `actor: platform` for
+  the platform credential's bootstrap of a project and its first key), the
+  resource, the action, when, and what changed, field by field before and
+  after, as the API reads it. No secret is recorded: a credential's value, an
+  API key's raw key, hash and prefix, the secrets the agent read masks, and a
+  number's `server_url_secret` and auth token read `***`, so a changed secret
+  shows as changed and nothing more. Each changed field is named by its
+  JSON Pointer (`/config/llm/model`). The entry is written in the change's
+  transaction; a request on these routes that would commit without one is
+  refused with a `500` and rolled back. `GET /v1/audit-log` (admin key; a
+  developer or viewer key gets `403`) reads the project's entries newest
+  first, filtered by `resource_type`, `resource_id`, `action`, `request_id`,
+  `since` and `until`, paged by `cursor`/`next_cursor`. Each audited
+  response names its primary entry in the new `X-TurnCall-Audit-Id` header,
+  so a client such as the builder can link to it; that id is the
+  `request_id` of every entry the request wrote, so `?request_id=` reads
+  back a publish's archived versions and re-pointed numbers too. Append-only: no route writes
+  an entry, and a database trigger refuses every `UPDATE`, `TRUNCATE` and
+  `DELETE` but the retention janitor's. Retention is the operator's new
+  `AUDIT_LOG_RETENTION_DAYS` (unset or empty = kept for good), swept hourly; call
+  retention never touches the log, and a deleted project's entries outlive
+  its purge. Migration `b3d7f1a9c5e2`. See the Audit log guide.
+
 - **Retention** (#316, ADR-0024). A project can choose how long its calls'
   recordings, transcripts and events are kept: `PUT
   /v1/projects/{id}/retention` (admin key) with `recordings_days`,
