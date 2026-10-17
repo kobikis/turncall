@@ -18,6 +18,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.domain.enums import CallDirection, CallEventType
+from turncall.services import telemetry_redaction
 from turncall.services.limits import admit_inbound_call, release_live_call
 from turncall.storage.models import CallRow, PhoneNumberRow
 from turncall.storage.repositories import agent_repo, call_repo
@@ -124,6 +125,9 @@ async def open_inbound_call(
     # Before call-init: a call refused at the carrier asks nobody for an agent.
     # The slot is taken under the call's id before the row exists (#224);
     # `admit_inbound_call` has already announced `call.rejected` when it says no.
+    # From here on the call's logs follow its project's redaction (#314),
+    # the carrier handler's own included: this runs in its task.
+    await telemetry_redaction.for_project(number.project_id, session=session)
     call_id = uuid4()
     if not await admit_inbound_call(
         session,

@@ -3445,7 +3445,7 @@
           "chat"
         ],
         "summary": "List Sessions",
-        "description": "List chat sessions for the authenticated project.",
+        "description": "List chat sessions for the authenticated project.\n\n`limit` is at most 500; a larger one is cut to 500, which the response's\n`limit` reports.",
         "operationId": "list_sessions_v1_chat_sessions_get",
         "parameters": [
           {
@@ -3655,7 +3655,7 @@
           "chat"
         ],
         "summary": "List Session Messages",
-        "description": "List messages in a chat session.",
+        "description": "List messages in a chat session.\n\n`limit` is at most 500; a larger one is cut to 500, which the response's\n`limit` reports.",
         "operationId": "list_session_messages_v1_chat_sessions__session_id__messages_get",
         "parameters": [
           {

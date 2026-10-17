@@ -149,3 +149,8 @@ Possible responses:
 curl -X POST http://localhost:8090/v1/calls/CALL_ID/analysis/rerun \
   -H "Authorization: Bearer tc_xxx"
 ```
+
+With [redaction](/guides/redaction) on, a re-run more than five minutes after the
+call (or after a restart) analyses the stored transcript, which is redacted: the
+conversation as said is held in memory only, for five minutes. A takeaway that
+extracts the caller's number then gets `<PHONE_NUMBER>`.

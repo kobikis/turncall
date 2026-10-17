@@ -1,13 +1,29 @@
 """SMS session repository - data access for chat sessions."""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
-from turncall.domain.session_state import SESSION_TTL_HOURS
-from turncall.storage.models import SmsSessionRow
+from turncall.domain.session_state import (
+    CLAIMED_UNTIL,
+    PENDING,
+    REDACTION,
+    SESSION_TTL_HOURS,
+)
+from turncall.storage.models import ProjectRow, SmsSessionRow
+
+# Written out, not bound: it must read as `ix_sms_sessions_redaction_pending`'s
+# predicate for the planner to use that index, and a bound parameter does not
+# in a generic plan.
+_REDACTION_PENDING = text(f"metadata_json ->> '{REDACTION}' = '{PENDING}'")
+_UNCLAIMED = text(
+    f"coalesce((metadata_json ->> '{CLAIMED_UNTIL}')::timestamptz, '-infinity') < now()"
+)
 
 
 async def create_session(
@@ -111,6 +127,27 @@ async def update_session_activity(
     return result.scalar_one_or_none()
 
 
+def _ended_metadata() -> ColumnElement[Any]:
+    """A session's metadata as it expires: marked for its rows' rewrite when
+    its project redacts then (#314, `services/text_redaction`). Read off the
+    project row, in the expiring statement, so every way a session ends marks
+    it and a crash between the two cannot lose the mark."""
+    redacts = (
+        select(ProjectRow.redaction_enabled)
+        .where(ProjectRow.id == SmsSessionRow.project_id)
+        .scalar_subquery()
+    )
+    return case(
+        (
+            redacts.is_(True),
+            SmsSessionRow.metadata_json.op("||")(
+                func.jsonb_build_object(REDACTION, PENDING)
+            ),
+        ),
+        else_=SmsSessionRow.metadata_json,
+    )
+
+
 async def expire_session(
     session: AsyncSession,
     session_id: UUID,
@@ -120,7 +157,7 @@ async def expire_session(
         update(SmsSessionRow)
         .where(SmsSessionRow.id == session_id)
         .where(SmsSessionRow.status == "active")
-        .values(status="expired")
+        .values(status="expired", metadata_json=_ended_metadata())
         .returning(SmsSessionRow)
     )
     return result.scalar_one_or_none()
@@ -166,6 +203,98 @@ async def expire_stale_sessions(session: AsyncSession) -> int:
         update(SmsSessionRow)
         .where(SmsSessionRow.status == "active")
         .where(SmsSessionRow.expires_at < now)
-        .values(status="expired")
+        .values(status="expired", metadata_json=_ended_metadata())
     )
     return result.rowcount
+
+
+async def claim_pending_redaction(
+    session: AsyncSession, *, limit: int, lease: timedelta
+) -> list[SmsSessionRow]:
+    """Claim, for `lease`, up to `limit` expired sessions whose rows are still
+    to be rewritten redacted, the longest-waiting first. Every API replica
+    runs the sweep: a session another one has claimed (its lease running, or
+    its claim not yet committed: `SKIP LOCKED`) is not taken. The caller
+    commits the claim before it waits on the detector."""
+    claimable = (
+        select(SmsSessionRow.id)
+        .where(SmsSessionRow.status == "expired", _REDACTION_PENDING, _UNCLAIMED)
+        .order_by(SmsSessionRow.expires_at.asc())
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    result = await session.execute(
+        update(SmsSessionRow)
+        .where(SmsSessionRow.id.in_(claimable))
+        .values(
+            metadata_json=SmsSessionRow.metadata_json.op("||")(
+                func.jsonb_build_object(CLAIMED_UNTIL, func.now() + lease)
+            )
+        )
+        .returning(SmsSessionRow)
+        .execution_options(synchronize_session=False)
+    )
+    return sorted(result.scalars().all(), key=lambda row: row.expires_at)
+
+
+async def release_redaction_claims(
+    session: AsyncSession, session_ids: Sequence[UUID]
+) -> None:
+    """Give claimed sessions back before their lease runs out: the rewrite
+    was deferred, so the next sweep, here or on another replica, retries."""
+    if session_ids:
+        await session.execute(
+            update(SmsSessionRow)
+            .where(SmsSessionRow.id.in_(session_ids))
+            .values(metadata_json=SmsSessionRow.metadata_json.op("-")(CLAIMED_UNTIL))
+            .execution_options(synchronize_session=False)
+        )
+
+
+async def lock_for_redaction(session: AsyncSession, session_id: UUID) -> None:
+    """Hold the session row until the rewrite commits. A message stored on it
+    meanwhile updates the row (`sms_message_repo.create_message`), so it
+    waits, and then finds the session rewritten and marks it pending again.
+    `FOR NO KEY UPDATE`: a message insert's foreign-key lock does not block
+    it."""
+    await session.execute(
+        select(SmsSessionRow.id)
+        .where(SmsSessionRow.id == session_id)
+        .with_for_update(key_share=True)
+    )
+
+
+async def set_session_redacted(
+    session: AsyncSession,
+    session_id: UUID,
+    *,
+    customer_number: str,
+    turncall_number: str,
+    state: str,
+) -> None:
+    """Store a session's numbers as redacted, and its redaction `state`; its
+    claim ends."""
+    await session.execute(
+        update(SmsSessionRow)
+        .where(SmsSessionRow.id == session_id)
+        .values(
+            customer_number=customer_number,
+            turncall_number=turncall_number,
+            metadata_json=SmsSessionRow.metadata_json.op("-")(CLAIMED_UNTIL).op("||")(
+                func.jsonb_build_object(REDACTION, state)
+            ),
+        )
+    )
+
+
+async def clear_pending_redaction(session: AsyncSession, session_id: UUID) -> None:
+    """Drop the mark: the project stopped redacting before the rewrite ran."""
+    await session.execute(
+        update(SmsSessionRow)
+        .where(SmsSessionRow.id == session_id)
+        .values(
+            metadata_json=SmsSessionRow.metadata_json.op("-")(REDACTION).op("-")(
+                CLAIMED_UNTIL
+            )
+        )
+    )

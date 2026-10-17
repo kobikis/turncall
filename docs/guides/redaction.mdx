@@ -50,13 +50,47 @@ You can also choose `PERSON`, `LOCATION`, `DATE_TIME`, `ORGANIZATION`, `URL`, `I
 - **The transcript**: `GET /v1/calls/{id}/transcript`, and `transcript` in `call.ended`.
 - **Every call event**: on the event log (`GET /v1/calls/{id}/events`) and in every webhook. That includes tool arguments and results in `tool.result`, and a call's `metadata` in `call.ended`.
 - **The numbers in payloads**: with `PHONE_NUMBER` chosen, `from_number`, `to_number`, `customer_number`, `turncall_number`, `target_number` and `number` are replaced whole. The call record keeps them: `GET /v1/calls/{id}` still shows `from_number`, and routing, the suppression list and campaigns work as before.
-- **Post-call analysis and takeaways**: stored redacted on the call, so `analysis` on `GET /v1/calls/{id}` and `GET /v1/calls/{id}/analysis` match `summary` and `analysis` in `call.ended`.
+- **Post-call analysis and takeaways**: stored redacted on the call, so `analysis` on `GET /v1/calls/{id}` and `GET /v1/calls/{id}/analysis` match `summary` and `analysis` in `call.ended`. A takeaway's fields, and `structured_data`'s, are yours, so every value is analysed whatever its field is called: a field named `customer_id` or `callback_url` is redacted like any other.
+- **Tool invocations**: the arguments (`input_json`) and the result (`output_json`) of every tool call are stored redacted, so `GET /v1/tools/invocations/{call_id}` and a chat session's invocations read back redacted. As with takeaways, the fields are the tool's, and every value is analysed. A JSON number of seven digits or more is analysed as the digits it is written with: `{"card_number": 4111111111111111}` is stored as `{"card_number": "<CREDIT_CARD>"}`, while an order number the detector finds nothing in stays a number. The status is read from the result before it is redacted. Your tool's webhook still gets the raw arguments during the call, and the model the raw result. A scenario drafted from a call or a session (`POST /v1/eval-scenarios/from-call`, `/from-session`) is built from these records and the transcript, so its arguments and tool mocks are redacted too.
+- **Logs and traces**: see [below](#logs-and-traces).
+- **Text conversations** (SMS, WhatsApp and the Chat API): see [below](#text-conversations).
 
 TurnCall's own identifiers are never analysed: ids, timestamps, statuses, provider names (the `from` and `to` of `provider.failover`) and tool names (`tool_name`). With `ORGANIZATION` chosen, "Azure" in a provider name stays as it is.
 
-Not yet redacted: the call record's own `metadata` and numbers (the numbers stay on purpose, see above), tool-invocation records, SMS and chat messages, logs and traces.
+Not yet redacted: the call record's own `metadata` and numbers (the numbers stay on purpose, see above).
 
 Never redacted: call-init and tool webhooks. These are part of the live call, and your own server answers them with the raw values.
+
+## Logs and traces
+
+The server's log lines and OpenTelemetry spans about a redacting project's calls and text conversations are redacted before they leave the process. That covers the carrier webhooks' lines (the caller's `from_number`), the call's pipeline (the observers log what was said, and the STT, LLM and TTS spans carry the transcript and the model's input and output), tool calls, transfers, post-call analysis, SMS and WhatsApp messages, and every API request made with the project's key.
+
+This is not the detector. A log line is written on the path that carries the call's audio, where the detector's hundreds of milliseconds would stall it, so logs and spans are redacted with regular expressions for the types that have a fixed shape: `PHONE_NUMBER`, `EMAIL_ADDRESS`, `CREDIT_CARD` (Luhn-checked), `US_SSN` and `IBAN_CODE` (checksum-validated), each only if the project chose it. Any other type, `PERSON` or `LOCATION` say, is not found in logs and spans. Ids and timestamps are never touched.
+
+How a number is told from everything else that is digits:
+
+- **Several numbers side by side are found one by one.** "4155550132 4155550133" is two phone numbers, not one 20-digit run too long to be either. A run too long for one number is split at its spaces, and from each group on the longest stretch that reads as a number is replaced, so a digit too many may be redacted with it ("+44 20 7946 0958 123 456" becomes "`<PHONE_NUMBER>` 456") but never one too few.
+- **A number inside an address is still a number.** With `PHONE_NUMBER` chosen and `EMAIL_ADDRESS` not, a WhatsApp id written `14155550132@s.whatsapp.net` or a SIP address `sip:+14155550132@pbx.example.com` has its number replaced and keeps the rest. With `EMAIL_ADDRESS` chosen, the whole address is.
+- **Timestamps and long ids are not numbers.** A bare run of digits (no `+`, no separators) is a phone number at 10 to 15 digits, but one starting with `1` only at 11 digits (`+1` and ten: no other country code starts with 1, and no US area code does). A bare card number starts with 2 to 6, as every major network's do (or is a 15-digit UATP number starting with 1). So epoch timestamps, which start with 1 in seconds, milliseconds, microseconds or nanoseconds (`1760000000123`), and ids padded with zeros are left as they are. A bare 11- to 15-digit id starting with 2 to 9 does read as a phone number: a WhatsApp id looks exactly like it.
+- **Separated, a phone number has a group of three digits or more** ("10 20 30 40" is a list), and one written with dots must read like `415.555.0132` (not a version, a decimal or an IP address).
+
+- **Exceptions**: for a redacting project, a logged exception's traceback is written without the local variables loguru would otherwise show, redacted and appended to the message. In JSON logs, its `exception` field is `null`.
+- **Spans**: a span started during the project's call is marked `turncall.redaction` (the chosen types), and its attributes, event attributes and status description are redacted as it is exported. The call's `turncall.from_number` and `turncall.to_number` are left off its spans altogether, whatever `PIPECAT_TRACE_INCLUDE_PII` says.
+- **What is outside a project** is logged as before: startup, a webhook for a number no project owns, a request without a valid key.
+- **A call follows the setting it started with.** Logs and spans read the project's setting when the call (or the request, or the text message) starts, not on every line.
+
+## Text conversations
+
+An SMS, WhatsApp or Chat API session works differently from a call, because its agent rereads the stored messages on every turn. If they were stored redacted, the agent would forget the number it was given one message earlier. So while a session is live, its messages are stored as written, and everything that reads them is redacted:
+
+- `GET /v1/chat/sessions/{id}/messages`: each message's `content`. A page is redacted before it is answered, a few dozen messages at a time so a long conversation does not hold up live calls' redaction, and holds at most 500 (a larger `limit` is cut to 500, as the response's `limit` shows; the same holds for `GET /v1/chat/sessions`).
+- `GET /v1/chat/sessions` and `GET /v1/chat/sessions/{id}`: `customer_number` and `turncall_number` (with `PHONE_NUMBER` chosen; a Chat API session's `api` stays as it is).
+- `POST /v1/eval-scenarios/from-session`: the derived scenario, as `/from-call` reads a call's redacted transcript.
+- The `chat.created` and `session.*` webhooks.
+
+Once a session ends, the agent never reads it again, so its messages and numbers are rewritten redacted in the database, as a call's are stored. A session ends when it expires (24 hours after its last message), when you `DELETE /v1/chat/sessions/{id}`, or when a new session replaces it. The rewrite runs in the session sweep, every 15 minutes, and covers sessions that ended while the project had redaction on. Every server runs the sweep; each claims the sessions it rewrites, so no session is rewritten twice, and a claim lapses after ten minutes if its server dies mid-rewrite. A reply that finishes after its session ended, as it is being rewritten, is stored and the session is rewritten again at the next sweep. A session that ended before redaction was turned on is not rewritten, but while redaction is on its reads are redacted all the same. If the detector cannot answer, the rewrite waits for the next sweep rather than storing `<REDACTED>`.
+
+The reply to `POST /v1/chat` and the text sent to the customer by SMS or WhatsApp are the live conversation, so they are never redacted.
 
 ## Limits
 

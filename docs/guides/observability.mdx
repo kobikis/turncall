@@ -61,9 +61,13 @@ They **supplement** the [server events](/guides/server-events) / webhook transcr
 |---|---|---|
 | `PIPECAT_ENABLE_OBSERVERS` | `true` | Toggle the five observers |
 | `PIPECAT_ENABLE_TRACING` | `true` | Toggle OTel tracing |
-| `PIPECAT_TRACE_INCLUDE_PII` | `true` | Put caller phone numbers (`from`/`to`) on spans. Set `false` for compliance-sensitive deployments — non-PII attributes stay. |
+| `PIPECAT_TRACE_INCLUDE_PII` | `true` | Put caller phone numbers (`from`/`to`) on spans. Set `false` for compliance-sensitive deployments — non-PII attributes stay. A project with [redaction](/guides/redaction) on never gets them, whatever this says. |
 | `PIPECAT_OTEL_SERVICE_NAME` | `turncall` | `service.name` in traces |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | (unset) | OTLP collector URL; required for tracing in production |
+
+## Redaction
+
+A project with [redaction](/guides/redaction) on has its calls' log lines and spans redacted before they leave the process: the observers' transcripts, the LLM's input and output on its spans, the numbers the webhook handlers log. Phone numbers, emails, card numbers, US SSNs and IBANs, whichever the project chose, become `<ENTITY_TYPE>`. It is done with regular expressions, not the detector, so a type with no fixed shape (`PERSON`, `LOCATION`) stays in logs and spans. See [what is redacted](/guides/redaction#logs-and-traces).
 
 ## Local quick start
 

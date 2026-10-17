@@ -31,7 +31,7 @@ from turncall.domain.models import (
     ToolDefinition,
 )
 from turncall.services.retrieval import KNOWLEDGE_TOOL_SCHEMA, query_knowledge
-from turncall.services.tool_webhook import classify_tool_result, post_tool_webhook
+from turncall.services.tool_webhook import invocation_record, post_tool_webhook
 
 # Recording tasks kept referenced so asyncio (which holds only a weak ref)
 # can't GC one mid-write.
@@ -59,7 +59,6 @@ async def _record_invocation(
     from turncall.storage.database import get_session_factory
     from turncall.storage.repositories import tool_invocation_repo
 
-    status, output_json = classify_tool_result(result)
     try:
         # Before the session: no detector wait inside a transaction (events/emit).
         payload = await redact(
@@ -67,12 +66,15 @@ async def _record_invocation(
             CallEventType.TOOL_RESULT,
             {"tool_name": tool_name, "arguments": args, "result": result},
         )
+        status, input_json, output_json = await invocation_record(
+            project_id, args, result
+        )
         async with get_session_factory()() as db:
             await tool_invocation_repo.create_invocation(
                 db,
                 session_id=session_id,
                 tool_name=tool_name,
-                input_json=args,
+                input_json=input_json,
                 status=status,
                 output_json=output_json,
                 latency_ms=latency_ms,

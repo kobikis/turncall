@@ -30,6 +30,11 @@ keeps the raw number (routing, the suppression list and campaigns read it).
 None of that needs the detector: a payload with no text in it is redacted
 right here, synchronously, and never reaches it.
 
+Those key rules are for TurnCall's own payloads. JSON whose keys the user
+chose (a tool's arguments and result, a takeaway) goes through `redact_json`,
+which analyses every string whatever its key; a lone string, through
+`redact_text` (#314).
+
 **The detector** is Presidio with spaCy's small English model, run locally so
 no text goes to a vendor to be redacted. It runs in a worker process of its
 own (`_Engine`), not a thread: Presidio is mostly Python and holds the GIL, so
@@ -123,6 +128,11 @@ RETRY_AFTER_SECONDS = 300.0
 MAX_PENDING = 256
 # A redaction that took longer than this is logged, with the backlog.
 SLOW_SECONDS = 1.0
+
+# Free JSON's integers this long or longer are analysed (`redact_json`): the
+# fewest digits a phone number has. A count, a duration or a party size is
+# shorter and never reaches the detector.
+NUMBER_DIGITS = 7
 
 # Top-level payload fields holding a phone number (decision 5 on #313).
 PHONE_FIELDS = frozenset(
@@ -309,6 +319,7 @@ async def redact_payload(
     *,
     event_type: str | None = None,
     keep: Iterable[str] = (),
+    strict: bool = False,
 ) -> dict[str, Any]:
     """`payload` with the policy's entity types replaced by `<ENTITY_TYPE>`.
 
@@ -316,11 +327,12 @@ async def redact_payload(
     from this project's stored events, which were redacted when stored. Never
     mutates `payload`: the caller may still hold it. Its text is analysed in
     the redaction worker, off the event loop; a payload with no text never
-    reaches the worker at all.
+    reaches the worker at all. `strict`: raise `RedactionWithheld` rather than
+    withhold the text when the detector does not answer.
     """
     keep = frozenset(keep)
     texts = texts_in(payload, event_type=event_type, keep=keep)
-    replaced = await _detect(texts, policy.entities) if texts else {}
+    replaced = await _detect(texts, policy.entities, strict) if texts else {}
     return _walk(
         payload,
         policy.entities,
@@ -330,11 +342,56 @@ async def redact_payload(
     )
 
 
-async def _detect(texts: list[str], entities: tuple[str, ...]) -> dict[str, str]:
+async def redact_json(
+    value: Any, policy: RedactionPolicy, *, strict: bool = False
+) -> Any:
+    """Free JSON (`value`: any JSON value) with the policy's entity types
+    replaced: a tool's arguments or result, a takeaway (#314).
+
+    Unlike `redact_payload`, nothing is skipped by its key: the keys are the
+    user's, not TurnCall's envelope, so a field named `customer_id`,
+    `callback_url` or `number` may hold what the caller said, and a phone
+    number in it is the detector's to find rather than replaced whole by its
+    field's name. Keys themselves are not analysed. UUIDs and ISO-8601
+    timestamps are skipped by their shape, as everywhere. An integer of
+    `NUMBER_DIGITS` digits or more is analysed as the digits it is written
+    with (`{"card": 4111111111111111}`, `{"phone": 4155550132}`): one the
+    detector finds becomes its `<ENTITY_TYPE>` string, any other stays the
+    number it was. The same worker, the same failure mode (withheld, never
+    raw, or `RedactionWithheld` when `strict`), and never mutates `value`.
+    """
+    texts: list[str] = []
+
+    def collect(text: str) -> str:
+        texts.append(text)
+        return text
+
+    _deep(value, collect, numbers=True)
+    replaced = await _detect(texts, policy.entities, strict) if texts else {}
+    return _deep(value, lambda text: replaced.get(text, WITHHELD), numbers=True)
+
+
+async def redact_text(text: str, policy: RedactionPolicy) -> str:
+    """One plain string redacted: an SMS row's content, a chat message."""
+    redacted: str = await redact_json(text, policy)
+    return redacted
+
+
+class RedactionWithheld(RuntimeError):
+    """The detector did not answer (unavailable, saturated or failed), for a
+    `strict` caller: one rewriting stored rows, which would rather try again
+    later than store `<REDACTED>` for good."""
+
+
+async def _detect(
+    texts: list[str], entities: tuple[str, ...], strict: bool = False
+) -> dict[str, str]:
     """Each distinct text, redacted; a text left out is withheld."""
     unique = list(dict.fromkeys(texts))
     redacted = await ENGINE.redact(unique, entities)
     if redacted is None:
+        if strict:
+            raise RedactionWithheld(f"{len(unique)} text(s) not redacted")
         return {}
     return dict(zip(unique, redacted, strict=True))
 
@@ -364,16 +421,32 @@ def _walk(
     return out
 
 
-def _deep(value: Any, redact: Callable[[str], str]) -> Any:
+def _deep(value: Any, redact: Callable[[str], str], *, numbers: bool = False) -> Any:
+    """`value` with its text passed through `redact`; with `numbers`, its
+    long integers too (`redact_json`), kept as numbers unless redacted."""
     if isinstance(value, str):
         if not value.strip() or _shaped_structural(value):
             return value
         return redact(value)
+    if numbers and _a_long_integer(value):
+        written = str(value)
+        redacted = redact(written)
+        return value if redacted == written else redacted
     if isinstance(value, dict):
-        return {k: _deep(v, redact) for k, v in value.items()}
+        return {k: _deep(v, redact, numbers=numbers) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_deep(v, redact) for v in value]
+        return [_deep(v, redact, numbers=numbers) for v in value]
     return value
+
+
+def _a_long_integer(value: Any) -> bool:
+    """An integer that may be a phone, card or SSN number: no bool, no float
+    (an amount), and `NUMBER_DIGITS` digits or more (a count is fewer)."""
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and len(str(abs(value))) >= NUMBER_DIGITS
+    )
 
 
 def _a_number(value: str) -> bool:

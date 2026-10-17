@@ -34,6 +34,12 @@ def setup_logging(log_level: str = "info", json_output: bool = False) -> None:
             ),
         )
 
+    # A redacting project's records are redacted before any sink sees them
+    # (services/telemetry_redaction, #314).
+    from turncall.services import telemetry_redaction
+
+    telemetry_redaction.install()
+
     # Intercept stdlib logging (uvicorn, sqlalchemy) into loguru
     class InterceptHandler(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:

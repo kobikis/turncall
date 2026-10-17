@@ -10,16 +10,19 @@ whichever channel the customer's endpoint hears from.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
 import httpx
 from loguru import logger
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.adapters.http_client import get_http_client
 from turncall.config.settings import get_settings
 from turncall.domain.models import ToolDefinition
 from turncall.events.webhook_signing import sign_payload
+from turncall.services import redaction
 
 # How much of an oversized result to show the model. Enough to see what the
 # tool was answering, small enough that the cap still means something.
@@ -76,6 +79,38 @@ def classify_tool_result(result: str) -> tuple[str, dict[str, Any]]:
         # such an endpoint made.
         return ("failed" if parsed.get("error") else "succeeded"), parsed
     return "succeeded", {"result": parsed}
+
+
+async def invocation_record(
+    project_id: UUID,
+    args: dict[str, Any],
+    result: str,
+    *,
+    sessions: Callable[[], AsyncSession] | None = None,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """(status, input_json, output_json) as a `tool_invocations` row stores
+    them, for both tool paths.
+
+    For a project that redacts, the arguments and the result go through its
+    redaction first (#314, ADR-0024): the row outlives the call and is served
+    by the invocations reads. Their keys are the tool's own, so they are free
+    JSON (`redaction.redact_json`), every string analysed whatever its key. The
+    status is read from the raw result, so a redacted error still counts as
+    one. Only the row is redacted: the webhook was sent the raw arguments and
+    the model was handed the raw result, both before this runs.
+
+    Waits on the detector: call it before the session's transaction begins
+    (events/emit). The policy is read on a session of its own, from
+    `sessions` (the app's factory by default).
+    """
+    status, output_json = classify_tool_result(result)
+    policy = await redaction.policy_for_project(project_id, sessions=sessions)
+    if policy is None:
+        return status, args, output_json
+    redacted_args, redacted_output = await redaction.redact_json(
+        [args, output_json], policy
+    )
+    return status, redacted_args, redacted_output
 
 
 async def post_tool_webhook(

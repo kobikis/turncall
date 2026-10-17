@@ -17,7 +17,8 @@ What it does not cover, on purpose:
   never redacts what the live call uses.
 - Tool-invocation rows (`tool_invocation_repo.create_invocation`, written by
   `orchestrator/tool_bridge.py` and `services/chat_tools.py`). Those are
-  stored data, but not call events; their redaction is #314's.
+  stored data, but not call events: they are redacted where they are written,
+  as free JSON (`tool_webhook.invocation_record`, #314).
 - Everything else that is stored or logged: SMS/chat message rows, logs and
   spans. (The call row's `analysis_json` is redacted where it is written,
   `services/call_analysis_trigger`.)

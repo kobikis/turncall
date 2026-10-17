@@ -230,6 +230,197 @@ async def test_what_was_stored_redacted_passes_through(detector) -> None:
     assert detector.seen.count(SECRET) == 1
 
 
+# --- Free text and free JSON (#314) -------------------------------------------
+
+
+async def test_a_plain_string_is_redacted_as_it_is(detector) -> None:
+    """An SMS row's content, a log line: no `{"text": s}` wrapping."""
+    assert await redaction.redact_text(f"mail {SECRET}", POLICY) == (
+        "mail <EMAIL_ADDRESS>"
+    )
+    assert await redaction.redact_text("  ", POLICY) == "  "
+    assert detector.seen[-1] == f"mail {SECRET}"
+    assert "  " not in detector.seen
+
+
+async def test_free_json_keys_are_the_users_and_are_all_analysed(detector) -> None:
+    """A tool's arguments or a takeaway: a field named `customer_id`,
+    `callback_url`, `status` or `number` is the user's, and may hold what the
+    caller said. Nothing is skipped by its key, and a phone-named field is
+    analysed by the detector rather than replaced whole."""
+    value = {
+        "customer_id": SECRET,
+        "callback_url": f"mailto:{SECRET}",
+        "status": SECRET,
+        "role": SECRET,
+        "number": f"call {SECRET}",
+        "from_number": "+15550001234",
+        "nested": {"order_id": SECRET},
+    }
+
+    out = await redaction.redact_json(value, POLICY)
+
+    assert out == {
+        "customer_id": "<EMAIL_ADDRESS>",
+        "callback_url": "mailto:<EMAIL_ADDRESS>",
+        "status": "<EMAIL_ADDRESS>",
+        "role": "<EMAIL_ADDRESS>",
+        "number": "call <EMAIL_ADDRESS>",
+        # The stand-in finds no number in it; the real detector's phone
+        # recognizer is what reads it (`test_redaction_detector.py`).
+        "from_number": "+15550001234",
+        "nested": {"order_id": "<EMAIL_ADDRESS>"},
+    }
+    assert "+15550001234" in detector.seen
+
+
+async def test_free_json_may_be_any_json_value(detector) -> None:
+    """A tool's result is whatever its webhook answered: a list, a string, a
+    number. The caller's value is left as it was."""
+    listed = [SECRET, {"a": [SECRET, 1, None, True]}]
+
+    assert await redaction.redact_json(listed, POLICY) == [
+        "<EMAIL_ADDRESS>",
+        {"a": ["<EMAIL_ADDRESS>", 1, None, True]},
+    ]
+    assert listed == [SECRET, {"a": [SECRET, 1, None, True]}]
+    assert await redaction.redact_json(SECRET, POLICY) == "<EMAIL_ADDRESS>"
+    assert await redaction.redact_json(42, POLICY) == 42
+    assert await redaction.redact_json(None, POLICY) is None
+
+
+async def test_free_json_analyses_long_integers_as_their_digits(monkeypatch) -> None:
+    """A tool's webhook may answer a card or a phone number as a JSON number.
+    It is analysed as the digits it is written with; one the detector finds
+    becomes its tag, any other stays a number. Counts never reach it."""
+
+    class Cards(_Marks):
+        def redact(self, text: str, entities: tuple[str, ...]) -> str:
+            self.seen.append(text)
+            return {"4111111111111111": "<CREDIT_CARD>"}.get(text, text)
+
+    cards = Cards()
+    _use(monkeypatch, lambda: cards)
+    value = {
+        "card_number": 4111111111111111,
+        "order": 98765432,
+        "items": [4111111111111111, 3],
+        "total": 4111111111111111.0,
+        "paid": True,
+        "party_size": 4,
+    }
+    try:
+        out = await redaction.redact_json(value, POLICY)
+    finally:
+        redaction.ENGINE.shutdown()
+
+    assert out == {
+        "card_number": "<CREDIT_CARD>",
+        "order": 98765432,
+        "items": ["<CREDIT_CARD>", 3],
+        "total": 4111111111111111.0,
+        "paid": True,
+        "party_size": 4,
+    }
+    assert value["card_number"] == 4111111111111111
+    assert {"4111111111111111", "98765432"} <= set(cards.seen)
+    assert not {"3", "4", "True"} & set(cards.seen)
+
+
+async def test_free_json_long_integers_are_withheld_when_the_detector_fails(
+    monkeypatch,
+) -> None:
+    def broken() -> None:
+        raise RuntimeError("model missing")
+
+    _use(monkeypatch, broken)
+    try:
+        out = await redaction.redact_json({"phone": 4155550132, "n": 12}, POLICY)
+    finally:
+        redaction.ENGINE.shutdown()
+
+    assert out == {"phone": "<REDACTED>", "n": 12}
+
+
+async def test_free_json_skips_uuids_and_timestamps_by_their_shape(detector) -> None:
+    value = {
+        "ref": "550e8400-e29b-41d4-a716-446655440000",
+        "when": ["2026-10-16T12:00:00+00:00"],
+    }
+
+    assert await redaction.redact_json(value, POLICY) == value
+    assert detector.seen == []
+
+
+async def test_free_json_with_no_text_never_reaches_the_detector(monkeypatch) -> None:
+    built: list[str] = []
+    _use(monkeypatch, lambda: built.append("built") or _Marks())
+
+    out = await redaction.redact_json({"n": 3, "ok": True, "items": []}, POLICY)
+
+    assert out == {"n": 3, "ok": True, "items": []}
+    assert built == []
+    assert redaction.ENGINE._pool is None
+
+
+async def test_free_text_and_json_withhold_when_the_detector_fails(
+    monkeypatch,
+) -> None:
+    def broken() -> None:
+        raise RuntimeError("model missing")
+
+    _use(monkeypatch, broken)
+    try:
+        text = await redaction.redact_text(SECRET, POLICY)
+        value = await redaction.redact_json(
+            {"customer_id": SECRET, "n": 1, "from_number": "+15550001234"}, POLICY
+        )
+    finally:
+        redaction.ENGINE.shutdown()
+
+    assert text == "<REDACTED>"
+    # No phone-field rule in free JSON: the number is text, withheld with it.
+    assert value == {"customer_id": "<REDACTED>", "n": 1, "from_number": "<REDACTED>"}
+
+
+async def test_strict_raises_rather_than_withholds(monkeypatch) -> None:
+    """For a rewrite of stored rows, which would rather try again later than
+    store `<REDACTED>` for good."""
+
+    def broken() -> None:
+        raise RuntimeError("model missing")
+
+    _use(monkeypatch, broken)
+    try:
+        with pytest.raises(redaction.RedactionWithheld):
+            await redaction.redact_json([SECRET], POLICY, strict=True)
+        with pytest.raises(redaction.RedactionWithheld):
+            await redaction.redact_payload({"text": SECRET}, POLICY, strict=True)
+        # No text, no detector: nothing to withhold.
+        assert await redaction.redact_payload(
+            {"customer_number": "+15550001234"}, POLICY, strict=True
+        ) == {"customer_number": "<PHONE_NUMBER>"}
+    finally:
+        redaction.ENGINE.shutdown()
+
+
+async def test_free_json_past_the_backlog_is_withheld(monkeypatch) -> None:
+    slow = _Marks(delay=0.2)
+    _use(monkeypatch, lambda: slow)
+    monkeypatch.setattr(redaction, "MAX_PENDING", 1)
+    try:
+        assert await redaction.ready()
+        first = asyncio.create_task(redaction.redact_text(SECRET, POLICY))
+        await asyncio.sleep(0.05)
+        over = await redaction.redact_json({"a": SECRET}, POLICY)
+        done = await first
+    finally:
+        redaction.ENGINE.shutdown()
+
+    assert over == {"a": "<REDACTED>"}
+    assert done == "<EMAIL_ADDRESS>"
+
+
 async def test_a_failing_detector_withholds_the_text(monkeypatch) -> None:
     """Never raw because redaction broke: every text string is withheld, and
     the event still goes out."""

@@ -101,3 +101,43 @@ async def test_the_worker_process_redacts_and_leaves_identifiers_alone() -> None
     assert "415 555 0132" not in failover["error"]
     assert "<PHONE_NUMBER>" in failover["error"]
     assert said == {"text": "Write to <EMAIL_ADDRESS>", "role": "customer"}
+
+
+async def test_the_worker_redacts_free_json_whatever_its_keys_are() -> None:
+    """A tool's arguments, a takeaway (#314): the keys are the user's, so a
+    number under `customer_id` or `callback_number` is found by the detector
+    itself, as is text in a plain string."""
+    from turncall.services.redaction import RedactionPolicy, redact_json, redact_text
+
+    policy = RedactionPolicy(DEFAULT_ENTITIES)
+    try:
+        assert await redaction.ready()
+        value = await redact_json(
+            {
+                "customer_id": "4155550132",
+                "callback_number": "+44 20 7946 0958",
+                "notes": ["write to jane.doe@example.com"],
+                "booked_at": "2026-10-16T12:00:00+00:00",
+                "party_size": 4,
+                # JSON numbers, as a webhook may answer them.
+                "card_number": 4111111111111111,
+                "phone": 4155550132,
+                "sent_at_ms": 1760000000123,
+            },
+            policy,
+        )
+        text = await redact_text("my number is 415 555 0132", policy)
+    finally:
+        redaction.shutdown()
+
+    assert value == {
+        "customer_id": "<PHONE_NUMBER>",
+        "callback_number": "<PHONE_NUMBER>",
+        "notes": ["write to <EMAIL_ADDRESS>"],
+        "booked_at": "2026-10-16T12:00:00+00:00",
+        "party_size": 4,
+        "card_number": "<CREDIT_CARD>",
+        "phone": "<PHONE_NUMBER>",
+        "sent_at_ms": 1760000000123,
+    }
+    assert text == "my number is <PHONE_NUMBER>"

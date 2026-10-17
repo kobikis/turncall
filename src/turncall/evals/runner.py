@@ -57,6 +57,7 @@ from turncall.evals.run_warnings import (
 )
 from turncall.evals.snapshots import harness_config
 from turncall.evals.targets import ResolvedTarget, resolve_target
+from turncall.services import telemetry_redaction
 from turncall.services.credentials import Credentials, for_project
 from turncall.services.credentials import scope as credentials_scope
 from turncall.services.tool_mocks import ToolMocks
@@ -719,6 +720,8 @@ async def execute_run(
             # Cancelled while queued, or already claimed by another worker.
             logger.info("eval_run_not_queued", run_id=str(run_id), status=run.status)
             return
+        # This run's logs and spans follow its project's redaction (#314).
+        await telemetry_redaction.for_project(run.project_id, session=session)
 
         iterations = run.iterations
         plan = await _plan_run(

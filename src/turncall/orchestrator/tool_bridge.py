@@ -25,7 +25,7 @@ from turncall.services.template_renderer import (
     render_agent_config,
 )
 from turncall.services.tool_mocks import EXECUTED, intercept
-from turncall.services.tool_webhook import classify_tool_result, post_tool_webhook
+from turncall.services.tool_webhook import invocation_record, post_tool_webhook
 
 if TYPE_CHECKING:
     from pipecat.services.llm_service import LLMService
@@ -67,13 +67,18 @@ async def _log_tool_result(
             {"tool_name": function_name, "arguments": args, "result": result},
             sessions=call_context.session_factory,
         )
+        status, input_json, output_json = await invocation_record(
+            call_context.project_id,
+            args,
+            result,
+            sessions=call_context.session_factory,
+        )
         async with call_context.session_factory() as session:
-            status, output_json = classify_tool_result(result)
             await tool_invocation_repo.create_invocation(
                 session,
                 call_id=call_context.call_id,
                 tool_name=function_name,
-                input_json=args,
+                input_json=input_json,
                 status=status,
                 output_json=output_json,
                 latency_ms=latency_ms,

@@ -123,16 +123,22 @@ async def resolve_briefing_text(
 
     # Auto-summary: gather the transcript and run the agent's LLM on the fly.
     from turncall.domain.models import AWSConfig, LLMConfig
-    from turncall.services import live_transcript, redaction
+    from turncall.services import live_transcript, redaction, telemetry_redaction
     from turncall.services.llm_text import complete_text
     from turncall.storage.repositories import agent_repo, call_repo
 
     call = await call_repo.get_call_by_id(session, call_id)
+    policy = None
+    if call is not None:
+        policy = await redaction.policy_for_project(call.project_id, session=session)
+        # The summary's logs (its LLM's included) follow the call's project.
+        # With no call there is none to follow: the caller's scope stays.
+        telemetry_redaction.use(policy)
     if (
         not here
         and call is not None
         and live_transcript.lines(call_id) is None
-        and await redaction.policy_for_project(call.project_id, session=session)
+        and policy
     ):
         # The whisper landed on a replica that did not run the call, and the
         # stored transcript is redacted: the process holding the conversation

@@ -89,6 +89,8 @@ and for the session they add up to (`400`).
 | GET | `/v1/chat/sessions/:id/messages` | List messages |
 | DELETE | `/v1/chat/sessions/:id` | Expire session |
 
+The two lists take `limit` (sessions: 50 by default, messages: 100) up to 500; a larger one is cut to 500, and the response's `limit` is the one applied.
+
 ## Context Threading
 
 Use `session_id` (group messages) or `previous_chat_id` (linear chain) to maintain conversation context. Cannot use both.

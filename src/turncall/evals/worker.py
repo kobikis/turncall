@@ -143,6 +143,7 @@ def _quieten_readiness_probe() -> None:
 
 async def run_worker() -> None:
     """Start the worker and serve until signalled."""
+    from turncall.services import telemetry_redaction
     from turncall.storage.database import (
         close_database,
         get_session_factory,
@@ -150,6 +151,8 @@ async def run_worker() -> None:
     )
     from turncall.storage.redis import close_redis, init_redis
 
+    # A redacting project's log records are redacted (#314).
+    telemetry_redaction.install()
     _quieten_readiness_probe()
     settings = get_settings()
     await init_database(settings.database)

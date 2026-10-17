@@ -12,6 +12,7 @@ from turncall.auth.api_keys import hash_api_key, legacy_hash_api_key
 from turncall.auth.context import AuthContext
 from turncall.config import get_settings
 from turncall.domain.enums import ProjectRole
+from turncall.services import telemetry_redaction
 from turncall.storage.repositories import api_key_repo, project_repo
 
 
@@ -62,6 +63,11 @@ async def resolve_auth_context(
     if await project_repo.get_project_by_id(session, api_key_row.project_id) is None:
         logger.warning("auth_deleted_project", project_id=str(api_key_row.project_id))
         raise UnauthorizedError("Invalid API key")
+
+    # The request's logs follow its project's redaction from here (#314): a
+    # transfer's target, a chat message, the call the end API stops. The
+    # endpoint runs in this task, so it sees what is set here.
+    await telemetry_redaction.for_project(api_key_row.project_id, session=session)
 
     return AuthContext(
         project_id=api_key_row.project_id,

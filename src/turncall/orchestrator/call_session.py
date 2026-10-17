@@ -33,6 +33,7 @@ from turncall.orchestrator.telemetry import (
     build_span_attributes,
     is_tracing_active,
 )
+from turncall.services import telemetry_redaction
 from turncall.services.credentials import MissingProviderKeyError
 from turncall.services.live_call_channel import ControlRefused
 
@@ -166,12 +167,23 @@ class CallSession:
             transport=transport,
             from_number=from_number,
             to_number=to_number,
-            include_pii=pipecat.trace_include_pii,
+            # A redacting project's numbers stay off its spans, whatever
+            # PIPECAT_TRACE_INCLUDE_PII says (#314).
+            include_pii=pipecat.trace_include_pii
+            and telemetry_redaction.current() is None,
         )
         return observers, attrs
 
     async def start(self) -> None:
         """Start the pipeline for this call."""
+        if self._call_context.records:
+            # Everything this call logs, and every span it starts, from here
+            # on follows its project's redaction: the pipeline's tasks are
+            # started from this one and inherit it (#314).
+            await telemetry_redaction.for_project(
+                self._call_context.project_id,
+                sessions=self._call_context.session_factory,
+            )
         logger.info(
             "call_session_starting",
             call_id=str(self.call_id),

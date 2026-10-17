@@ -51,7 +51,7 @@ from turncall.campaigns import lifecycle
 from turncall.campaigns.schedule import CallingWindow, next_open, retry_at
 from turncall.config import get_settings
 from turncall.domain.enums import CampaignStatus, CampaignTargetStatus
-from turncall.services import limits
+from turncall.services import limits, telemetry_redaction
 from turncall.services.call_view import call_view_fields
 from turncall.services.outbound_dial import DialNotRecorded, place_outbound_call
 from turncall.storage.models import CampaignRow, CampaignTargetRow
@@ -85,11 +85,15 @@ async def run_pass(session_factory: SessionFactory, *, clock: Clock) -> float | 
         campaigns = await campaign_repo.active_campaigns(session)
     waits: list[float] = []
     for campaign in campaigns:
-        try:
-            wait = await advance(session_factory, campaign, clock=clock)
-        except Exception:
-            logger.exception("campaign_pass_error", campaign_id=str(campaign.id))
-            continue
+        # The campaign's logs follow its project's redaction (#314).
+        async with telemetry_redaction.scoped_to_project(
+            campaign.project_id, sessions=session_factory
+        ):
+            try:
+                wait = await advance(session_factory, campaign, clock=clock)
+            except Exception:
+                logger.exception("campaign_pass_error", campaign_id=str(campaign.id))
+                continue
         if wait is not None:
             waits.append(wait)
     return min(waits, default=None)

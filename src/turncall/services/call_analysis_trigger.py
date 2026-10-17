@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.domain.enums import CallEventType, EndedReason
 from turncall.domain.models import AnalysisConfig, AWSConfig, LLMConfig
-from turncall.services import live_transcript, redaction
+from turncall.services import live_transcript, redaction, telemetry_redaction
 from turncall.services.call_view import call_view_fields, public_metadata
 
 if TYPE_CHECKING:
@@ -182,6 +182,8 @@ async def _run_post_call(
         policy = await redaction.policy_for_project(
             project_id, sessions=session_factory
         )
+        # This task's logs, the analysis LLM's included, follow the project.
+        telemetry_redaction.use(policy)
         if (
             analysis_config.enabled
             and policy is not None
@@ -255,7 +257,10 @@ async def _run_post_call(
 
             # Store analysis on call record. Redacted first, for a project that
             # redacts: the call read serves it, and analysis read the raw
-            # conversation (#313; the rest of #314's surfaces are #314's).
+            # conversation (#313). The top-level keys are ours (`model`,
+            # `analyzed_at` are skipped); everything under them is analysed
+            # whatever its key, so `takeaways` and `structured_data`, whose
+            # keys are the user's, are redacted in full (#314).
             # Before the session, as every redaction wait is (events/emit).
             if policy is not None:
                 analysis_dict = await redaction.redact_payload(analysis_dict, policy)

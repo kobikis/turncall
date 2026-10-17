@@ -457,9 +457,9 @@ Customer texts → Twilio POST /webhooks/twilio/sms/inbound → resolve phone �
 ### Chat API
 ```
 POST /v1/chat              # Send message, get LLM reply (creates/resumes session)
-GET  /v1/chat/sessions     # List sessions
+GET  /v1/chat/sessions     # List sessions (?limit= at most 500, cut to it)
 GET  /v1/chat/sessions/:id # Get session detail
-GET  /v1/chat/sessions/:id/messages  # List messages
+GET  /v1/chat/sessions/:id/messages  # List messages (?limit= at most 500)
 GET  /v1/chat/sessions/:id/tool-invocations  # Tool calls made in the session
 DELETE /v1/chat/sessions/:id         # Expire session
 ```
@@ -1001,8 +1001,22 @@ PUT refreshes this process's entry, other replicas see it within the TTL.
   runtime downloads are off: a missing model raises instead of
   pip-installing, and `TLDEXTRACT_PUBLIC_SUFFIX_LIST_URLS=""` keeps the email
   recognizer offline. Fails closed: never raw because redaction broke.
-- **Not yet (#314):** tool-invocation rows, SMS/chat message rows, logs and
-  spans.
+- **#314** extends it past call events. `redaction.redact_json` (user JSON:
+  every string whatever its key, and integers of `NUMBER_DIGITS`+ digits as
+  their digits) stores `tool_invocations.input_json` / `output_json`
+  redacted (`tool_webhook.invocation_record`, awaited before the row's
+  session). Text conversations (`services/text_redaction`): `sms_messages`
+  stay raw while the session is live (`sms_chat._build_llm_messages` replays
+  them); every Chat API read is redacted, in jobs of `DETECT_BATCH`; an
+  ended session is marked `pending` by its expiry and rewritten by the
+  15-min sweep, which claims sessions with `FOR UPDATE SKIP LOCKED` and a
+  lease (`claim_pending_redaction`, partial index
+  `ix_sms_sessions_redaction_pending`) and holds the session row while it
+  writes; `create_message` always updates the session row, so a late reply
+  waits for that and re-marks it `pending`. Logs and spans
+  (`services/telemetry_redaction`): regex only, never the detector; the
+  project comes from a contextvar set by `for_project` (pass `session=` when
+  one is open) where a call, request or text message starts.
 
 ## Graceful Shutdown
 
