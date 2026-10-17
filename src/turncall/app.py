@@ -29,12 +29,16 @@ async def _ensure_credentials_readable(settings: Settings) -> None:
 
 
 async def _warn_if_whatsapp_unverifiable(settings: Settings) -> None:
-    """WhatsApp configured without WHATSAPP_APP_SECRET is said at startup (#339)."""
+    """WhatsApp configured without WHATSAPP_APP_SECRET is said at startup (#339).
+    Only a warning: a failure to check never stops the server from starting."""
     from turncall.storage.database import create_session_factory, get_engine
     from turncall.webhooks.whatsapp_handlers import warn_if_unverifiable
 
-    async with create_session_factory(get_engine())() as session:
-        await warn_if_unverifiable(settings, session)
+    try:
+        async with create_session_factory(get_engine())() as session:
+            await warn_if_unverifiable(settings, session)
+    except Exception:
+        logger.exception("whatsapp_verification_check_failed")
 
 
 @asynccontextmanager
