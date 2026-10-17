@@ -590,6 +590,13 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **A viewer key can no longer link or unlink an agent's knowledge bases**
+  (#335). `POST /v1/agents/{agent_id}/knowledge-bases` and
+  `DELETE /v1/agents/{agent_id}/knowledge-bases/{kb_id}` accepted any key, so
+  a viewer key could change what an agent retrieves from. Both now need an
+  admin or developer key, like every other change to an agent or a knowledge
+  base; a viewer key gets `403 forbidden` and nothing changes. A viewer key
+  that relied on this must be replaced by a developer key.
 - **Numbers in event payloads are redacted** (#313, #336 review). With
   redaction on, a JSON number of seven digits or more inside a payload (a
   tool's `arguments` or `result` on `tool.result`, the call's `metadata` on
