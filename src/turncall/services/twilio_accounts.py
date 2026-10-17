@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from turncall.services.webhook_verification import accepts_unverified, outcome
 from turncall.storage.models import PhoneNumberRow
 from turncall.storage.repositories import credential_repo, phone_number_repo
 
@@ -109,10 +110,10 @@ async def unverifiable_webhooks_refused(
     """Whether a webhook no token here can verify is refused (#337).
 
     Only a development deployment with no Twilio credentials anywhere passes
-    one: in production a forged `/webhooks/twilio/*` request must not be
-    taken because a token was left unset or blank.
+    one: anywhere else (staging included) a forged `/webhooks/twilio/*`
+    request must not be taken because a token was left unset or blank.
     """
-    return settings.is_production or await any_number_has_own_account(session)
+    return not accepts_unverified(settings) or await any_number_has_own_account(session)
 
 
 async def warn_unverifiable_numbers(session: AsyncSession, settings: Settings) -> int:
@@ -132,6 +133,6 @@ async def warn_unverifiable_numbers(session: AsyncSession, settings: Settings) -
             "token to verify their webhooks; set TWILIO_AUTH_TOKEN or give each "
             "number its own account. Their webhooks are {outcome}.",
             count=count,
-            outcome="refused (403)" if refused else "accepted unverified",
+            outcome=outcome(settings, refused=refused),
         )
     return count

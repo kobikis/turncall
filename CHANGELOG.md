@@ -587,29 +587,34 @@ and is not part of this repository's history.
   so no carrier configuration changes. Migration `b9f5d3a7e1c2`
   (`calls.media_attached_at`). A call answered before the upgrade and not yet
   streaming when it lands has no token and is refused.
-- **Twilio webhooks no token can verify are refused in production** (#337).
-  With no `TWILIO_AUTH_TOKEN` and no number on its own Twilio account, every
-  `/webhooks/twilio/*` route took a request unverified, so a production
+- **Twilio webhooks no token can verify are refused outside development**
+  (#337). With no `TWILIO_AUTH_TOKEN` and no number on its own Twilio account,
+  every `/webhooks/twilio/*` route took a request unverified, so a production
   deployment whose token was unset or blank accepted forged calls and texts.
-  With `TURNCALL_ENV=production` such a webhook is now a `403`, refused before
-  anything is read or created, and logged as `twilio_webhook_unverifiable`;
-  development is unchanged. `/webhooks/twilio/stream-status`, the one route
-  that never checked a signature, now does. At startup, Twilio numbers on the
-  platform account while `TWILIO_AUTH_TOKEN` is unset are logged as
-  `twilio_numbers_unverifiable`, with whether their webhooks are refused. Set
-  `TWILIO_AUTH_TOKEN` (or each number's own account) before upgrading a
-  production deployment that takes Twilio.
+  Such a webhook is now taken only when `TURNCALL_ENV` is `development`;
+  every other environment, staging included, answers `403` before anything
+  is read or created, and logs `twilio_webhook_unverifiable` (once a minute
+  per route, with how many it left out: anyone can cause it). A token that is
+  only whitespace counts as unset. `/webhooks/twilio/stream-status`, the one
+  route that never checked a signature, now does, against the same URL the
+  TwiML gave Twilio: both are built from one origin, and in production that
+  is always `https`, behind a TLS terminator that sends no
+  `X-Forwarded-Proto` too. At startup, Twilio numbers on the platform account
+  while `TWILIO_AUTH_TOKEN` is unset are logged as
+  `twilio_numbers_unverifiable`, with whether their webhooks are refused, and
+  plainly when they are accepted only because `TURNCALL_ENV` was never set.
+  See the upgrade notes.
 
-- **A WhatsApp webhook nothing can verify is refused in production** (#339).
-  Without `WHATSAPP_APP_SECRET`, every WhatsApp webhook (voice calls and text
-  messages) was accepted unverified, in production too. Production now
-  refuses it with a `403` before anything is read, and startup warns when
-  WhatsApp is configured (`WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` or
-  `WHATSAPP_WEBHOOK_VERIFY_TOKEN` set, or a `whatsapp_enabled` number) without
-  it. Meta's subscription handshake (`GET`, `hub.challenge`) is unaffected,
-  and development accepts unsigned webhooks as before. Set
-  `WHATSAPP_APP_SECRET` before upgrading a production deployment that takes
-  WhatsApp.
+- **A WhatsApp webhook nothing can verify is refused outside development**
+  (#339). Without `WHATSAPP_APP_SECRET`, every WhatsApp webhook (voice calls
+  and text messages) was accepted unverified, in production too. It is now
+  accepted only when `TURNCALL_ENV` is `development`; every other
+  environment, staging included, refuses it with a `403` before anything is
+  read, logged once a minute. A secret that is only whitespace counts as
+  unset. Startup warns when WhatsApp is configured (`WHATSAPP_TOKEN`,
+  `WHATSAPP_PHONE_NUMBER_ID` or `WHATSAPP_WEBHOOK_VERIFY_TOKEN` set, or a
+  `whatsapp_enabled` number) without it. Meta's subscription handshake
+  (`GET`, `hub.challenge`) is unaffected. See the upgrade notes.
 
 ### Fixed
 

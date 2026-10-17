@@ -68,7 +68,7 @@ turncall-demo         # the website demo: agents from a file over WebRTC, no DB/
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `TWILIO_ACCOUNT_SID` | Yes* | Twilio account SID — the platform account. *A number bound with its own `twilio_account_sid` + `twilio_auth_token` uses those instead |
-| `TWILIO_AUTH_TOKEN` | Yes* | Twilio auth token (platform account; see above). With none at any level, a Twilio webhook is refused (`403`) in production and taken unverified only in development (#337); startup warns of numbers it leaves unverifiable |
+| `TWILIO_AUTH_TOKEN` | Yes* | Twilio auth token (platform account; see above). Whitespace-only counts as unset. With none at any level, a Twilio webhook is taken unverified only when `TURNCALL_ENV` is `development` (its default) and refused (`403`) everywhere else, staging included (#337); startup warns of numbers it leaves unverifiable, and says so plainly when development is only the default. Refusals are logged once a minute per route (`services/webhook_verification.py`) |
 | `TELNYX_API_KEY` | No | Telnyx API key, the platform account for Telnyx numbers (ADR-0022). A project's `telnyx` credential replaces it **and** `TELNYX_PUBLIC_KEY` whole. Without one at any level a Telnyx call cannot be answered: it fails with `missing_keys: ["telnyx"]` |
 | `TELNYX_PUBLIC_KEY` | With Telnyx | The platform Telnyx account's webhook public key (base64 Ed25519, Mission Control > Keys & Credentials > Public Key). Not a secret, but required: a Telnyx webhook nothing can verify is refused — there is no unsigned dev mode on Telnyx |
 | `OPENAI_API_KEY` | Yes* | OpenAI API key (LLM + optional STT/TTS). *Not required if using Ollama/custom LLM |
@@ -90,7 +90,7 @@ turncall-demo         # the website demo: agents from a file over WebRTC, no DB/
 | `HEYGEN_LIVE_AVATAR_API_KEY` | No | LiveAvatar API key for the HeyGen video avatar. From app.liveavatar.com (NOT a HeyGen key — Pipecat targets the LiveAvatar API) |
 | `WHATSAPP_TOKEN` | No | WhatsApp API access token (Meta Developer Console > WhatsApp > API Setup) |
 | `WHATSAPP_PHONE_NUMBER_ID` | No | WhatsApp Business phone number ID |
-| `WHATSAPP_APP_SECRET` | Prod | Meta App Secret for webhook signature validation (App Settings > Basic > App Secret, 32 hex chars). In production a WhatsApp webhook is refused (`403`) without it, and startup warns when WhatsApp is configured (another `WHATSAPP_*` setting, or a `whatsapp_enabled` number) but it is not (#339); development accepts them unverified |
+| `WHATSAPP_APP_SECRET` | Prod | Meta App Secret for webhook signature validation (App Settings > Basic > App Secret, 32 hex chars). Whitespace-only counts as unset. Without it a WhatsApp webhook is accepted unverified only when `TURNCALL_ENV` is `development` (its default) and refused (`403`) everywhere else, staging included, and startup warns when WhatsApp is configured (another `WHATSAPP_*` setting, or a `whatsapp_enabled` number) but it is not (#339) |
 | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | No | Arbitrary token for webhook URL verification handshake |
 | `STORAGE_BACKEND` | No | Object storage backend: `local` (default) or `s3` |
 | `LOCAL_STORAGE_PATH` | No | Local storage directory (default: `./storage`) |

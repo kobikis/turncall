@@ -2,9 +2,9 @@
 
 Through the running app: a number bound with voice and SMS, then the platform
 token blanked, as a template that leaves `TWILIO_AUTH_TOKEN` empty would. In
-production an unsigned voice or SMS webhook is a 403 and leaves nothing behind
-— no call, no text session, no LLM turn, no event. In development the same
-requests are taken, as they always were.
+production and staging an unsigned voice or SMS webhook is a 403 and leaves
+nothing behind — no call, no text session, no LLM turn, no event. In
+development the same requests are taken, as they always were.
 """
 
 import secrets
@@ -58,8 +58,9 @@ async def _sms_number(app, agent_id: str) -> str:
     return e164
 
 
-async def test_production_refuses_and_development_accepts(
-    monkeypatch, redis_env, llm_turns
+@pytest.mark.parametrize("refusing", [Environment.PRODUCTION, Environment.STAGING])
+async def test_outside_development_refused_and_development_accepts(
+    monkeypatch, redis_env, llm_turns, refusing
 ):
     async with run_app(
         Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
@@ -71,7 +72,7 @@ async def test_production_refuses_and_development_accepts(
         settings = get_settings()
         monkeypatch.setattr(settings.twilio, "auth_token", "")
 
-        monkeypatch.setattr(settings, "environment", Environment.PRODUCTION)
+        monkeypatch.setattr(settings, "environment", refusing)
         refused_voice = await app.api.post(voice_url, data=ring(app.carrier, number))
         refused_sms = await app.api.post(sms_url, data=_sms(app.carrier, number))
         calls_after_refusal = (await app.api.get("/v1/calls")).json()["data"]

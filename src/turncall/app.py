@@ -33,25 +33,19 @@ async def _warn_unverifiable_webhooks(settings: Settings) -> None:
     without WHATSAPP_APP_SECRET (#339), Twilio numbers no auth token covers
     (#337). Only warnings: a failed check never stops the server starting."""
     from turncall.services.twilio_accounts import warn_unverifiable_numbers
-    from turncall.storage.database import create_session_factory, get_engine
-    from turncall.webhooks.whatsapp_handlers import warn_if_unverifiable
+    from turncall.services.webhook_verification import warn_if_whatsapp_unverifiable
+    from turncall.storage.database import get_session_factory
 
-    checks = (
-        (
-            "whatsapp_verification_check_failed",
-            lambda session: warn_if_unverifiable(settings, session),
-        ),
-        (
-            "twilio_numbers_check_failed",
-            lambda session: warn_unverifiable_numbers(session, settings),
-        ),
-    )
-    for failed, check in checks:
-        try:
-            async with create_session_factory(get_engine())() as session:
-                await check(session)
-        except Exception:
-            logger.exception(failed)
+    try:
+        async with get_session_factory()() as session:
+            await warn_if_whatsapp_unverifiable(session, settings)
+    except Exception:
+        logger.exception("whatsapp_verification_check_failed")
+    try:
+        async with get_session_factory()() as session:
+            await warn_unverifiable_numbers(session, settings)
+    except Exception:
+        logger.exception("twilio_numbers_check_failed")
 
 
 @asynccontextmanager

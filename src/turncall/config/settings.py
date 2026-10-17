@@ -49,11 +49,21 @@ class RedisSettings(BaseSettings):
     max_connections: int = Field(default=50, alias="REDIS_MAX_CONNECTIONS")
 
 
+def _stripped_secret(value: object) -> object:
+    """A webhook-signing secret without surrounding whitespace, so one that is
+    only whitespace (a template rendering `" "`, a secret file's newline) is
+    unset (#337, #339) for every reader, rather than a key anyone can guess
+    that turns the refusal of unverifiable webhooks off."""
+    return value.strip() if isinstance(value, str) else value
+
+
 class TwilioSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TWILIO_")
 
     account_sid: str = Field(default="", alias="TWILIO_ACCOUNT_SID")
     auth_token: str = Field(default="", alias="TWILIO_AUTH_TOKEN")
+
+    _strip_auth_token = field_validator("auth_token", mode="before")(_stripped_secret)
 
 
 class TelnyxSettings(BaseSettings):
@@ -193,6 +203,8 @@ class WhatsAppSettings(BaseSettings):
     phone_number_id: str = Field(default="", alias="WHATSAPP_PHONE_NUMBER_ID")
     app_secret: str = Field(default="", alias="WHATSAPP_APP_SECRET")
     webhook_verify_token: str = Field(default="", alias="WHATSAPP_WEBHOOK_VERIFY_TOKEN")
+
+    _strip_app_secret = field_validator("app_secret", mode="before")(_stripped_secret)
 
 
 class StorageSettings(BaseSettings):
@@ -571,6 +583,12 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == Environment.PRODUCTION
+
+    @property
+    def environment_is_default(self) -> bool:
+        """TURNCALL_ENV was not set: this deployment runs as development
+        because nothing said otherwise, not because it was told to."""
+        return "environment" not in self.model_fields_set
 
 
 @lru_cache(maxsize=1)

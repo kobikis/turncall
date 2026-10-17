@@ -1,9 +1,11 @@
 """A WhatsApp webhook nothing can verify (#339).
 
-Without WHATSAPP_APP_SECRET, production refuses every signed POST before
-anything is read, development accepts it as it always has, the subscription
-handshake (GET, hub.challenge) works either way, and startup says so when
-WhatsApp is configured.
+Without WHATSAPP_APP_SECRET (or with one that is only whitespace), every
+environment but development refuses every signed POST before anything is
+read, development accepts it as it always has, the subscription handshake
+(GET, hub.challenge) works either way, and startup says so when WhatsApp is
+configured, plainly when development is only TURNCALL_ENV's default. A
+refusal is logged at most once a minute.
 """
 
 import hashlib
@@ -16,6 +18,7 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 from turncall.config.settings import Environment, Settings, WhatsAppSettings
+from turncall.services import webhook_verification
 from turncall.storage.database import get_session
 from turncall.webhooks import whatsapp_handlers
 
@@ -63,8 +66,8 @@ CALL = {
 
 
 def _settings(
+    environment: Environment,
     *,
-    production: bool,
     app_secret: str = "",
     token: str = "",
     phone_number_id: str = "",
@@ -72,9 +75,7 @@ def _settings(
 ) -> Settings:
     return Settings().model_copy(
         update={
-            "environment": (
-                Environment.PRODUCTION if production else Environment.DEVELOPMENT
-            ),
+            "environment": environment,
             "whatsapp": WhatsAppSettings(
                 WHATSAPP_TOKEN=token,
                 WHATSAPP_PHONE_NUMBER_ID=phone_number_id,
@@ -87,6 +88,18 @@ def _settings(
 
 def _sign(body: bytes, secret: str = SECRET) -> str:
     return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+PRODUCTION = Environment.PRODUCTION
+DEVELOPMENT = Environment.DEVELOPMENT
+
+
+@pytest.fixture(autouse=True)
+def _fresh_refusal_log():
+    """Each test sees its own first refusal, not one another test logged."""
+    webhook_verification.refused_webhooks.reset()
+    yield
+    webhook_verification.refused_webhooks.reset()
 
 
 @pytest.fixture
@@ -126,14 +139,17 @@ def _post(app, settings: Settings, payload: dict, signature: str | None = None):
         return app.post("/webhooks/whatsapp", content=body, headers=headers)
 
 
-class TestProductionWithoutAppSecret:
+class TestRefusedOutsideDevelopment:
+    @pytest.mark.parametrize(
+        "environment", [Environment.PRODUCTION, Environment.STAGING]
+    )
     @pytest.mark.parametrize("payload", [MESSAGE, CALL], ids=["messages", "calls"])
     def test_refused_and_nothing_processed(
-        self, app, db_session, handlers, payload
+        self, app, db_session, handlers, environment, payload
     ) -> None:
         body = json.dumps(payload).encode()
         # Even one signed with what would be the secret: nothing can check it.
-        resp = _post(app, _settings(production=True), payload, _sign(body))
+        resp = _post(app, _settings(environment), payload, _sign(body))
 
         assert resp.status_code == 403
         handlers["calls"].assert_not_awaited()
@@ -144,7 +160,7 @@ class TestProductionWithoutAppSecret:
         seen: list[str] = []
         sink = logger.add(lambda m: seen.append(str(m)), level="WARNING")
         try:
-            resp = _post(app, _settings(production=True), MESSAGE)
+            resp = _post(app, _settings(PRODUCTION), MESSAGE)
         finally:
             logger.remove(sink)
 
@@ -154,8 +170,33 @@ class TestProductionWithoutAppSecret:
             for line in seen
         )
 
+    def test_a_flood_of_refusals_is_one_line(self, app, db_session, handlers) -> None:
+        seen: list[str] = []
+        sink = logger.add(lambda m: seen.append(str(m)), level="WARNING")
+        try:
+            statuses = {
+                _post(app, _settings(PRODUCTION), MESSAGE).status_code
+                for _ in range(20)
+            }
+        finally:
+            logger.remove(sink)
+
+        assert statuses == {403}
+        assert len([line for line in seen if "whatsapp_webhook_refused" in line]) == 1
+
+    def test_a_whitespace_secret_is_no_secret(self, app, db_session, handlers) -> None:
+        # A template rendering the secret as " ": a key anyone can guess.
+        settings = _settings(PRODUCTION, app_secret="  \n")
+        body = json.dumps(MESSAGE).encode()
+
+        resp = _post(app, settings, MESSAGE, _sign(body, secret="  \n"))
+
+        assert settings.whatsapp.app_secret == ""
+        assert resp.status_code == 403
+        handlers["messages"].assert_not_awaited()
+
     def test_subscription_handshake_still_works(self, app) -> None:
-        settings = _settings(production=True, verify_token="my-token")
+        settings = _settings(PRODUCTION, verify_token="my-token")
         with patch.object(whatsapp_handlers, "get_settings", return_value=settings):
             resp = app.get(
                 "/webhooks/whatsapp",
@@ -177,7 +218,9 @@ class TestWithAppSecret:
         self, app, db_session, handlers, production, payload
     ) -> None:
         body = json.dumps(payload).encode()
-        settings = _settings(production=production, app_secret=SECRET)
+        settings = _settings(
+            PRODUCTION if production else DEVELOPMENT, app_secret=SECRET
+        )
 
         resp = _post(app, settings, payload, _sign(body))
 
@@ -189,7 +232,7 @@ class TestWithAppSecret:
     def test_bad_signature_is_refused(
         self, app, db_session, handlers, signature
     ) -> None:
-        settings = _settings(production=True, app_secret=SECRET)
+        settings = _settings(PRODUCTION, app_secret=SECRET)
 
         resp = _post(app, settings, MESSAGE, signature)
 
@@ -199,7 +242,7 @@ class TestWithAppSecret:
 
 class TestDevelopmentWithoutAppSecret:
     def test_accepted_unverified_as_before(self, app, db_session, handlers) -> None:
-        resp = _post(app, _settings(production=False), MESSAGE)
+        resp = _post(app, _settings(DEVELOPMENT), MESSAGE)
 
         assert resp.status_code == 200
         handlers["messages"].assert_awaited_once()
@@ -211,11 +254,13 @@ class TestStartupWarning:
 
     async def _warn(self, settings: Settings, *, numbers: bool = False) -> str | None:
         with patch.object(
-            whatsapp_handlers.phone_number_repo,
+            webhook_verification.phone_number_repo,
             "any_whatsapp_enabled",
             AsyncMock(return_value=numbers),
         ):
-            return await whatsapp_handlers.warn_if_unverifiable(settings, MagicMock())
+            return await webhook_verification.warn_if_whatsapp_unverifiable(
+                MagicMock(), settings
+            )
 
     @pytest.mark.parametrize(
         ("setting", "name"),
@@ -231,7 +276,7 @@ class TestStartupWarning:
         seen: list[str] = []
         sink = logger.add(lambda m: seen.append(str(m)), level="WARNING")
         try:
-            warning = await self._warn(_settings(production=True, **{setting: "x"}))
+            warning = await self._warn(_settings(PRODUCTION, **{setting: "x"}))
         finally:
             logger.remove(sink)
 
@@ -242,21 +287,42 @@ class TestStartupWarning:
         assert any(warning in line for line in seen)
 
     async def test_a_whatsapp_number_without_the_secret_warns(self) -> None:
-        warning = await self._warn(_settings(production=True), numbers=True)
+        warning = await self._warn(_settings(PRODUCTION), numbers=True)
 
         assert warning is not None
         assert "whatsapp_enabled" in warning
 
+    async def test_staging_says_it_refuses(self) -> None:
+        warning = await self._warn(_settings(Environment.STAGING, token="x"))
+
+        assert warning is not None
+        assert "refused (403)" in warning
+
     async def test_development_says_it_accepts_unverified(self) -> None:
-        warning = await self._warn(_settings(production=False, token="x"))
+        warning = await self._warn(_settings(DEVELOPMENT, token="x"))
+
+        assert warning is not None
+        assert "accepted unverified (TURNCALL_ENV=development)" in warning
+
+    async def test_default_development_says_turncall_env_is_unset(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.delenv("TURNCALL_ENV", raising=False)
+        settings = Settings(_env_file=None).model_copy(
+            update={"whatsapp": WhatsAppSettings(WHATSAPP_TOKEN="x")}
+        )
+        assert settings.environment_is_default
+
+        warning = await self._warn(settings)
 
         assert warning is not None
         assert "accepted unverified" in warning
+        assert "TURNCALL_ENV is not set" in warning
 
     async def test_with_the_secret_nothing_is_said(self) -> None:
-        settings = _settings(production=True, app_secret=SECRET, token="x")
+        settings = _settings(PRODUCTION, app_secret=SECRET, token="x")
 
         assert await self._warn(settings, numbers=True) is None
 
     async def test_without_whatsapp_nothing_is_said(self) -> None:
-        assert await self._warn(_settings(production=True)) is None
+        assert await self._warn(_settings(PRODUCTION)) is None
