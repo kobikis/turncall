@@ -67,6 +67,7 @@
                   "guides/limits",
                   "guides/redaction",
                   "guides/retention",
+                  "guides/audit-log",
                   "guides/campaigns",
                   "guides/observability",
                   "guides/graceful-shutdown",
@@ -109,6 +110,12 @@
               "PUT /v1/projects/{project_id}/redaction",
               "PUT /v1/projects/{project_id}/retention",
               "DELETE /v1/projects/{project_id}"
+            ]
+          },
+          {
+            "group": "Audit Log",
+            "pages": [
+              "GET /v1/audit-log"
             ]
           },
           {

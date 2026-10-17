@@ -2,7 +2,7 @@
 
 **Status:** Accepted (redaction of the transcript and call events built in
 #313; the rest of redaction in #314; `trace_include_pii` off by default in
-#315; retention in #316; the audit log not yet)
+#315; retention in #316; the audit log in #317)
 **Date:** 2026-10-16
 **Relates to:** ADR-0005 (call recording), ADR-0010 (OTel tracing), ADR-0011
 (project deletion), ADR-0013 (takeaways), ADR-0015 (open-core licensing).
@@ -115,6 +115,40 @@ credential, a number, a key or a project setting. Call retention never touches
 it; it has its own retention setting. Changes made by a person in the console
 are audited by the builder, which links its entries to these (builder-api
 ADR-0028).
+
+- **Audit log as built** (#317). Every mutating route on agents (their
+  versions, publish, rollback and knowledge base links), project
+  credentials, phone numbers, API keys and project settings (limits,
+  redaction, retention, deletion) takes one audit trail
+  (`api/audit.py`); a test lists every such route and fails on one without
+  it, and the trail's teardown, which runs before the session commits,
+  refuses a successful request that recorded nothing, rolling its change
+  back. So an entry is written in the change's transaction: a change rolled
+  back has none, and a saved one always has one. A request writes one entry
+  per resource it changed (a publish writes the version, each version it
+  archived and each number it re-pointed), and names them on its response in
+  `X-TurnCall-Audit-Id`, which is how the builder links its entry to the
+  engine's. The platform credential's bootstrap of a project and its first
+  key is recorded too, as `actor: platform` with no key. **What changed** is
+  a diff of the resource as the API reads it, field by field: values come
+  only from the masked read, and the unmasked one is only compared, so a
+  changed secret reads `***` on both sides. A credential is recorded only as
+  present, an API key never by its raw key, hash or prefix, and a number's
+  call-init secret (which its read does return) and auth token are masked.
+  **Append-only** twice: no route writes an entry, and a trigger refuses
+  every `UPDATE` and `TRUNCATE` on the table, and every `DELETE` but the
+  retention janitor's, which marks its transaction. It guards against the
+  application, not the table's owner. **Retention** is the operator's
+  (`AUDIT_LOG_RETENTION_DAYS`, unset = kept for good, swept hourly) rather
+  than a project setting: an admin key must not be able to shorten the trail
+  that records its own changes. **A deleted project keeps its entries**: the
+  table has no foreign keys, so the ADR-0011 purge leaves the trail
+  (including the entry for the deletion), and only the audit retention
+  removes it; its keys stop working, so the database is where it is read
+  then. The read (`GET /v1/audit-log`) is admin-only and pages by cursor,
+  not page number, because entries keep arriving at the head of a
+  newest-first list. The log is not redacted: it records configuration, not
+  conversations.
 
 **[[trace_include_pii]] defaults to off from the public release.** Caller
 numbers in an external tracing backend should be a choice. This is a behaviour

@@ -574,13 +574,22 @@ from), "the project's API key" (that is a `tc_...` [[API key]], authorizing call
 TurnCall rather than out of it).
 
 **Audit log**:
-An append-only record of changes made through the API (agents, credentials, numbers,
-API keys, project settings), each entry keyed by the [[API key]] that made it, since
-TurnCall is identity-free. Kept under its own retention, never the call
-[[retention policy]]. The builder audits the person behind a console change and links
-to these entries. See ADR-0024 (decided, not yet built).
+An append-only record of changes made through the API (agents with their versions and
+knowledge base links, credentials, numbers, API keys, project settings), each entry
+keyed by the [[API key]] that made it, since TurnCall is identity-free (the
+[[platform credential]]'s bootstrap of a project and its first key is `actor:
+platform`, with no key). An entry is one change to one resource: an **action**
+(`updated`, `published`, `archived`...) and **changes**, each changed field before and
+after as the API reads it, secrets masked, never their values. Written in the change's
+transaction, so a change rolled back has no entry and one saved always has; one request
+can write several (a publish: the version, the one it archived, the numbers it
+re-pointed), named on its response in `X-TurnCall-Audit-Id`. Read by admin keys only.
+Kept under its own retention, the operator's `AUDIT_LOG_RETENTION_DAYS` rather than a
+project's, never the call [[retention policy]]; a deleted project's entries outlive
+its purge. The builder audits the person behind a console change and links to these
+entries by id. See ADR-0024 (#317).
 _Avoid_: "activity feed" (reads as user-facing history), "event log" (that is a
-call's events).
+call's events), "history" (an agent's versions are its history).
 
 **Session token** (browser):
 What a browser presents to join a WebRTC call instead of an [[API key]]: minted by the

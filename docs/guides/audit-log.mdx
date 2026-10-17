@@ -1,0 +1,110 @@
+---
+title: Audit log
+description: "Every change made through the API to agents, credentials, numbers, keys and project settings, and which API key made it"
+icon: "list-check"
+---
+
+The audit log records every change made through the API to a project's agents, credentials, phone numbers, API keys and settings. Each entry says which API key made the change, what it did to which resource, when, and what changed. TurnCall has no notion of a person, so an entry is keyed by the API key. A change a person makes in the TurnCall builder is audited there too, and the builder's entry links to this one.
+
+Entries are append-only. Nothing in the API updates or deletes one, and they are kept until the retention the operator sets.
+
+## What is recorded
+
+| Resource (`resource_type`) | Requests | `action` |
+|----------|----------|----------|
+| `agent` | create, update, delete, publish, roll back; link and unlink a knowledge base | `created`, `updated`, `deleted`, `published`, `rolled_back`, `knowledge_base_linked`, `knowledge_base_unlinked`; `archived` for a version a publish or rollback took out of service |
+| `credential` | store or replace, delete (`/v1/credentials/{provider}`) | `created`, `updated`, `deleted` |
+| `phone_number` | bind, update, unbind; set and clear A/B routing | `created`, `updated`, `deleted`, `routing_set`, `routing_cleared`; `updated` for a number a publish or rollback re-pointed |
+| `api_key` | create (the first key and later ones), revoke | `created`, `revoked` |
+| `project` | create, set limits, redaction or retention, delete | `created`, `limits_set`, `redaction_set`, `retention_set`, `deleted` |
+
+A request that changes several things writes an entry for each. Publishing version 2 of an agent whose version 1 is live writes three: version 2 `published`, version 1 `archived`, and the number that pointed at version 1 `updated`.
+
+Every successful request on these routes writes at least one entry, even one that changed nothing: deleting a credential that is not there writes a `deleted` entry with no changes. A request that fails writes none.
+
+The project and its first API key are created with the platform credential (`X-Platform-Key`), not an API key. Their entries have `actor: "platform"` and `api_key_id: null`. Every other entry has `actor: "api_key"` and the key's id.
+
+## What changed
+
+`changes` maps each field that changed to its value before and after, as the API reads it:
+
+```json
+{
+  "id": "6f1c0e8a-6c1d-4f43-9a8e-2b0f8c1d3e57",
+  "project_id": "0b6e...",
+  "api_key_id": "9d2a...",
+  "actor": "api_key",
+  "resource_type": "agent",
+  "resource_id": "c41f...",
+  "action": "updated",
+  "changes": {
+    "config.system_prompt": {"before": "You are a receptionist.", "after": "Be brief."},
+    "config.llm.api_key": {"before": "***", "after": "***"}
+  },
+  "request_id": "f3b1...",
+  "created_at": "2026-10-17T09:12:44.512Z"
+}
+```
+
+Nested fields are named by their path (`config.llm.model`, `limits.live_calls`, `config.tools.0.webhook_secret`). A field that was not set reads `null`. When something is created, every field it was created with is listed with `before: null`; when it is deleted, every field it had, with `after: null`.
+
+**No secret is ever recorded.** A secret that changed shows as `"***"` on both sides, so you can see that it changed but not what it was or became. This covers:
+
+- a credential's value: a credential entry records only that one is set (`"value": "***"`);
+- an API key's material: the raw key, its hash and its prefix. A key is recorded by its `name`, `role`, `environment` and `revoked_at`;
+- whatever the agent read masks: `llm.api_key` (and each failover's), the AWS secret key and session token, `server_url.secret`, each tool's `webhook_secret`, and the values of MCP servers' `headers` and `env`;
+- a phone number's `server_url_secret` (which the number read does return) and its own Twilio auth token.
+
+The audit log is not [redacted](/guides/redaction): it records configuration, not conversations. Don't put personal data in agent names, prompts or metadata you do not want kept for as long as the audit log is.
+
+## Read it
+
+```bash
+curl "https://api.example.com/v1/audit-log?resource_type=agent&since=2026-10-01T00:00:00Z" \
+  -H "Authorization: Bearer tc_..."
+```
+
+This needs an admin key; a developer or viewer key gets `403`. A key reads only its own project's entries. Entries come newest first. Filters, all optional:
+
+| Parameter | |
+|-----------|---|
+| `resource_type` | `agent`, `credential`, `phone_number`, `api_key` or `project` |
+| `resource_id` | The resource's id; a credential's is its provider account (`openai`, `aws`, ...) |
+| `action` | One of the actions above |
+| `since`, `until` | ISO 8601 times: entries at or after `since` and before `until`. A time without a zone is UTC |
+| `limit` | 1 to 200, default 50 |
+| `cursor` | The previous page's `next_cursor` |
+
+```json
+{"success": true, "data": [ ... ], "next_cursor": "WyIyMDI2LTEw...", "limit": 50}
+```
+
+The audit log pages by cursor rather than by page number, because new entries keep arriving at the head of the list and would shift every page. Pass `next_cursor` back as `cursor` until it is `null`.
+
+## Link to an entry
+
+Every response to an audited request names the entries it wrote in the `X-TurnCall-Audit-Id` header, comma-separated in the order they were written:
+
+```
+X-TurnCall-Audit-Id: 6f1c0e8a-6c1d-4f43-9a8e-2b0f8c1d3e57, 1a9b...
+```
+
+Store the ids next to your own record of the change (the TurnCall builder does, for the person who made it) and read the entry back with `GET /v1/audit-log`. The header is on successful responses only; a request that failed wrote no entry.
+
+## Append-only
+
+- **No route writes an entry.** The only route is `GET /v1/audit-log`.
+- **The entry is written in the change's transaction.** A change that is rolled back leaves no entry, and a change that is saved always has one. If a request on these routes ever succeeded without writing an entry, it is refused with a `500` and its change rolled back, rather than saved unrecorded.
+- **The database refuses changes too.** A trigger on the `audit_log` table refuses every `UPDATE` and `TRUNCATE`, and every `DELETE` except the retention janitor's. It protects the trail from the application and anything connecting as it; the table's owner can still drop the trigger, so restrict who owns the database if that matters to you.
+
+## Retention
+
+Entries are kept for good unless the operator sets `AUDIT_LOG_RETENTION_DAYS` on the server (1 to 36500). With it set, each server deletes entries older than that many days once an hour, for every project. It is a setting of the deployment, not of a project, so an admin key cannot shorten the trail that records its own changes.
+
+Call [retention](/guides/retention) never touches the audit log, and the audit log's retention never touches calls.
+
+**A deleted project keeps its entries.** Deleting a project writes a `project` `deleted` entry, and the project's entries stay when the project is purged later (`PROJECT_PURGE_RETENTION_DAYS`), until the audit log's own retention deletes them. Once the project is deleted its API keys stop working, so the entries can only be read from the database: `SELECT * FROM audit_log WHERE project_id = '...' ORDER BY created_at DESC`.
+
+## Not recorded
+
+Changes to knowledge bases and their documents, tools, takeaways, webhook subscriptions, campaigns, eval scenarios and runs, ambience sounds and the suppression list are not recorded. Neither are calls, messages or anything else a call does.
