@@ -590,6 +590,15 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **Numbers in event payloads are redacted** (#313, #336 review). With
+  redaction on, a JSON number of seven digits or more inside a payload (a
+  tool's `arguments` or `result` on `tool.result`, the call's `metadata` on
+  `call.ended`) went out raw in webhooks and on the event log, while the
+  tool invocation row stored it redacted: only strings were analysed. Such a
+  number is now analysed as the digits it is written with, as tool
+  invocations and takeaways already were, so `{"phone": 4155550132}` reads
+  `{"phone": "<PHONE_NUMBER>"}`. Numbers at a payload's top level
+  (`duration_ms`) are TurnCall's own and are not analysed.
 - **A Twilio call that rings out no longer reports `call.started`.** Every
   status callback but `completed` and `failed` went out as `call.started`, so
   an outbound call that rang and was never answered sent it at `ringing` and

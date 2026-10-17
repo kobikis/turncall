@@ -342,6 +342,64 @@ async def test_free_json_long_integers_are_withheld_when_the_detector_fails(
     assert out == {"phone": "<REDACTED>", "n": 12}
 
 
+async def test_a_payloads_nested_long_integers_are_analysed_as_free_json_s_are(
+    monkeypatch,
+) -> None:
+    """A tool's arguments or the call's metadata may carry a phone number as a
+    JSON number (`{"phone": 4155550132}`): below the top level, a payload's
+    long integers go to the detector as `redact_json`'s do. A number at the
+    top level is TurnCall's own measure (`duration_ms`) and is never analysed."""
+
+    class Phones(_Marks):
+        def redact(self, text: str, entities: tuple[str, ...]) -> str:
+            self.seen.append(text)
+            return {"4155550132": "<PHONE_NUMBER>"}.get(text, text)
+
+    phones = Phones()
+    _use(monkeypatch, lambda: phones)
+    payload = {
+        "tool_name": "book",
+        "arguments": {"phone": 4155550132, "order": 98765432, "party": 4},
+        "metadata": {"callback": [4155550132]},
+        "duration_ms": 4155550132,
+    }
+    try:
+        out = await redaction.redact_payload(payload, POLICY, event_type="tool.result")
+    finally:
+        redaction.ENGINE.shutdown()
+
+    assert out == {
+        "tool_name": "book",
+        "arguments": {"phone": "<PHONE_NUMBER>", "order": 98765432, "party": 4},
+        "metadata": {"callback": ["<PHONE_NUMBER>"]},
+        "duration_ms": 4155550132,
+    }
+    assert {"4155550132", "98765432"} <= set(phones.seen)
+    assert "4" not in phones.seen
+    assert redaction.texts_in({"duration_ms": 4155550132, "n": {"k": 12}}) == []
+
+
+async def test_a_payloads_nested_long_integers_are_withheld_without_the_detector(
+    monkeypatch,
+) -> None:
+    def broken() -> None:
+        raise RuntimeError("model missing")
+
+    _use(monkeypatch, broken)
+    try:
+        out = await redaction.redact_payload(
+            {"arguments": {"phone": 4155550132, "n": 12}, "duration_ms": 1200000},
+            POLICY,
+        )
+    finally:
+        redaction.ENGINE.shutdown()
+
+    assert out == {
+        "arguments": {"phone": "<REDACTED>", "n": 12},
+        "duration_ms": 1200000,
+    }
+
+
 async def test_free_json_skips_uuids_and_timestamps_by_their_shape(detector) -> None:
     value = {
         "ref": "550e8400-e29b-41d4-a716-446655440000",

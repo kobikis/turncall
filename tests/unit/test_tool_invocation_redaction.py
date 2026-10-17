@@ -37,12 +37,14 @@ from turncall.services.tool_webhook import invocation_record
 pytestmark = pytest.mark.unit
 
 SECRET = "jane.doe@example.com"
+PHONE = "4155550132"
 POLICY = RedactionPolicy(DEFAULT_ENTITIES)
 
 
 class _Marks:
-    """Replaces SECRET wherever it appears; records what it saw, and the
-    order of its runs against the sessions opened (`happened`)."""
+    """Replaces SECRET wherever it appears, and PHONE's digits standing
+    alone; records what it saw, and the order of its runs against the
+    sessions opened (`happened`)."""
 
     def __init__(self, happened: list[str]) -> None:
         self.seen: list[str] = []
@@ -53,6 +55,8 @@ class _Marks:
         with self._lock:
             self.seen.append(text)
             self.happened.append("detect")
+        if text == PHONE:
+            return "<PHONE_NUMBER>"
         return text.replace(SECRET, "<EMAIL_ADDRESS>")
 
 
@@ -231,3 +235,39 @@ async def test_a_text_tool_row_is_redacted_but_the_webhook_and_model_get_it_raw(
     assert kwargs["input_json"] == REDACTED_ARGS
     assert kwargs["output_json"] == REDACTED_OUTPUT
     assert "detect" not in happened[happened.index("session") :]
+
+
+async def test_an_integer_phone_in_a_tools_arguments_is_redacted_in_tool_result(
+    detector, redacting, happened
+) -> None:
+    """A tool whose schema types `phone` as an integer is called with
+    `{"phone": 4155550132}`. The `tool.result` event, stored and sent to
+    subscribers, carries `<PHONE_NUMBER>` as the invocation row does: the
+    payload's long integers are analysed as free JSON's are (#336 review)."""
+    args = {"phone": int(PHONE), "party_size": 4}
+    stored = AsyncMock()
+    dispatched = AsyncMock()
+    context = SimpleNamespace(
+        project_id=uuid4(), call_id=uuid4(), session_factory=lambda: _Db(happened)
+    )
+
+    with (
+        patch(
+            "turncall.storage.repositories.tool_invocation_repo.create_invocation",
+            new=AsyncMock(),
+        ) as create,
+        patch(
+            "turncall.storage.repositories.call_repo.get_next_sequence_number",
+            new=AsyncMock(return_value=1),
+        ),
+        patch("turncall.storage.repositories.call_repo.create_call_event", new=stored),
+        patch("turncall.events.dispatcher.dispatch_event", new=dispatched),
+    ):
+        await tool_bridge._log_tool_result(context, "book", args, RESULT, 12)
+
+    redacted = {"phone": "<PHONE_NUMBER>", "party_size": 4}
+    assert create.await_args.kwargs["input_json"] == redacted
+    assert stored.await_args.kwargs["event_type"] == "tool.result"
+    assert stored.await_args.kwargs["payload"]["arguments"] == redacted
+    assert dispatched.await_args.kwargs["payload"]["arguments"] == redacted
+    assert args == {"phone": int(PHONE), "party_size": 4}
