@@ -128,13 +128,12 @@ async def resolve_briefing_text(
     from turncall.storage.repositories import agent_repo, call_repo
 
     call = await call_repo.get_call_by_id(session, call_id)
-    policy = (
-        await redaction.policy_for_project(call.project_id, session=session)
-        if call is not None
-        else None
-    )
-    # The summary's logs (its LLM's included) follow the call's project.
-    telemetry_redaction.use(policy)
+    policy = None
+    if call is not None:
+        policy = await redaction.policy_for_project(call.project_id, session=session)
+        # The summary's logs (its LLM's included) follow the call's project.
+        # With no call there is none to follow: the caller's scope stays.
+        telemetry_redaction.use(policy)
     if (
         not here
         and call is not None

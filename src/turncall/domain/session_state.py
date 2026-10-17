@@ -33,7 +33,10 @@ def is_session_expired(expires_at: datetime) -> bool:
 # Redaction of a text conversation (#314), kept in `metadata_json` under
 # REDACTION: on a session, PENDING from its expiry while its project redacts
 # until its rows are rewritten, then DONE; on a message, DONE once its content
-# is. A row without it holds what was said, raw.
+# is. A row without it holds what was said, raw. CLAIMED_UNTIL: a pending
+# session a sweep is rewriting, until when (a lease, so a replica that dies
+# mid-rewrite does not keep it).
 REDACTION = "redaction"
 PENDING = "pending"
 DONE = "done"
+CLAIMED_UNTIL = "redaction_claimed_until"

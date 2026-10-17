@@ -80,6 +80,17 @@ async def _text(app: Harness) -> None:
     assert message.status_code == 200
 
 
+async def _unsupported(app: Harness) -> None:
+    """The caller sends a WhatsApp image: not answered, but logged."""
+    number = await _sms_number(app, await app.create_agent(AGENT), whatsapp=True)
+    payload = _whatsapp(number, SAID)
+    message = payload["entry"][0]["changes"][0]["value"]["messages"][0]
+    message.update(type="image", id="wamid.image")
+    del message["text"]
+    response = await app.api.post("/webhooks/whatsapp", json=payload)
+    assert response.status_code == 200
+
+
 async def _logged_during(
     monkeypatch, drive: Callable[[Harness], Awaitable[None]], *, enabled: bool
 ) -> list[dict[str, Any]]:
@@ -157,6 +168,63 @@ async def test_a_redacting_projects_texts_log_no_caller_numbers(
     assert _with(records, WHATSAPP_CALLER) == []
     assert _extra(records, "twilio_inbound_sms", "from_number") == ["<PHONE_NUMBER>"]
     assert _extra(records, "whatsapp_inbound_text", "from_number") == ["<PHONE_NUMBER>"]
+
+
+async def test_an_unanswered_whatsapp_message_logs_no_caller_number(
+    monkeypatch, llm_replies
+) -> None:
+    """Its line is written before any reply is tried: the project is known
+    from the business number first."""
+    records = await _logged_during(monkeypatch, _unsupported, enabled=True)
+
+    assert _with(records, WHATSAPP_CALLER) == []
+    assert _extra(records, "whatsapp_unsupported_message_type", "from_number") == [
+        "<PHONE_NUMBER>"
+    ]
+
+
+async def test_the_policy_is_read_on_the_handlers_open_session(
+    monkeypatch, llm_replies
+) -> None:
+    """An API request and a carrier webhook already hold a session (the key's
+    project, the number's row were just read on it): the policy is read
+    there on a cache miss, not on a second pooled connection."""
+    alone: list[object] = []
+    read_alone = redaction._read_policy_alone
+
+    async def recording(project_id, sessions=None):
+        alone.append(project_id)
+        return await read_alone(project_id, sessions)
+
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        response = await app.api.put(
+            f"/v1/projects/{app.project_id}/redaction", json={"enabled": True}
+        )
+        assert response.status_code == 200, response.text
+        number = await _sms_number(app, await app.create_agent(AGENT))
+        whatsapp = await _sms_number(app, await app.create_agent(AGENT), whatsapp=True)
+        monkeypatch.setattr(redaction, "_read_policy_alone", recording)
+
+        redaction.forget_policies()
+        assert (await app.api.get("/v1/chat/sessions")).status_code == 200
+        redaction.forget_policies()
+        sms = {
+            "AccountSid": app.carrier.account_sid,
+            "MessageSid": "SM1",
+            "From": CALLER,
+            "To": number,
+            "Body": "hello",
+        }
+        url = app.carrier.number(number).sms_url
+        assert (await post_signed(app.api, app.carrier, url, sms)).status_code == 200
+        redaction.forget_policies()
+        payload = _whatsapp(whatsapp, "hello")
+        response = await app.api.post("/webhooks/whatsapp", json=payload)
+        assert response.status_code == 200
+
+    assert alone == []
 
 
 @pytest.fixture

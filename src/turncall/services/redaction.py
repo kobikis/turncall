@@ -129,6 +129,11 @@ MAX_PENDING = 256
 # A redaction that took longer than this is logged, with the backlog.
 SLOW_SECONDS = 1.0
 
+# Free JSON's integers this long or longer are analysed (`redact_json`): the
+# fewest digits a phone number has. A count, a duration or a party size is
+# shorter and never reaches the detector.
+NUMBER_DIGITS = 7
+
 # Top-level payload fields holding a phone number (decision 5 on #313).
 PHONE_FIELDS = frozenset(
     {
@@ -348,9 +353,12 @@ async def redact_json(
     `callback_url` or `number` may hold what the caller said, and a phone
     number in it is the detector's to find rather than replaced whole by its
     field's name. Keys themselves are not analysed. UUIDs and ISO-8601
-    timestamps are skipped by their shape, as everywhere. The same worker,
-    the same failure mode (withheld, never raw, or `RedactionWithheld` when
-    `strict`), and never mutates `value`.
+    timestamps are skipped by their shape, as everywhere. An integer of
+    `NUMBER_DIGITS` digits or more is analysed as the digits it is written
+    with (`{"card": 4111111111111111}`, `{"phone": 4155550132}`): one the
+    detector finds becomes its `<ENTITY_TYPE>` string, any other stays the
+    number it was. The same worker, the same failure mode (withheld, never
+    raw, or `RedactionWithheld` when `strict`), and never mutates `value`.
     """
     texts: list[str] = []
 
@@ -358,9 +366,9 @@ async def redact_json(
         texts.append(text)
         return text
 
-    _deep(value, collect)
+    _deep(value, collect, numbers=True)
     replaced = await _detect(texts, policy.entities, strict) if texts else {}
-    return _deep(value, lambda text: replaced.get(text, WITHHELD))
+    return _deep(value, lambda text: replaced.get(text, WITHHELD), numbers=True)
 
 
 async def redact_text(text: str, policy: RedactionPolicy) -> str:
@@ -413,16 +421,32 @@ def _walk(
     return out
 
 
-def _deep(value: Any, redact: Callable[[str], str]) -> Any:
+def _deep(value: Any, redact: Callable[[str], str], *, numbers: bool = False) -> Any:
+    """`value` with its text passed through `redact`; with `numbers`, its
+    long integers too (`redact_json`), kept as numbers unless redacted."""
     if isinstance(value, str):
         if not value.strip() or _shaped_structural(value):
             return value
         return redact(value)
+    if numbers and _a_long_integer(value):
+        written = str(value)
+        redacted = redact(written)
+        return value if redacted == written else redacted
     if isinstance(value, dict):
-        return {k: _deep(v, redact) for k, v in value.items()}
+        return {k: _deep(v, redact, numbers=numbers) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_deep(v, redact) for v in value]
+        return [_deep(v, redact, numbers=numbers) for v in value]
     return value
+
+
+def _a_long_integer(value: Any) -> bool:
+    """An integer that may be a phone, card or SSN number: no bool, no float
+    (an amount), and `NUMBER_DIGITS` digits or more (a count is fewer)."""
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and len(str(abs(value))) >= NUMBER_DIGITS
+    )
 
 
 def _a_number(value: str) -> bool:

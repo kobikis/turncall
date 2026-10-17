@@ -151,7 +151,7 @@ async def inbound_sms_webhook(
     # this request's logs follow the project's redaction (#314).
     phone_number = await phone_number_repo.get_by_e164(session, to_number)
     if phone_number is not None:
-        await telemetry_redaction.for_project(phone_number.project_id)
+        await telemetry_redaction.for_project(phone_number.project_id, session=session)
     logger.info(
         "twilio_inbound_sms",
         message_sid=message_sid,
@@ -238,7 +238,7 @@ async def inbound_voice_webhook(
     # request's logs follow the project's redaction (#314).
     phone_number = await phone_number_repo.get_by_e164(session, to_number)
     if phone_number is not None:
-        await telemetry_redaction.for_project(phone_number.project_id)
+        await telemetry_redaction.for_project(phone_number.project_id, session=session)
     logger.info(
         "twilio_inbound_call",
         call_sid=call_sid,
@@ -355,7 +355,7 @@ async def status_callback(
         logger.warning("twilio_status_unknown_call", call_sid=call_sid)
         return Response(status_code=204)
     # The call's ending (post-call analysis, its webhooks) logs from here.
-    await telemetry_redaction.for_project(call.project_id)
+    await telemetry_redaction.for_project(call.project_id, session=session)
 
     # Map Twilio status to internal status
     new_status = TWILIO_STATUS_MAP.get(call_status)

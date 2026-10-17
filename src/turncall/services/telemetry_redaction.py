@@ -20,7 +20,12 @@ regular expressions, for the types that have a reliable shape: phone numbers,
 email addresses, card numbers (Luhn-checked), US SSNs and IBANs (checksum
 validated), each only when the project chose it. A type without a shape
 (`PERSON`, `LOCATION`, ...) is not found in logs and spans. UUIDs and ISO-8601
-timestamps are never touched.
+timestamps are never touched. A run of digits too long for one number is
+split at its spaces into the numbers side by side (`_numbers`); a number
+inside an email-shaped string (a WhatsApp JID, a SIP address) is still found
+when the project chose phone numbers but not emails; and a bare run starting
+with 0 or 1 is a phone only at eleven digits from 1 (+1's), a card only at
+fifteen from 1 (UATP), so epoch timestamps and padded ids are left alone.
 
 **Logs.** `install()` puts `redact_record` on loguru as its patcher, which runs
 on the thread that logs, before the record is handed to an `enqueue=True` sink
@@ -133,6 +138,9 @@ def current() -> RedactionPolicy | None:
 
 # --- Redacting a string ----------------------------------------------------
 
+# A run of digits and phone punctuation: a phone number, a card number, or
+# several numbers side by side.
+_RUN = r"(?<![\w+])\+?\(?\d[\d \t().-]{5,}\d\)?(?!\w)"
 _PATTERN = re.compile(
     # Never touched: a UUID, an ISO-8601 date or timestamp.
     r"(?P<keep>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
@@ -140,12 +148,16 @@ _PATTERN = re.compile(
     r"|(?P<email>[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})"
     r"|(?P<iban>\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?\b)"
     r"|(?P<ssn>(?<![\w-])\d{3}[- ]\d{2}[- ]\d{4}(?![\w-]))"
-    # A run of digits and phone punctuation: a phone number or a card number.
-    r"|(?P<digits>(?<![\w+])\+?\(?\d[\d \t().-]{5,}\d\)?(?!\w))"
+    rf"|(?P<digits>{_RUN})"
 )
+_DIGIT_RUN = re.compile(_RUN)
+_SPACES = re.compile(r"([ \t]+)")
+_NOT_DIGIT = re.compile(r"\D")
 _DOTTED = re.compile(r"[\d.]+")
 _GROUPS = re.compile(r"\d+")
 _DOTTED_PHONE = re.compile(r"(?:\d{1,3}\.)?\d{3}\.\d{3}\.\d{4}")
+# A card's most digits: no one number in a run is longer.
+_MOST_DIGITS = 19
 
 
 def redact_line(text: str, entities: Sequence[str]) -> str:
@@ -155,42 +167,117 @@ def redact_line(text: str, entities: Sequence[str]) -> str:
         return text
     chosen = frozenset(entities)
 
+    def numbers(match: re.Match[str]) -> str:
+        return _numbers(match.group(0), chosen)
+
     def replace(match: re.Match[str]) -> str:
         found = match.group(0)
         kind = match.lastgroup
-        if kind == "email" and EMAIL in chosen:
-            return f"<{EMAIL}>"
+        if kind == "email":
+            if EMAIL in chosen:
+                return f"<{EMAIL}>"
+            # Email-shaped, and maybe a number's: a WhatsApp JID
+            # (`14155550132@s.whatsapp.net`), a SIP address.
+            return _DIGIT_RUN.sub(numbers, found)
         if kind == "iban" and IBAN in chosen and _iban_valid(found):
             return f"<{IBAN}>"
         if kind == "ssn" and SSN in chosen:
             return f"<{SSN}>"
         if kind == "digits":
-            digits = re.sub(r"\D", "", found)
-            phone = PHONE in chosen and _a_phone(found, digits)
-            if phone and found.startswith("+"):
-                return f"<{PHONE}>"
-            if CARD in chosen and 13 <= len(digits) <= 19 and _luhn(digits):
-                return f"<{CARD}>"
-            if phone:
-                return f"<{PHONE}>"
+            return _numbers(found, chosen)
         return found
 
     return _PATTERN.sub(replace, text)
 
 
+def _numbers(run: str, chosen: frozenset[str]) -> str:
+    """A run of digits and phone punctuation, its numbers replaced. One number
+    if it reads as one; else it is several side by side ("4155550132
+    4155550133"), split at its spaces: from each group on, the longest stretch
+    that reads as a number is replaced (a digit too many redacted rather than
+    one left), and a group that starts none is left as it is."""
+    whole = _number_type(run, chosen)
+    if whole is not None:
+        return whole
+    parts = _SPACES.split(run)
+    groups, gaps = parts[0::2], parts[1::2]
+    if len(groups) == 1:
+        return run
+    out: list[str] = []
+    i = 0
+    while i < len(groups):
+        ends: list[int] = []
+        digits = 0
+        for j in range(i, len(groups)):
+            digits += len(_NOT_DIGIT.sub("", groups[j]))
+            if digits > _MOST_DIGITS:
+                break
+            ends.append(j + 1)
+        for end in reversed(ends):
+            if i == 0 and end == len(groups):
+                continue  # the whole run: not a number
+            stretch = "".join(_interleave(groups[i:end], gaps[i : end - 1]))
+            found = _number_type(stretch, chosen)
+            if found is not None:
+                out.append(found)
+                i = end
+                break
+        else:
+            out.append(groups[i])
+            i += 1
+        if i < len(groups):
+            out.append(gaps[i - 1])
+    return "".join(out)
+
+
+def _interleave(groups: list[str], gaps: list[str]) -> list[str]:
+    out = [groups[0]]
+    for gap, group in zip(gaps, groups[1:], strict=True):
+        out += [gap, group]
+    return out
+
+
+def _number_type(found: str, chosen: frozenset[str]) -> str | None:
+    """`<PHONE_NUMBER>` or `<CREDIT_CARD>` when `found` reads as one of the
+    chosen types, else None."""
+    digits = _NOT_DIGIT.sub("", found)
+    phone = PHONE in chosen and _a_phone(found, digits)
+    if phone and found.startswith("+"):
+        return f"<{PHONE}>"
+    if CARD in chosen and _a_card(found, digits):
+        return f"<{CARD}>"
+    if phone:
+        return f"<{PHONE}>"
+    return None
+
+
 def _a_phone(found: str, digits: str) -> bool:
     """Seven to fifteen digits (E.164's most), written as a number is: with a
     `+`, with separators, or ten digits or more bare (a WhatsApp id, a US
-    number without its `+1`). Digits and dots only must read 415.555.0132:
+    number without its `+1`). Bare and starting with 1, only eleven digits:
+    +1's country code and ten (no country code starts with 1 but +1's, and a
+    US area code never does), so an epoch timestamp, seconds (ten digits) to
+    nanoseconds, is not one. Digits and dots only must read 415.555.0132:
     not a decimal, a version or an IP address. Separated, one group has three
     digits or more: "10 20 30 40" is a list."""
     if not 7 <= len(digits) <= 15:
         return False
     if found == digits:
-        return len(digits) >= 10
+        return len(digits) >= 10 and (digits[0] != "1" or len(digits) == 11)
     if "." in found and _DOTTED.fullmatch(found):
         return bool(_DOTTED_PHONE.fullmatch(found))
     return found.startswith("+") or any(len(g) >= 3 for g in _GROUPS.findall(found))
+
+
+def _a_card(found: str, digits: str) -> bool:
+    """13 to 19 digits passing Luhn. Bare, it starts as a card network's do:
+    2 to 6 (Mastercard, Amex, Visa, Discover...), or 1 at fifteen digits
+    (UATP). A bare run from 0 or 1 is a padded id or an epoch timestamp."""
+    if not (13 <= len(digits) <= 19 and _luhn(digits)):
+        return False
+    if found != digits:
+        return True
+    return digits[0] in "23456" or (digits[0] == "1" and len(digits) == 15)
 
 
 def _luhn(digits: str) -> bool:

@@ -2,11 +2,11 @@
 
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from turncall.domain.session_state import DONE, REDACTION
-from turncall.storage.models import SmsMessageRow
+from turncall.domain.session_state import DONE, PENDING, REDACTION
+from turncall.storage.models import SmsMessageRow, SmsSessionRow
 
 
 async def create_message(
@@ -21,7 +21,31 @@ async def create_message(
     token_count: int | None = None,
     metadata_json: dict | None = None,
 ) -> SmsMessageRow:
-    """Create a new chat message."""
+    """Create a new chat message.
+
+    Its session's row is updated with it, in the same transaction: a session
+    already rewritten redacted (a reply that finished after its session
+    ended) goes back to pending, so the sweep rewrites this message too. The
+    update is unconditional so that it takes the row's lock, which the
+    rewrite holds until it commits (`sms_session_repo.lock_for_redaction`):
+    one of the two always sees the other (#314).
+    """
+    await session.execute(
+        update(SmsSessionRow)
+        .where(SmsSessionRow.id == session_id)
+        .values(
+            metadata_json=case(
+                (
+                    SmsSessionRow.metadata_json[REDACTION].astext == DONE,
+                    SmsSessionRow.metadata_json.op("||")(
+                        func.jsonb_build_object(REDACTION, PENDING)
+                    ),
+                ),
+                else_=SmsSessionRow.metadata_json,
+            )
+        )
+        .execution_options(synchronize_session=False)
+    )
     row = SmsMessageRow(
         session_id=session_id,
         project_id=project_id,

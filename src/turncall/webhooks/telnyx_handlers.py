@@ -138,7 +138,7 @@ async def call_control_webhook(request: Request, session: DbSession) -> Response
         return Response(status_code=403)
     if project_id is not None:
         # This event's logs follow the project's redaction (#314).
-        await telemetry_redaction.for_project(project_id)
+        await telemetry_redaction.for_project(project_id, session=session)
 
     if event_type == "call.initiated" and payload.get("direction") == "incoming":
         # A retried webhook names a call already opened: answer it once.

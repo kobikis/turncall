@@ -177,7 +177,7 @@ async def _handle_call_event(
     )
     if phone_row is not None:
         # This call's logs follow its project's redaction (#314).
-        await telemetry_redaction.for_project(phone_row.project_id)
+        await telemetry_redaction.for_project(phone_row.project_id, session=session)
     if phone_row is not None and not await admit_inbound_call(
         session,
         project_id=phone_row.project_id,
@@ -265,7 +265,7 @@ async def _start_voice_pipeline(
                 whatsapp_call_id=whatsapp_call_id,
             )
             return
-        await telemetry_redaction.for_project(phone_row.project_id)
+        await telemetry_redaction.for_project(phone_row.project_id, session=db)
 
         agent = None
         dynamic_config = None
@@ -429,6 +429,13 @@ async def _handle_message_event(
     metadata = value.get("metadata", {})
     phone_number_id = metadata.get("phone_number_id", "")
     display_phone = metadata.get("display_phone_number", "")
+    to_number = _normalize_phone(display_phone)
+
+    # Every message here is to one business number: their logs, the
+    # unanswered ones' included, follow its project's redaction (#314).
+    ours = await phone_number_repo.get_by_e164(db, to_number) if messages else None
+    if ours is not None:
+        await telemetry_redaction.for_project(ours.project_id, session=db)
 
     for msg in messages:
         msg_type = msg.get("type")
@@ -447,14 +454,7 @@ async def _handle_message_event(
         if not body:
             continue
 
-        # Normalize phone numbers
-        to_number = _normalize_phone(display_phone)
         from_number = _normalize_phone(from_number)
-
-        # The message's logs follow its project's redaction (#314).
-        ours = await phone_number_repo.get_by_e164(db, to_number)
-        if ours is not None:
-            await telemetry_redaction.for_project(ours.project_id)
         logger.info(
             "whatsapp_inbound_text",
             from_number=from_number,

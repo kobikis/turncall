@@ -84,3 +84,35 @@ def test_schema_renamed_field_present():
     assert r.transfer_message == "connecting you"
     assert r.fallback_message == "nobody home"
     assert not hasattr(r, "pre_transfer_message")
+
+
+async def test_a_briefing_for_an_unknown_call_keeps_the_callers_log_scope(
+    monkeypatch,
+):
+    """With no call row there is no project to scope the summary's logs to:
+    the redaction the caller's handler set (a carrier webhook's, by its
+    number) holds on for the rest of its task (#314)."""
+    from turncall.services import telemetry_redaction
+    from turncall.services.redaction import DEFAULT_ENTITIES, RedactionPolicy
+    from turncall.storage.repositories import call_repo
+
+    async def no_call(_session, _call_id):
+        return None
+
+    async def nothing_said(_session, _call_id):
+        return []
+
+    monkeypatch.setattr(call_repo, "get_call_by_id", no_call)
+    monkeypatch.setattr(t, "_conversation", nothing_said)
+    policy = RedactionPolicy(DEFAULT_ENTITIES)
+    telemetry_redaction.use(policy)
+    intent = t.TransferIntent(
+        target_number="+15551234567",
+        transfer_mode="warm",
+        briefing_from_summary=True,
+    )
+
+    text = await t.resolve_briefing_text(object(), uuid4(), intent)  # type: ignore[arg-type]
+
+    assert text == "The caller is being transferred to you."
+    assert telemetry_redaction.current() == policy

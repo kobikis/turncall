@@ -311,3 +311,28 @@ async def test_a_rewrite_the_detector_cannot_answer_waits_for_the_next_sweep(
     assert [row.content for row in deferred_rows] == [SAID, REPLY]
     assert stored.metadata_json["redaction"] == "done"
     assert [row.content for row in rows] == [REDACTED_SAID, REDACTED_REPLY]
+
+
+async def test_a_page_is_at_most_max_page_size(monkeypatch, turns) -> None:
+    """A read of a redacting project's page waits on the detector, so a page
+    is bounded: a larger `limit` is cut, and the response says so."""
+    async with run_app(
+        SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        await _redact(app)
+        agent_id = await app.create_agent(HARNESS_AGENT)
+        r = await app.api.post("/v1/chat", json={"agent_id": agent_id, "message": SAID})
+        session_id = r.json()["data"]["session_id"]
+        messages = await app.api.get(
+            f"/v1/chat/sessions/{session_id}/messages", params={"limit": 100_000}
+        )
+        sessions = await app.api.get("/v1/chat/sessions", params={"limit": 100_000})
+
+    from turncall.api.v1.chat import MAX_PAGE_SIZE
+
+    assert messages.status_code == sessions.status_code == 200
+    assert messages.json()["limit"] == sessions.json()["limit"] == MAX_PAGE_SIZE
+    assert [m["content"] for m in messages.json()["data"]] == [
+        REDACTED_SAID,
+        REDACTED_REPLY,
+    ]

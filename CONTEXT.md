@@ -499,7 +499,9 @@ its behalf afterwards (a warm transfer's briefing, post-call analysis and takeaw
 the conversation as said; their *outputs* are redacted on the way out). Text only; done
 locally (Presidio), opt-in per project. A redacted value reads `<ENTITY_TYPE>`. Built for
 the transcript, call events and stored analysis (#313); tool-invocation rows, text
-messages, logs and spans are #314. See ADR-0024.
+messages (redacted on every read while the session is live, rewritten once it ends),
+logs and spans (#314; regular expressions rather than Presidio, so only the types with a
+fixed shape). See ADR-0024.
 _Avoid_: "masking" (reads as display-only), "anonymization" (a stronger legal claim).
 
 **Retention policy**:

@@ -127,7 +127,7 @@ async def open_inbound_call(
     # `admit_inbound_call` has already announced `call.rejected` when it says no.
     # From here on the call's logs follow its project's redaction (#314),
     # the carrier handler's own included: this runs in its task.
-    await telemetry_redaction.for_project(number.project_id)
+    await telemetry_redaction.for_project(number.project_id, session=session)
     call_id = uuid4()
     if not await admit_inbound_call(
         session,

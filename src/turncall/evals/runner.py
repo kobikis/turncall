@@ -721,7 +721,7 @@ async def execute_run(
             logger.info("eval_run_not_queued", run_id=str(run_id), status=run.status)
             return
         # This run's logs and spans follow its project's redaction (#314).
-        await telemetry_redaction.for_project(run.project_id, sessions=session_factory)
+        await telemetry_redaction.for_project(run.project_id, session=session)
 
         iterations = run.iterations
         plan = await _plan_run(

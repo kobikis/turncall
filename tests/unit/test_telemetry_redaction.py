@@ -26,6 +26,7 @@ pytestmark = pytest.mark.unit
 
 ALL = DEFAULT_ENTITIES
 POLICY = RedactionPolicy(ALL)
+PHONE = "PHONE_NUMBER"
 
 
 @pytest.mark.parametrize(
@@ -72,6 +73,80 @@ def test_only_the_chosen_types() -> None:
     text = "+15550001234 or jane@example.com"
     assert redact_line(text, ("EMAIL_ADDRESS",)) == "+15550001234 or <EMAIL_ADDRESS>"
     assert redact_line(text, ("PERSON",)) == text
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Too many digits for one number: each is found on its own.
+        (
+            "numbers 4155550132 4155550133",
+            "numbers <PHONE_NUMBER> <PHONE_NUMBER>",
+        ),
+        ("415-555-0132 415-555-0133", "<PHONE_NUMBER> <PHONE_NUMBER>"),
+        ("+14155550132 +14155550133", "<PHONE_NUMBER> <PHONE_NUMBER>"),
+        # The longest number that fits is taken: a digit too many redacted,
+        # rather than one left.
+        ("call +44 20 7946 0958 123 456", "call <PHONE_NUMBER> 456"),
+        ("at 1760000000123 from 4155550132", "at 1760000000123 from <PHONE_NUMBER>"),
+        ("1760000000123 4155550132", "1760000000123 <PHONE_NUMBER>"),
+    ],
+)
+def test_separate_numbers_stay_separate(text: str, expected: str) -> None:
+    assert redact_line(text, (PHONE,)) == expected
+
+
+def test_separate_cards_stay_separate() -> None:
+    assert redact_line("4111111111111111 4012888888881881", ("CREDIT_CARD",)) == (
+        "<CREDIT_CARD> <CREDIT_CARD>"
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "chosen", "expected"),
+    [
+        # A WhatsApp JID is email-shaped: its number is found without EMAIL.
+        ("+14155550132@s.whatsapp.net", (PHONE,), "<PHONE_NUMBER>@s.whatsapp.net"),
+        (
+            "jid 14155550132@s.whatsapp.net",
+            (PHONE,),
+            "jid <PHONE_NUMBER>@s.whatsapp.net",
+        ),
+        ("+14155550132@s.whatsapp.net", ALL, "<EMAIL_ADDRESS>"),
+        (
+            "sip:+14155550132@pbx.example.com",
+            (PHONE,),
+            "sip:<PHONE_NUMBER>@pbx.example.com",
+        ),
+        # A valid IBAN not chosen is left whole, not mined for a phone.
+        ("GB82 WEST 1234 5698 7654 32", (PHONE,), "GB82 WEST 1234 5698 7654 32"),
+    ],
+)
+def test_a_number_inside_another_shape(
+    text: str, chosen: tuple[str, ...], expected: str
+) -> None:
+    assert redact_line(text, chosen) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ts 1760000000123",  # epoch milliseconds
+        "ts 1760000000",  # epoch seconds
+        "at 1760000000123453",  # epoch microseconds, passes Luhn
+        "at 1760000000123456789",  # epoch nanoseconds
+        "snowflake 1234567890123456789",
+        "id 0412345678901233",  # zero-padded, passes Luhn
+    ],
+)
+def test_timestamps_and_long_ids_are_left_alone(text: str) -> None:
+    assert redact_line(text, ALL) == text
+
+
+def test_a_bare_number_starting_with_1_is_a_phone_at_eleven_digits() -> None:
+    # +1's country code, written without its `+` (a WhatsApp id).
+    assert redact_line("wa 14155550132", (PHONE,)) == "wa <PHONE_NUMBER>"
+    assert redact_line("cn 13812345678", (PHONE,)) == "cn <PHONE_NUMBER>"
 
 
 def test_a_number_with_a_plus_is_a_phone_even_when_it_passes_luhn() -> None:

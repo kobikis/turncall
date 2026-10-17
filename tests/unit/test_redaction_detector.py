@@ -119,6 +119,10 @@ async def test_the_worker_redacts_free_json_whatever_its_keys_are() -> None:
                 "notes": ["write to jane.doe@example.com"],
                 "booked_at": "2026-10-16T12:00:00+00:00",
                 "party_size": 4,
+                # JSON numbers, as a webhook may answer them.
+                "card_number": 4111111111111111,
+                "phone": 4155550132,
+                "sent_at_ms": 1760000000123,
             },
             policy,
         )
@@ -132,5 +136,8 @@ async def test_the_worker_redacts_free_json_whatever_its_keys_are() -> None:
         "notes": ["write to <EMAIL_ADDRESS>"],
         "booked_at": "2026-10-16T12:00:00+00:00",
         "party_size": 4,
+        "card_number": "<CREDIT_CARD>",
+        "phone": "<PHONE_NUMBER>",
+        "sent_at_ms": 1760000000123,
     }
     assert text == "my number is <PHONE_NUMBER>"

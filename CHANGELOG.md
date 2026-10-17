@@ -28,9 +28,9 @@ and is not part of this repository's history.
   never redacted: the model hears the caller's words, a warm transfer's
   operator is briefed on them, and post-call analysis and takeaways read them.
   Their results are redacted before they are stored on the call, so `analysis`
-  on the call read, `GET /v1/calls/{id}/analysis` and `call.ended` agree;
-  tool-invocation rows, logs and spans are not yet
-  (#314). TurnCall's own identifiers (ids, statuses, provider and tool names)
+  on the call read, `GET /v1/calls/{id}/analysis` and `call.ended` agree
+  (tool invocations, text conversations, logs and spans: below, #314).
+  TurnCall's own identifiers (ids, statuses, provider and tool names)
   are never analysed. Detection is local — Presidio over spaCy's small English
   model, no text leaves the deployment — and runs in a worker process of its
   own, outside the process carrying live calls' audio; a project with
@@ -55,7 +55,14 @@ and is not part of this repository's history.
   the database by the session sweep, within 15 minutes. A session that ended
   before redaction was turned on is not rewritten. The reply to
   `POST /v1/chat` and the text sent to the customer are the live conversation
-  and are never redacted. No migration: the state is kept in `metadata_json`.
+  and are never redacted. Every API server runs the sweep and claims the
+  sessions it rewrites (a ten-minute lease), so none is rewritten twice; a
+  reply stored as its session is rewritten puts it back for the next sweep.
+  The state is kept in `metadata_json`; migration `b5e1d9c3a7f2` adds a
+  partial index for the sweep's claim. A page of
+  `GET /v1/chat/sessions/{id}/messages` or `GET /v1/chat/sessions` now holds
+  at most 500: a larger `limit` is cut to 500, which the response's `limit`
+  reports (a page is redacted before it is answered, in jobs of 64 texts).
 
 - **Redaction: tool invocations** (#314). With redaction on, a tool call's
   arguments and result are stored redacted on its `tool_invocations` row, so
@@ -63,7 +70,10 @@ and is not part of this repository's history.
   and scenarios drafted from a call or session read back redacted. The fields
   are the tool's own, so every value is analysed whatever it is called (a
   `customer_id` holding an email is redacted); the same holds for takeaway
-  and `structured_data` fields in the stored analysis. The tool's webhook is
+  and `structured_data` fields in the stored analysis. A JSON number of
+  seven digits or more is analysed as its digits, so
+  `{"card_number": 4111111111111111}` is stored as `"<CREDIT_CARD>"`. The
+  tool's webhook is
   still sent the raw arguments and the model still reads the raw result.
 
 - **Redaction in logs and traces** (#314). A redacting project's log lines
@@ -74,7 +84,12 @@ and is not part of this repository's history.
   made with the project's API key. Regular expressions rather than the
   detector, which is too slow for the audio path: `PHONE_NUMBER`,
   `EMAIL_ADDRESS`, `CREDIT_CARD`, `US_SSN` and `IBAN_CODE`, as the project
-  chose them; other types are not found in logs and spans. For such a
+  chose them; other types are not found in logs and spans. Numbers side by
+  side are found one by one, a number inside an email-shaped string (a
+  WhatsApp JID) is found when phone numbers are chosen and emails are not,
+  and epoch timestamps and zero-padded ids are left alone: a bare run of
+  digits starting with 1 is a phone number only at 11 digits, a card number
+  only at 15. For such a
   project a logged exception's traceback is written without its local
   variables, redacted, in the message (JSON `exception` is `null`), and the
   call's `turncall.from_number` / `turncall.to_number` are left off its spans

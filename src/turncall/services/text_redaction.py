@@ -19,6 +19,10 @@ redacts:
   `PENDING` when its project redacts at that moment (`sms_session_repo`), and
   the session sweep (`seal_ended_sessions`, every 15 minutes) does the rewrite
   and marks each row `DONE`, which the reads then pass through as stored.
+  Every API replica sweeps: each claims the sessions it rewrites (a lease,
+  `REWRITE_LEASE`), so no two rewrite one. A message stored on a session as
+  it is rewritten (a reply that finished after the session ended) puts it
+  back to `PENDING` (`sms_message_repo.create_message`), for the next sweep.
 
 A session that ended before its project turned redaction on is not rewritten,
 as a call's stored lines are not; its reads are redacted all the same while
@@ -30,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Sequence
+from datetime import timedelta
 from itertools import batched
 from types import SimpleNamespace
 from typing import Any
@@ -46,11 +51,15 @@ from turncall.storage.repositories import sms_message_repo, sms_session_repo
 
 # The Chat API's stand-in for a session with no number: TurnCall's, not text.
 NO_NUMBER = "api"
-# Messages per detector job when a session is rewritten: a long conversation
-# must not take the worker's whole backlog (`redaction.MAX_PENDING`) at once.
-REWRITE_BATCH = 64
+# Texts per detector job, on a read as on a rewrite: a long conversation must
+# not take the worker's whole backlog (`redaction.MAX_PENDING`) at once, which
+# would withhold live calls' text until it was through.
+DETECT_BATCH = 64
 # Sessions rewritten per sweep.
 REWRITE_LIMIT = 50
+# How long a sweep's claim on a session lasts: shorter than the sweep's
+# interval (15 minutes), so one that dies mid-rewrite delays it one sweep.
+REWRITE_LEASE = timedelta(minutes=10)
 # `sms_sessions.customer_number` / `turncall_number` are VARCHAR(20).
 _NUMBER_LENGTH = 20
 
@@ -69,7 +78,7 @@ async def readable_messages(
     if policy is None or not raw:
         return list(rows)
     await _release(db)
-    contents = await redaction.redact_json([row.content for row in raw], policy)
+    contents = await _redacted([row.content for row in raw], policy)
     redacted = {row.id: content for row, content in zip(raw, contents, strict=True)}
     return [
         _copy(row, content=redacted[row.id]) if row.id in redacted else row
@@ -87,7 +96,10 @@ async def readable_sessions(
     if policy is None or not raw:
         return list(rows)
     await _release(db)
-    numbers = await asyncio.gather(*(_numbers(row, policy) for row in raw))
+    numbers: list[tuple[str, str]] = []
+    # Two texts a session at most: a page in jobs of DETECT_BATCH.
+    for chunk in batched(raw, DETECT_BATCH // 2):
+        numbers += await asyncio.gather(*(_numbers(row, policy) for row in chunk))
     redacted = {row.id: pair for row, pair in zip(raw, numbers, strict=True)}
     return [
         _copy(
@@ -109,22 +121,35 @@ async def seal_ended_sessions(
 ) -> int:
     """Rewrite redacted the rows of sessions that ended while their project
     redacted (marked `PENDING` by their expiry). Returns how many were
-    rewritten. A detector that does not answer ends the pass: the rest wait
-    for the next sweep, raw at rest and redacted on every read meanwhile."""
+    rewritten. Only sessions this sweep claimed: another replica's are left
+    to it. A detector that does not answer ends the pass: the rest are given
+    back for the next sweep, raw at rest and redacted on every read
+    meanwhile."""
     async with sessions() as db:
-        pending = await sms_session_repo.list_pending_redaction(db, limit=limit)
+        claimed = await sms_session_repo.claim_pending_redaction(
+            db, limit=limit, lease=REWRITE_LEASE
+        )
+        await db.commit()
     sealed = 0
-    for row in pending:
-        try:
-            if await _seal(sessions, row):
-                sealed += 1
-        except redaction.RedactionWithheld:
-            logger.warning(
-                "text_session_redaction_deferred",
-                session_id=str(row.id),
-                reason="the detector did not answer",
-            )
-            break
+    left = {row.id for row in claimed}
+    try:
+        for row in claimed:
+            try:
+                if await _seal(sessions, row):
+                    sealed += 1
+            except redaction.RedactionWithheld:
+                logger.warning(
+                    "text_session_redaction_deferred",
+                    session_id=str(row.id),
+                    reason="the detector did not answer",
+                )
+                break
+            left.discard(row.id)
+    finally:
+        if left:
+            async with sessions() as db:
+                await sms_session_repo.release_redaction_claims(db, list(left))
+                await db.commit()
     return sealed
 
 
@@ -140,12 +165,15 @@ async def _seal(sessions: Callable[[], AsyncSession], row: SmsSessionRow) -> boo
             return False
         messages = await sms_message_repo.list_unredacted_messages(db, row.id)
 
-    contents: list[str] = []
-    for chunk in batched((content for _, content in messages), REWRITE_BATCH):
-        contents += await redaction.redact_json(list(chunk), policy, strict=True)
+    contents = await _redacted(
+        [content for _, content in messages], policy, strict=True
+    )
     customer, turncall = await _numbers(row, policy, strict=True)
 
     async with sessions() as db:
+        # Held to the commit: a message stored from here on waits for it,
+        # then puts the session back to pending (`create_message`).
+        await sms_session_repo.lock_for_redaction(db, row.id)
         for (message_id, _), content in zip(messages, contents, strict=True):
             await sms_message_repo.set_message_redacted(db, message_id, content)
         # A turn that was mid-reply as the session expired may have stored
@@ -164,6 +192,16 @@ async def _seal(sessions: Callable[[], AsyncSession], row: SmsSessionRow) -> boo
 
 
 # --- Helpers -------------------------------------------------------------------
+
+
+async def _redacted(
+    texts: list[str], policy: redaction.RedactionPolicy, *, strict: bool = False
+) -> list[str]:
+    """`texts` redacted, in jobs of DETECT_BATCH, one after another."""
+    out: list[str] = []
+    for chunk in batched(texts, DETECT_BATCH):
+        out += await redaction.redact_json(list(chunk), policy, strict=strict)
+    return out
 
 
 async def _numbers(

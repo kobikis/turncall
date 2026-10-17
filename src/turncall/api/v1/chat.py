@@ -24,6 +24,11 @@ from turncall.storage.repositories import (
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
+# The most a page of sessions or messages holds: a larger `limit` is cut to it,
+# and the response's `limit` says so. A redacting project's page goes to the
+# detector, in jobs, before it is answered (#314).
+MAX_PAGE_SIZE = 500
+
 
 @router.post("", status_code=201)
 async def send_message(
@@ -67,7 +72,12 @@ async def list_sessions(
     page: int = 1,
     limit: int = 50,
 ) -> dict:
-    """List chat sessions for the authenticated project."""
+    """List chat sessions for the authenticated project.
+
+    `limit` is at most 500; a larger one is cut to 500, which the response's
+    `limit` reports.
+    """
+    limit = min(limit, MAX_PAGE_SIZE)
     offset = (page - 1) * limit
     rows = await sms_session_repo.list_sessions(
         session, auth.project_id, status=status, limit=limit, offset=offset
@@ -108,7 +118,12 @@ async def list_session_messages(
     limit: int = 100,
     offset: int = 0,
 ) -> dict:
-    """List messages in a chat session."""
+    """List messages in a chat session.
+
+    `limit` is at most 500; a larger one is cut to 500, which the response's
+    `limit` reports.
+    """
+    limit = min(limit, MAX_PAGE_SIZE)
     # Verify session belongs to project
     sess_row = await sms_session_repo.get_session_by_id(
         session, session_id, project_id=auth.project_id

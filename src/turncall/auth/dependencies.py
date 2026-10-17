@@ -67,7 +67,7 @@ async def resolve_auth_context(
     # The request's logs follow its project's redaction from here (#314): a
     # transfer's target, a chat message, the call the end API stops. The
     # endpoint runs in this task, so it sees what is set here.
-    await telemetry_redaction.for_project(api_key_row.project_id)
+    await telemetry_redaction.for_project(api_key_row.project_id, session=session)
 
     return AuthContext(
         project_id=api_key_row.project_id,

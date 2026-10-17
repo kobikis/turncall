@@ -401,6 +401,13 @@ class SmsSessionRow(Base):
             "status",
         ),
         Index("ix_sms_sessions_expires_at", "expires_at"),
+        # The redaction sweep's claim (#314, sms_session_repo
+        # .claim_pending_redaction): the sessions still to be rewritten.
+        Index(
+            "ix_sms_sessions_redaction_pending",
+            "expires_at",
+            postgresql_where=text("metadata_json ->> 'redaction' = 'pending'"),
+        ),
     )
 
 

@@ -289,6 +289,59 @@ async def test_free_json_may_be_any_json_value(detector) -> None:
     assert await redaction.redact_json(None, POLICY) is None
 
 
+async def test_free_json_analyses_long_integers_as_their_digits(monkeypatch) -> None:
+    """A tool's webhook may answer a card or a phone number as a JSON number.
+    It is analysed as the digits it is written with; one the detector finds
+    becomes its tag, any other stays a number. Counts never reach it."""
+
+    class Cards(_Marks):
+        def redact(self, text: str, entities: tuple[str, ...]) -> str:
+            self.seen.append(text)
+            return {"4111111111111111": "<CREDIT_CARD>"}.get(text, text)
+
+    cards = Cards()
+    _use(monkeypatch, lambda: cards)
+    value = {
+        "card_number": 4111111111111111,
+        "order": 98765432,
+        "items": [4111111111111111, 3],
+        "total": 4111111111111111.0,
+        "paid": True,
+        "party_size": 4,
+    }
+    try:
+        out = await redaction.redact_json(value, POLICY)
+    finally:
+        redaction.ENGINE.shutdown()
+
+    assert out == {
+        "card_number": "<CREDIT_CARD>",
+        "order": 98765432,
+        "items": ["<CREDIT_CARD>", 3],
+        "total": 4111111111111111.0,
+        "paid": True,
+        "party_size": 4,
+    }
+    assert value["card_number"] == 4111111111111111
+    assert {"4111111111111111", "98765432"} <= set(cards.seen)
+    assert not {"3", "4", "True"} & set(cards.seen)
+
+
+async def test_free_json_long_integers_are_withheld_when_the_detector_fails(
+    monkeypatch,
+) -> None:
+    def broken() -> None:
+        raise RuntimeError("model missing")
+
+    _use(monkeypatch, broken)
+    try:
+        out = await redaction.redact_json({"phone": 4155550132, "n": 12}, POLICY)
+    finally:
+        redaction.ENGINE.shutdown()
+
+    assert out == {"phone": "<REDACTED>", "n": 12}
+
+
 async def test_free_json_skips_uuids_and_timestamps_by_their_shape(detector) -> None:
     value = {
         "ref": "550e8400-e29b-41d4-a716-446655440000",
