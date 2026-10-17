@@ -178,9 +178,10 @@ certification.
   de-identification, the call record's numbers and metadata are neither
   redacted nor deleted by retention, and only project credentials (and a
   number's Twilio token) are encrypted by TurnCall, not call data, webhook
-  signing secrets, call-init secrets or the secrets in agent config. It
-  does not rely on the builder's audit of people (builder-api #101, #102),
-  which is not built yet. There is no switch that turns recording off (every voice call is
+  signing secrets, call-init secrets or the secrets in agent config. The
+  builder's audit of people (builder-api #101, #102, built since in
+  builder-api #105) is named as one way to identify the person behind a
+  change, never as the only one: one key per person serves too. There is no switch that turns recording off (every voice call is
   recorded, ADR-0005), so of the audio guidance above only a short
   `recordings_days` is available today, and the guides say so. The webhook guide
   (`server-events.mdx`) states what redaction does to payloads.

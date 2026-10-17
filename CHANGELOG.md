@@ -900,6 +900,11 @@ and is not part of this repository's history.
   recording off for audio that holds PII; there is no such setting, as every
   voice call is recorded. It now says to keep recordings briefly with
   `recordings_days`.
+- **The person behind a change, in the Compliance guide.** Its audit-log and
+  unique-user-identification rows now say that the TurnCall builder records
+  the person behind each change made in its console, in an append-only log of
+  its own linked to the entries here (builder-api #101, #102). A change made
+  straight against the API is still attributed to its key only.
 
 ### Upgrade notes
 
