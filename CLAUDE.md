@@ -68,7 +68,7 @@ turncall-demo         # the website demo: agents from a file over WebRTC, no DB/
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `TWILIO_ACCOUNT_SID` | Yes* | Twilio account SID — the platform account. *A number bound with its own `twilio_account_sid` + `twilio_auth_token` uses those instead |
-| `TWILIO_AUTH_TOKEN` | Yes* | Twilio auth token (platform account; see above) |
+| `TWILIO_AUTH_TOKEN` | Yes* | Twilio auth token (platform account; see above). With none at any level, a Twilio webhook is refused (`403`) in production and taken unverified only in development (#337); startup warns of numbers it leaves unverifiable |
 | `TELNYX_API_KEY` | No | Telnyx API key, the platform account for Telnyx numbers (ADR-0022). A project's `telnyx` credential replaces it **and** `TELNYX_PUBLIC_KEY` whole. Without one at any level a Telnyx call cannot be answered: it fails with `missing_keys: ["telnyx"]` |
 | `TELNYX_PUBLIC_KEY` | With Telnyx | The platform Telnyx account's webhook public key (base64 Ed25519, Mission Control > Keys & Credentials > Public Key). Not a secret, but required: a Telnyx webhook nothing can verify is refused — there is no unsigned dev mode on Telnyx |
 | `OPENAI_API_KEY` | Yes* | OpenAI API key (LLM + optional STT/TTS). *Not required if using Ollama/custom LLM |

@@ -587,6 +587,18 @@ and is not part of this repository's history.
   so no carrier configuration changes. Migration `b9f5d3a7e1c2`
   (`calls.media_attached_at`). A call answered before the upgrade and not yet
   streaming when it lands has no token and is refused.
+- **Twilio webhooks no token can verify are refused in production** (#337).
+  With no `TWILIO_AUTH_TOKEN` and no number on its own Twilio account, every
+  `/webhooks/twilio/*` route took a request unverified, so a production
+  deployment whose token was unset or blank accepted forged calls and texts.
+  With `TURNCALL_ENV=production` such a webhook is now a `403`, refused before
+  anything is read or created, and logged as `twilio_webhook_unverifiable`;
+  development is unchanged. `/webhooks/twilio/stream-status`, the one route
+  that never checked a signature, now does. At startup, Twilio numbers on the
+  platform account while `TWILIO_AUTH_TOKEN` is unset are logged as
+  `twilio_numbers_unverifiable`, with whether their webhooks are refused. Set
+  `TWILIO_AUTH_TOKEN` (or each number's own account) before upgrading a
+  production deployment that takes Twilio.
 
 - **A WhatsApp webhook nothing can verify is refused in production** (#339).
   Without `WHATSAPP_APP_SECRET`, every WhatsApp webhook (voice calls and text

@@ -65,3 +65,16 @@ async def test_the_sealed_token_is_found_by_its_account_sid(factory) -> None:
             is None
         )
         assert await phone_number_repo.any_has_own_twilio_account(session) is True
+
+
+async def test_platform_twilio_numbers_are_counted(factory) -> None:
+    """The startup warning's count (#337): Twilio numbers on the platform
+    account, not those carrying their own."""
+    async with factory() as session:
+        before = await phone_number_repo.count_on_platform_twilio_account(session)
+    await _bind(factory, None)
+    await _bind(factory, None)
+    await _bind(factory, StoredTwilioAccount(f"AC{uuid.uuid4().hex}", "sealed"))
+    async with factory() as session:
+        after = await phone_number_repo.count_on_platform_twilio_account(session)
+    assert after - before == 2

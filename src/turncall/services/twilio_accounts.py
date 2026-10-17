@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 from turncall.storage.models import PhoneNumberRow
 from turncall.storage.repositories import credential_repo, phone_number_repo
 
@@ -99,3 +101,37 @@ async def any_number_has_own_account(session: AsyncSession) -> bool:
     accounts, a webhook nothing here can verify is refused.
     """
     return await phone_number_repo.any_has_own_twilio_account(session)
+
+
+async def unverifiable_webhooks_refused(
+    session: AsyncSession, settings: Settings
+) -> bool:
+    """Whether a webhook no token here can verify is refused (#337).
+
+    Only a development deployment with no Twilio credentials anywhere passes
+    one: in production a forged `/webhooks/twilio/*` request must not be
+    taken because a token was left unset or blank.
+    """
+    return settings.is_production or await any_number_has_own_account(session)
+
+
+async def warn_unverifiable_numbers(session: AsyncSession, settings: Settings) -> int:
+    """Log, once at startup, the Twilio numbers whose webhooks no token can
+    verify: on the platform account while `TWILIO_AUTH_TOKEN` is unset (#337).
+
+    Returns how many there are. A number with its own account is verified by
+    its own token, so only the platform's numbers count.
+    """
+    if settings.twilio.auth_token:
+        return 0
+    count = await phone_number_repo.count_on_platform_twilio_account(session)
+    if count:
+        refused = await unverifiable_webhooks_refused(session, settings)
+        logger.warning(
+            "twilio_numbers_unverifiable: {count} Twilio number(s) have no auth "
+            "token to verify their webhooks; set TWILIO_AUTH_TOKEN or give each "
+            "number its own account. Their webhooks are {outcome}.",
+            count=count,
+            outcome="refused (403)" if refused else "accepted unverified",
+        )
+    return count

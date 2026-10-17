@@ -28,17 +28,30 @@ async def _ensure_credentials_readable(settings: Settings) -> None:
         await credential_repo.ensure_readable(session, settings)
 
 
-async def _warn_if_whatsapp_unverifiable(settings: Settings) -> None:
-    """WhatsApp configured without WHATSAPP_APP_SECRET is said at startup (#339).
-    Only a warning: a failure to check never stops the server from starting."""
+async def _warn_unverifiable_webhooks(settings: Settings) -> None:
+    """Carrier webhooks nothing here can verify are said at startup: WhatsApp
+    without WHATSAPP_APP_SECRET (#339), Twilio numbers no auth token covers
+    (#337). Only warnings: a failed check never stops the server starting."""
+    from turncall.services.twilio_accounts import warn_unverifiable_numbers
     from turncall.storage.database import create_session_factory, get_engine
     from turncall.webhooks.whatsapp_handlers import warn_if_unverifiable
 
-    try:
-        async with create_session_factory(get_engine())() as session:
-            await warn_if_unverifiable(settings, session)
-    except Exception:
-        logger.exception("whatsapp_verification_check_failed")
+    checks = (
+        (
+            "whatsapp_verification_check_failed",
+            lambda session: warn_if_unverifiable(settings, session),
+        ),
+        (
+            "twilio_numbers_check_failed",
+            lambda session: warn_unverifiable_numbers(session, settings),
+        ),
+    )
+    for failed, check in checks:
+        try:
+            async with create_session_factory(get_engine())() as session:
+                await check(session)
+        except Exception:
+            logger.exception(failed)
 
 
 @asynccontextmanager
@@ -71,7 +84,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_database(settings.database)
     await init_redis(settings.redis)
     await _ensure_credentials_readable(settings)
-    await _warn_if_whatsapp_unverifiable(settings)
+    await _warn_unverifiable_webhooks(settings)
 
     # Log all agent configs on startup
     try:

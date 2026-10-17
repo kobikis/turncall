@@ -72,19 +72,27 @@ async def _validate_twilio_request(
     else is checked against the platform's (services/twilio_accounts.py).
     """
     from turncall.services.twilio_accounts import (
-        any_number_has_own_account,
         token_for_account_sid,
+        unverifiable_webhooks_refused,
     )
 
-    token = await token_for_account_sid(
-        session, params.get("AccountSid"), get_settings()
-    )
+    settings = get_settings()
+    token = await token_for_account_sid(session, params.get("AccountSid"), settings)
     if not token:
-        # No platform token and no number on this account. With no Twilio
-        # credentials anywhere this is a dev setup and passes, as before; once
-        # numbers bring their own accounts, an unverifiable webhook is refused —
-        # an operator who keeps Twilio only per number must not lose the check.
-        return not await any_number_has_own_account(session)
+        # No platform token and no number on this account. In development with
+        # no Twilio credentials anywhere this passes, as before. In production
+        # (#337), or once numbers bring their own accounts, it is refused: a
+        # blank token must not turn the check off.
+        if not await unverifiable_webhooks_refused(session, settings):
+            return True
+        logger.warning(
+            "twilio_webhook_unverifiable: no Twilio auth token can verify this "
+            "webhook (TWILIO_AUTH_TOKEN unset, and no number has account "
+            "{account_sid}); refused",
+            account_sid=params.get("AccountSid"),
+            path=request.url.path,
+        )
+        return False
     url = _public_url(request)
     return validate_twilio_signature(token, signature, url, params)
 
@@ -552,12 +560,22 @@ async def recording_callback(
 @router.post("/stream-status")
 async def stream_status_callback(
     request: Request,
+    session: DbSession,
 ) -> Response:
     """Handle Twilio Media Stream status callback.
 
     Notifies when the audio stream connects, disconnects, or errors.
     """
     form_data = await request.form()
+    # Verified like every Twilio webhook (#337). The header is read here rather
+    # than declared, so the published API spec is unchanged.
+    if not await _validate_twilio_request(
+        request,
+        session,
+        request.headers.get("X-Twilio-Signature", ""),
+        dict(form_data),
+    ):
+        return Response(status_code=403)
     stream_status = form_data.get("StreamStatus", "")
     stream_sid = form_data.get("StreamSid", "")
     call_sid = form_data.get("CallSid", "")
