@@ -517,6 +517,15 @@ class Settings(BaseSettings):
         default=30, alias="PROJECT_PURGE_RETENTION_DAYS"
     )
 
+    # The audit log (#317, ADR-0024): entries older than this many days are
+    # deleted by an hourly janitor. Unset (the default) keeps them for good.
+    # An operator's setting, not a project's: an admin key must not be able
+    # to shorten the trail that records its own changes. Call retention never
+    # touches the audit log.
+    audit_log_retention_days: int | None = Field(
+        default=None, ge=1, le=36500, alias="AUDIT_LOG_RETENTION_DAYS"
+    )
+
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     twilio: TwilioSettings = Field(default_factory=TwilioSettings)

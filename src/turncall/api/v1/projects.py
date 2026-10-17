@@ -4,7 +4,9 @@ from uuid import UUID
 
 from fastapi import APIRouter
 from loguru import logger
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from turncall.api.audit import Audit, PlatformAudit
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ErrorCode, ForbiddenError, NotFoundError
 from turncall.api.responses import ok
@@ -17,7 +19,8 @@ from turncall.api.v1.schemas.projects import (
 )
 from turncall.auth import AdminAuth, Auth, PlatformKey
 from turncall.config import get_settings
-from turncall.services import redaction
+from turncall.domain.enums import AuditAction, AuditResource
+from turncall.services import audit_log, redaction
 from turncall.storage.repositories import project_repo
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -27,11 +30,27 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 async def create_project(
     body: CreateProjectRequest,
     session: DbSession,
+    audit: PlatformAudit,
 ) -> dict:
     """Create a new project. Requires the platform credential (X-Platform-Key) —
     only the builder can provision projects (ADR-0011)."""
     row = await project_repo.create_project(session, name=body.name)
+    await audit.record(
+        AuditResource.PROJECT,
+        row.id,
+        AuditAction.CREATED,
+        after=audit_log.project_state(row),
+        project_id=row.id,
+    )
     return ok(ProjectResponse.from_row(row))
+
+
+async def _before(session: AsyncSession, project_id: UUID) -> audit_log.State:
+    """The project's settings before a change; 404 if it is gone."""
+    row = await project_repo.get_project_by_id(session, project_id)
+    if row is None:
+        raise NotFoundError("Project", str(project_id))
+    return audit_log.project_state(row)
 
 
 @router.get("/{project_id}")
@@ -55,6 +74,7 @@ async def set_project_limits(
     body: ProjectLimits,
     auth: AdminAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Set the project's limits (#206), replacing all of them: a field left
     out or null goes back to the platform default. Applies to the next call or
@@ -62,6 +82,7 @@ async def set_project_limits(
     limit. Admin key; a project can only set its own."""
     if auth.project_id != project_id:
         raise ForbiddenError("A project can only set its own limits")
+    before = await _before(session, project_id)
     row = await project_repo.set_limits(
         session,
         project_id,
@@ -71,6 +92,13 @@ async def set_project_limits(
     )
     if row is None:
         raise NotFoundError("Project", str(project_id))
+    await audit.record(
+        AuditResource.PROJECT,
+        project_id,
+        AuditAction.LIMITS_SET,
+        before=before,
+        after=audit_log.project_state(row),
+    )
     return ok(ProjectResponse.from_row(row))
 
 
@@ -80,6 +108,7 @@ async def set_project_redaction(
     body: ProjectRedaction,
     auth: AdminAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Turn the project's redaction on or off and choose its entity types
     (#313, ADR-0024), replacing the whole setting: `enabled` is required, and
@@ -90,11 +119,19 @@ async def set_project_redaction(
     Admin key; a project can only set its own."""
     if auth.project_id != project_id:
         raise ForbiddenError("A project can only set its own redaction")
+    before = await _before(session, project_id)
     row = await project_repo.set_redaction(
         session, project_id, enabled=body.enabled, entities=body.entities
     )
     if row is None:
         raise NotFoundError("Project", str(project_id))
+    await audit.record(
+        AuditResource.PROJECT,
+        project_id,
+        AuditAction.REDACTION_SET,
+        before=before,
+        after=audit_log.project_state(row),
+    )
     await session.commit()
     policy = redaction.policy_of(body.enabled, body.entities)
     redaction.remember_policy(project_id, policy)
@@ -115,6 +152,7 @@ async def set_project_retention(
     body: ProjectRetention,
     auth: AdminAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Set how long the project keeps its calls' recordings, transcripts and
     events (#316, ADR-0024), replacing all three: a field left out or null
@@ -126,6 +164,7 @@ async def set_project_retention(
     kept. Admin key; a project can only set its own."""
     if auth.project_id != project_id:
         raise ForbiddenError("A project can only set its own retention")
+    before = await _before(session, project_id)
     row = await project_repo.set_retention(
         session,
         project_id,
@@ -135,6 +174,13 @@ async def set_project_retention(
     )
     if row is None:
         raise NotFoundError("Project", str(project_id))
+    await audit.record(
+        AuditResource.PROJECT,
+        project_id,
+        AuditAction.RETENTION_SET,
+        before=before,
+        after=audit_log.project_state(row),
+    )
     logger.info(
         "project_retention_set",
         project_id=str(project_id),
@@ -150,6 +196,7 @@ async def delete_project(
     project_id: UUID,
     auth: AdminAuth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Soft-delete a project (ADR-0011). A project can only delete ITSELF (the
     path id must match the authenticated project) and only with an admin key.
@@ -158,8 +205,10 @@ async def delete_project(
     IRREVERSIBLE for storage (recordings/KB files are purged)."""
     if auth.project_id != project_id:
         raise ForbiddenError("A project can only delete itself")
-    if await project_repo.get_project_by_id(session, project_id) is None:
+    row = await project_repo.get_project_by_id(session, project_id)
+    if row is None:
         raise NotFoundError("Project", str(project_id))
+    before = audit_log.project_state(row)
 
     from turncall.services.project_deletion import delete_project as run_delete
 
@@ -178,4 +227,12 @@ async def delete_project(
             ),
         ) from exc
 
+    # The entry outlives the project, its keys and the purge (ADR-0024).
+    await audit.record(
+        AuditResource.PROJECT,
+        project_id,
+        AuditAction.DELETED,
+        before=before,
+        after=audit_log.project_state(row),
+    )
     return ok({"deleted": True, "project_id": str(project_id)})

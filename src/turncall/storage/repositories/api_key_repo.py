@@ -82,3 +82,10 @@ async def revoke_api_key(
         query = query.where(ApiKeyRow.project_id == project_id)
     result = await session.execute(query.values(revoked_at=datetime.now(UTC)))
     return result.rowcount > 0  # type: ignore[union-attr]
+
+
+async def revoked_at(session: AsyncSession, api_key_id: UUID) -> datetime | None:
+    """When the key was revoked, as stored (None if it is not)."""
+    return await session.scalar(
+        select(ApiKeyRow.revoked_at).where(ApiKeyRow.id == api_key_id)
+    )

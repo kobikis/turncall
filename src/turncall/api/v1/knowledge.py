@@ -9,6 +9,7 @@ from turncall.adapters.storage import (
     create_storage_adapter,
     delete_objects,
 )
+from turncall.api.audit import Audit
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.api.responses import ok, paginated
@@ -25,6 +26,8 @@ from turncall.api.v1.schemas.knowledge import (
 )
 from turncall.auth import Auth, WriteAuth
 from turncall.config.settings import get_settings
+from turncall.domain.enums import AuditAction, AuditResource
+from turncall.services import audit_log
 from turncall.services.credentials import for_project
 from turncall.services.document_ingestion import (
     create_pending_document,
@@ -389,6 +392,7 @@ async def link_knowledge_base(
     body: LinkKnowledgeBaseRequest,
     auth: Auth,
     session: DbSession,
+    audit: Audit,
 ) -> dict:
     """Link a knowledge base to an agent."""
     from turncall.storage.repositories import agent_repo
@@ -414,6 +418,12 @@ async def link_knowledge_base(
         top_k=body.top_k,
         similarity_threshold=body.similarity_threshold,
         tool_description=body.tool_description,
+    )
+    await audit.record(
+        AuditResource.AGENT,
+        agent_id,
+        AuditAction.KNOWLEDGE_BASE_LINKED,
+        after=audit_log.fields(knowledge_base=audit_log.knowledge_base_link(row)),
     )
     await session.commit()
     return ok(AgentKnowledgeBaseResponse.from_row(row))
@@ -444,6 +454,7 @@ async def unlink_knowledge_base(
     kb_id: UUID,
     auth: Auth,
     session: DbSession,
+    audit: Audit,
 ) -> None:
     """Unlink a knowledge base from an agent."""
     from turncall.storage.repositories import agent_repo
@@ -456,9 +467,23 @@ async def unlink_knowledge_base(
     if agent_row is None:
         raise NotFoundError("Agent", str(agent_id))
 
+    link = next(
+        (
+            audit_log.knowledge_base_link(r)
+            for r in await knowledge_repo.get_agent_knowledge_bases(session, agent_id)
+            if r.knowledge_base_id == kb_id
+        ),
+        None,
+    )
     removed = await knowledge_repo.unlink_agent_knowledge_base(
         session, agent_id=agent_id, knowledge_base_id=kb_id
     )
     if not removed:
         raise NotFoundError("AgentKnowledgeBase", f"{agent_id}/{kb_id}")
+    await audit.record(
+        AuditResource.AGENT,
+        agent_id,
+        AuditAction.KNOWLEDGE_BASE_UNLINKED,
+        before=audit_log.fields(knowledge_base=link),
+    )
     await session.commit()

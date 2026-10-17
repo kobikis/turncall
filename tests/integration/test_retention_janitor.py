@@ -25,11 +25,13 @@ from turncall.services import retention
 from turncall.storage.database import create_engine, create_session_factory
 from turncall.storage.models import (
     AgentRow,
+    AuditEntryRow,
     CallEventRow,
     CallRow,
     ProjectRow,
     ToolInvocationRow,
 )
+from turncall.storage.repositories import audit_repo
 
 pytestmark = pytest.mark.integration
 
@@ -392,6 +394,23 @@ async def test_the_janitor_writes_nothing_but_call_data(db, storage, projects) -
         factory, projects, recordings_days=1, transcripts_days=1, events_days=1
     )
     call_id = await _call(factory, storage, project_id)
+    # An audit entry made before the call ended, so older than every cutoff.
+    entry_id = uuid.uuid4()
+    async with factory() as db:
+        await audit_repo.append(
+            db,
+            id=entry_id,
+            project_id=project_id,
+            api_key_id=None,
+            actor="platform",
+            resource_type="project",
+            resource_id=str(project_id),
+            action="retention_set",
+            changes={},
+            request_id=None,
+            created_at=ENDED - timedelta(days=1),
+        )
+        await db.commit()
     written: set[str] = set()
 
     def record(_conn, _cursor, statement, *_args) -> None:
@@ -403,10 +422,17 @@ async def test_the_janitor_writes_nothing_but_call_data(db, storage, projects) -
         swept = await retention.sweep(factory, storage, now=_days(2))
     finally:
         event.remove(engine.sync_engine, "before_cursor_execute", record)
+    async with factory() as db:
+        kept = await db.scalar(
+            select(func.count())
+            .select_from(AuditEntryRow)
+            .where(AuditEntryRow.id == entry_id)
+        )
 
     assert swept.recording and swept.transcript and swept.events
     assert (await _state(factory, call_id))["events"] == []
     assert written and written <= CALL_DATA, written
+    assert "audit_log" not in written and kept == 1
 
 
 READY = CallEventType.RECORDING_READY.value

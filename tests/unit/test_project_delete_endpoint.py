@@ -2,6 +2,8 @@
 502 if the Twilio unbind fails (ADR-0011)."""
 
 import uuid
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -10,6 +12,26 @@ from turncall.api.deps import get_session
 from turncall.auth.context import AuthContext
 from turncall.auth.dependencies import resolve_auth_context
 from turncall.domain.enums import ProjectRole
+
+
+def _project(project_id):
+    """A live project row, as the audit entry of its deletion reads it."""
+    now = datetime.now(UTC)
+    return SimpleNamespace(
+        id=project_id,
+        name="p",
+        created_at=now,
+        updated_at=now,
+        deleted_at=None,
+        limit_live_calls=None,
+        limit_outbound_calls_per_second=None,
+        limit_messages_per_minute=None,
+        redaction_enabled=False,
+        redaction_entities=None,
+        retention_recordings_days=None,
+        retention_transcripts_days=None,
+        retention_events_days=None,
+    )
 
 
 def _auth(app, role, project_id):
@@ -42,7 +64,7 @@ def test_admin_self_delete_runs_deletion(app):
     with (
         patch(
             "turncall.storage.repositories.project_repo.get_project_by_id",
-            new=AsyncMock(return_value=object()),  # project exists
+            new=AsyncMock(return_value=_project(pid)),  # project exists
         ),
         patch(
             "turncall.services.project_deletion.delete_project", new=AsyncMock()
@@ -73,7 +95,7 @@ def test_502_when_unbind_fails(app):
     with (
         patch(
             "turncall.storage.repositories.project_repo.get_project_by_id",
-            new=AsyncMock(return_value=object()),
+            new=AsyncMock(return_value=_project(pid)),
         ),
         patch(
             "turncall.services.project_deletion.delete_project",

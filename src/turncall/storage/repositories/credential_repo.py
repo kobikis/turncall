@@ -96,6 +96,18 @@ async def list_for_project(
     return list(result.scalars().all())
 
 
+async def get(
+    session: AsyncSession, project_id: UUID, provider: str
+) -> ProjectCredentialRow | None:
+    """The project's credential for one provider account, still sealed."""
+    return await session.scalar(
+        select(ProjectCredentialRow).where(
+            ProjectCredentialRow.project_id == project_id,
+            ProjectCredentialRow.provider == provider,
+        )
+    )
+
+
 async def providers_for_project(session: AsyncSession, project_id: UUID) -> set[str]:
     result = await session.execute(
         select(ProjectCredentialRow.provider).where(

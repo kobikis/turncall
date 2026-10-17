@@ -151,6 +151,14 @@
                   "title": "Response Create Project V1 Projects Post"
                 }
               }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
           "422": {
@@ -273,6 +281,14 @@
                   "title": "Response Delete Project V1 Projects  Project Id  Delete"
                 }
               }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
           "422": {
@@ -343,6 +359,14 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Set Project Limits V1 Projects  Project Id  Limits Put"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -417,6 +441,14 @@
                   "title": "Response Set Project Redaction V1 Projects  Project Id  Redaction Put"
                 }
               }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
           "422": {
@@ -489,6 +521,14 @@
                   "title": "Response Set Project Retention V1 Projects  Project Id  Retention Put"
                 }
               }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
           "422": {
@@ -559,6 +599,14 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Create Api Key V1 Api Keys Post"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -673,6 +721,14 @@
                   "title": "Response Create Api Key Authenticated V1 Api Keys Authenticated Post"
                 }
               }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
           "422": {
@@ -735,6 +791,14 @@
                   "title": "Response Revoke Api Key V1 Api Keys  Api Key Id  Delete"
                 }
               }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
           "422": {
@@ -795,6 +859,14 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Create Agent V1 Agents Post"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -1031,6 +1103,14 @@
                   "title": "Response Update Agent V1 Agents  Agent Id  Put"
                 }
               }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
           "422": {
@@ -1089,6 +1169,14 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Delete Agent V1 Agents  Agent Id  Delete"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -1151,6 +1239,14 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Publish Agent V1 Agents  Agent Id  Publish Post"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -1275,6 +1371,14 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Rollback Agent V1 Agents  Agent Id  Rollback Post"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2284,6 +2388,14 @@
                   "title": "Response Bind Phone Number V1 Phone Numbers Post"
                 }
               }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
           "422": {
@@ -2486,6 +2598,14 @@
                   "title": "Response Update Phone Number V1 Phone Numbers  Phone Number Id  Put"
                 }
               }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
           "422": {
@@ -2544,6 +2664,14 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Unbind Phone Number V1 Phone Numbers  Phone Number Id  Delete"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2616,6 +2744,14 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Set Routing Weights V1 Phone Numbers  Phone Number Id  Routing Put"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2736,6 +2872,14 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Clear Routing Weights V1 Phone Numbers  Phone Number Id  Routing Delete"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -4594,6 +4738,14 @@
                   "title": "Response Link Knowledge Base V1 Agents  Agent Id  Knowledge Bases Post"
                 }
               }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
           "422": {
@@ -4717,7 +4869,15 @@
         ],
         "responses": {
           "204": {
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -5339,7 +5499,7 @@
           "credentials"
         ],
         "summary": "Put Credential",
-        "description": "Store (or replace) the project's credential for one provider account.\n\nTakes effect on the project's next call \u2014 resolved per call, no restart.",
+        "description": "Store (or replace) the project's credential for one provider account.\n\nTakes effect on the project's next call \u2014 resolved per call, no restart.\nThe audit log records that it was set, never its value.",
         "operationId": "put_credential_v1_credentials__provider__put",
         "parameters": [
           {
@@ -5391,6 +5551,14 @@
                   "title": "Response Put Credential V1 Credentials  Provider  Put"
                 }
               }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
           "422": {
@@ -5410,7 +5578,7 @@
           "credentials"
         ],
         "summary": "Delete Credential",
-        "description": "Remove a credential; the project falls back to the platform key.\n\nIdempotent: deleting one that is not there answers `deleted: false`, so a\nrevocation retried under incident pressure never errors.",
+        "description": "Remove a credential; the project falls back to the platform key.\n\nIdempotent: deleting one that is not there answers `deleted: false`, so a\nrevocation retried under incident pressure never errors. Audited either\nway: an entry with no changes says the request found nothing to delete.",
         "operationId": "delete_credential_v1_credentials__provider__delete",
         "parameters": [
           {
@@ -5448,6 +5616,14 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Delete Credential V1 Credentials  Provider  Delete"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of each audit log entry this request wrote, comma-separated, in order (`GET /v1/audit-log` returns them).",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -6866,6 +7042,175 @@
         }
       }
     },
+    "/v1/audit-log": {
+      "get": {
+        "tags": [
+          "audit-log"
+        ],
+        "summary": "List Audit Log",
+        "description": "The project's audit log, newest first: each change made through the\nAPI to its agents, credentials, phone numbers, API keys and settings, the\nAPI key that made it, and what changed (secrets never recorded).\n\nPaged by cursor, not by page number: entries keep arriving at the head of\nthe list, so a page number would shift under the reader. Pass\n`next_cursor` back as `cursor` for the next page; it is null on the last.\nAdmin key only.",
+        "operationId": "list_audit_log_v1_audit_log_get",
+        "parameters": [
+          {
+            "name": "resource_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AuditResource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Type"
+            }
+          },
+          {
+            "name": "resource_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource Id"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AuditAction"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Entries at or after this time",
+              "title": "Since"
+            },
+            "description": "Entries at or after this time"
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Entries before this time",
+              "title": "Until"
+            },
+            "description": "Entries before this time"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`next_cursor` from the previous page",
+              "title": "Cursor"
+            },
+            "description": "`next_cursor` from the previous page"
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Audit Log V1 Audit Log Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/webhooks/twilio/sms/inbound": {
       "post": {
         "tags": [
@@ -7752,6 +8097,39 @@
         "type": "object",
         "title": "AnalysisSchema",
         "description": "Post-call analysis configuration. Results ship inline in `call.ended`."
+      },
+      "AuditAction": {
+        "type": "string",
+        "enum": [
+          "created",
+          "updated",
+          "deleted",
+          "published",
+          "rolled_back",
+          "archived",
+          "knowledge_base_linked",
+          "knowledge_base_unlinked",
+          "routing_set",
+          "routing_cleared",
+          "revoked",
+          "limits_set",
+          "redaction_set",
+          "retention_set"
+        ],
+        "title": "AuditAction",
+        "description": "What was done to the resource. `archived` is an agent version a\npublish or rollback took out of service; `deleted` is an agent deleted\nthrough the API (archived too, but asked for)."
+      },
+      "AuditResource": {
+        "type": "string",
+        "enum": [
+          "agent",
+          "credential",
+          "phone_number",
+          "api_key",
+          "project"
+        ],
+        "title": "AuditResource",
+        "description": "What an audit log entry is about (#317, ADR-0024)."
       },
       "AvatarConfigSchema": {
         "properties": {
