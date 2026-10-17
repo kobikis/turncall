@@ -903,6 +903,20 @@ and is not part of this repository's history.
 
 ### Upgrade notes
 
+- **Set `TWILIO_AUTH_TOKEN` and `WHATSAPP_APP_SECRET`, and `TURNCALL_ENV`,
+  before upgrading any deployment that is not a development one** (#337,
+  #339). A Twilio or WhatsApp webhook nothing can verify is now refused with a
+  `403` everywhere but `TURNCALL_ENV=development`: without the token, every
+  inbound Twilio call gets Twilio's application error and every text is
+  dropped; without the secret, every WhatsApp event is. A Twilio number on
+  its own account is verified by its own token and needs nothing.
+  `TURNCALL_ENV` still defaults to `development`, which accepts them
+  unverified, so a production or staging deployment that never set it must
+  set it now (startup says so when it is unset).
+- **Viewer keys lose four routes** (#335): linking and unlinking an agent's
+  knowledge base, `POST /v1/calls/{call_id}/analysis/rerun` and
+  `POST /v1/webrtc/connect` now need an admin or developer key. Replace a
+  viewer key used for any of them with a developer key.
 - **Spans no longer carry caller numbers.** `PIPECAT_TRACE_INCLUDE_PII` defaults
   to `false`, so `turncall.from_number` / `turncall.to_number` are gone from a
   call's spans. If you search traces by caller number, set
