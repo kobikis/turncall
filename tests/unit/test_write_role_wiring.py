@@ -55,11 +55,11 @@ NOT_KEYED: dict[tuple[str, str], str] = {
     # ADR-0011. A project key cannot create projects or mint keys this way.
     ("POST", "/v1/projects"): "platform key",
     ("POST", "/v1/api-keys"): "platform key",
-    # TODO(#341 review): ICE candidate trickle for a peer connection that
+    # TODO(#342): ICE candidate trickle for a peer connection that
     # POST /v1/webrtc/connect (a developer key) opened. It takes no key at
     # all; the unguessable `pc_id` is the only capability. Requiring the
     # key here changes what a browser client must send on every PATCH, so
-    # it is left as it was and tracked separately.
+    # it is left as it was here; #342 tracks it.
     ("PATCH", "/v1/webrtc/connect"): "pc_id of an open peer connection",
 }
 
