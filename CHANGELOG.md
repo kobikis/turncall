@@ -613,13 +613,22 @@ and is not part of this repository's history.
 
 ### Fixed
 
-- **A viewer key can no longer link or unlink an agent's knowledge bases**
-  (#335). `POST /v1/agents/{agent_id}/knowledge-bases` and
-  `DELETE /v1/agents/{agent_id}/knowledge-bases/{kb_id}` accepted any key, so
-  a viewer key could change what an agent retrieves from. Both now need an
-  admin or developer key, like every other change to an agent or a knowledge
-  base; a viewer key gets `403 forbidden` and nothing changes. A viewer key
-  that relied on this must be replaced by a developer key.
+- **A viewer key is refused on every route that changes something** (#335).
+  These routes accepted any key, so a viewer key could change what an agent
+  retrieves from, overwrite a call's analysis or start a call:
+  - `POST /v1/agents/{agent_id}/knowledge-bases` and
+    `DELETE /v1/agents/{agent_id}/knowledge-bases/{kb_id}` (link and unlink a
+    knowledge base);
+  - `POST /v1/calls/{call_id}/analysis/rerun` (replaces the stored analysis
+    and spends LLM calls);
+  - `POST /v1/webrtc/connect` (starts a browser call, as `POST /v1/chat` and
+    an outbound call, which already needed a writing key, start theirs).
+
+  Each now needs an admin or developer key, like every other change; a viewer
+  key gets `403 forbidden` and nothing changes. Every mutating route that
+  takes an API key is now checked for this in the test suite, not only those
+  under `/v1/agents` and `/v1/knowledge-bases`. A viewer key that relied on
+  one of these must be replaced by a developer key.
 - **Numbers in event payloads are redacted** (#313, #336 review). With
   redaction on, a JSON number of seven digits or more inside a payload (a
   tool's `arguments` or `result` on `tool.result`, the call's `metadata` on

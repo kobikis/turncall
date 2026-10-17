@@ -11,7 +11,7 @@ from turncall.api.deps import DbSession
 from turncall.api.errors import NotFoundError
 from turncall.api.responses import ok, paginated
 from turncall.api.v1.schemas.calls import CallEventResponse, CallResponse
-from turncall.auth import Auth
+from turncall.auth import Auth, WriteAuth
 from turncall.config.settings import get_settings
 from turncall.services.call_view import call_view_fields
 from turncall.services.recording_storage import recording_storage_key
@@ -209,7 +209,7 @@ async def get_call_analysis(
 @router.post("/{call_id}/analysis/rerun")
 async def rerun_call_analysis(
     call_id: UUID,
-    auth: Auth,
+    auth: WriteAuth,
     session: DbSession,
 ) -> dict:
     """Re-run post-call analysis for a completed call."""

@@ -1772,7 +1772,7 @@ Call ends → background processing (analysis ~2-5s + recording flush) → singl
 ### API
 ```
 GET  /v1/calls/{id}/analysis         # Get analysis results
-POST /v1/calls/{id}/analysis/rerun   # Re-run analysis
+POST /v1/calls/{id}/analysis/rerun   # Re-run analysis (admin/developer key)
 ```
 
 ### Key Files

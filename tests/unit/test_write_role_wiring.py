@@ -1,10 +1,14 @@
-"""A viewer key changes nothing on an agent or a knowledge base (#335).
+"""A viewer key changes nothing (#335).
 
 What this guards:
 
-- Every mutating route under `/v1/agents` and `/v1/knowledge-bases` refuses
-  a viewer key with a 403, before it reads or writes anything. A new route
-  that takes `Auth` where it means `WriteAuth` fails here, by name.
+- Every mutating route (POST, PUT, PATCH, DELETE) that takes an API key
+  refuses a viewer key with a 403, before it reads or writes anything. A new
+  route that takes `Auth` where it means `WriteAuth` fails here, by name,
+  unless it is listed in `VIEWER_MAY_CALL` with why it only reads.
+- Every mutating route that takes no API key at all is listed in `NOT_KEYED`
+  with what authenticates it instead, so a route that forgot its key fails
+  here too.
 - Linking and unlinking an agent's knowledge base, which took `Auth` until
   #335, refuse a viewer key and still work for admin and developer keys.
 
@@ -19,6 +23,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from turncall.api.audit import AUDIT_HEADER, MUTATING_METHODS, api_routes
@@ -30,8 +35,33 @@ from turncall.domain.enums import ProjectRole
 
 pytestmark = pytest.mark.unit
 
-WRITE_ONLY_PREFIXES = ("/v1/agents", "/v1/knowledge-bases")
 PATH_PARAM = re.compile(r"\{[^}]+\}")
+
+# Mutating-method routes a viewer key may call, because they read and change
+# nothing. Each needs its reason. None today: knowledge-base search is a POST
+# that only reads, but it spends the project's embedding calls, so it takes
+# `WriteAuth` like every other paid operation.
+VIEWER_MAY_CALL: dict[tuple[str, str], str] = {}
+
+# Carrier webhooks take no API key: each carrier's own signature check
+# authenticates them (tests/unit/test_twilio_unverifiable_webhooks.py,
+# test_whatsapp_unverified.py, the Telnyx signature tests).
+CARRIER_WEBHOOKS = "/webhooks/"
+
+# Mutating routes outside the carrier webhooks that take no API key, and what
+# authenticates them instead.
+NOT_KEYED: dict[tuple[str, str], str] = {
+    # The builder's bootstrap: the platform credential (X-Platform-Key),
+    # ADR-0011. A project key cannot create projects or mint keys this way.
+    ("POST", "/v1/projects"): "platform key",
+    ("POST", "/v1/api-keys"): "platform key",
+    # TODO(#341 review): ICE candidate trickle for a peer connection that
+    # POST /v1/webrtc/connect (a developer key) opened. It takes no key at
+    # all; the unguessable `pc_id` is the only capability. Requiring the
+    # key here changes what a browser client must send on every PATCH, so
+    # it is left as it was and tracked separately.
+    ("PATCH", "/v1/webrtc/connect"): "pc_id of an open peer connection",
+}
 
 
 def _client(role: ProjectRole, session: Any) -> TestClient:
@@ -43,11 +73,22 @@ def _client(role: ProjectRole, session: Any) -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
-def _mutating_routes() -> list[tuple[str, str]]:
+def _takes_api_key(route: APIRoute) -> bool:
+    """Whether the route resolves an API key, at any depth."""
+    pending = [route.dependant]
+    while pending:
+        dependant = pending.pop()
+        if dependant.call is resolve_auth_context:
+            return True
+        pending.extend(dependant.dependencies)
+    return False
+
+
+def _mutating_routes(*, keyed: bool) -> list[tuple[str, str]]:
     return sorted(
         (method, path)
         for path, route in api_routes(create_app())
-        if path.startswith(WRITE_ONLY_PREFIXES)
+        if _takes_api_key(route) is keyed
         for method in route.methods & MUTATING_METHODS
     )
 
@@ -62,9 +103,9 @@ def _touched(session: AsyncMock) -> list[str]:
     ]
 
 
-def test_no_mutating_route_on_an_agent_or_knowledge_base_accepts_a_viewer() -> None:
-    routes = _mutating_routes()
-    # Sanity: the walk found the routes the issue names, and the rest.
+def test_no_mutating_route_accepts_a_viewer() -> None:
+    routes = _mutating_routes(keyed=True)
+    # Sanity: the walk found the routes the issues name, and the rest.
     assert {
         ("POST", "/v1/agents"),
         ("PUT", "/v1/agents/{agent_id}"),
@@ -72,11 +113,16 @@ def test_no_mutating_route_on_an_agent_or_knowledge_base_accepts_a_viewer() -> N
         ("DELETE", "/v1/agents/{agent_id}/knowledge-bases/{kb_id}"),
         ("POST", "/v1/knowledge-bases"),
         ("POST", "/v1/knowledge-bases/{kb_id}/documents"),
+        ("POST", "/v1/calls/{call_id}/analysis/rerun"),
+        ("POST", "/v1/webrtc/connect"),
     } <= set(routes)
-    assert len(routes) >= 13
+    assert len(routes) >= 50
+    assert set(VIEWER_MAY_CALL) <= set(routes), "VIEWER_MAY_CALL names a gone route"
 
     accepted = []
     for method, path in routes:
+        if (method, path) in VIEWER_MAY_CALL:
+            continue
         session = AsyncMock()
         url = PATH_PARAM.sub(lambda _: str(uuid.uuid4()), path)
         # The role check runs before the body is validated: none is needed.
@@ -87,6 +133,15 @@ def test_no_mutating_route_on_an_agent_or_knowledge_base_accepts_a_viewer() -> N
         elif touched := _touched(session):
             accepted.append((method, path, touched))
     assert accepted == [], f"mutating routes a viewer key gets past: {accepted}"
+
+
+def test_every_mutating_route_without_an_api_key_is_accounted_for() -> None:
+    unkeyed = {
+        route
+        for route in _mutating_routes(keyed=False)
+        if not route[1].startswith(CARRIER_WEBHOOKS)
+    }
+    assert unkeyed == set(NOT_KEYED)
 
 
 # --- Linking an agent's knowledge base -------------------------------------

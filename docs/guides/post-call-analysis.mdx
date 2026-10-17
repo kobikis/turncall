@@ -145,6 +145,9 @@ Possible responses:
 
 ## Re-run Analysis
 
+A re-run needs an admin or developer key: it replaces the stored analysis and
+spends LLM calls, so a viewer key gets `403`.
+
 ```bash
 curl -X POST http://localhost:8090/v1/calls/CALL_ID/analysis/rerun \
   -H "Authorization: Bearer tc_xxx"
