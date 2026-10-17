@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from turncall.domain.carriers import DEFAULT_CARRIER
+from turncall.domain.carriers import DEFAULT_CARRIER, TWILIO
 from turncall.storage.models import PhoneNumberRow
 
 
@@ -206,3 +206,21 @@ async def any_has_own_twilio_account(session: AsyncSession) -> bool:
         .limit(1)
     )
     return found is not None
+
+
+async def any_whatsapp_enabled(session: AsyncSession) -> bool:
+    """Whether any number on this deployment takes WhatsApp."""
+    found = await session.scalar(
+        select(PhoneNumberRow.id).where(PhoneNumberRow.whatsapp_enabled).limit(1)
+    )
+    return found is not None
+
+
+async def count_on_platform_twilio_account(session: AsyncSession) -> int:
+    """How many Twilio numbers run on the platform's account (no own token)."""
+    count = await session.scalar(
+        select(func.count(PhoneNumberRow.id))
+        .where(PhoneNumberRow.provider == TWILIO)
+        .where(PhoneNumberRow.twilio_auth_token_ciphertext.is_(None))
+    )
+    return int(count or 0)

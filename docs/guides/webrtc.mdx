@@ -25,6 +25,9 @@ curl -X POST http://localhost:8090/v1/webrtc/connect \
   }'
 ```
 
+Starting a call needs an admin or developer key, as for an outbound call or a
+chat session; a viewer key gets `403`.
+
 The answer carries the **call id** alongside the SDP:
 
 ```json

@@ -390,7 +390,7 @@ agent_kb_router = APIRouter(prefix="/agents", tags=["agents"])
 async def link_knowledge_base(
     agent_id: UUID,
     body: LinkKnowledgeBaseRequest,
-    auth: Auth,
+    auth: WriteAuth,
     session: DbSession,
     audit: Audit,
 ) -> dict:
@@ -451,7 +451,7 @@ async def list_agent_knowledge_bases(
 async def unlink_knowledge_base(
     agent_id: UUID,
     kb_id: UUID,
-    auth: Auth,
+    auth: WriteAuth,
     session: DbSession,
     audit: Audit,
 ) -> None:

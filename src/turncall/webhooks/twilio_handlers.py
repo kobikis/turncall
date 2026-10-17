@@ -39,20 +39,32 @@ TWIML_CONTENT_TYPE = "application/xml"
 BUSY_TWIML = '<Response><Reject reason="busy"/></Response>'
 
 
-def _public_url(request: Request) -> str:
-    """Rebuild the externally-visible URL Twilio signed.
+def _public_origin(request: Request) -> tuple[str, str]:
+    """The scheme and host Twilio reaches this deployment at.
 
-    Behind a tunnel/proxy (ngrok, load balancer) the container sees plain http
-    and an internal host, but Twilio signed the public https URL — so honor
-    X-Forwarded-Proto/Host, matching how media-stream URLs are built elsewhere.
-    Header values may be a comma-separated proxy chain; take the first.
+    The one source of both the callback URLs this edge hands Twilio (TwiML's
+    `statusCallback`, the media stream) and the URL a signature is checked
+    against, so the two cannot disagree. Behind a tunnel or proxy (ngrok, a
+    load balancer) the container sees plain http and an internal host, so
+    X-Forwarded-Proto/Host are honoured (a proxy chain is comma-separated:
+    the first is the client's). Production is always https, as Twilio is told
+    it is, even behind a TLS terminator that sends no X-Forwarded-Proto.
     """
     fwd_proto = request.headers.get("x-forwarded-proto")
-    scheme = fwd_proto.split(",")[0].strip() if fwd_proto else request.url.scheme
+    if get_settings().is_production:
+        scheme = "https"
+    elif fwd_proto:
+        scheme = fwd_proto.split(",")[0].strip()
+    else:
+        scheme = request.url.scheme
     host_header = request.headers.get("x-forwarded-host") or request.headers.get("host")
-    if not host_header:
-        return str(request.url)
-    host = host_header.split(",")[0].strip()
+    host = host_header.split(",")[0].strip() if host_header else request.url.netloc
+    return scheme, host
+
+
+def _public_url(request: Request) -> str:
+    """The externally-visible URL of this request, as Twilio signed it."""
+    scheme, host = _public_origin(request)
     url = f"{scheme}://{host}{request.url.path}"
     if request.url.query:
         url = f"{url}?{request.url.query}"
@@ -72,19 +84,30 @@ async def _validate_twilio_request(
     else is checked against the platform's (services/twilio_accounts.py).
     """
     from turncall.services.twilio_accounts import (
-        any_number_has_own_account,
         token_for_account_sid,
+        unverifiable_webhooks_refused,
     )
+    from turncall.services.webhook_verification import refused_webhooks
 
-    token = await token_for_account_sid(
-        session, params.get("AccountSid"), get_settings()
-    )
+    settings = get_settings()
+    token = await token_for_account_sid(session, params.get("AccountSid"), settings)
     if not token:
-        # No platform token and no number on this account. With no Twilio
-        # credentials anywhere this is a dev setup and passes, as before; once
-        # numbers bring their own accounts, an unverifiable webhook is refused —
-        # an operator who keeps Twilio only per number must not lose the check.
-        return not await any_number_has_own_account(session)
+        # No platform token and no number on this account. In development with
+        # no Twilio credentials anywhere this passes, as before. In production
+        # (#337), or once numbers bring their own accounts, it is refused: a
+        # blank token must not turn the check off.
+        if not await unverifiable_webhooks_refused(session, settings):
+            return True
+        # Anyone can cause this, as often as they like, so it is said once a
+        # minute per route; startup has already reported the configuration.
+        refused_webhooks.warn(
+            getattr(request.scope.get("route"), "path", "/webhooks/twilio"),
+            "twilio_webhook_unverifiable: no Twilio auth token can verify this "
+            "webhook (TWILIO_AUTH_TOKEN unset, and no number has account "
+            "{account_sid}); refused",
+            account_sid=params.get("AccountSid", ""),
+        )
+        return False
     url = _public_url(request)
     return validate_twilio_signature(token, signature, url, params)
 
@@ -96,15 +119,13 @@ def generate_media_stream_twiml(request: Request, call_id: UUID) -> str:
     carrier adapter. The call id and its media token are passed — the token
     is what proves the stream that opens is this call's — and the media entry
     point resolves everything else from the call record. wss:// when behind
-    HTTPS (ngrok, production) — detected via X-Forwarded-Proto.
+    HTTPS (ngrok, production): see `_public_origin`.
     """
-    host = request.headers.get("host", "localhost:8000")
-    forwarded_proto = request.headers.get("x-forwarded-proto", "")
-    is_https = forwarded_proto == "https" or get_settings().is_production
-    ws_url = f"{'wss' if is_https else 'ws'}://{host}/ws/media-stream"
-    status_cb = (
-        f"{'https' if is_https else 'http'}://{host}/webhooks/twilio/stream-status"
-    )
+    scheme, host = _public_origin(request)
+    ws_url = f"{'wss' if scheme == 'https' else 'ws'}://{host}/ws/media-stream"
+    # Signed by Twilio over exactly this URL, and checked against
+    # `_public_url` of the callback, which rebuilds it from the same origin.
+    status_cb = f"{scheme}://{host}{router.prefix}/stream-status"
     return (
         "<Response>"
         "<Connect>"
@@ -552,12 +573,22 @@ async def recording_callback(
 @router.post("/stream-status")
 async def stream_status_callback(
     request: Request,
+    session: DbSession,
 ) -> Response:
     """Handle Twilio Media Stream status callback.
 
     Notifies when the audio stream connects, disconnects, or errors.
     """
     form_data = await request.form()
+    # Verified like every Twilio webhook (#337). The header is read here rather
+    # than declared, so the published API spec is unchanged.
+    if not await _validate_twilio_request(
+        request,
+        session,
+        request.headers.get("X-Twilio-Signature", ""),
+        dict(form_data),
+    ):
+        return Response(status_code=403)
     stream_status = form_data.get("StreamStatus", "")
     stream_sid = form_data.get("StreamSid", "")
     call_sid = form_data.get("CallSid", "")

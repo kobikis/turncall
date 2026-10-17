@@ -28,6 +28,26 @@ async def _ensure_credentials_readable(settings: Settings) -> None:
         await credential_repo.ensure_readable(session, settings)
 
 
+async def _warn_unverifiable_webhooks(settings: Settings) -> None:
+    """Carrier webhooks nothing here can verify are said at startup: WhatsApp
+    without WHATSAPP_APP_SECRET (#339), Twilio numbers no auth token covers
+    (#337). Only warnings: a failed check never stops the server starting."""
+    from turncall.services.twilio_accounts import warn_unverifiable_numbers
+    from turncall.services.webhook_verification import warn_if_whatsapp_unverifiable
+    from turncall.storage.database import get_session_factory
+
+    try:
+        async with get_session_factory()() as session:
+            await warn_if_whatsapp_unverifiable(session, settings)
+    except Exception:
+        logger.exception("whatsapp_verification_check_failed")
+    try:
+        async with get_session_factory()() as session:
+            await warn_unverifiable_numbers(session, settings)
+    except Exception:
+        logger.exception("twilio_numbers_check_failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: startup and shutdown."""
@@ -58,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_database(settings.database)
     await init_redis(settings.redis)
     await _ensure_credentials_readable(settings)
+    await _warn_unverifiable_webhooks(settings)
 
     # Log all agent configs on startup
     try:

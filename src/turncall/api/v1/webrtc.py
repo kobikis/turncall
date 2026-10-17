@@ -24,7 +24,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ErrorCode, NotFoundError
-from turncall.auth import Auth
+from turncall.auth import Auth, WriteAuth
 from turncall.config import get_settings
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.ambience import build_ambience_mixer
@@ -78,7 +78,7 @@ _calls_by_pc: dict[str, tuple[UUID, UUID]] = {}
 @router.post("/connect", status_code=200)
 async def webrtc_connect(
     request: Request,
-    auth: Auth,
+    auth: WriteAuth,
     session: DbSession,
 ) -> JSONResponse:
     """WebRTC signaling endpoint — SDP offer/answer exchange.

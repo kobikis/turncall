@@ -31,6 +31,10 @@ from turncall.orchestrator.transport_factory import (
 )
 from turncall.services import telemetry_redaction
 from turncall.services.limits import admit_inbound_call, release_live_call
+from turncall.services.webhook_verification import (
+    refused_webhooks,
+    whatsapp_unverifiable_refused,
+)
 from turncall.storage.database import create_session_factory, get_engine
 from turncall.storage.repositories import (
     agent_repo,
@@ -107,8 +111,19 @@ async def handle_webhook(
     """
     raw_body = await request.body()
 
-    # Validate signature for ALL webhook events (CRITICAL security check)
+    # Validate signature for ALL webhook events (CRITICAL security check).
+    # Without WHATSAPP_APP_SECRET nothing can verify one: it is refused before
+    # anything is read everywhere but development, which accepts it unverified
+    # (#339). Said once a minute: anyone can cause it, and startup has already
+    # reported the configuration.
     settings = get_settings()
+    if not settings.whatsapp.app_secret and whatsapp_unverifiable_refused(settings):
+        refused_webhooks.warn(
+            "/webhooks/whatsapp",
+            "whatsapp_webhook_refused | WHATSAPP_APP_SECRET is not set, so its "
+            "X-Hub-Signature-256 cannot be verified",
+        )
+        return Response(status_code=403)
     if settings.whatsapp.app_secret:
         sha256_signature = request.headers.get("X-Hub-Signature-256", "")
         if not validate_whatsapp_signature(

@@ -587,9 +587,53 @@ and is not part of this repository's history.
   so no carrier configuration changes. Migration `b9f5d3a7e1c2`
   (`calls.media_attached_at`). A call answered before the upgrade and not yet
   streaming when it lands has no token and is refused.
+- **Twilio webhooks no token can verify are refused outside development**
+  (#337). With no `TWILIO_AUTH_TOKEN` and no number on its own Twilio account,
+  every `/webhooks/twilio/*` route took a request unverified, so a production
+  deployment whose token was unset or blank accepted forged calls and texts.
+  Such a webhook is now taken only when `TURNCALL_ENV` is `development`;
+  every other environment, staging included, answers `403` before anything
+  is read or created, and logs `twilio_webhook_unverifiable` (once a minute
+  per route, with how many it left out: anyone can cause it). A token that is
+  only whitespace counts as unset. `/webhooks/twilio/stream-status`, the one
+  route that never checked a signature, now does, against the same URL the
+  TwiML gave Twilio: both are built from one origin, and in production that
+  is always `https`, behind a TLS terminator that sends no
+  `X-Forwarded-Proto` too. At startup, Twilio numbers on the platform account
+  while `TWILIO_AUTH_TOKEN` is unset are logged as
+  `twilio_numbers_unverifiable`, with whether their webhooks are refused, and
+  plainly when they are accepted only because `TURNCALL_ENV` was never set.
+  See the upgrade notes.
+
+- **A WhatsApp webhook nothing can verify is refused outside development**
+  (#339). Without `WHATSAPP_APP_SECRET`, every WhatsApp webhook (voice calls
+  and text messages) was accepted unverified, in production too. It is now
+  accepted only when `TURNCALL_ENV` is `development`; every other
+  environment, staging included, refuses it with a `403` before anything is
+  read, logged once a minute. A secret that is only whitespace counts as
+  unset. Startup warns when WhatsApp is configured (`WHATSAPP_TOKEN`,
+  `WHATSAPP_PHONE_NUMBER_ID` or `WHATSAPP_WEBHOOK_VERIFY_TOKEN` set, or a
+  `whatsapp_enabled` number) without it. Meta's subscription handshake
+  (`GET`, `hub.challenge`) is unaffected. See the upgrade notes.
 
 ### Fixed
 
+- **A viewer key is refused on every route that changes something** (#335).
+  These routes accepted any key, so a viewer key could change what an agent
+  retrieves from, overwrite a call's analysis or start a call:
+  - `POST /v1/agents/{agent_id}/knowledge-bases` and
+    `DELETE /v1/agents/{agent_id}/knowledge-bases/{kb_id}` (link and unlink a
+    knowledge base);
+  - `POST /v1/calls/{call_id}/analysis/rerun` (replaces the stored analysis
+    and spends LLM calls);
+  - `POST /v1/webrtc/connect` (starts a browser call, as `POST /v1/chat` and
+    an outbound call, which already needed a writing key, start theirs).
+
+  Each now needs an admin or developer key, like every other change; a viewer
+  key gets `403 forbidden` and nothing changes. Every mutating route that
+  takes an API key is now checked for this in the test suite, not only those
+  under `/v1/agents` and `/v1/knowledge-bases`. A viewer key that relied on
+  one of these must be replaced by a developer key.
 - **Numbers in event payloads are redacted** (#313, #336 review). With
   redaction on, a JSON number of seven digits or more inside a payload (a
   tool's `arguments` or `result` on `tool.result`, the call's `metadata` on
@@ -859,6 +903,20 @@ and is not part of this repository's history.
 
 ### Upgrade notes
 
+- **Set `TWILIO_AUTH_TOKEN` and `WHATSAPP_APP_SECRET`, and `TURNCALL_ENV`,
+  before upgrading any deployment that is not a development one** (#337,
+  #339). A Twilio or WhatsApp webhook nothing can verify is now refused with a
+  `403` everywhere but `TURNCALL_ENV=development`: without the token, every
+  inbound Twilio call gets Twilio's application error and every text is
+  dropped; without the secret, every WhatsApp event is. A Twilio number on
+  its own account is verified by its own token and needs nothing.
+  `TURNCALL_ENV` still defaults to `development`, which accepts them
+  unverified, so a production or staging deployment that never set it must
+  set it now (startup says so when it is unset).
+- **Viewer keys lose four routes** (#335): linking and unlinking an agent's
+  knowledge base, `POST /v1/calls/{call_id}/analysis/rerun` and
+  `POST /v1/webrtc/connect` now need an admin or developer key. Replace a
+  viewer key used for any of them with a developer key.
 - **Spans no longer carry caller numbers.** `PIPECAT_TRACE_INCLUDE_PII` defaults
   to `false`, so `turncall.from_number` / `turncall.to_number` are gone from a
   call's spans. If you search traces by caller number, set
