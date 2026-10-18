@@ -126,3 +126,97 @@ async def test_an_ended_call_is_not_ended_again(live_call) -> None:
     trigger.assert_not_called()
     async with sessions() as session:
         assert (await call_repo.get_call_by_id(session, call_id)).status == "no_answer"
+
+
+async def test_an_ended_call_is_not_reopened(live_call) -> None:
+    """A pipeline starting after the carrier ended the call (its stream built
+    late) set it back to in progress, and its ending sent `call.ended` again."""
+    sessions, call_id = live_call
+    async with sessions() as session:
+        await call_repo.mark_call_ended(
+            session, call_id, status="completed", ended_at=datetime.now(UTC)
+        )
+        reopened = await call_repo.update_call_status(
+            session, call_id, status="in_progress", started_at=datetime.now(UTC)
+        )
+        await session.commit()
+
+    assert reopened is None
+    async with sessions() as session:
+        assert (await call_repo.get_call_by_id(session, call_id)).status == "completed"
+
+
+def _reading_trigger(sessions, seen: list):
+    """A stand-in for `trigger_post_call_analysis` that reads the call's status
+    as post-call processing would: in a session of its own, right away."""
+
+    def trigger(_factory, call_id, *_args, **_kwargs):
+        async def status() -> str:
+            async with sessions() as session:
+                return (await call_repo.get_call_by_id(session, call_id)).status
+
+        seen.append(asyncio.ensure_future(status()))
+
+    return trigger
+
+
+async def test_the_end_api_commits_before_post_call_reads_the_call(live_call) -> None:
+    """It started post-call processing inside the request's transaction, which
+    then read the call as still in progress (#328)."""
+    from turncall.services import call_control
+
+    sessions, call_id = live_call
+    seen: list[asyncio.Future] = []
+    with (
+        patch("turncall.storage.database.get_session_factory", lambda: sessions),
+        patch(
+            "turncall.services.call_analysis_trigger.config_for_call",
+            AsyncMock(return_value={}),
+        ),
+        patch(
+            "turncall.services.call_analysis_trigger.trigger_post_call_analysis",
+            _reading_trigger(sessions, seen),
+        ),
+    ):
+        async with sessions() as session:
+            result = await call_control.end_call(session, call_id, reason="test")
+            # Before the request's own commit, as the endpoint returns.
+            statuses = [await f for f in seen]
+            await session.commit()
+
+    assert result.success, result.message
+    assert statuses == ["completed"]
+
+
+async def test_the_end_api_racing_the_pipeline_ends_the_call_once(live_call) -> None:
+    from turncall.services import call_control
+
+    sessions, call_id = live_call
+    both_read = asyncio.Barrier(2)
+    read = call_repo.get_call_by_id
+
+    async def read_then_wait(*args, **kwargs):
+        call = await read(*args, **kwargs)
+        await both_read.wait()
+        return call
+
+    async def end_api() -> None:
+        async with sessions() as session:
+            await call_control.end_call(session, call_id, reason="test")
+            await session.commit()
+
+    with (
+        patch.object(call_repo, "get_call_by_id", read_then_wait),
+        patch("turncall.storage.database.get_session_factory", lambda: sessions),
+        patch(
+            "turncall.services.call_analysis_trigger.config_for_call",
+            AsyncMock(return_value={}),
+        ),
+        patch(
+            "turncall.services.call_analysis_trigger.trigger_post_call_analysis",
+            MagicMock(),
+        ) as trigger,
+    ):
+        await asyncio.gather(end_api(), finalize_call(sessions, call_id, failed=False))
+
+    trigger.assert_called_once()

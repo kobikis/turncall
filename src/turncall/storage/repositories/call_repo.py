@@ -84,7 +84,14 @@ async def update_call_status(
     duration_ms: int | None = None,
     active_agent_id: UUID | None = None,
 ) -> CallRow | None:
-    """Update call status and optional fields. Returns updated row."""
+    """Update call status and optional fields. Returns updated row, or None
+    when there is none to update.
+
+    An ended call is never reopened: a status that isn't an ending lands only
+    on a call that hasn't ended. A pipeline starting, or a transfer failing
+    back to `in_progress`, after the carrier ended the call used to make it
+    live again, and its ending then sent `call.ended` a second time (#328).
+    """
     values: dict[str, Any] = {"status": status}
     if provider_call_sid is not None:
         values["provider_call_sid"] = provider_call_sid
@@ -97,9 +104,10 @@ async def update_call_status(
     if active_agent_id is not None:
         values["active_agent_id"] = active_agent_id
 
-    result = await session.execute(
-        update(CallRow).where(CallRow.id == call_id).values(**values).returning(CallRow)
-    )
+    stmt = update(CallRow).where(CallRow.id == call_id)
+    if status not in _ENDED:
+        stmt = stmt.where(CallRow.status.not_in(_ENDED))
+    result = await session.execute(stmt.values(**values).returning(CallRow))
     return result.scalar_one_or_none()
 
 

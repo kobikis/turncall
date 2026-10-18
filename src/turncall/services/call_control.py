@@ -153,7 +153,10 @@ async def end_call(
     call = await _endable_call(session, call_id)
     if isinstance(call, ControlResult):
         return call
-    ended = await _control_end(session, call, reason)
+    # Recorded and committed before the hangup, as `begin_assistant_end` does:
+    # whichever path ends the call reads the event log for why it ended.
+    await _record_control_end(session, call, await _control_end(session, call, reason))
+    await session.commit()
 
     # Hang up through the call's carrier
     sid = call.provider_call_sid
@@ -180,7 +183,6 @@ async def end_call(
         ended_at=ended_at,
         duration_ms=duration_ms,
     )
-    await _record_control_end(session, call, ended)
     if ended_now is None:
         # The carrier's status or the pipeline ended it meanwhile, and that
         # path sends `call.ended` (#328).
