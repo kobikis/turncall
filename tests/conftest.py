@@ -1,5 +1,7 @@
 """Shared test fixtures."""
 
+import sys
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -156,3 +158,11 @@ def _logs_redacted_as_in_the_app():
     telemetry_redaction.use(None)
     yield
     telemetry_redaction.use(None)
+
+
+def pytest_sessionfinish(session, exitstatus) -> None:
+    """Stop the redaction worker, which the harness keeps across apps
+    (`run_app`), once every test is done."""
+    redaction = sys.modules.get("turncall.services.redaction")
+    if redaction is not None:
+        redaction.shutdown()
