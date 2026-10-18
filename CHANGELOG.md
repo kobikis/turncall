@@ -709,6 +709,16 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **`call.ended` is sent once** (#328). A call's pipeline finishing, the
+  carrier's status callback and `POST /v1/calls/{id}/end` each ended the call
+  after reading it as in progress, so two arriving together each sent
+  `call.ended`. The status callback and the end API also started post-call
+  processing before committing, so that `call.ended` could carry
+  `status: "in_progress"`. Ending a call is now one guarded update (only the
+  path that ends it sends `call.ended`, after committing), and a call the
+  carrier reported as `no_answer` or `busy` is no longer turned `completed`
+  when its pipeline finishes.
+
 - **A log line carrying a Telnyx error is written** (#352). Both log sinks
   are `enqueue=True`, so loguru pickles every record, a logged exception
   included, and rebuilds it on its writer thread. `TelnyxApiError`,
