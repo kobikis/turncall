@@ -314,6 +314,17 @@ class CallRow(Base):
     media_attached_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Post-call processing, which sends `call.ended` (#356). Deferred: when the
+    # carrier or the end API ended a call its pipeline runs and left post-call
+    # processing to the pipeline (`call_repo.defer_post_call`). Started: when
+    # it was started, once per call, ever (`call_repo.claim_post_call`).
+    # Internal — on no read and in no webhook.
+    post_call_deferred_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    post_call_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # Retention (#316): when the janitor deleted each kind of the call's data
     # (`services/retention`), null = not yet. The row itself is never deleted.
     recording_expired_at: Mapped[datetime | None] = mapped_column(
@@ -348,6 +359,15 @@ class CallRow(Base):
                 postgresql_where=text(f"{kind}_expired_at IS NULL"),
             )
             for kind in ("recording", "transcript", "events")
+        ),
+        # The post-call sweep (#356): calls deferred to their pipeline whose
+        # post-call processing has not started.
+        Index(
+            "ix_calls_post_call_deferred",
+            "post_call_deferred_at",
+            postgresql_where=text(
+                "post_call_deferred_at IS NOT NULL AND post_call_started_at IS NULL"
+            ),
         ),
     )
 

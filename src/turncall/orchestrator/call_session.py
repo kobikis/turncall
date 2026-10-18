@@ -311,8 +311,8 @@ class CallSession:
                 except Exception:
                     logger.exception("mcp_cleanup_error", call_id=str(self.call_id))
             # Post-call analysis + call.ended are dispatched above on the
-            # completing edge (also from the Twilio /status callback and the
-            # end_call tool for their respective paths). Cancelling the task on
+            # completing edge, also when the Twilio /status callback or the
+            # end API ended the call first (#356). Cancelling the task on
             # on_client_disconnected guarantees we reach here promptly instead of
             # hanging in the runner.
             logger.info("call_session_ended", call_id=str(self.call_id))
@@ -718,14 +718,15 @@ async def finalize_call(session_factory: Any, call_id: UUID, *, failed: bool) ->
     """Set the terminal status, ended_at and duration, then dispatch
     `call.ended` + post-call analysis.
 
-    Only if this ends the call (`call_repo.mark_call_ended`): the carrier's
-    status callback and the end API end calls too, and whichever does first
-    is the one that sends `call.ended` (#328).
+    The carrier's status callback and the end API end calls too, and
+    whichever does first sets the status (#328). On a call a pipeline runs
+    they defer post-call processing to it, which reads the transcript only
+    now that its last lines are stored (#356): so this starts it when it ended
+    the call, or when they did and deferred it — never on a call they ended
+    without deferring (unanswered, or ended by a replica on an older release,
+    which started it itself). `start_post_call` starts it once.
     """
-    from turncall.services.call_analysis_trigger import (
-        config_for_call,
-        trigger_post_call_analysis,
-    )
+    from turncall.services.call_analysis_trigger import start_post_call
     from turncall.storage.repositories import call_repo
 
     async with session_factory() as session:
@@ -745,17 +746,7 @@ async def finalize_call(session_factory: Any, call_id: UUID, *, failed: bool) ->
             ended_at=ended_at,
             duration_ms=duration_ms,
         )
-        if ended is None:
-            return  # already over: whoever ended it sent `call.ended`
-        await session.commit()
-
-        # Not gated on active_agent_id: a call running an inline agent has
-        # none, and this is what dispatches call.ended.
-        config = await config_for_call(session, call)
-        if config is not None:
-            trigger_post_call_analysis(
-                session_factory, call.id, call.project_id, config
-            )
+        await start_post_call(session_factory, session, call, deferred=ended is None)
 
 
 def _speaks_to_a_peer(transport: object) -> bool:

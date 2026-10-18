@@ -206,6 +206,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     audit_log_task = asyncio.create_task(_audit_log_janitor())
 
+    # Post-call processing for a call the carrier or the end API ended and
+    # left to its pipeline, which never finished (#356): its process died.
+    async def _post_call_sweep() -> None:
+        from turncall.services.call_analysis_trigger import run_sweep
+        from turncall.storage.database import create_session_factory, get_engine
+
+        await run_sweep(create_session_factory(get_engine()))
+
+    post_call_sweep_task = asyncio.create_task(_post_call_sweep())
+
     # Asterisk's inbound edge: an ARI connection to every Asterisk served (#209).
     from turncall.webhooks.asterisk_edge import EDGES
 
@@ -235,6 +245,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     purge_task.cancel()
     retention_task.cancel()
     audit_log_task.cancel()
+    post_call_sweep_task.cancel()
     asterisk_task.cancel()
     await asyncio.gather(asterisk_task, return_exceptions=True)
 

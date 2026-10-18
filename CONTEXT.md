@@ -357,7 +357,10 @@ The single, comprehensive end-of-call webhook — transcript, duration, recordin
 summary, analysis. Dispatched by post-call processing once analysis is done AND
 the [[recording flush]] has reached a terminal [[recording status]] (or a 15s
 bound elapsed). The subscriber's canonical end-of-call signal; fires exactly
-once, never blocked by a failed recording. See ADR-0006. _Avoid_: relying on
+once, never blocked by a failed recording. See ADR-0006. On a call a pipeline
+ran, post-call processing starts when the pipeline finishes, never from the
+carrier's status callback or the end API, so the transcript is complete; a
+sweep starts it for a call whose pipeline died (#356). _Avoid_: relying on
 `analysis.completed` (defined in the enum but never emitted) — `call.ended`
 supersedes it.
 

@@ -148,9 +148,10 @@ async def mark_call_ended(
 
     A guarded UPDATE, as `attach_media`: of the paths that end a call — its
     pipeline finishing, the carrier's status callback, the end API — exactly
-    one does, and only that one starts post-call processing, which sends
-    `call.ended` (#328). The caller commits, and must before starting
-    post-call processing, which reads the call in a session of its own.
+    one does (#328). Which of them starts post-call processing, which sends
+    `call.ended`, is `claim_post_call`'s to settle (#356). The caller commits,
+    and must before starting post-call processing, which reads the call in a
+    session of its own.
     """
     values: dict[str, Any] = {"status": status, "ended_at": ended_at}
     if duration_ms is not None:
@@ -162,6 +163,65 @@ async def mark_call_ended(
         .returning(CallRow)
     )
     return result.scalar_one_or_none()
+
+
+async def defer_post_call(session: AsyncSession, call_id: UUID) -> bool:
+    """Leave the call's post-call processing to its pipeline, which starts it
+    once its last lines are stored (#356); whether this deferred it. The
+    carrier's status callback and the end API, on a call a pipeline runs.
+    The sweep starts it for a pipeline that never does. The caller commits.
+    """
+    result = await session.execute(
+        update(CallRow)
+        .where(
+            CallRow.id == call_id,
+            CallRow.post_call_deferred_at.is_(None),
+            CallRow.post_call_started_at.is_(None),
+        )
+        .values(post_call_deferred_at=func.now())
+    )
+    return bool(result.rowcount)
+
+
+async def claim_post_call(
+    session: AsyncSession, call_id: UUID, *, deferred: bool = False
+) -> bool:
+    """Claim the call's one post-call processing run; whether this caller got
+    it. `deferred`: only if an ending left it to the call's pipeline
+    (`defer_post_call`) — the pipeline on a call something else ended, and
+    the sweep.
+
+    A guarded UPDATE, as `mark_call_ended`: of the paths that may start it —
+    the pipeline finishing, the carrier's status callback or the end API on a
+    call no pipeline ran, the sweep — exactly one does, so `call.ended` is
+    sent once (#356). The caller commits, before starting it.
+    """
+    stmt = update(CallRow).where(
+        CallRow.id == call_id, CallRow.post_call_started_at.is_(None)
+    )
+    if deferred:
+        stmt = stmt.where(CallRow.post_call_deferred_at.is_not(None))
+    result = await session.execute(stmt.values(post_call_started_at=func.now()))
+    return bool(result.rowcount)
+
+
+async def list_post_call_deferred(
+    session: AsyncSession, *, deferred_before: datetime, limit: int = 100
+) -> list[CallRow]:
+    """Calls deferred to their pipeline before `deferred_before` whose
+    post-call processing has not started: the pipeline has not finished, or
+    never will (#356)."""
+    result = await session.execute(
+        select(CallRow)
+        .where(
+            CallRow.post_call_deferred_at.is_not(None),
+            CallRow.post_call_deferred_at < deferred_before,
+            CallRow.post_call_started_at.is_(None),
+        )
+        .order_by(CallRow.post_call_deferred_at)
+        .limit(limit)
+    )
+    return list(result.scalars())
 
 
 async def update_call_recording_url(

@@ -103,6 +103,13 @@ def channel(call_id: uuid.UUID | str) -> str:
     return f"call:{call_id}:control"
 
 
+async def is_running(redis: Redis, call_id: uuid.UUID | str) -> bool:
+    """Whether a task, on any replica, is running the call: its control
+    channel has a subscriber (`serve`)."""
+    counts = await redis.pubsub_numsub(channel(call_id))
+    return any(count for _name, count in counts)
+
+
 def _ack_key(request_id: str) -> str:
     return f"call:control:ack:{request_id}"
 
