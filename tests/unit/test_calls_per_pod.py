@@ -14,6 +14,12 @@ from types import SimpleNamespace
 
 import pytest
 
+# The real package, before the client loads: the client puts an empty stand-in
+# for `tests.harness` in sys.modules whenever the real one isn't imported yet,
+# and a later `from tests.harness import ...` in another test module would find
+# it (#346).
+import tests.harness  # noqa: F401
+
 pytestmark = pytest.mark.unit
 
 _PATH = Path(__file__).resolve().parents[2] / "scripts/calls_per_pod/client.py"
