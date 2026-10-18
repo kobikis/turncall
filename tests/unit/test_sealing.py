@@ -1,13 +1,17 @@
 """Secrets sealed at rest (#338): the cipher, the walkers, the column types.
 
-The walkers are held to `sanitize_config` and to the domain models themselves,
-so a secret field added later is caught whichever list it was left out of.
+The walkers are held to `sanitize_config`, to the domain models themselves, and
+to the frozen copy in the seal_secrets_at_rest migration, so a secret field
+added later is caught whichever list it was left out of — and the rows the
+migration sealed are the ones the app opens.
 """
 
+import importlib.util
 import json
 import re
 import types
 import typing
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock
@@ -430,3 +434,58 @@ def test_the_prefix_is_not_base64() -> None:
     assert ":" in PREFIX
     assert not is_sealed(Fernet(Fernet.generate_key()).encrypt(b"x").decode())
     assert sealing.PREFIX == "tcs1:"  # the migration freezes this literal
+
+
+MIGRATION = (
+    Path(__file__).parents[2] / "alembic/versions/e6c2a8f4b0d9_seal_secrets_at_rest.py"
+)
+
+
+@pytest.fixture(scope="module")
+def migration() -> Any:
+    spec = importlib.util.spec_from_file_location("seal_secrets_at_rest", MIGRATION)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestMatchesTheMigration:
+    """The migration seals with its own frozen paths; the app must seal and
+    open exactly those, or a migrated row reads back half-sealed."""
+
+    def test_the_same_prefix(self, migration) -> None:
+        assert migration.PREFIX == PREFIX
+
+    def test_the_same_paths(self, migration) -> None:
+        configs = [SECRETFUL] + [
+            _config_at(path, "sk-FIELD") for path in _secret_paths(AgentConfig)
+        ]
+        for config in configs:
+            assert map_secrets(config, _tag) == migration.map_config(config, _tag)
+
+    def test_the_same_inline_targets_and_dynamic_configs(self, migration) -> None:
+        for target in (
+            {"type": "inline", "agent": SECRETFUL},
+            {"agent": SECRETFUL},  # an `agent` dict is what makes it inline
+            {"type": "agent", "agent_id": "a"},
+            {"type": "inline", "agent": "not-a-dict"},
+            None,
+        ):
+            assert map_inline_target(target, _tag) == migration.map_inline_target(
+                target, _tag
+            )
+        for metadata in (
+            {"dynamic_config": SECRETFUL, "lead": {"api_key": "theirs"}},
+            {"lead": 1},
+            {"dynamic_config": None},
+            None,
+        ):
+            assert map_dynamic_config(metadata, _tag) == migration.map_dynamic_config(
+                metadata, _tag
+            )
+
+    def test_each_opens_what_the_other_sealed(self, migration, keyed) -> None:
+        cipher = Fernet(keyed.credentials.encryption_key.encode())
+        assert unseal(migration.sealer(cipher)(SECRET), keyed) == SECRET
+        assert migration.unsealer(cipher)(seal(SECRET, keyed)) == SECRET
