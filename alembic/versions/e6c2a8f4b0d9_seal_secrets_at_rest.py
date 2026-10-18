@@ -111,9 +111,57 @@ def map_dynamic_config(metadata: Any, fn: Convert) -> Any:
     return {**metadata, "dynamic_config": map_config(metadata["dynamic_config"], fn)}
 
 
+def _secret_bearing(config: str) -> str:
+    """SQL that is true for a `config` document `map_config` can find a secret
+    in, and for some it cannot: only candidates leave the database, and the
+    walk itself decides. A superset, so no row holding a secret is skipped."""
+    return (
+        f"((({config}) -> 'llm') ?| array['api_key', 'failover']"
+        f" OR ({config}) ?| array['aws', 'server_url', 'tools', 'mcp_servers'])"
+    )
+
+
+Column = tuple[str, str, Any, str, Callable[[Any, Convert], Any]]
+
 # (table, column, column type, which rows can hold one, how to reach it).
 # Never audit_log: it holds masked values only, and is append-only.
-COLUMNS: tuple[tuple[str, str, Any, str, Callable[[Any, Convert], Any]], ...] = (
+#
+# The large tables, rewritten before any ALTER: the ALTER's ACCESS EXCLUSIVE
+# lock on a table it widens is held until the transaction commits, so the
+# tables it takes it on are rewritten last, once it is the only work left.
+LARGE: tuple[Column, ...] = (
+    ("agents", "config_blob", JSONB(), _secret_bearing("config_blob"), map_config),
+    (
+        "calls",
+        "metadata_json",
+        JSONB(),
+        _secret_bearing("metadata_json -> 'dynamic_config'"),
+        map_dynamic_config,
+    ),
+    (
+        "sms_sessions",
+        "metadata_json",
+        JSONB(),
+        _secret_bearing("metadata_json -> 'dynamic_config'"),
+        map_dynamic_config,
+    ),
+    (
+        "eval_runs",
+        "target",
+        JSONB(),
+        _secret_bearing("target -> 'agent'"),
+        map_inline_target,
+    ),
+    (
+        "eval_scenarios",
+        "default_target",
+        JSONB(),
+        _secret_bearing("default_target -> 'agent'"),
+        map_inline_target,
+    ),
+)
+# The two whose column is widened, so a sealed value fits: after the ALTER.
+WIDENED_COLUMNS: tuple[Column, ...] = (
     ("webhook_subscriptions", "secret", sa.Text(), "secret IS NOT NULL", map_text),
     (
         "phone_numbers",
@@ -122,36 +170,8 @@ COLUMNS: tuple[tuple[str, str, Any, str, Callable[[Any, Convert], Any]], ...] = 
         "server_url_secret IS NOT NULL",
         map_text,
     ),
-    ("agents", "config_blob", JSONB(), "config_blob IS NOT NULL", map_config),
-    (
-        "calls",
-        "metadata_json",
-        JSONB(),
-        "metadata_json -> 'dynamic_config' IS NOT NULL",
-        map_dynamic_config,
-    ),
-    (
-        "sms_sessions",
-        "metadata_json",
-        JSONB(),
-        "metadata_json -> 'dynamic_config' IS NOT NULL",
-        map_dynamic_config,
-    ),
-    (
-        "eval_runs",
-        "target",
-        JSONB(),
-        "target -> 'agent' IS NOT NULL",
-        map_inline_target,
-    ),
-    (
-        "eval_scenarios",
-        "default_target",
-        JSONB(),
-        "default_target -> 'agent' IS NOT NULL",
-        map_inline_target,
-    ),
 )
+COLUMNS = LARGE + WIDENED_COLUMNS
 
 # A Fernet token for a 43-character secret is 140 characters before the prefix.
 WIDENED = (
@@ -176,9 +196,25 @@ def _fernet() -> Fernet | None:
         ) from exc
 
 
+def sealed_under(fernet: Fernet | None, value: str) -> bool:
+    """Sealed as the app's `seal` tells it: prefixed, and opened by the key.
+
+    A value that only looks sealed — a secret that happens to start with the
+    prefix — is plaintext to seal, or the app could not read it back. With no
+    key nothing opens, so nothing counts as sealed.
+    """
+    if fernet is None or not is_sealed(value):
+        return False
+    try:
+        fernet.decrypt(value[len(PREFIX) :].encode())
+    except InvalidToken:
+        return False
+    return True
+
+
 def sealer(fernet: Fernet) -> Convert:
     def seal(value: str) -> str:
-        if is_sealed(value):
+        if sealed_under(fernet, value):
             return value
         return PREFIX + fernet.encrypt(value.encode()).decode()
 
@@ -200,16 +236,25 @@ def unsealer(fernet: Fernet) -> Convert:
     return unseal
 
 
-def _rows(bind: Any, table: str, column: str, type_: Any, where: str) -> Iterator[Any]:
+def _table(table: str, column: str, type_: Any) -> Any:
+    return sa.table(
+        table, sa.column("id", UUID(as_uuid=True)), sa.column(column, type_)
+    )
+
+
+def _pages(
+    bind: Any, table: str, column: str, type_: Any, where: str
+) -> Iterator[list[Any]]:
     """Every row that can hold a secret, a page at a time, by id."""
-    t = sa.table(table, sa.column("id", UUID(as_uuid=True)), sa.column(column, type_))
+    t = _table(table, column, type_)
     after = None
     while True:
         query = sa.select(t.c.id, t.c[column]).where(sa.text(where))
         if after is not None:
             query = query.where(t.c.id > after)
-        page = bind.execute(query.order_by(t.c.id).limit(PAGE)).all()
-        yield from page
+        page = list(bind.execute(query.order_by(t.c.id).limit(PAGE)).all())
+        if page:
+            yield page
         if len(page) < PAGE:
             return
         after = page[-1][0]
@@ -228,30 +273,42 @@ def holds(value: Any, reach: Callable[[Any, Convert], Any], wanted: Any) -> bool
     return bool(found)
 
 
-def _pending(bind: Any, wanted: Callable[[str], bool]) -> dict[str, int]:
+def _count(
+    bind: Any, columns: Sequence[Column], wanted: Callable[[str], bool]
+) -> dict[str, int]:
     """How many rows per column hold a secret `wanted` picks out."""
     counts: dict[str, int] = {}
-    for table, column, type_, where, reach in COLUMNS:
+    for table, column, type_, where, reach in columns:
         count = sum(
             holds(value, reach, wanted)
-            for _id, value in _rows(bind, table, column, type_, where)
+            for page in _pages(bind, table, column, type_, where)
+            for _id, value in page
         )
         if count:
             counts[f"{table}.{column}"] = count
     return counts
 
 
-def _rewrite(bind: Any, fn: Convert) -> None:
-    for table, column, type_, where, reach in COLUMNS:
-        t = sa.table(
-            table, sa.column("id", UUID(as_uuid=True)), sa.column(column, type_)
+def _rewrite(bind: Any, columns: Sequence[Column], fn: Convert) -> None:
+    """`fn` over every secret in `columns`: one read of each table, and one
+    batched UPDATE per page for the rows it changes."""
+    for table, column, type_, where, reach in columns:
+        t = _table(table, column, type_)
+        update = (
+            sa.update(t)
+            .where(t.c.id == sa.bindparam("row_id"))
+            .values({column: sa.bindparam("sealed", type_=type_)})
         )
         # Each page is read whole before its updates run, and an updated row
         # still sorts where it did, so paging by id sees every row once.
-        for row_id, value in _rows(bind, table, column, type_, where):
-            new = reach(value, fn)
-            if new != value:
-                bind.execute(sa.update(t).where(t.c.id == row_id).values({column: new}))
+        for page in _pages(bind, table, column, type_, where):
+            changed = []
+            for row_id, value in page:
+                new = reach(value, fn)
+                if new != value:
+                    changed.append({"row_id": row_id, "sealed": new})
+            if changed:
+                bind.execute(update, changed)
 
 
 def _summary(counts: dict[str, int]) -> str:
@@ -260,49 +317,54 @@ def _summary(counts: dict[str, int]) -> str:
     return f"{total} row(s) ({where})"
 
 
-def upgrade() -> None:
-    bind = op.get_bind()
-    # Checked before anything changes, so a refusal leaves the schema as is.
-    plaintext = _pending(bind, lambda v: not is_sealed(v))
-    fernet = _fernet()
-    if plaintext and fernet is None:
-        raise RuntimeError(
-            f"{_summary(plaintext)} hold secrets in plaintext, and {KEY_ENV} is "
-            "not set, so they cannot be sealed. Set it — once, and never rotate "
-            'it — then upgrade again. Generate one with `python -c "from '
-            "cryptography.fernet import Fernet; print(Fernet.generate_key()"
-            '.decode())"`.'
-        )
+def _alter(to_text: bool) -> None:
     for table, column, nullable in WIDENED:
         op.alter_column(
             table,
             column,
-            existing_type=sa.String(128),
-            type_=sa.Text(),
+            existing_type=sa.String(128) if to_text else sa.Text(),
+            type_=sa.Text() if to_text else sa.String(128),
             existing_nullable=nullable,
         )
-    if plaintext and fernet is not None:
-        _rewrite(bind, sealer(fernet))
+
+
+def upgrade() -> None:
+    bind = op.get_bind()
+    fernet = _fernet()
+    if fernet is None:
+        # Without a key nothing reads as sealed, so any secret is one to seal.
+        # Counted before anything changes, so a refusal leaves the schema as is.
+        unsealed = _count(bind, COLUMNS, lambda v: True)
+        if unsealed:
+            raise RuntimeError(
+                f"{_summary(unsealed)} hold secrets, and {KEY_ENV} is not set, so "
+                "they cannot be sealed. Set it — once, and never rotate it — "
+                'then upgrade again. Generate one with `python -c "from '
+                "cryptography.fernet import Fernet; print(Fernet.generate_key()"
+                '.decode())"`.'
+            )
+        _alter(to_text=True)
+        return
+    seal = sealer(fernet)
+    _rewrite(bind, LARGE, seal)
+    _alter(to_text=True)
+    _rewrite(bind, WIDENED_COLUMNS, seal)
 
 
 def downgrade() -> None:
     bind = op.get_bind()
-    sealed = _pending(bind, is_sealed)
     fernet = _fernet()
-    if sealed and fernet is None:
-        raise RuntimeError(
-            f"{_summary(sealed)} hold sealed secrets, which the previous revision "
-            f"reads as plaintext, and {KEY_ENV} is not set, so they cannot be "
-            "unsealed. Set it to the key they were sealed with, then downgrade "
-            "again."
-        )
-    if sealed and fernet is not None:
-        _rewrite(bind, unsealer(fernet))
-    for table, column, nullable in WIDENED:
-        op.alter_column(
-            table,
-            column,
-            existing_type=sa.Text(),
-            type_=sa.String(128),
-            existing_nullable=nullable,
-        )
+    if fernet is None:
+        sealed = _count(bind, COLUMNS, is_sealed)
+        if sealed:
+            raise RuntimeError(
+                f"{_summary(sealed)} hold sealed secrets, which the previous "
+                f"revision reads as plaintext, and {KEY_ENV} is not set, so they "
+                "cannot be unsealed. Set it to the key they were sealed with, then "
+                "downgrade again."
+            )
+    else:
+        # Every row, the narrowed columns' too, before the ALTER takes its lock:
+        # a sealed value would not fit in 128 characters anyway.
+        _rewrite(bind, COLUMNS, unsealer(fernet))
+    _alter(to_text=False)
