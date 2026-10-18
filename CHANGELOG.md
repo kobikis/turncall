@@ -773,13 +773,16 @@ and is not part of this repository's history.
   invocations and takeaways already were, so `{"phone": 4155550132}` reads
   `{"phone": "<PHONE_NUMBER>"}`. Numbers at a payload's top level
   (`duration_ms`) are TurnCall's own and are not analysed.
-- **A Twilio call that rings out no longer reports `call.started`.** Every
+- **A Twilio status callback no longer reports `call.started`.** Every
   status callback but `completed` and `failed` went out as `call.started`, so
   an outbound call that rang and was never answered sent it at `ringing` and
-  again at `busy` or `no-answer`. Now only `in-progress` (answered) sends it;
-  `ringing` sends nothing, and `busy` and `no-answer` store a `call.ended` row
-  on the call's log and send nothing, as a Telnyx hangup does. The status and
-  `ended_reason` (`customer_busy`, `customer_did_not_answer`) are unchanged.
+  again at `busy` or `no-answer`, and an answered one sent it a second time
+  at `in-progress` (#329). An outbound call's `call.started` is now the one
+  sent when it is dialled, once, on Twilio and Telnyx alike. `ringing` and
+  `in-progress` send nothing, and `busy` and `no-answer` store a `call.ended`
+  row on the call's log and send nothing, as a Telnyx hangup does. The status,
+  `started_at` and `ended_reason` (`customer_busy`,
+  `customer_did_not_answer`) are unchanged.
 - **`voicemail.detected` takes its place on the call's log.** It was stored
   with sequence number 0, so it read back first, before the call started.
 - **`/health` reports a reachable database as healthy.** It executed the

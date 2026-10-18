@@ -2,9 +2,12 @@
 
 Every status but `completed` and `failed` used to go out as `call.started`,
 so an outbound call that rang and was never answered told subscribers it had
-started at `ringing` and again at `no-answer`. Now only an answered call
-says so, and a call nobody picked up leaves what Telnyx's hangup leaves: a
-stored `call.ended` row, nothing sent. The end-to-end half is `test_an_outbound_call_nobody_answers` in
+started at `ringing` and again at `no-answer`. Now none does: the dial sent
+`call.started` already, so an answer (`in-progress`) sending it too told an
+outbound call's subscribers twice, where Telnyx's answer sends nothing
+(#329). A call nobody picked up leaves what Telnyx's hangup leaves: a stored
+`call.ended` row, nothing sent. The end-to-end halves are
+`test_an_outbound_call` and `test_an_outbound_call_nobody_answers` in
 `tests/integration/test_carrier_contract.py`.
 """
 
@@ -24,7 +27,7 @@ pytestmark = pytest.mark.unit
 LEAVES = {
     "queued": ([], []),
     "ringing": ([], []),
-    "in-progress": (["call.started"], []),
+    "in-progress": ([], []),
     "completed": ([], ["call.ended"]),
     "busy": ([], ["call.ended"]),
     "no-answer": ([], ["call.ended"]),
