@@ -88,6 +88,7 @@ async def test_the_webhooks_are_the_calls_event_log(monkeypatch):
         await call.closed.wait()  # the agent hung up
         await call.finish()
         await app.sink.wait_for("call.ended")
+        await app.post_call_settled()
         read = (await app.api.get(f"/v1/calls/{call.call_id}/events")).json()
 
     stored = read["data"]
@@ -115,7 +116,10 @@ async def test_the_webhooks_are_the_calls_event_log(monkeypatch):
     # `call.ended` rows: those stay on the log.
     ended = [e for e in sent if e["event"] == "call.ended"]
     others = [e for e in sent if e["event"] != "call.ended"]
-    assert ended, "call.ended never reached the subscriber"
+    # Once, whichever of the agent's hangup and the carrier's `completed`
+    # status ended the call first (#328), and as completed.
+    assert len(ended) == 1, [e["payload"]["status"] for e in ended]
+    assert ended[0]["payload"]["status"] == "completed"
     last_other = max(_sent_at(e) for e in others)
     assert all(_sent_at(e) > last_other for e in ended), sent
     said = [(t["role"], t["text"]) for t in ended[0]["payload"]["transcript"]]

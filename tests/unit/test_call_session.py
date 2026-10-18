@@ -62,9 +62,9 @@ class TestFinalizeCall:
                 AsyncMock(return_value=call),
             ),
             patch(
-                "turncall.storage.repositories.call_repo.update_call_status",
-                AsyncMock(),
-            ) as update_status,
+                "turncall.storage.repositories.call_repo.mark_call_ended",
+                AsyncMock(return_value=call),
+            ) as mark_ended,
             patch(
                 "turncall.storage.repositories.agent_repo.get_agent_by_id",
                 AsyncMock(return_value=agent),
@@ -76,15 +76,16 @@ class TestFinalizeCall:
         ):
             await cs._finalize_call()
 
-            update_status.assert_awaited_once()
-            kwargs = update_status.await_args.kwargs
+            mark_ended.assert_awaited_once()
+            kwargs = mark_ended.await_args.kwargs
             assert kwargs["status"] == "completed"
             assert kwargs["ended_at"] is not None
             assert kwargs["duration_ms"] is not None and kwargs["duration_ms"] > 0
             trigger.assert_called_once()
 
-    async def test_skips_already_completed(self) -> None:
-        """Idempotency: if /status or the end_call tool already finalized, do nothing."""
+    async def test_skips_a_call_already_ended(self) -> None:
+        """If /status or the end API ended it first, the guarded update ends
+        nothing, and only that path sends `call.ended` (#328)."""
         call_id = uuid4()
         cs = _make_call_session(call_id)
         call = SimpleNamespace(
@@ -101,9 +102,9 @@ class TestFinalizeCall:
                 AsyncMock(return_value=call),
             ),
             patch(
-                "turncall.storage.repositories.call_repo.update_call_status",
-                AsyncMock(),
-            ) as update_status,
+                "turncall.storage.repositories.call_repo.mark_call_ended",
+                AsyncMock(return_value=None),
+            ) as mark_ended,
             patch(
                 "turncall.services.call_analysis_trigger.trigger_post_call_analysis",
                 MagicMock(),
@@ -111,7 +112,7 @@ class TestFinalizeCall:
         ):
             await cs._finalize_call()
 
-            update_status.assert_not_awaited()
+            mark_ended.assert_awaited_once()
             trigger.assert_not_called()
 
     async def test_no_agent_and_no_inline_config_skips_analysis(self) -> None:
@@ -132,9 +133,9 @@ class TestFinalizeCall:
                 AsyncMock(return_value=call),
             ),
             patch(
-                "turncall.storage.repositories.call_repo.update_call_status",
-                AsyncMock(),
-            ) as update_status,
+                "turncall.storage.repositories.call_repo.mark_call_ended",
+                AsyncMock(return_value=call),
+            ) as mark_ended,
             patch(
                 "turncall.services.call_analysis_trigger.trigger_post_call_analysis",
                 MagicMock(),
@@ -142,7 +143,7 @@ class TestFinalizeCall:
         ):
             await cs._finalize_call()
 
-            update_status.assert_awaited_once()
+            mark_ended.assert_awaited_once()
             trigger.assert_not_called()
 
     async def test_an_inline_agent_still_gets_post_call_processing(self) -> None:
@@ -167,8 +168,8 @@ class TestFinalizeCall:
                 AsyncMock(return_value=call),
             ),
             patch(
-                "turncall.storage.repositories.call_repo.update_call_status",
-                AsyncMock(),
+                "turncall.storage.repositories.call_repo.mark_call_ended",
+                AsyncMock(return_value=call),
             ),
             patch(
                 "turncall.services.call_analysis_trigger.trigger_post_call_analysis",
@@ -189,9 +190,9 @@ class TestFinalizeCall:
                 AsyncMock(return_value=None),
             ),
             patch(
-                "turncall.storage.repositories.call_repo.update_call_status",
+                "turncall.storage.repositories.call_repo.mark_call_ended",
                 AsyncMock(),
-            ) as update_status,
+            ) as mark_ended,
             patch(
                 "turncall.services.call_analysis_trigger.trigger_post_call_analysis",
                 MagicMock(),
@@ -199,7 +200,7 @@ class TestFinalizeCall:
         ):
             await cs._finalize_call()
 
-            update_status.assert_not_awaited()
+            mark_ended.assert_not_awaited()
             trigger.assert_not_called()
 
 
@@ -233,9 +234,9 @@ class TestProviderError:
                 AsyncMock(return_value=call),
             ),
             patch(
-                "turncall.storage.repositories.call_repo.update_call_status",
-                AsyncMock(),
-            ) as update_status,
+                "turncall.storage.repositories.call_repo.mark_call_ended",
+                AsyncMock(return_value=call),
+            ) as mark_ended,
             patch(
                 "turncall.services.call_analysis_trigger.config_for_call",
                 AsyncMock(return_value={}),
@@ -252,7 +253,7 @@ class TestProviderError:
         log_event.assert_awaited_once()
         assert log_event.await_args.args[0] == "error.raised"
         assert "401" in log_event.await_args.args[1]["error"]
-        assert update_status.await_args.kwargs["status"] == "failed"
+        assert mark_ended.await_args.kwargs["status"] == "failed"
         trigger.assert_called_once()  # call.ended still goes out
 
     async def test_a_recoverable_error_is_not_recorded(self) -> None:

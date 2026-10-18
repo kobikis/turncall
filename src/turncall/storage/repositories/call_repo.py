@@ -84,7 +84,14 @@ async def update_call_status(
     duration_ms: int | None = None,
     active_agent_id: UUID | None = None,
 ) -> CallRow | None:
-    """Update call status and optional fields. Returns updated row."""
+    """Update call status and optional fields. Returns updated row, or None
+    when there is none to update.
+
+    An ended call is never reopened: a status that isn't an ending lands only
+    on a call that hasn't ended. A pipeline starting, or a transfer failing
+    back to `in_progress`, after the carrier ended the call used to make it
+    live again, and its ending then sent `call.ended` a second time (#328).
+    """
     values: dict[str, Any] = {"status": status}
     if provider_call_sid is not None:
         values["provider_call_sid"] = provider_call_sid
@@ -97,9 +104,10 @@ async def update_call_status(
     if active_agent_id is not None:
         values["active_agent_id"] = active_agent_id
 
-    result = await session.execute(
-        update(CallRow).where(CallRow.id == call_id).values(**values).returning(CallRow)
-    )
+    stmt = update(CallRow).where(CallRow.id == call_id)
+    if status not in _ENDED:
+        stmt = stmt.where(CallRow.status.not_in(_ENDED))
+    result = await session.execute(stmt.values(**values).returning(CallRow))
     return result.scalar_one_or_none()
 
 
@@ -125,6 +133,35 @@ async def attach_media(session: AsyncSession, call_id: UUID, *, carrier: str) ->
         .values(media_attached_at=func.now())
     )
     return bool(result.rowcount)
+
+
+async def mark_call_ended(
+    session: AsyncSession,
+    call_id: UUID,
+    *,
+    status: str,
+    ended_at: datetime,
+    duration_ms: int | None = None,
+) -> CallRow | None:
+    """End the call: its terminal status, `ended_at` and duration, unless it is
+    already over. The row if this caller ended it, else None.
+
+    A guarded UPDATE, as `attach_media`: of the paths that end a call — its
+    pipeline finishing, the carrier's status callback, the end API — exactly
+    one does, and only that one starts post-call processing, which sends
+    `call.ended` (#328). The caller commits, and must before starting
+    post-call processing, which reads the call in a session of its own.
+    """
+    values: dict[str, Any] = {"status": status, "ended_at": ended_at}
+    if duration_ms is not None:
+        values["duration_ms"] = duration_ms
+    result = await session.execute(
+        update(CallRow)
+        .where(CallRow.id == call_id, CallRow.status.not_in(_ENDED))
+        .values(**values)
+        .returning(CallRow)
+    )
+    return result.scalar_one_or_none()
 
 
 async def update_call_recording_url(

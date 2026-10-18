@@ -330,6 +330,10 @@ the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
 
+**`call.ended` arrives once, as `completed`.** When the agent hung up just as
+the carrier reported the call over, a subscriber could get `call.ended` twice,
+or once with `status: "in_progress"`. It now arrives once.
+
 **Telnyx errors reach the logs.** A log line carrying a Telnyx error, or a few
 of TurnCall's own, was dropped with a loguru "Logging error" instead of being
 written. It is written now.

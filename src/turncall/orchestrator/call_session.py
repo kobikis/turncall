@@ -718,8 +718,9 @@ async def finalize_call(session_factory: Any, call_id: UUID, *, failed: bool) ->
     """Set the terminal status, ended_at and duration, then dispatch
     `call.ended` + post-call analysis.
 
-    The `status not in (completed, failed)` guard keeps this idempotent vs the
-    /status callback and the end_call tool — whichever finalizes first wins.
+    Only if this ends the call (`call_repo.mark_call_ended`): the carrier's
+    status callback and the end API end calls too, and whichever does first
+    is the one that sends `call.ended` (#328).
     """
     from turncall.services.call_analysis_trigger import (
         config_for_call,
@@ -729,7 +730,7 @@ async def finalize_call(session_factory: Any, call_id: UUID, *, failed: bool) ->
 
     async with session_factory() as session:
         call = await call_repo.get_call_by_id(session, call_id)
-        if not call or call.status in ("completed", "failed"):
+        if not call:
             return
 
         ended_at = datetime.now(UTC)
@@ -737,13 +738,15 @@ async def finalize_call(session_factory: Any, call_id: UUID, *, failed: bool) ->
         if call.started_at is not None:
             duration_ms = int((ended_at - call.started_at).total_seconds() * 1000)
         status = CallStatus.FAILED if failed else CallStatus.COMPLETED
-        await call_repo.update_call_status(
+        ended = await call_repo.mark_call_ended(
             session,
             call_id,
             status=status.value,
             ended_at=ended_at,
             duration_ms=duration_ms,
         )
+        if ended is None:
+            return  # already over: whoever ended it sent `call.ended`
         await session.commit()
 
         # Not gated on active_agent_id: a call running an inline agent has

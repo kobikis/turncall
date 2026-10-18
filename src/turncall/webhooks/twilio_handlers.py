@@ -417,12 +417,22 @@ async def status_callback(
         if call_duration:
             update_kwargs["duration_ms"] = int(call_duration) * 1000
 
-    await call_repo.update_call_status(session, call.id, **update_kwargs)
+    if is_terminal_state(new_status):
+        # Only if this ends the call: the pipeline finishing and the end API
+        # end calls too, and only the first sends `call.ended` (#328).
+        ended = await call_repo.mark_call_ended(session, call.id, **update_kwargs)
+        if ended is None:
+            return Response(status_code=204)
+    else:
+        await call_repo.update_call_status(session, call.id, **update_kwargs)
 
     await _record_status(session, call, new_status, call_sid, call_status)
 
     # Trigger post-call processing when call completes
     if new_status == CallStatus.COMPLETED:
+        # Committed first: post-call processing reads the call in a session of
+        # its own, and found it still in progress (#328).
+        await session.commit()
         try:
             from turncall.services.call_analysis_trigger import (
                 config_for_call,
