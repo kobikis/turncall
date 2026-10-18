@@ -156,6 +156,17 @@ class _SealedJSONB(TypeDecorator[Any]):
     def _walk(self, value: Any, fn: Callable[[str], str]) -> Any:
         raise NotImplementedError
 
+    def coerce_compared_value(self, op: Any, value: Any) -> Any:
+        """An operand binds as it did against JSONB, unless JSONB would bind it
+        as JSONB: then as this type, so a document merged in is sealed too.
+
+        A TypeDecorator binds every operand as itself, so the key in the SMS
+        claim's `metadata_json - 'claimed_until'` went out as a JSON string,
+        `jsonb - jsonb`, which Postgres has no operator for.
+        """
+        coerced = self.impl_instance.coerce_compared_value(op, value)
+        return self if coerced is self.impl_instance else coerced
+
     def process_bind_param(self, value: Any, dialect: Dialect) -> Any:
         return self._walk(value, seal)
 
@@ -166,6 +177,8 @@ class _SealedJSONB(TypeDecorator[Any]):
 class SealedAgentConfig(_SealedJSONB):
     """agents.config_blob: every secret `map_secrets` names."""
 
+    cache_ok = True  # read off each class's own __dict__, never inherited
+
     def _walk(self, value: Any, fn: Callable[[str], str]) -> Any:
         return map_secrets(value, fn)
 
@@ -173,12 +186,16 @@ class SealedAgentConfig(_SealedJSONB):
 class SealedTarget(_SealedJSONB):
     """eval_runs.target, eval_scenarios.default_target: an inline target's agent."""
 
+    cache_ok = True  # read off each class's own __dict__, never inherited
+
     def _walk(self, value: Any, fn: Callable[[str], str]) -> Any:
         return map_inline_target(value, fn)
 
 
 class SealedMetadata(_SealedJSONB):
     """calls.metadata_json, sms_sessions.metadata_json: the `dynamic_config` only."""
+
+    cache_ok = True  # read off each class's own __dict__, never inherited
 
     def _walk(self, value: Any, fn: Callable[[str], str]) -> Any:
         return map_dynamic_config(value, fn)

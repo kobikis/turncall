@@ -12,6 +12,15 @@ from fastapi.testclient import TestClient
 from turncall.app import create_app
 from turncall.config.settings import Settings
 
+# A webhook subscription, a number's server_url or an agent's api_key cannot
+# be written without CREDENTIAL_ENCRYPTION_KEY (#338), so every test gets one.
+# Fixed, not generated, so a row one run leaves in a shared test database is
+# still readable by the next; a developer's own key wins, as their database
+# may hold rows sealed under it.
+TEST_ENCRYPTION_KEY = "dHVybmNhbGwgdGVzdHM6IHNlY3JldHMgYXQgcmVzdC4="
+if not os.environ.get("CREDENTIAL_ENCRYPTION_KEY"):
+    os.environ["CREDENTIAL_ENCRYPTION_KEY"] = TEST_ENCRYPTION_KEY
+
 
 @pytest.fixture
 def settings() -> Settings:
