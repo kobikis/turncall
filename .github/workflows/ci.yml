@@ -118,8 +118,9 @@ jobs:
         with:
           python-version: "3.12"
       # uv installs the tree in a fraction of pip's time, from a cache keyed on
-      # pyproject.toml.
-      - uses: astral-sh/setup-uv@v10
+      # pyproject.toml. setup-uv publishes no moving major tag (`@v10` does not
+      # resolve), so it is pinned to the release's commit.
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with:
           enable-cache: true
           cache-dependency-glob: pyproject.toml
