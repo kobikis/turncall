@@ -23,7 +23,9 @@ Pieces
   `configure_sms`, `send_sms`, `buy_number`, and Telnyx's `answer`, `reject`,
   `stop_streaming`, `speak`, `start_playback`, `stop_playback`, `bridge`),
   `wait_for(kind)` and `action_at(index)`. `offer(e164)` puts a number up
-  for sale: a number search lists it, and buying it moves it onto the account.
+  for sale: a number search lists it, and buying it moves it onto the account
+  (on Telnyx, `hold_orders = True` keeps it on a pending number order until
+  `finish_orders()`).
   `install(set_attr)` replaces the adapters `services/twilio_accounts
   .TwilioAccount` and `services/telnyx_accounts.TelnyxAccount` hand out, which
   is every carrier REST call the app makes. It also holds the Telnyx account's

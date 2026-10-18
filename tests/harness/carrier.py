@@ -7,7 +7,9 @@ stream. `FakeCarrier` is the first half — every REST action lands in
 `actions` instead of on the network — plus the state the second half needs:
 the numbers it owns and the URLs TurnCall configured on them, and the numbers
 it has for sale (`offer`: a search lists them, `buy_number` moves one onto the
-account). The inbound edge is per carrier format (`twilio.py`, `telnyx.py`).
+account; on Telnyx, `hold_orders` keeps a bought number on order until
+`finish_orders`, as an unfinished Telnyx number order does). The inbound edge
+is per carrier format (`twilio.py`, `telnyx.py`).
 
 One fake stands in for every carrier: a Telnyx command lands in the same
 `actions` list as a Twilio one, under the same kind (`hang_up` is a hang-up on
@@ -102,6 +104,9 @@ class FakeCarrier:
         self.actions: list[CarrierAction] = []
         self._numbers: dict[str, FakeNumber] = {}
         self._for_sale: dict[str, OfferedNumber] = {}
+        # Telnyx number orders not finished yet: E.164 -> order id.
+        self.hold_orders = False
+        self._on_order: dict[str, str] = {}
         self._recorded = asyncio.Condition()
 
     # -- numbers ---------------------------------------------------------
@@ -136,6 +141,25 @@ class FakeCarrier:
         if self._for_sale.pop(e164, None) is None:
             return None
         return self.add_number(e164)
+
+    def _order(self, e164: str) -> tuple[str, FakeNumber | None] | None:
+        """A Telnyx number order for a number on sale: its id, and the number
+        once on the account (None while `hold_orders` keeps it on order).
+        None when the number is not for sale."""
+        if self._for_sale.pop(e164, None) is None:
+            return None
+        order_id = "order-" + secrets.token_hex(8)
+        if self.hold_orders:
+            self._on_order[e164] = order_id
+            return order_id, None
+        return order_id, self.add_number(e164)
+
+    def finish_orders(self) -> list[FakeNumber]:
+        """Telnyx finishes every pending number order: each number lands on
+        the account, where bind can find it."""
+        landed = [self.add_number(e164) for e164 in self._on_order]
+        self._on_order.clear()
+        return landed
 
     # -- recording -------------------------------------------------------
 
@@ -369,7 +393,8 @@ _DIAL_FIELDS = (
 
 class FakeTelnyxAdapter(FakeTelephonyAdapter):
     """Telnyx's commands, recorded. `account_sid` on its actions is the API key
-    the app used. `answer` and `reject` are Telnyx's own: Call Control answers
+    the app used. A search and a purchase answer as `TelnyxAdapter` does (a
+    purchase is a number order, `hold_orders` keeps it pending). `answer` and `reject` are Telnyx's own: Call Control answers
     or refuses a call with a REST command where Twilio reads TwiML. So is a
     transfer's sequence (`stop_streaming`, `speak`, `start_playback`,
     `stop_playback`, `dial`, `bridge`); `telnyx.TelnyxCall.complete_transfer`
@@ -429,6 +454,64 @@ class FakeTelnyxAdapter(FakeTelephonyAdapter):
         await self._record(
             "bridge", call_sid=call_control_id, other=other, client_state=client_state
         )
+
+    async def search_numbers(
+        self,
+        country: str,
+        *,
+        number_type: str = "local",
+        area_code: str | None = None,
+        contains: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """The numbers on sale matching the filters, as `TelnyxAdapter`
+        returns them: no friendly name or postal code, but a price. A read: no
+        action is recorded."""
+        found = [
+            n
+            for n in self._carrier.for_sale()
+            if n.matches(country, number_type, area_code, contains)
+        ]
+        return [
+            {
+                "e164_number": n.e164,
+                "friendly_name": None,
+                "country": n.country,
+                "region": n.region,
+                "locality": n.locality,
+                "postal_code": None,
+                "number_type": n.number_type,
+                "capabilities": {"voice": True, "sms": True, "mms": False},
+                "upfront_cost": "1.00",
+                "monthly_cost": "1.00",
+                "currency": "USD",
+            }
+            for n in found[:limit]
+        ]
+
+    async def buy_number(self, e164_number: str) -> dict[str, Any]:
+        """Order a number on sale onto the account, recorded as `buy_number`
+        (`number_sid` None while the order is held). One not on sale is
+        refused as Telnyx refuses an order: a 422."""
+        from turncall.adapters.telephony.telnyx_adapter import TelnyxApiError
+
+        ordered = self._carrier._order(e164_number)
+        if ordered is None:
+            raise TelnyxApiError(
+                422, ["85001"], f"{e164_number} is not available for purchase"
+            )
+        order_id, number = ordered
+        sid = number.sid if number else None
+        await self._record(
+            "buy_number", e164=e164_number, number_sid=sid, order_id=order_id
+        )
+        return {
+            "number_sid": sid,
+            "e164_number": e164_number,
+            "friendly_name": None,
+            "status": "active" if number else "pending",
+            "order_id": order_id,
+        }
 
     async def find_number(self, e164: str) -> dict[str, Any] | None:
         number = self._carrier._numbers.get(e164)

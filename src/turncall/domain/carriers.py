@@ -22,7 +22,7 @@ DEFAULT_CARRIER = TWILIO
 # The carriers whose numbers TurnCall searches, buys and releases on a
 # project's account (ADR-0025). Not Asterisk: the PBX's dialplan owns its
 # numbers.
-PURCHASE_CARRIERS: tuple[str, ...] = (TWILIO,)
+PURCHASE_CARRIERS: tuple[str, ...] = (TWILIO, TELNYX)
 # The kinds of number a search asks for. Not every carrier sells every kind in
 # every country.
 NUMBER_TYPES: tuple[str, ...] = ("local", "toll_free", "mobile")

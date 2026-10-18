@@ -6,7 +6,8 @@ viewer keys can do neither: buying spends the operator's money. Driven
 through Seam A (the real app, stub providers, the fake carrier, whose
 `offer` puts numbers up for sale and whose `buy_number` action is the
 purchase). The unit halves are `tests/unit/test_phone_number_purchase.py`
-and `test_twilio_number_purchase.py`.
+and `test_twilio_number_purchase.py`; Telnyx's end-to-end half is
+`test_harness_telnyx_number_purchase.py`.
 """
 
 from __future__ import annotations
@@ -104,6 +105,7 @@ async def test_search_buy_bind_and_a_call_reaches_the_agent(monkeypatch) -> None
         "status": "active",
         "twilio_account_sid": None,
         "twilio_credentials": "platform",
+        "telnyx_order_id": None,
     }
     # Sold: off the shelf, and the bind pointed it at TurnCall.
     assert still_for_sale == []

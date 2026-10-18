@@ -256,6 +256,11 @@ class AvailableNumberResponse(BaseModel):
     postal_code: str | None = None
     number_type: str
     capabilities: NumberCapabilities
+    # Telnyx says what a number costs (decimal strings, as Telnyx sends them);
+    # Twilio's search does not.
+    upfront_cost: str | None = None
+    monthly_cost: str | None = None
+    currency: str | None = None
 
 
 class BuyPhoneNumberRequest(TwilioAccountFields):
@@ -280,7 +285,10 @@ class PurchasedNumberResponse(BaseModel):
     """A bought number, and what binding it needs: send `carrier`,
     `e164_number` and `external_number_sid` to `POST /v1/phone-numbers`
     (with the same Twilio pair, when `twilio_credentials` is "number").
-    `status` is "active" once the number can be bound."""
+    `status` is "active" once the number can be bound. A Telnyx number order
+    that has not finished yet is "pending", with `external_number_sid` null:
+    bind finds the number by its E.164 once Telnyx has put it on the account,
+    and refuses it (422) until then."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -292,3 +300,6 @@ class PurchasedNumberResponse(BaseModel):
     # Twilio only: the account it was bought on, null for the platform's.
     twilio_account_sid: str | None = None
     twilio_credentials: str | None = None  # "number" | "platform"; null off Twilio
+    # Telnyx only: the number order the purchase placed. Not the number's id:
+    # that is `external_number_sid`, once the order has finished.
+    telnyx_order_id: str | None = None

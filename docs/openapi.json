@@ -2368,7 +2368,10 @@
             "in": "query",
             "required": false,
             "schema": {
-              "const": "twilio",
+              "enum": [
+                "twilio",
+                "telnyx"
+              ],
               "type": "string",
               "description": "The carrier account to search.",
               "default": "twilio",
@@ -8816,7 +8819,10 @@
           },
           "carrier": {
             "type": "string",
-            "const": "twilio",
+            "enum": [
+              "twilio",
+              "telnyx"
+            ],
             "title": "Carrier",
             "description": "The carrier whose account the number is bought on.",
             "default": "twilio"

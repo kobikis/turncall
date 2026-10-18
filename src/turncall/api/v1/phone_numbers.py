@@ -142,9 +142,13 @@ async def _own_twilio(
     return found, StoredTwilioAccount(account.account_sid, ciphertext)
 
 
-async def _telnyx_account(session: Any, project_id: UUID) -> TelnyxAccount:
+async def project_telnyx_account(
+    session: Any, project_id: UUID, *, purpose: str = "bind the number on"
+) -> TelnyxAccount:
     """The project's Telnyx account, else the platform's — the one that must
-    be able to see a number bound on Telnyx."""
+    be able to see a number bound on Telnyx, and the one numbers are searched
+    for and bought on (#320). `purpose` finishes the 503's "No Telnyx account
+    to ..." when there is none."""
     try:
         account = await telnyx_accounts.account_for_project(
             session, project_id, get_settings()
@@ -158,7 +162,7 @@ async def _telnyx_account(session: Any, project_id: UUID) -> TelnyxAccount:
             status_code=503,
             code=ErrorCode.NO_TELNYX_ACCOUNT,
             message=(
-                "No Telnyx account to bind the number on: store the project's "
+                f"No Telnyx account to {purpose}: store the project's "
                 "`telnyx` credential, or set TELNYX_API_KEY"
             ),
             details={"missing_keys": [TELNYX]},
@@ -173,7 +177,7 @@ async def _on_telnyx(
     number id. Checked at bind, rather than when the first call never comes."""
     from turncall.adapters.telephony.telnyx_adapter import TelnyxApiError
 
-    account = await _telnyx_account(session, project_id)
+    account = await project_telnyx_account(session, project_id)
     try:
         found = await account.adapter().find_number(e164)
     except TelnyxApiError as exc:
@@ -212,7 +216,7 @@ async def _route_telnyx_number(session: Any, row: Any) -> bool:
             "telnyx_number_not_routed: set PUBLIC_BASE_URL", e164=row.e164_number
         )
         return False
-    account = await _telnyx_account(session, row.project_id)
+    account = await project_telnyx_account(session, row.project_id)
     try:
         await account.adapter().configure_number_webhook(
             row.external_number_sid,

@@ -1,4 +1,4 @@
-"""Searching and buying numbers on a carrier account (#319, ADR-0025).
+"""Searching and buying numbers on a carrier account (#319, #320, ADR-0025).
 
 Admin-only: buying spends the operator's money. A bought number is bound with
 `POST /v1/phone-numbers` like any other; buying writes no binding, so the
@@ -10,6 +10,13 @@ names (`X-Twilio-Account-Sid` + `X-Twilio-Auth-Token` headers on the search,
 which keep the token out of the URL; `twilio_account_sid` +
 `twilio_auth_token` in the buy's body, as bind takes them), or on the
 platform's TWILIO_* account without one.
+
+Telnyx runs on the project's Telnyx account: its `telnyx` credential, else the
+platform's TELNYX_API_KEY (ADR-0022), as bind does. A Telnyx purchase is a
+number order that finishes asynchronously: the buy waits a few seconds for it
+(`TelnyxAdapter.buy_number`) and answers "active" with the number's id, or
+"pending" without one. Bind looks a Telnyx number up by its E.164 either way,
+so a pending number binds once Telnyx has put it on the account.
 
 This router is mounted before `phone_numbers.router`, whose
 `GET /{phone_number_id}` would otherwise take `/available`.
@@ -26,6 +33,7 @@ from turncall.api.audit import Audit
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ConflictError, ErrorCode
 from turncall.api.responses import ok
+from turncall.api.v1.phone_numbers import project_telnyx_account
 from turncall.api.v1.schemas.phone_numbers import (
     AvailableNumberResponse,
     BuyPhoneNumberRequest,
@@ -36,9 +44,10 @@ from turncall.api.v1.schemas.phone_numbers import (
 )
 from turncall.auth import AdminAuth
 from turncall.config.settings import get_settings
-from turncall.domain.carriers import TWILIO
+from turncall.domain.carriers import TELNYX, TWILIO
 from turncall.domain.enums import AuditAction, AuditResource
 from turncall.services import audit_log, twilio_accounts
+from turncall.services.telnyx_accounts import TelnyxAccount
 from turncall.services.twilio_accounts import TwilioAccount
 from turncall.storage.repositories import phone_number_repo
 
@@ -88,6 +97,7 @@ TwilioHeaders = Annotated[TwilioAccountFields, Depends(twilio_account_headers)]
 async def search_available_numbers(
     auth: AdminAuth,
     twilio: TwilioHeaders,
+    session: DbSession,
     carrier: Annotated[
         PurchaseCarrier, Query(description="The carrier account to search.")
     ] = TWILIO,
@@ -105,14 +115,19 @@ async def search_available_numbers(
     """Numbers the carrier account can buy, voice-capable. Admin only."""
     if carrier != TWILIO and twilio.has_own_twilio:
         raise _unprocessable(f"X-Twilio-* headers apply to Twilio, not {carrier}")
-    found = await _search_on_twilio(
-        twilio,
-        country.upper(),
-        number_type=number_type,
-        area_code=area_code,
-        contains=contains,
-        limit=limit,
-    )
+    filters: dict[str, Any] = {
+        "number_type": number_type,
+        "area_code": area_code,
+        "contains": contains,
+        "limit": limit,
+    }
+    if carrier == TELNYX:
+        account = await project_telnyx_account(
+            session, auth.project_id, purpose="search for numbers on"
+        )
+        found = await _search_on_telnyx(account, country.upper(), **filters)
+    else:
+        found = await _search_on_twilio(twilio, country.upper(), **filters)
     return ok(
         [
             AvailableNumberResponse(carrier=carrier, **number).model_dump()
@@ -134,17 +149,31 @@ async def buy_phone_number(
     if await phone_number_repo.get_by_e164(session, body.e164_number) is not None:
         raise ConflictError(f"Phone number {body.e164_number} is already bound")
 
-    bought = await _buy_on_twilio(body)
-    audit.record(
-        AuditResource.PHONE_NUMBER,
-        bought.e164_number,
-        AuditAction.PURCHASED,
-        after=audit_log.fields(
+    if body.carrier == TELNYX:
+        account = await project_telnyx_account(
+            session, auth.project_id, purpose="buy the number on"
+        )
+        bought = await _buy_on_telnyx(account, body.e164_number)
+        after = audit_log.fields(
+            carrier=bought.carrier,
+            e164_number=bought.e164_number,
+            external_number_sid=bought.external_number_sid,
+            status=bought.status,
+            telnyx_order_id=bought.telnyx_order_id,
+        )
+    else:
+        bought = await _buy_on_twilio(body)
+        after = audit_log.fields(
             carrier=bought.carrier,
             e164_number=bought.e164_number,
             external_number_sid=bought.external_number_sid,
             twilio_account_sid=bought.twilio_account_sid,
-        ),
+        )
+    audit.record(
+        AuditResource.PHONE_NUMBER,
+        bought.e164_number,
+        AuditAction.PURCHASED,
+        after=after,
     )
     return ok(bought.model_dump())
 
@@ -219,4 +248,54 @@ def _twilio_failed(exc: Any, *, own: bool) -> NoReturn:
         ) from exc
     raise ApiError(
         status_code=502, code=ErrorCode.TWILIO_ERROR, message=f"Twilio: {exc.msg}"
+    ) from exc
+
+
+async def _search_on_telnyx(
+    account: TelnyxAccount, country: str, **filters: Any
+) -> list[dict[str, Any]]:
+    from turncall.adapters.telephony.telnyx_adapter import TelnyxApiError
+
+    try:
+        return list(await account.adapter().search_numbers(country, **filters))
+    except TelnyxApiError as exc:
+        _telnyx_failed(exc)
+
+
+async def _buy_on_telnyx(account: TelnyxAccount, e164: str) -> PurchasedNumberResponse:
+    from turncall.adapters.telephony.telnyx_adapter import (
+        TelnyxApiError,
+        TelnyxOrderFailed,
+    )
+
+    try:
+        number = await account.adapter().buy_number(e164)
+    except TelnyxOrderFailed as exc:
+        raise _unprocessable(
+            f"Telnyx could not complete the number order for {e164}",
+            details={"telnyx_order_id": exc.order_id},
+        ) from exc
+    except TelnyxApiError as exc:
+        _telnyx_failed(exc)
+    return PurchasedNumberResponse(
+        carrier=TELNYX,
+        e164_number=number["e164_number"],
+        external_number_sid=number["number_sid"],
+        friendly_name=number.get("friendly_name"),
+        status=number["status"],
+        telnyx_order_id=number.get("order_id"),
+    )
+
+
+def _telnyx_failed(exc: Any) -> NoReturn:
+    """Telnyx refused: a request it would not take (a number no longer for
+    sale, a filter it rejects) or the account's key is the operator's to fix
+    (422); Telnyx failing is not (502). The project's key and the platform's
+    are treated alike, as bind treats them."""
+    if exc.status in (401, 403):
+        raise _unprocessable("Telnyx rejected this account's API key") from exc
+    if exc.status in (400, 404, 422):
+        raise _unprocessable(str(exc), details={"telnyx_codes": exc.codes}) from exc
+    raise ApiError(
+        status_code=502, code=ErrorCode.TELNYX_ERROR, message=str(exc)
     ) from exc

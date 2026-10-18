@@ -13,6 +13,7 @@ steps are this adapter's.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -38,6 +39,10 @@ APPLICATION_PREFIX = "TurnCall "
 # The webhook format `webhooks/telnyx_handlers.py` reads ({"data": {...}}).
 # Telnyx's default for a new application is "1", a different shape.
 _WEBHOOK_API_VERSION = "2"
+# How long a purchase waits for Telnyx to finish its number order, in seconds
+# between looks (5 s in all). A US number usually completes within it; one
+# that does not is answered "pending" rather than holding the request open.
+ORDER_POLL_DELAYS: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0)
 
 
 class TelnyxApiError(RuntimeError):
@@ -53,6 +58,14 @@ class TelnyxApiError(RuntimeError):
 class TelnyxNumberError(RuntimeError):
     """A number this account cannot use the way TurnCall needs: not on the
     account, or on no Call Control application to dial from."""
+
+
+class TelnyxOrderFailed(TelnyxNumberError):
+    """Telnyx accepted a number order and then failed it: nothing was bought."""
+
+    def __init__(self, order_id: str, e164: str) -> None:
+        self.order_id = order_id
+        super().__init__(f"Telnyx failed number order {order_id} for {e164}")
 
 
 def _media_stream(stream_url: str) -> dict[str, str]:
@@ -355,6 +368,109 @@ class TelnyxAdapter(TelephonyAdapter):
             None,
         )
 
+    async def search_numbers(
+        self,
+        country: str,
+        *,
+        number_type: str = "local",
+        area_code: str | None = None,
+        contains: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Numbers this account can buy, voice-capable, in TurnCall's shape
+        (the keys `TwilioAdapter.search_numbers` returns, plus cost).
+
+        Telnyx's own (ADR-0025), not a `TelephonyAdapter` action. Only exact
+        matches: Telnyx otherwise pads a thin result with "best effort"
+        numbers that miss the filters. Raises `TelnyxApiError`.
+        """
+        params: dict[str, Any] = {
+            "filter[country_code]": country,
+            "filter[phone_number_type]": number_type,
+            "filter[features][]": ["voice"],
+            "filter[best_effort]": "false",
+            "filter[limit]": limit,
+        }
+        if area_code:
+            params["filter[national_destination_code]"] = area_code
+        if contains:
+            params["filter[phone_number][contains]"] = contains
+        found = await self._request("GET", "/available_phone_numbers", params=params)
+        numbers = [
+            _available_number(n, number_type)
+            for n in found.get("data") or []
+            if not n.get("best_effort")
+        ]
+        return [n for n in numbers if n["capabilities"]["voice"]][:limit]
+
+    async def buy_number(self, e164_number: str) -> dict[str, Any]:
+        """Order the number onto this account; what binding it needs, in the
+        keys `TwilioAdapter.buy_number` returns plus `order_id`.
+
+        A Telnyx purchase is a number order, which finishes asynchronously, and
+        the order's ids are not the number's. So the order is looked at again
+        for up to `ORDER_POLL_DELAYS` and, once it succeeds, the number is
+        found on the account for its id (`number_sid`): status "active". An
+        order still pending then (Telnyx is slow, or the number awaits
+        regulatory documents) is "pending" with `number_sid` None; bind finds
+        the number by its E.164 once it lands. A failed order raises
+        `TelnyxOrderFailed`; a refused one `TelnyxApiError`. Once the order is
+        placed nothing else raises: the money is spent, and the caller must
+        hear that it was.
+        """
+        created = await self._request(
+            "POST",
+            "/number_orders",
+            body={"phone_numbers": [{"phone_number": e164_number}]},
+        )
+        order = dict(created.get("data") or {})
+        order_id = str(order.get("id", ""))
+        logger.info(
+            "telnyx_number_ordered",
+            order_id=order_id,
+            e164=e164_number,
+            status=order.get("status"),
+        )
+        order = await self._settle(order)
+        if order.get("status") == "failure":
+            raise TelnyxOrderFailed(order_id, e164_number)
+        number = None
+        if order.get("status") == "success":
+            number = await self._find_quietly(e164_number)
+        return {
+            "number_sid": str(number["id"]) if number else None,
+            "e164_number": e164_number,
+            "friendly_name": None,
+            "status": "active" if number else "pending",
+            "order_id": order_id,
+        }
+
+    async def _settle(self, order: dict[str, Any]) -> dict[str, Any]:
+        """The order once it is no longer pending, or as it stands after
+        `ORDER_POLL_DELAYS`. Not waited on when it awaits requirements (a
+        human uploads those), nor when a look fails."""
+        path = f"/number_orders/{quote(str(order.get('id', '')), safe='')}"
+        for delay in ORDER_POLL_DELAYS:
+            awaits_telnyx = order.get("status") == "pending" and (
+                order.get("requirements_met") is not False
+            )
+            if not awaits_telnyx:
+                break
+            await asyncio.sleep(delay)
+            try:
+                order = dict((await self._request("GET", path)).get("data") or {})
+            except (TelnyxApiError, httpx.HTTPError) as exc:
+                logger.warning("telnyx_number_order_unread", order=path, error=exc)
+                break
+        return order
+
+    async def _find_quietly(self, e164: str) -> dict[str, Any] | None:
+        try:
+            return await self.find_number(e164)
+        except (TelnyxApiError, httpx.HTTPError) as exc:
+            logger.warning("telnyx_bought_number_unread", e164=e164, error=exc)
+            return None
+
     async def ensure_application(self, webhook_url: str) -> str:
         """This deployment's Call Control application, pointed at
         `webhook_url`, created when missing; its id."""
@@ -445,3 +561,35 @@ class TelnyxAdapter(TelephonyAdapter):
 
     async def configure_sms_webhook(self, number_sid: str, sms_url: str) -> None:
         raise NotImplementedError("SMS on Telnyx numbers is not supported")
+
+
+def _available_number(record: dict[str, Any], number_type: str) -> dict[str, Any]:
+    """An available Telnyx number in the carrier-neutral shape a search
+    returns. Telnyx names its regions by type and its features by name."""
+    regions = {
+        r.get("region_type"): r.get("region_name")
+        for r in record.get("region_information") or []
+    }
+    features = {f.get("name") for f in record.get("features") or []}
+    cost = record.get("cost_information") or {}
+    return {
+        "e164_number": record.get("phone_number"),
+        "friendly_name": record.get("vanity_format") or None,
+        "country": regions.get("country_code"),
+        "region": regions.get("state"),
+        "locality": regions.get("location") or regions.get("rate_center"),
+        "postal_code": None,
+        "number_type": number_type,
+        "capabilities": {
+            "voice": "voice" in features,
+            "sms": "sms" in features,
+            "mms": "mms" in features,
+        },
+        "upfront_cost": _text(cost.get("upfront_cost")),
+        "monthly_cost": _text(cost.get("monthly_cost")),
+        "currency": _text(cost.get("currency")),
+    }
+
+
+def _text(value: Any) -> str | None:
+    return None if value is None else str(value)
