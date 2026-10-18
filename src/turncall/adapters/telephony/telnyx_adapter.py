@@ -43,6 +43,13 @@ _WEBHOOK_API_VERSION = "2"
 # between looks (5 s in all). A US number usually completes within it; one
 # that does not is answered "pending" rather than holding the request open.
 ORDER_POLL_DELAYS: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0)
+# A number order's statuses (developers.telnyx.com, "Number orders"): pending
+# until Telnyx finishes it, then success, or one of the states in which
+# nothing was bought: failed, cancelled (by the user or by Telnyx), or every
+# number on it deleted from the account.
+ORDER_PENDING = "pending"
+ORDER_SUCCESS = "success"
+ORDER_ENDED_UNBOUGHT: frozenset[str] = frozenset({"failure", "cancelled", "deleted"})
 
 
 class TelnyxApiError(RuntimeError):
@@ -61,7 +68,8 @@ class TelnyxNumberError(RuntimeError):
 
 
 class TelnyxOrderFailed(TelnyxNumberError):
-    """Telnyx accepted a number order and then failed it: nothing was bought."""
+    """Telnyx accepted a number order and then ended it unbought (failed,
+    cancelled or deleted): nothing is on the account."""
 
     def __init__(self, order_id: str, e164: str) -> None:
         self.order_id = order_id
@@ -105,19 +113,24 @@ class TelnyxAdapter(TelephonyAdapter):
         *,
         params: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None,
+        client: httpx.AsyncClient | None = None,
     ) -> dict[str, Any]:
         """One REST request; the response's JSON body. Raises `TelnyxApiError`
-        on anything but success."""
-        async with httpx.AsyncClient(
-            transport=self._transport, timeout=_TIMEOUT_SECONDS
-        ) as client:
-            response = await client.request(
-                method,
-                f"{TELNYX_API_BASE}{path}",
-                params=params,
-                json=body,
-                headers={"Authorization": f"Bearer {self._api_key}"},
-            )
+        on anything but success, and `httpx.HTTPError` when Telnyx does not
+        answer. On `client` when given (a purchase's several looks share
+        one), else on a client of its own."""
+        if client is None:
+            async with self._client() as own:
+                return await self._request(
+                    method, path, params=params, body=body, client=own
+                )
+        response = await client.request(
+            method,
+            f"{TELNYX_API_BASE}{path}",
+            params=params,
+            json=body,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+        )
         if response.is_success:
             return dict(response.json()) if response.content else {}
         try:
@@ -127,6 +140,9 @@ class TelnyxAdapter(TelephonyAdapter):
         codes = [str(e.get("code", "")) for e in errors]
         detail = "; ".join(str(e.get("detail") or e.get("title")) for e in errors)
         raise TelnyxApiError(response.status_code, codes, detail or response.text)
+
+    def _client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=self._transport, timeout=_TIMEOUT_SECONDS)
 
     async def _command(
         self, call_control_id: str, action: str, body: dict[str, Any] | None = None
@@ -352,7 +368,9 @@ class TelnyxAdapter(TelephonyAdapter):
         path = f"/phone_numbers/{quote(number_sid, safe='')}"
         return dict((await self._request("GET", path)).get("data") or {})
 
-    async def find_number(self, e164: str) -> dict[str, Any] | None:
+    async def find_number(
+        self, e164: str, *, client: httpx.AsyncClient | None = None
+    ) -> dict[str, Any] | None:
         """The account's phone number `e164`, or None when it cannot see it.
 
         Telnyx's filter takes digits only (a `+` matches nothing) and matches
@@ -362,6 +380,7 @@ class TelnyxAdapter(TelephonyAdapter):
             "GET",
             "/phone_numbers",
             params={"filter[phone_number]": e164.lstrip("+"), "page[size]": 250},
+            client=client,
         )
         return next(
             (dict(n) for n in found.get("data") or [] if n.get("phone_number") == e164),
@@ -411,32 +430,47 @@ class TelnyxAdapter(TelephonyAdapter):
         the order's ids are not the number's. So the order is looked at again
         for up to `ORDER_POLL_DELAYS` and, once it succeeds, the number is
         found on the account for its id (`number_sid`): status "active". An
-        order still pending then (Telnyx is slow, or the number awaits
-        regulatory documents) is "pending" with `number_sid` None; bind finds
-        the number by its E.164 once it lands. A failed order raises
-        `TelnyxOrderFailed`; a refused one `TelnyxApiError`. Once the order is
-        placed nothing else raises: the money is spent, and the caller must
-        hear that it was.
+        order still pending then (Telnyx is slow, the number awaits
+        regulatory documents, or Telnyx answers a status it does not
+        document) is "pending" with `number_sid` None; bind finds the number
+        by its E.164 once it lands. An order that ended any other way
+        (`ORDER_ENDED_UNBOUGHT`) raises `TelnyxOrderFailed`; a refused one
+        `TelnyxApiError`; an order request Telnyx did not answer
+        `httpx.HTTPError` (it may have been placed). Once the order is placed
+        nothing else raises: the money is spent, and the caller must hear
+        that it was. One HTTP client serves the order, its looks and the
+        lookup.
         """
-        created = await self._request(
-            "POST",
-            "/number_orders",
-            body={"phone_numbers": [{"phone_number": e164_number}]},
-        )
-        order = dict(created.get("data") or {})
-        order_id = str(order.get("id", ""))
-        logger.info(
-            "telnyx_number_ordered",
-            order_id=order_id,
-            e164=e164_number,
-            status=order.get("status"),
-        )
-        order = await self._settle(order)
-        if order.get("status") == "failure":
-            raise TelnyxOrderFailed(order_id, e164_number)
-        number = None
-        if order.get("status") == "success":
-            number = await self._find_quietly(e164_number)
+        async with self._client() as client:
+            created = await self._request(
+                "POST",
+                "/number_orders",
+                body={"phone_numbers": [{"phone_number": e164_number}]},
+                client=client,
+            )
+            order = dict(created.get("data") or {})
+            order_id = str(order.get("id", ""))
+            logger.info(
+                "telnyx_number_ordered",
+                order_id=order_id,
+                e164=e164_number,
+                status=order.get("status"),
+            )
+            order = await self._settle(order, client)
+            status = order.get("status")
+            if status in ORDER_ENDED_UNBOUGHT:
+                raise TelnyxOrderFailed(order_id, e164_number)
+            if status not in (ORDER_PENDING, ORDER_SUCCESS):
+                logger.warning(
+                    "telnyx_number_order_status_unknown: order {order_id} for "
+                    "{e164} is {status!r}; answered pending",
+                    order_id=order_id,
+                    e164=e164_number,
+                    status=status,
+                )
+            number = None
+            if status == ORDER_SUCCESS:
+                number = await self._find_quietly(e164_number, client)
         return {
             "number_sid": str(number["id"]) if number else None,
             "e164_number": e164_number,
@@ -459,28 +493,33 @@ class TelnyxAdapter(TelephonyAdapter):
         await self._request("DELETE", f"/phone_numbers/{quote(number_id, safe='')}")
         logger.info("telnyx_number_released", number_id=number_id)
 
-    async def _settle(self, order: dict[str, Any]) -> dict[str, Any]:
+    async def _settle(
+        self, order: dict[str, Any], client: httpx.AsyncClient
+    ) -> dict[str, Any]:
         """The order once it is no longer pending, or as it stands after
         `ORDER_POLL_DELAYS`. Not waited on when it awaits requirements (a
         human uploads those), nor when a look fails."""
         path = f"/number_orders/{quote(str(order.get('id', '')), safe='')}"
         for delay in ORDER_POLL_DELAYS:
-            awaits_telnyx = order.get("status") == "pending" and (
+            awaits_telnyx = order.get("status") == ORDER_PENDING and (
                 order.get("requirements_met") is not False
             )
             if not awaits_telnyx:
                 break
             await asyncio.sleep(delay)
             try:
-                order = dict((await self._request("GET", path)).get("data") or {})
+                looked = await self._request("GET", path, client=client)
             except (TelnyxApiError, httpx.HTTPError) as exc:
                 logger.warning("telnyx_number_order_unread", order=path, error=exc)
                 break
+            order = dict(looked.get("data") or {})
         return order
 
-    async def _find_quietly(self, e164: str) -> dict[str, Any] | None:
+    async def _find_quietly(
+        self, e164: str, client: httpx.AsyncClient
+    ) -> dict[str, Any] | None:
         try:
-            return await self.find_number(e164)
+            return await self.find_number(e164, client=client)
         except (TelnyxApiError, httpx.HTTPError) as exc:
             logger.warning("telnyx_bought_number_unread", e164=e164, error=exc)
             return None

@@ -29,7 +29,7 @@ async def test_every_twilio_account_reaches_the_fake_carrier(monkeypatch):
     carrier = FakeCarrier()
     carrier.install(monkeypatch.setattr)
 
-    await TwilioAccount("ACown", "token").adapter().end_call("CA1")
+    await TwilioAccount("ACown", "token", shared=False).adapter().end_call("CA1")
 
     assert [(a.kind, a.account_sid, a.params) for a in carrier.actions] == [
         ("hang_up", "ACown", {"call_sid": "CA1"})

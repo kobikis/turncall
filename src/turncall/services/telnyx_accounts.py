@@ -10,7 +10,7 @@ the only place a Telnyx adapter is built.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from turncall.domain.carriers import TELNYX
@@ -32,14 +32,16 @@ CONNECTION_KEY = "telnyx_connection_id"
 
 @dataclass(frozen=True)
 class TelnyxAccount:
-    """`api_key` / `public_key` are "" when no level holds one. `platform`
-    is True for the platform's shared TELNYX_* account, False for a
-    project's own `telnyx` credential: a number release on the shared account
-    is allowed only for a number the project bought (#321)."""
+    """`api_key` / `public_key` are "" when no level holds one. `shared` is
+    True for the platform's TELNYX_* account, which every project shares,
+    False for a project's own `telnyx` credential: a number release on a
+    shared account is allowed only for a number the project bought (#321).
+    Required, keyword-only, with no default: an account that did not say
+    whose it is must not pass for the project's own."""
 
     api_key: str
     public_key: str
-    platform: bool = False
+    shared: bool = field(kw_only=True)
 
     def adapter(self) -> Any:
         from turncall.adapters.telephony.telnyx_adapter import TelnyxAdapter
@@ -49,7 +51,7 @@ class TelnyxAccount:
 
 def platform_account(settings: Settings) -> TelnyxAccount:
     return TelnyxAccount(
-        settings.telnyx.api_key, settings.telnyx.public_key, platform=True
+        settings.telnyx.api_key, settings.telnyx.public_key, shared=True
     )
 
 
@@ -61,5 +63,7 @@ async def account_for_project(
         documents = await credential_repo.load_documents(session, project_id, settings)
         own = documents.get(TELNYX)
         if own:
-            return TelnyxAccount(own.get("api_key", ""), own.get("public_key", ""))
+            return TelnyxAccount(
+                own.get("api_key", ""), own.get("public_key", ""), shared=False
+            )
     return platform_account(settings)

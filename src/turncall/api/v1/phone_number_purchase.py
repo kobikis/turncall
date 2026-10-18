@@ -39,15 +39,26 @@ This router is mounted before `phone_numbers.router`, whose
 
 from __future__ import annotations
 
-from typing import Annotated, Any, NoReturn
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Annotated, Any
+from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, Header, Query
-from pydantic import ValidationError
+from loguru import logger
+from pydantic import BaseModel, ValidationError
 
 from turncall.api.audit import Audit
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ConflictError, ErrorCode
 from turncall.api.responses import ok
+from turncall.api.v1.carrier_errors import (
+    telnyx_failed,
+    telnyx_unanswered,
+    twilio_failed,
+    unprocessable,
+)
 from turncall.api.v1.phone_numbers import project_telnyx_account
 from turncall.api.v1.schemas.phone_numbers import (
     AvailableNumberResponse,
@@ -69,15 +80,6 @@ from turncall.services.twilio_accounts import TwilioAccount
 from turncall.storage.repositories import phone_number_repo, purchased_number_repo
 
 router = APIRouter(prefix="/phone-numbers", tags=["phone-numbers"])
-
-
-def _unprocessable(message: str, details: dict[str, Any] | None = None) -> ApiError:
-    return ApiError(
-        status_code=422,
-        code=ErrorCode.VALIDATION_ERROR,
-        message=message,
-        details=details,
-    )
 
 
 def twilio_account_headers(
@@ -102,7 +104,7 @@ def twilio_account_headers(
         )
     except ValidationError as exc:
         message = "; ".join(e["msg"] for e in exc.errors())
-        raise _unprocessable(
+        raise unprocessable(
             f"X-Twilio-Account-Sid / X-Twilio-Auth-Token: {message}"
         ) from exc
 
@@ -131,7 +133,7 @@ async def search_available_numbers(
 ) -> dict:
     """Numbers the carrier account can buy, voice-capable. Admin only."""
     if carrier != TWILIO and twilio.has_own_twilio:
-        raise _unprocessable(f"X-Twilio-* headers apply to Twilio, not {carrier}")
+        raise unprocessable(f"X-Twilio-* headers apply to Twilio, not {carrier}")
     filters: dict[str, Any] = {
         "number_type": number_type,
         "area_code": area_code,
@@ -167,11 +169,12 @@ async def buy_phone_number(
         raise ConflictError(f"Phone number {body.e164_number} is already bound")
 
     if body.carrier == TELNYX:
-        account = await project_telnyx_account(
+        telnyx = await project_telnyx_account(
             session, auth.project_id, purpose="buy the number on"
         )
-        bought = await _buy_on_telnyx(account, body.e164_number)
-        on_platform = account.platform
+        shared = telnyx.shared
+        await _end_reads(session)
+        bought = await _buy_on_telnyx(telnyx, body.e164_number, auth.project_id)
         after = audit_log.fields(
             carrier=bought.carrier,
             e164_number=bought.e164_number,
@@ -180,30 +183,83 @@ async def buy_phone_number(
             telnyx_order_id=bought.telnyx_order_id,
         )
     else:
-        bought = await _buy_on_twilio(body)
-        on_platform = not body.has_own_twilio
+        twilio = _twilio_account(body)
+        shared = twilio.shared
+        await _end_reads(session)
+        bought = await _buy_on_twilio(body, twilio)
         after = audit_log.fields(
             carrier=bought.carrier,
             e164_number=bought.e164_number,
             external_number_sid=bought.external_number_sid,
             twilio_account_sid=bought.twilio_account_sid,
         )
-    # Recorded for a pending Telnyx order too: the number is the project's
-    # once Telnyx finishes it.
-    await purchased_number_repo.record(
-        session,
-        project_id=auth.project_id,
-        carrier=bought.carrier,
-        e164_number=bought.e164_number,
-        account=PLATFORM_ACCOUNT if on_platform else OWN_ACCOUNT,
-    )
-    audit.record(
-        AuditResource.PHONE_NUMBER,
-        bought.e164_number,
-        AuditAction.PURCHASED,
-        after=after,
-    )
+    async with _tracked(session, "bought", bought, auth.project_id):
+        # Recorded for a pending Telnyx order too: the number is the
+        # project's once Telnyx finishes it.
+        await purchased_number_repo.record(
+            session,
+            project_id=auth.project_id,
+            carrier=bought.carrier,
+            e164_number=bought.e164_number,
+            account=PLATFORM_ACCOUNT if shared else OWN_ACCOUNT,
+        )
+        audit.record(
+            AuditResource.PHONE_NUMBER,
+            bought.e164_number,
+            AuditAction.PURCHASED,
+            after=after,
+        )
     return ok(bought.model_dump())
+
+
+async def _end_reads(session: Any) -> None:
+    """End the request's transaction before the carrier is asked anything,
+    so no pooled connection sits idle in a transaction while it answers (a
+    Telnyx order is looked at for seconds). Only reads ran in it (the key,
+    the binding check, the account; a legacy key's hash upgrade, which is
+    then made on the key's next request); what is written after the carrier
+    answers starts a new one. A rollback, not a commit: a commit before the
+    audit entry is recorded would be refused."""
+    await session.rollback()
+
+
+@asynccontextmanager
+async def _tracked(
+    session: Any, done: str, number: BaseModel, project_id: UUID
+) -> AsyncIterator[None]:
+    """Record what the carrier just did, and commit it here rather than
+    after the route returns, so a failure is caught: the carrier side is
+    done and irreversible (a bought number is billed) whether TurnCall
+    records it or not. Failing, the number is logged at error level with
+    everything an operator needs to find it, and the client gets a 500 that
+    names it too."""
+    try:
+        yield
+        await session.commit()
+    except Exception as exc:
+        state = number.model_dump(exclude_none=True)
+        logger.error(
+            "phone_number_{done}_untracked: {carrier} {done} {e164} (number "
+            "{sid}, order {order}) for project {project_id}, but TurnCall could "
+            "not record it: {error!r}",
+            done=done,
+            carrier=state.get("carrier"),
+            e164=state.get("e164_number"),
+            sid=state.get("external_number_sid"),
+            order=state.get("telnyx_order_id"),
+            project_id=str(project_id),
+            error=exc,
+            number=state,
+        )
+        raise ApiError(
+            status_code=500,
+            code=ErrorCode.INTERNAL_ERROR,
+            message=(
+                f"The carrier {done} {state.get('e164_number')}, but TurnCall "
+                "could not record it; the number's details are in `details`"
+            ),
+            details={done: state},
+        ) from exc
 
 
 @router.post("/release")
@@ -231,12 +287,12 @@ async def release_phone_number(
         )
 
     if body.carrier == TELNYX:
-        account = await project_telnyx_account(
+        telnyx = await project_telnyx_account(
             session, auth.project_id, purpose="release the number on"
         )
-        on_platform = account.platform
-        await _bought_here_if_shared(session, auth.project_id, body, on_platform)
-        released = await _release_on_telnyx(account, body.e164_number)
+        await _bought_here_if_shared(session, auth.project_id, body, telnyx.shared)
+        await _end_reads(session)
+        released = await _release_on_telnyx(telnyx, body.e164_number, auth.project_id)
         before = audit_log.fields(
             carrier=released.carrier,
             e164_number=released.e164_number,
@@ -244,9 +300,8 @@ async def release_phone_number(
         )
     else:
         twilio = _twilio_account(body)
-        await _bought_here_if_shared(
-            session, auth.project_id, body, not body.has_own_twilio
-        )
+        await _bought_here_if_shared(session, auth.project_id, body, twilio.shared)
+        await _end_reads(session)
         released = await _release_on_twilio(body, twilio)
         before = audit_log.fields(
             carrier=released.carrier,
@@ -254,18 +309,19 @@ async def release_phone_number(
             external_number_sid=released.external_number_sid,
             twilio_account_sid=released.twilio_account_sid,
         )
-    await purchased_number_repo.forget(
-        session,
-        project_id=auth.project_id,
-        carrier=released.carrier,
-        e164_number=released.e164_number,
-    )
-    audit.record(
-        AuditResource.PHONE_NUMBER,
-        released.e164_number,
-        AuditAction.RELEASED,
-        before=before,
-    )
+    async with _tracked(session, "released", released, auth.project_id):
+        await purchased_number_repo.forget(
+            session,
+            project_id=auth.project_id,
+            carrier=released.carrier,
+            e164_number=released.e164_number,
+        )
+        audit.record(
+            AuditResource.PHONE_NUMBER,
+            released.e164_number,
+            AuditAction.RELEASED,
+            before=before,
+        )
     return ok(released.model_dump())
 
 
@@ -273,13 +329,13 @@ async def _bought_here_if_shared(
     session: Any,
     project_id: Any,
     body: ReleasePhoneNumberRequest,
-    on_platform: bool,
+    shared: bool,
 ) -> None:
-    """Refuse a release on the platform's shared account of a number this
+    """Refuse a release on a shared account (the platform's) of a number this
     project did not buy there (403), before the carrier is asked anything:
     the account holds every project's numbers, and the operator's own. The
     refusal does not say whether the account holds the number."""
-    if not on_platform:
+    if not shared:
         return
     if await purchased_number_repo.bought_on_platform(
         session,
@@ -317,26 +373,27 @@ async def _search_on_twilio(
         return list(await account.adapter().search_numbers(country, **filters))
     except TwilioRestException as exc:
         if exc.status == 404:
-            raise _unprocessable(
+            raise unprocessable(
                 f"Twilio sells no {filters['number_type']} numbers in {country}"
             ) from exc
-        _twilio_failed(exc, own=fields.has_own_twilio)
+        twilio_failed(exc, own=fields.has_own_twilio)
 
 
-async def _buy_on_twilio(body: BuyPhoneNumberRequest) -> PurchasedNumberResponse:
+async def _buy_on_twilio(
+    body: BuyPhoneNumberRequest, account: TwilioAccount
+) -> PurchasedNumberResponse:
     from twilio.base.exceptions import TwilioRestException
 
-    account = _twilio_account(body)
     try:
         number = await account.adapter().buy_number(body.e164_number)
     except TwilioRestException as exc:
         if exc.status == 400:
             # No longer available, or the country needs an address or a
             # regulatory bundle on the account first.
-            raise _unprocessable(
+            raise unprocessable(
                 f"Twilio: {exc.msg}", details={"twilio_code": exc.code}
             ) from exc
-        _twilio_failed(exc, own=body.has_own_twilio)
+        twilio_failed(exc, own=body.has_own_twilio)
     return PurchasedNumberResponse(
         carrier=TWILIO,
         e164_number=number["e164_number"],
@@ -357,17 +414,17 @@ async def _release_on_twilio(
     try:
         number_sid = await adapter.find_number_sid(body.e164_number)
         if number_sid is None:
-            raise _unprocessable(
+            raise unprocessable(
                 f"{body.e164_number} is not a phone number on this Twilio account"
             )
         await adapter.release_number(number_sid)
     except TwilioRestException as exc:
         if exc.status == 404:
             # Gone between the lookup and the release: not released here.
-            raise _unprocessable(
+            raise unprocessable(
                 f"{body.e164_number} is not a phone number on this Twilio account"
             ) from exc
-        _twilio_failed(exc, own=body.has_own_twilio)
+        twilio_failed(exc, own=body.has_own_twilio)
     return ReleasedNumberResponse(
         carrier=TWILIO,
         e164_number=body.e164_number,
@@ -381,7 +438,9 @@ def _twilio_account(fields: TwilioAccountFields) -> TwilioAccount:
     """The account the request names, else the platform's."""
     if fields.has_own_twilio:
         return TwilioAccount(
-            fields.twilio_account_sid or "", fields.twilio_auth_token or ""
+            fields.twilio_account_sid or "",
+            fields.twilio_auth_token or "",
+            shared=False,
         )
     account = twilio_accounts.platform_account(get_settings())
     if account is None:
@@ -397,18 +456,6 @@ def _twilio_account(fields: TwilioAccountFields) -> TwilioAccount:
     return account
 
 
-def _twilio_failed(exc: Any, *, own: bool) -> NoReturn:
-    """Twilio refused: the caller's own credentials are theirs to fix (422);
-    the platform's, or Twilio failing, are not (502)."""
-    if own and exc.status in (401, 403):
-        raise _unprocessable(
-            "Twilio rejected this Account SID / Auth Token pair"
-        ) from exc
-    raise ApiError(
-        status_code=502, code=ErrorCode.TWILIO_ERROR, message=f"Twilio: {exc.msg}"
-    ) from exc
-
-
 async def _search_on_telnyx(
     account: TelnyxAccount, country: str, **filters: Any
 ) -> list[dict[str, Any]]:
@@ -417,10 +464,14 @@ async def _search_on_telnyx(
     try:
         return list(await account.adapter().search_numbers(country, **filters))
     except TelnyxApiError as exc:
-        _telnyx_failed(exc)
+        telnyx_failed(exc, request_is_callers=True)
+    except httpx.HTTPError as exc:
+        telnyx_unanswered(exc)
 
 
-async def _buy_on_telnyx(account: TelnyxAccount, e164: str) -> PurchasedNumberResponse:
+async def _buy_on_telnyx(
+    account: TelnyxAccount, e164: str, project_id: UUID
+) -> PurchasedNumberResponse:
     from turncall.adapters.telephony.telnyx_adapter import (
         TelnyxApiError,
         TelnyxOrderFailed,
@@ -429,12 +480,29 @@ async def _buy_on_telnyx(account: TelnyxAccount, e164: str) -> PurchasedNumberRe
     try:
         number = await account.adapter().buy_number(e164)
     except TelnyxOrderFailed as exc:
-        raise _unprocessable(
+        raise unprocessable(
             f"Telnyx could not complete the number order for {e164}",
             details={"telnyx_order_id": exc.order_id},
         ) from exc
     except TelnyxApiError as exc:
-        _telnyx_failed(exc)
+        telnyx_failed(exc, request_is_callers=True)
+    except httpx.HTTPError as exc:
+        # Only the order request itself raises this (its looks afterwards are
+        # quiet): Telnyx may have taken the order and the answer been lost.
+        logger.error(
+            "telnyx_number_order_unanswered: Telnyx did not answer the number "
+            "order for {e164} (project {project_id}): {error!r}. The order may "
+            "have been placed: check the account's number orders.",
+            e164=e164,
+            project_id=str(project_id),
+            error=exc,
+            shared_account=account.shared,
+        )
+        telnyx_unanswered(
+            exc,
+            f"the number order for {e164} may have been placed; check the "
+            "Telnyx account's number orders before buying it again",
+        )
     return PurchasedNumberResponse(
         carrier=TELNYX,
         e164_number=number["e164_number"],
@@ -446,37 +514,43 @@ async def _buy_on_telnyx(account: TelnyxAccount, e164: str) -> PurchasedNumberRe
 
 
 async def _release_on_telnyx(
-    account: TelnyxAccount, e164: str
+    account: TelnyxAccount, e164: str, project_id: UUID
 ) -> ReleasedNumberResponse:
     from turncall.adapters.telephony.telnyx_adapter import TelnyxApiError
 
     adapter = account.adapter()
     try:
         found = await adapter.find_number(e164)
-        if found is None:
-            # Also a number whose order has not finished: it is not on the
-            # account yet.
-            raise _unprocessable(
-                f"{e164} is not a phone number on this project's Telnyx account"
-            )
-        number_id = str(found["id"])
+    except TelnyxApiError as exc:
+        telnyx_failed(exc, request_is_callers=True)
+    except httpx.HTTPError as exc:
+        telnyx_unanswered(exc)
+    if found is None:
+        # Also a number whose order has not finished: it is not on the
+        # account yet.
+        raise unprocessable(
+            f"{e164} is not a phone number on this project's Telnyx account"
+        )
+    number_id = str(found["id"])
+    try:
         await adapter.release_number(number_id)
     except TelnyxApiError as exc:
-        _telnyx_failed(exc)
+        telnyx_failed(exc, request_is_callers=True)
+    except httpx.HTTPError as exc:
+        logger.error(
+            "telnyx_number_release_unanswered: Telnyx did not answer the "
+            "release of {e164} (number {number_id}, project {project_id}): "
+            "{error!r}. It may have been released.",
+            e164=e164,
+            number_id=number_id,
+            project_id=str(project_id),
+            error=exc,
+        )
+        telnyx_unanswered(
+            exc,
+            f"{e164} may have been released; check the Telnyx account before "
+            "releasing it again",
+        )
     return ReleasedNumberResponse(
         carrier=TELNYX, e164_number=e164, external_number_sid=number_id
     )
-
-
-def _telnyx_failed(exc: Any) -> NoReturn:
-    """Telnyx refused: a request it would not take (a number no longer for
-    sale, a filter it rejects) or the account's key is the operator's to fix
-    (422); Telnyx failing is not (502). The project's key and the platform's
-    are treated alike, as bind treats them."""
-    if exc.status in (401, 403):
-        raise _unprocessable("Telnyx rejected this account's API key") from exc
-    if exc.status in (400, 404, 422):
-        raise _unprocessable(str(exc), details={"telnyx_codes": exc.codes}) from exc
-    raise ApiError(
-        status_code=502, code=ErrorCode.TELNYX_ERROR, message=str(exc)
-    ) from exc

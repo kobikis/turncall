@@ -11,6 +11,10 @@ from twilio.request_validator import RequestValidator
 from twilio.rest import Client as TwilioClient
 
 from turncall.adapters.telephony.base import TelephonyAdapter
+from turncall.domain.carriers import NUMBER_TYPES
+
+# How many partial matches each page of a number lookup reads.
+_LOOKUP_PAGE_SIZE = 50
 
 
 class TwilioAdapter(TelephonyAdapter):
@@ -159,19 +163,29 @@ class TwilioAdapter(TelephonyAdapter):
         """The PN SID of this E.164 number on this account, or None if the
         account does not own it. Raises TwilioRestException on bad credentials
         (a refused list arrives from the SDK as a bare TwilioException; it is
-        converted, so a 401 reads as one). Off the event loop."""
+        converted, so a 401 reads as one). Off the event loop.
 
-        def _find() -> list[Any]:
+        Twilio's PhoneNumber filter matches partially (a number that merely
+        contains `e164_number` matches too), so every match is read, page by
+        page, until the exact number turns up: a release or a bind must never
+        act on a different number.
+        """
+
+        def _find() -> str | None:
             listing = self._client.incoming_phone_numbers
             try:
-                return list(listing.list(phone_number=e164_number, limit=1))
+                for number in listing.stream(
+                    phone_number=e164_number, page_size=_LOOKUP_PAGE_SIZE
+                ):
+                    if number.phone_number == e164_number:
+                        return str(number.sid)
             except TwilioRestException:
                 raise
             except TwilioException as exc:
                 raise _page_error(exc, listing._uri) from exc
+            return None
 
-        numbers = await asyncio.to_thread(_find)
-        return numbers[0].sid if numbers else None
+        return await asyncio.to_thread(_find)
 
     async def search_numbers(
         self,
@@ -189,17 +203,19 @@ class TwilioAdapter(TelephonyAdapter):
         `country`, 401/403 on bad credentials. Off the event loop: the SDK
         blocks.
         """
-        if number_type not in _NUMBER_LISTS:
+        if number_type not in NUMBER_TYPES:
             raise ValueError(f"Twilio has no number type {number_type!r}")
         filters: dict[str, Any] = {"voice_enabled": True, "limit": limit}
         if area_code:
-            filters["area_code"] = int(area_code)
+            # As given: a leading zero is part of an area code.
+            filters["area_code"] = area_code
         if contains:
             filters["contains"] = contains
 
         def _search() -> list[Any]:
             numbers = self._client.available_phone_numbers(country)
-            listing = getattr(numbers, _NUMBER_LISTS[number_type])
+            # The SDK names each type's list as TurnCall does.
+            listing = getattr(numbers, number_type)
             try:
                 return list(listing.list(**filters))
             except TwilioRestException:
@@ -321,10 +337,6 @@ class TwilioAdapter(TelephonyAdapter):
         else:
             dial.text = target_number
         return ET.tostring(response, encoding="unicode")
-
-
-# TurnCall's number types, by the SDK's list of each under AvailablePhoneNumbers.
-_NUMBER_LISTS = {"local": "local", "toll_free": "toll_free", "mobile": "mobile"}
 
 
 def _available_number(record: Any, number_type: str) -> dict[str, Any]:

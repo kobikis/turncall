@@ -473,7 +473,7 @@ def twilio(monkeypatch):
     """The call's Twilio account, and the recordings deleted from it."""
     from turncall.services import twilio_accounts
 
-    account = twilio_accounts.TwilioAccount("AC1", "token")
+    account = twilio_accounts.TwilioAccount("AC1", "token", shared=True)
 
     async def account_for_call(*_args: Any) -> Any:
         return account

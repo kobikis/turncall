@@ -254,6 +254,47 @@ class TestBuy:
             await telnyx.adapter().buy_number(E164)
         assert raised.value.order_id == "order-1"
 
+    @pytest.mark.parametrize("ended", ["cancelled", "deleted"])
+    async def test_an_order_ended_otherwise_than_success_raises(
+        self, ended: str
+    ) -> None:
+        """Telnyx's other terminal states (cancelled by the user or Telnyx;
+        every number on it deleted) bought nothing either: they are no
+        pending purchase to record."""
+        telnyx = FakeTelnyx(order_states=["pending", ended])
+        with pytest.raises(TelnyxOrderFailed) as raised:
+            await telnyx.adapter().buy_number(E164)
+        assert raised.value.order_id == "order-1"
+        assert "GET /phone_numbers" not in telnyx.paths()
+
+    async def test_a_status_telnyx_has_not_documented_is_pending(self) -> None:
+        """Not known to have failed, so not reported as failed: the order may
+        be billed, and recording it pending keeps it in sight."""
+        telnyx = FakeTelnyx(order_states=["pending", "on-hold"])
+        bought = await telnyx.adapter().buy_number(E164)
+        assert bought["status"] == "pending"
+        assert bought["number_sid"] is None
+
+    async def test_the_whole_purchase_uses_one_http_client(self, monkeypatch) -> None:
+        """The order, its polls and the lookup share a connection rather
+        than opening one per look."""
+        opened: list[Any] = []
+        real = httpx.AsyncClient
+
+        class Counting(real):  # type: ignore[misc, valid-type]
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                opened.append(self)
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(httpx, "AsyncClient", Counting)
+        telnyx = FakeTelnyx(order_states=["pending", "pending", "success"])
+
+        bought = await telnyx.adapter().buy_number(E164)
+
+        assert bought["status"] == "active"
+        assert len(telnyx.requests) == 4
+        assert len(opened) == 1
+
     async def test_a_refused_order_raises(self) -> None:
         telnyx = FakeTelnyx()
         telnyx.refuse["POST /number_orders"] = httpx.Response(

@@ -14,7 +14,7 @@ their token.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -31,8 +31,15 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class TwilioAccount:
+    """`shared` is True for the platform's TWILIO_* account, which every
+    project shares, False for an account a number or a request names: a
+    number release on a shared account is allowed only for a number the
+    project bought (#321). Required, keyword-only, with no default, as on
+    `TelnyxAccount`."""
+
     account_sid: str
     auth_token: str
+    shared: bool = field(kw_only=True)
 
     def adapter(self) -> Any:
         from turncall.adapters.telephony.twilio_adapter import TwilioAdapter
@@ -43,7 +50,7 @@ class TwilioAccount:
 def platform_account(settings: Settings) -> TwilioAccount | None:
     t = settings.twilio
     return (
-        TwilioAccount(t.account_sid, t.auth_token)
+        TwilioAccount(t.account_sid, t.auth_token, shared=True)
         if t.account_sid and t.auth_token
         else None
     )
@@ -61,7 +68,7 @@ def account_for_number(
         token = credential_repo.decrypt(row.twilio_auth_token_ciphertext, settings)[
             "auth_token"
         ]
-        return TwilioAccount(row.twilio_account_sid, token)
+        return TwilioAccount(row.twilio_account_sid, token, shared=False)
     return platform_account(settings)
 
 

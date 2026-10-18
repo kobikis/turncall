@@ -11,6 +11,12 @@ from turncall.api.audit import Audit
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.api.responses import ok, paginated
+from turncall.api.v1.carrier_errors import (
+    telnyx_failed,
+    telnyx_unanswered,
+    twilio_failed,
+    unprocessable,
+)
 from turncall.api.v1.schemas.phone_numbers import (
     BindPhoneNumberRequest,
     PhoneNumberResponse,
@@ -100,10 +106,6 @@ def _with_configured(row: Any, configured: bool | None) -> dict[str, Any]:
     return data
 
 
-def _unprocessable(message: str) -> ApiError:
-    return ApiError(status_code=422, code=ErrorCode.VALIDATION_ERROR, message=message)
-
-
 async def _own_twilio(
     body: TwilioAccountFields, e164: str, given_sid: str | None, settings: Settings
 ) -> tuple[str, StoredTwilioAccount]:
@@ -114,23 +116,19 @@ async def _own_twilio(
     """
     from twilio.base.exceptions import TwilioRestException
 
-    account = TwilioAccount(body.twilio_account_sid or "", body.twilio_auth_token or "")
+    account = TwilioAccount(
+        body.twilio_account_sid or "", body.twilio_auth_token or "", shared=False
+    )
     try:
         found = await account.adapter().find_number_sid(e164)
     except TwilioRestException as exc:
-        if exc.status in (401, 403):
-            raise _unprocessable(
-                "Twilio rejected this Account SID / Auth Token pair"
-            ) from exc
-        raise ApiError(
-            status_code=502, code=ErrorCode.TWILIO_ERROR, message=f"Twilio: {exc.msg}"
-        ) from exc
+        twilio_failed(exc, own=True)
     if found is None:
-        raise _unprocessable(
+        raise unprocessable(
             f"{e164} is not a phone number on Twilio account {account.account_sid}"
         )
     if given_sid and given_sid != found:
-        raise _unprocessable(
+        raise unprocessable(
             f"{e164} on that Twilio account is {found}, not {given_sid}"
         )
     try:
@@ -174,24 +172,26 @@ async def _on_telnyx(
     session: Any, project_id: UUID, e164: str, given_sid: str | None
 ) -> str:
     """Prove the project's Telnyx account holds the number; its Telnyx phone
-    number id. Checked at bind, rather than when the first call never comes."""
+    number id. Checked at bind, rather than when the first call never comes.
+    The lookup is TurnCall's own request, so Telnyx refusing it is Telnyx's
+    error (502), as is Telnyx not answering."""
+    import httpx
+
     from turncall.adapters.telephony.telnyx_adapter import TelnyxApiError
 
     account = await project_telnyx_account(session, project_id)
     try:
         found = await account.adapter().find_number(e164)
     except TelnyxApiError as exc:
-        if exc.status in (401, 403):
-            raise _unprocessable("Telnyx rejected this account's API key") from exc
-        raise ApiError(
-            status_code=502, code=ErrorCode.TELNYX_ERROR, message=str(exc)
-        ) from exc
+        telnyx_failed(exc, request_is_callers=False)
+    except httpx.HTTPError as exc:
+        telnyx_unanswered(exc)
     if found is None:
-        raise _unprocessable(
+        raise unprocessable(
             f"{e164} is not a phone number on this project's Telnyx account"
         )
     if given_sid and given_sid != str(found["id"]):
-        raise _unprocessable(f"{e164} on Telnyx is {found['id']}, not {given_sid}")
+        raise unprocessable(f"{e164} on Telnyx is {found['id']}, not {given_sid}")
     return str(found["id"])
 
 
@@ -329,7 +329,7 @@ async def update_phone_number(
     if body.carrier is not None and body.carrier != row.provider:
         # Its SID, webhooks and calls all live on that carrier: moving it is
         # unbinding there and binding on the other.
-        raise _unprocessable(
+        raise unprocessable(
             f"this number's carrier is {row.provider}; a carrier cannot be changed "
             "in place — unbind the number and bind it again"
         )
@@ -338,7 +338,7 @@ async def update_phone_number(
         try:
             only_on_twilio(body, row.provider)
         except ValueError as exc:
-            raise _unprocessable(str(exc)) from exc
+            raise unprocessable(str(exc)) from exc
 
     # Mint a secret only when webhook routing appears for the first time.
     secret = row.server_url_secret

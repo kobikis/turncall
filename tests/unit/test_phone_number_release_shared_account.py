@@ -79,7 +79,7 @@ def telnyx_account(request, monkeypatch) -> str:
     account = TelnyxAccount(
         "PLATFORM_KEY" if request.param == "platform" else "PROJECT_KEY",
         "pub",
-        platform=request.param == "platform",
+        shared=request.param == "platform",
     )
 
     async def account_for_project(session, project_id, settings):
@@ -92,7 +92,7 @@ def telnyx_account(request, monkeypatch) -> str:
 @pytest.fixture
 def platform_telnyx(monkeypatch) -> None:
     async def account_for_project(session, project_id, settings):
-        return TelnyxAccount("PLATFORM_KEY", "pub", platform=True)
+        return TelnyxAccount("PLATFORM_KEY", "pub", shared=True)
 
     monkeypatch.setattr(ACCOUNTS, account_for_project)
 
@@ -100,7 +100,7 @@ def platform_telnyx(monkeypatch) -> None:
 @pytest.fixture
 def own_telnyx(monkeypatch) -> None:
     async def account_for_project(session, project_id, settings):
-        return TelnyxAccount("PROJECT_KEY", "pub")
+        return TelnyxAccount("PROJECT_KEY", "pub", shared=False)
 
     monkeypatch.setattr(ACCOUNTS, account_for_project)
 
@@ -145,6 +145,44 @@ def _carrier_patched(find: Any, release: Any, find_t: Any, release_t: Any) -> An
     return stack
 
 
+class TestEachAccountSaysWhetherItIsShared:
+    """`shared` is required on both account types: an account built without
+    saying whose it is would otherwise read as the project's own, and the
+    release guard would let it through."""
+
+    @pytest.mark.parametrize("kind", ["telnyx", "twilio"])
+    def test_an_account_must_say_whether_it_is_shared(self, kind) -> None:
+        from turncall.services.twilio_accounts import TwilioAccount
+
+        cls = TelnyxAccount if kind == "telnyx" else TwilioAccount
+        with pytest.raises(TypeError):
+            cls("KEY", "SECRET")  # type: ignore[call-arg]
+
+    def test_the_platforms_twilio_account_is_shared(self) -> None:
+        from turncall.services import twilio_accounts
+
+        settings = SimpleNamespace(
+            twilio=SimpleNamespace(account_sid="AC1", auth_token="tok")
+        )
+        assert twilio_accounts.platform_account(settings).shared is True
+
+    def test_a_numbers_own_twilio_account_is_not_shared(self) -> None:
+        from turncall.services import twilio_accounts
+
+        row = SimpleNamespace(
+            twilio_account_sid="ACown", twilio_auth_token_ciphertext="sealed"
+        )
+        settings = SimpleNamespace(
+            twilio=SimpleNamespace(account_sid="AC1", auth_token="tok")
+        )
+        with patch(
+            "turncall.storage.repositories.credential_repo.decrypt",
+            return_value={"auth_token": "own"},
+        ):
+            own = twilio_accounts.account_for_number(row, settings)
+        assert (own.account_sid, own.shared) == ("ACown", False)
+
+
 class TestTheTelnyxAccountSaysWhoseItIs:
     def test_the_platforms_account_is_shared(self) -> None:
         from turncall.services import telnyx_accounts
@@ -152,7 +190,7 @@ class TestTheTelnyxAccountSaysWhoseItIs:
         settings = SimpleNamespace(
             telnyx=SimpleNamespace(api_key="KEY", public_key="PUB")
         )
-        assert telnyx_accounts.platform_account(settings).platform is True
+        assert telnyx_accounts.platform_account(settings).shared is True
 
     async def test_a_project_credential_is_the_projects_own(self) -> None:
         from turncall.services import telnyx_accounts
@@ -174,8 +212,8 @@ class TestTheTelnyxAccountSaysWhoseItIs:
             shared = await telnyx_accounts.account_for_project(
                 AsyncMock(), uuid.uuid4(), settings
             )
-        assert (own.api_key, own.platform) == ("OWN", False)
-        assert (shared.api_key, shared.platform) == ("KEY", True)
+        assert (own.api_key, own.shared) == ("OWN", False)
+        assert (shared.api_key, shared.shared) == ("KEY", True)
 
 
 class TestAPurchaseIsRecorded:

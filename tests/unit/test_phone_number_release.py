@@ -26,6 +26,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from twilio.base.exceptions import TwilioRestException
 
@@ -120,7 +121,7 @@ def telnyx_account(monkeypatch) -> list[Any]:
 
     async def account_for_project(session, project_id, settings):
         asked.append(project_id)
-        return TelnyxAccount("PROJECT_KEY", "pub")
+        return TelnyxAccount("PROJECT_KEY", "pub", shared=False)
 
     monkeypatch.setattr(ACCOUNTS, account_for_project)
     return asked
@@ -462,11 +463,70 @@ class TestTelnyx:
         assert r.json()["code"] == code
         assert AUDIT_HEADER not in r.headers
 
+    def test_telnyx_not_answering_the_lookup_is_a_502(
+        self, admin, unbound, telnyx_account
+    ) -> None:
+        with (
+            patch(
+                f"{TELNYX}.find_number",
+                AsyncMock(side_effect=httpx.ConnectTimeout("slow")),
+            ),
+            patch(f"{TELNYX}.release_number", AsyncMock()) as release,
+        ):
+            r = admin.post(URL, headers=H, json=_release("telnyx"))
+        assert r.status_code == 502, r.text
+        assert r.json()["code"] == "telnyx_error"
+        release.assert_not_awaited()
+        assert AUDIT_HEADER not in r.headers
+
+    def test_telnyx_not_answering_the_release_says_it_may_be_released(
+        self, admin, unbound, telnyx_account
+    ) -> None:
+        from loguru import logger
+
+        seen: list[str] = []
+        sink = logger.add(lambda m: seen.append(str(m)), level="ERROR")
+        try:
+            with (
+                patch(
+                    f"{TELNYX}.find_number", AsyncMock(return_value={"id": "pn-777"})
+                ),
+                patch(
+                    f"{TELNYX}.release_number",
+                    AsyncMock(side_effect=httpx.ReadTimeout("slow")),
+                ),
+            ):
+                r = admin.post(URL, headers=H, json=_release("telnyx"))
+        finally:
+            logger.remove(sink)
+        assert r.status_code == 502, r.text
+        assert r.json()["code"] == "telnyx_error"
+        assert "may have been released" in r.json()["error"]
+        assert AUDIT_HEADER not in r.headers
+        [logged] = [m for m in seen if "telnyx_number_release_unanswered" in m]
+        assert "pn-777" in logged
+
+    def test_no_transaction_is_held_open_while_telnyx_answers(
+        self, admin, session, unbound, telnyx_account
+    ) -> None:
+        seen: list[int] = []
+
+        async def release(number_id: str) -> None:
+            seen.append(session.rollback.await_count)
+
+        with (
+            patch(f"{TELNYX}.find_number", AsyncMock(return_value={"id": "pn-777"})),
+            patch(f"{TELNYX}.release_number", side_effect=release),
+        ):
+            r = admin.post(URL, headers=H, json=_release("telnyx"))
+        assert r.status_code == 200, r.text
+        assert seen == [1]
+
     def test_no_telnyx_account_is_a_503(self, admin, unbound, monkeypatch) -> None:
         from turncall.services.telnyx_accounts import TelnyxAccount
 
         async def none(session, project_id, settings):
-            return TelnyxAccount("", "")
+            return TelnyxAccount("", "", shared=False)
 
         monkeypatch.setattr(ACCOUNTS, none)
         r = admin.post(URL, headers=H, json=_release("telnyx"))

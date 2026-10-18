@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from twilio.base.exceptions import TwilioRestException
 
@@ -66,6 +67,17 @@ BOUGHT = {
     "friendly_name": "(312) 555-0100",
     "status": "active",
 }
+
+
+@pytest.fixture
+def errors_logged() -> Any:
+    """What is logged at error level, as text."""
+    from loguru import logger
+
+    seen: list[str] = []
+    sink = logger.add(lambda m: seen.append(str(m)), level="ERROR")
+    yield seen
+    logger.remove(sink)
 
 
 def _settings(platform: bool = True) -> SimpleNamespace:
@@ -265,6 +277,74 @@ class TestBuy:
         }
         assert r.headers[AUDIT_HEADER]
 
+    def test_no_transaction_is_held_open_while_the_carrier_answers(
+        self, admin, session
+    ) -> None:
+        """The reads' transaction ends before the carrier is asked (a
+        Telnyx order is polled for seconds), and what is recorded after it
+        answers is committed then."""
+        seen: dict[str, int] = {}
+
+        async def buy(e164: str) -> dict[str, Any]:
+            seen["rollbacks"] = session.rollback.await_count
+            seen["commits"] = session.commit.await_count
+            return BOUGHT
+
+        with (
+            patch(f"{REPO}.get_by_e164", AsyncMock(return_value=None)),
+            patch(f"{ADAPTER}.buy_number", side_effect=buy),
+        ):
+            r = admin.post(
+                "/v1/phone-numbers/purchase", headers=H, json={"e164_number": E164}
+            )
+
+        assert r.status_code == 201, r.text
+        assert seen == {"rollbacks": 1, "commits": 0}
+        session.commit.assert_awaited()
+
+    def test_a_purchase_that_cannot_be_recorded_is_logged_and_named(
+        self, admin, session, errors_logged
+    ) -> None:
+        """Twilio sold the number, so it is billed whatever TurnCall manages
+        to record: a failure to record it is logged loudly with what an
+        operator needs to find it, and the 500 names it too."""
+        with (
+            patch(f"{REPO}.get_by_e164", AsyncMock(return_value=None)),
+            patch(f"{ADAPTER}.buy_number", AsyncMock(return_value=BOUGHT)),
+            patch(
+                "turncall.storage.repositories.purchased_number_repo.record",
+                AsyncMock(side_effect=RuntimeError("database gone")),
+            ),
+        ):
+            r = admin.post(
+                "/v1/phone-numbers/purchase", headers=H, json={"e164_number": E164}
+            )
+
+        assert r.status_code == 500, r.text
+        body = r.json()
+        assert body["code"] == "internal_error"
+        assert body["details"]["bought"]["external_number_sid"] == PN
+        assert body["details"]["bought"]["e164_number"] == E164
+        [logged] = [m for m in errors_logged if "phone_number_bought_untracked" in m]
+        assert "twilio" in logged
+        assert E164 in logged
+        assert PN in logged
+        assert "database gone" in logged
+
+    def test_a_failed_commit_is_caught_too(self, admin, session, errors_logged) -> None:
+        session.commit.side_effect = RuntimeError("commit refused")
+        with (
+            patch(f"{REPO}.get_by_e164", AsyncMock(return_value=None)),
+            patch(f"{ADAPTER}.buy_number", AsyncMock(return_value=BOUGHT)),
+        ):
+            r = admin.post(
+                "/v1/phone-numbers/purchase", headers=H, json={"e164_number": E164}
+            )
+
+        assert r.status_code == 500, r.text
+        assert r.json()["details"]["bought"]["external_number_sid"] == PN
+        assert [m for m in errors_logged if "phone_number_bought_untracked" in m]
+
     def test_buys_on_the_account_the_body_names(self, admin) -> None:
         accounts: list[str] = []
 
@@ -432,7 +512,7 @@ def telnyx_account(monkeypatch) -> list[Any]:
 
     async def account_for_project(session, project_id, settings):
         asked.append(project_id)
-        return TelnyxAccount("PROJECT_KEY", "pub")
+        return TelnyxAccount("PROJECT_KEY", "pub", shared=False)
 
     monkeypatch.setattr(ACCOUNTS, account_for_project)
     return asked
@@ -520,7 +600,7 @@ class TestTelnyxSearch:
         from turncall.services.telnyx_accounts import TelnyxAccount
 
         async def none(session, project_id, settings):
-            return TelnyxAccount("", "")
+            return TelnyxAccount("", "", shared=False)
 
         monkeypatch.setattr(ACCOUNTS, none)
         r = admin.get(
@@ -546,6 +626,53 @@ class TestTelnyxSearch:
             )
         assert r.status_code == (502 if status == 500 else 422)
         assert r.json()["code"] == code
+
+
+class TestTelnyxUnanswered:
+    """Telnyx not answering (a timeout, a dropped connection) is Telnyx's
+    error, 502 `telnyx_error`, not a 500."""
+
+    def test_a_search_is_a_502(self, admin, telnyx_account) -> None:
+        with patch(
+            f"{TELNYX}.search_numbers",
+            AsyncMock(side_effect=httpx.ReadTimeout("slow")),
+        ):
+            r = admin.get(
+                "/v1/phone-numbers/available", headers=H, params={"carrier": "telnyx"}
+            )
+        assert r.status_code == 502, r.text
+        assert r.json()["code"] == "telnyx_error"
+
+    def test_an_order_is_a_502_saying_it_may_have_been_placed(
+        self, admin, telnyx_account, errors_logged
+    ) -> None:
+        with (
+            patch(f"{REPO}.get_by_e164", AsyncMock(return_value=None)),
+            patch(
+                f"{TELNYX}.buy_number",
+                AsyncMock(side_effect=httpx.ReadTimeout("slow")),
+            ),
+            patch(
+                "turncall.storage.repositories.purchased_number_repo.record",
+                AsyncMock(),
+            ) as record,
+        ):
+            r = admin.post(
+                "/v1/phone-numbers/purchase",
+                headers=H,
+                json={"carrier": "telnyx", "e164_number": E164},
+            )
+
+        assert r.status_code == 502, r.text
+        body = r.json()
+        assert body["code"] == "telnyx_error"
+        assert "may have been placed" in body["error"]
+        record.assert_not_awaited()
+        assert AUDIT_HEADER not in r.headers
+        [logged] = [m for m in errors_logged if "telnyx_number_order_unanswered" in m]
+        assert E164 in logged
+        assert str(telnyx_account[0]) in logged  # the project
+        assert "ReadTimeout" in logged
 
 
 class TestTelnyxBuy:

@@ -92,7 +92,8 @@ class TestSearch:
         assert request["method"] == "GET"
         assert request["path"] == f"{API}/AvailablePhoneNumbers/US/Local.json"
         assert request["params"] == {
-            "AreaCode": 312,
+            # A string: an area code's leading zero is a digit.
+            "AreaCode": "312",
             "Contains": "555",
             "VoiceEnabled": "true",
             "PageSize": 5,
@@ -126,6 +127,14 @@ class TestSearch:
         assert request["path"] == f"{API}/AvailablePhoneNumbers/GB/{resource}.json"
         # No filter but voice: what is unset is not sent.
         assert set(request["params"]) == {"VoiceEnabled", "PageSize"}
+
+    async def test_an_area_codes_leading_zero_is_kept(self) -> None:
+        http = FakeTwilioHttp((200, _page("available_phone_numbers")))
+
+        await _adapter(http).search_numbers("GB", area_code="020")
+
+        [request] = http.requests
+        assert request["params"]["AreaCode"] == "020"
 
     async def test_a_type_twilio_does_not_sell_there_raises(self) -> None:
         http = FakeTwilioHttp((404, {"code": 20404, "message": "Not Found"}))
@@ -195,6 +204,38 @@ class TestFindNumberSid:
         assert request["method"] == "GET"
         assert request["path"] == f"{API}/IncomingPhoneNumbers.json"
         assert request["params"]["PhoneNumber"] == "+13125550100"
+
+    async def test_a_longer_number_containing_it_is_not_it(self) -> None:
+        """Twilio's PhoneNumber filter matches partially: a number on the
+        account that merely contains the one asked for is not that number,
+        so a release or a bind never acts on it."""
+        longer = {"sid": "PN" + "c" * 32, "phone_number": "+4413125550100"}
+        http = FakeTwilioHttp((200, _page("incoming_phone_numbers", longer)))
+
+        assert await _adapter(http).find_number_sid("+13125550100") is None
+
+    async def test_the_exact_number_is_picked_out_of_partial_matches(self) -> None:
+        longer = {"sid": "PN" + "c" * 32, "phone_number": "+4413125550100"}
+        owned = {"sid": "PN" + "b" * 32, "phone_number": "+13125550100"}
+        http = FakeTwilioHttp(
+            (200, _page("incoming_phone_numbers", longer, owned)),
+        )
+
+        assert await _adapter(http).find_number_sid("+13125550100") == owned["sid"]
+
+    async def test_the_exact_number_is_looked_for_past_the_first_page(self) -> None:
+        longer = {"sid": "PN" + "c" * 32, "phone_number": "+4413125550100"}
+        owned = {"sid": "PN" + "b" * 32, "phone_number": "+13125550100"}
+        first = {
+            **_page("incoming_phone_numbers", longer),
+            "next_page_uri": f"{API}/IncomingPhoneNumbers.json?Page=1",
+        }
+        http = FakeTwilioHttp(
+            (200, first), (200, _page("incoming_phone_numbers", owned))
+        )
+
+        assert await _adapter(http).find_number_sid("+13125550100") == owned["sid"]
+        assert len(http.requests) == 2
 
     async def test_a_number_the_account_does_not_own_is_none(self) -> None:
         http = FakeTwilioHttp((200, _page("incoming_phone_numbers")))
