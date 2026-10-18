@@ -120,7 +120,7 @@ and nothing that signs or calls out changed. The no-key rule is the one under
 "Encryption": a write holding one of these secrets fails closed
 (`credential_key_unavailable`), a write holding none needs no key, and the
 startup check samples the sealed columns too. The `seal_secrets_at_rest`
-migration sealed the rows that existed. It is protection for a dump or backup
+migration (`e6c2a8f4b0d9`) sealed the rows that existed. It is protection for a dump or backup
 taken without the key, not against one taken with it, and call data stays
 unencrypted.
 

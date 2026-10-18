@@ -730,7 +730,7 @@ and is not part of this repository's history.
   what is stored cannot be read with it. This protects a dump on its own: a
   dump *and* the key still read every one of them, and call data
   (recordings, transcripts, events, analysis, the call record) is stored as
-  it was. The `seal_secrets_at_rest` migration encrypts existing rows in one
+  it was. The `seal_secrets_at_rest` migration (`e6c2a8f4b0d9`) encrypts existing rows in one
   transaction, and refuses to run without the key when any exist. See the
   upgrade notes.
 
@@ -1108,7 +1108,7 @@ and is not part of this repository's history.
 - **Set `CREDENTIAL_ENCRYPTION_KEY` before upgrading a database that holds
   any secret** (#338): a webhook subscription, a number with a `server_url`,
   an agent with a secret in its config, or one in an inline config on a
-  call, SMS session, eval run or scenario. The `seal_secrets_at_rest` migration
+  call, SMS session, eval run or scenario. The `seal_secrets_at_rest` migration (`e6c2a8f4b0d9`)
   encrypts them under it, and without it refuses to run and changes
   nothing. A deployment that stores project credentials has it set already.
   From then on the key is also needed to create a webhook subscription, give

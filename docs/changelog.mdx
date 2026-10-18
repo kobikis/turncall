@@ -8,7 +8,7 @@ description: "Latest updates and improvements to TurnCall"
 ## ⚠️ Upgrade notes
 
 **Set `CREDENTIAL_ENCRYPTION_KEY` before upgrading a database that holds a
-secret.** The `seal_secrets_at_rest` migration encrypts webhook subscriptions'
+secret.** The `seal_secrets_at_rest` migration (`e6c2a8f4b0d9`) encrypts webhook subscriptions'
 signing secrets, numbers' `server_url_secret` and the secrets in agent configs
 under it, and without it refuses to run and changes nothing. A deployment that
 stores project credentials has it set already. From then on, creating a webhook
