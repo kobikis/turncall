@@ -1,6 +1,30 @@
 # syntax=docker/dockerfile:1
-# ---- builder: compile deps into a venv, kept out of the final image ----
-FROM python:3.12-slim AS builder
+# Three build stages, so a change reaches only the layers it has to:
+#   requirements  pyproject.toml's production dependencies, as a requirements
+#                 file; dev tools and tool settings leave it unchanged
+#   deps          a venv holding those dependencies, rebuilt only when the
+#                 requirements file changes
+#   wheel         TurnCall itself, built from src/, installed last in runtime
+# CI keeps every layer in the GitHub Actions cache (cache-to mode=max), so a
+# code change rebuilds the wheel and one small layer, not the 2GB venv.
+
+# ---- requirements ----
+FROM python:3.12-slim AS requirements
+
+# Optional extras for this build. The eval worker passes `evals-audio` (Kokoro
+# speaks the caller, Moonshine transcribes the bot for the judge, ~66MB); the
+# API image takes none, since nothing on the call path ever loads them.
+ARG INSTALL_EXTRAS=""
+
+COPY pyproject.toml ./
+RUN python -c 'import sys, tomllib; \
+p = tomllib.load(open("pyproject.toml", "rb"))["project"]; \
+extras = [e for e in sys.argv[1].split(",") if e]; \
+print("\n".join(p["dependencies"] + [d for e in extras for d in p["optional-dependencies"][e]]))' \
+        "$INSTALL_EXTRAS" > /requirements.txt
+
+# ---- deps: compile the dependencies into a venv, kept out of the final image ----
+FROM python:3.12-slim AS deps
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1
@@ -22,28 +46,22 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio
 
-# Optional extras for this build. The eval worker passes `evals-audio` (Kokoro
-# speaks the caller, Moonshine transcribes the bot for the judge, ~66MB); the
-# API image takes none, since nothing on the call path ever loads them.
-ARG INSTALL_EXTRAS=""
-
-# The dependencies first, read from pyproject.toml alone, then the package with
-# --no-deps: a change to src/ reuses the dependency layer instead of reinstalling
-# the whole pipecat/ML stack. The BuildKit pip cache mount doesn't survive
-# between CI runners; the layer does, in the GitHub Actions cache. Prod deps
+# Keyed on the requirements file's content, not pyproject.toml's: a new dev
+# dependency or a ruff setting no longer reinstalls the stack. The BuildKit pip
+# cache mount doesn't survive between CI runners; this layer does. Prod deps
 # only — no [dev].
-COPY pyproject.toml ./
+COPY --from=requirements /requirements.txt /tmp/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -c 'import sys, tomllib; \
-p = tomllib.load(open("pyproject.toml", "rb"))["project"]; \
-extras = [e for e in sys.argv[1].split(",") if e]; \
-print("\n".join(p["dependencies"] + [d for e in extras for d in p["optional-dependencies"][e]]))' \
-        "$INSTALL_EXTRAS" > /tmp/requirements.txt \
-    && pip install -r /tmp/requirements.txt
+    pip install -r /tmp/requirements.txt
+
+# ---- wheel: TurnCall itself ----
+FROM python:3.12-slim AS wheel
 
 # hatchling builds the wheel from src/, so both must be present.
+COPY pyproject.toml ./
 COPY src/ src/
-RUN --mount=type=cache,target=/root/.cache/pip pip install --no-deps .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip wheel --disable-pip-version-check --no-deps --wheel-dir /wheels .
 
 # No NLTK step. Pipecat's TTS sentence splitting used NLTK and needed its
 # `punkt_tab` data baked in, or the runtime hit "Resource punkt_tab not found"
@@ -92,11 +110,17 @@ RUN useradd --create-home --uid 10001 app \
     && mkdir -p /app/storage /home/app/.cache \
     && chown -R app:app /app /home/app/.cache
 
-COPY --from=builder --chown=app:app /opt/venv /opt/venv
+COPY --from=deps --chown=app:app /opt/venv /opt/venv
 COPY --chown=app:app alembic/ alembic/
 COPY --chown=app:app alembic.ini ./
 
 USER app
+
+# TurnCall last, on top of the dependencies: a code change adds this small
+# layer and leaves the venv layer above as it was. The wheel is bind-mounted,
+# so it never lands in the image.
+RUN --mount=type=bind,from=wheel,source=/wheels,target=/tmp/wheels \
+    pip install --disable-pip-version-check --no-cache-dir --no-deps /tmp/wheels/*.whl
 
 EXPOSE 8090
 
