@@ -119,6 +119,15 @@ class TestSeal:
         """A row from before the migration, or a test fake."""
         assert unseal(SECRET, _settings()) == SECRET
 
+    def test_one_cipher_per_key(self, keyed) -> None:
+        """Built once per key, not per value; a bad key still fails each time."""
+        assert sealing.fernet(keyed) is sealing.fernet(keyed)
+        other = _settings(Fernet.generate_key().decode())
+        assert sealing.fernet(other) is not sealing.fernet(keyed)
+        for _ in range(2):
+            with pytest.raises(CredentialKeyError, match="not a valid Fernet key"):
+                sealing.fernet(_settings("not-a-key"))
+
     def test_credential_repo_keeps_the_error(self) -> None:
         """Callers catch `credential_repo.CredentialKeyError`; it is this one."""
         assert credential_repo.CredentialKeyError is CredentialKeyError

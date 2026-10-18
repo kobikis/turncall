@@ -26,6 +26,7 @@ caller wrapped in SQLAlchemy's StatementError, with this one as `.orig`.
 """
 
 from collections.abc import Callable
+from functools import lru_cache
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -58,6 +59,14 @@ def fernet(settings: Settings | None = None) -> Fernet:
             'print(Fernet.generate_key().decode())"` and set it once — '
             "rotating it orphans every stored secret."
         )
+    return _cipher(key)
+
+
+@lru_cache(maxsize=4)
+def _cipher(key: str) -> Fernet:
+    """One Fernet per key, not one per value sealed or opened: a config holds
+    a dozen secrets, and a page of calls a config each. A malformed key raises
+    each time it is asked for; lru_cache keeps no exception."""
     try:
         return Fernet(key.encode())
     except ValueError as exc:

@@ -28,16 +28,15 @@ from turncall.storage.sealing import CredentialKeyError as CredentialKeyError
 
 # The key, its error and the cipher live with the rest of what the key seals
 # (#338); every `credential_repo.CredentialKeyError` keeps working through here.
-_fernet = fernet
 
 
 def encrypt(document: dict[str, Any], settings: Settings) -> str:
-    return _fernet(settings).encrypt(json.dumps(document).encode()).decode()
+    return fernet(settings).encrypt(json.dumps(document).encode()).decode()
 
 
 def decrypt(token: str, settings: Settings) -> dict[str, Any]:
     try:
-        return dict(json.loads(_fernet(settings).decrypt(token.encode())))
+        return dict(json.loads(fernet(settings).decrypt(token.encode())))
     except InvalidToken as exc:
         raise CredentialKeyError(
             "A project credential cannot be decrypted with the configured "
@@ -162,7 +161,7 @@ async def ensure_readable(session: AsyncSession, settings: Settings) -> None:
     so the check sees what is stored whether or not the column unseals.
     """
     if settings.credentials.encryption_key:
-        _fernet(settings)  # malformed is an error whether or not rows exist
+        fernet(settings)  # malformed is an error whether or not rows exist
     # Phone numbers' own Twilio tokens are sealed with the same key.
     for column in (
         ProjectCredentialRow.ciphertext,
