@@ -469,8 +469,10 @@ curl -X DELETE http://localhost:8090/v1/credentials/deepgram -H "Authorization: 
 
 Deleting a credential is idempotent and returns the project to the platform key.
 An `aws` project credential is **not** gated by `AWS_AGENT_CREDENTIALS_ENABLED`
-— that flag governs static keys inside agent config only, because those are
-the ones stored unencrypted.
+— that flag governs static keys inside agent config only. Those are encrypted at
+rest too, under the same `CREDENTIAL_ENCRYPTION_KEY`, but they are long-lived and
+kept with every agent version that carries them rather than once per project, so
+they stay opt-in.
 
 `GET /v1/providers` lists the valid providers per role and, per account, two
 separate signals: `platform_key` (the environment has one) and

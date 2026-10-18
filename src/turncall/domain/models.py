@@ -308,8 +308,8 @@ class AWSConfig(DomainModel):
 
     region: str | None = None  # None → settings.aws.region (AWS_REGION)
     # Static keys are the deliberate escape hatch, gated at the API boundary by
-    # AWS_AGENT_CREDENTIALS_ENABLED: they land in config_blob, which is
-    # unencrypted JSONB.
+    # AWS_AGENT_CREDENTIALS_ENABLED: they are long-lived, and land in
+    # config_blob (encrypted at rest under CREDENTIAL_ENCRYPTION_KEY, #338).
     access_key_id: str | None = None
     secret_access_key: str | None = None
     session_token: str | None = None

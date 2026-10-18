@@ -168,13 +168,15 @@ class TavusSettings(BaseSettings):
 
 
 class CredentialSettings(BaseSettings):
-    """Project credentials at rest (ADR-0020)."""
+    """Secrets at rest: project credentials (ADR-0020) and, since #338, every
+    other secret TurnCall stores (signing secrets, agent config secrets)."""
 
     model_config = SettingsConfigDict(env_prefix="")
 
     # Fernet key. Set once and never rotate: rotating orphans every stored
-    # credential. Unset while credentials exist is a startup error, never a
-    # silent fall back to plaintext.
+    # secret. Unset while encrypted values exist is a startup error, and a
+    # write holding a secret without it fails closed, never a silent fall back
+    # to plaintext.
     encryption_key: str = Field(default="", alias="CREDENTIAL_ENCRYPTION_KEY")
 
 
@@ -229,8 +231,9 @@ class AWSSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="")
 
     region: str = Field(default="us-east-1", alias="AWS_REGION")
-    # Per-agent *static* AWS keys are persisted in config_blob (unencrypted
-    # JSONB) and are long-lived by construction, so operators opt in
+    # Per-agent *static* AWS keys are persisted in config_blob, encrypted at
+    # rest under CREDENTIAL_ENCRYPTION_KEY (#338), but long-lived by
+    # construction and kept with every agent version, so operators opt in
     # deliberately. Agents supplying them are rejected at create when off.
     # Governs AGENT CONFIG ONLY: a project credential (ADR-0020) is encrypted
     # and outside that surface, so false does not mean "no static AWS keys on
