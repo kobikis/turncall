@@ -560,7 +560,12 @@ async def test_post_call_triggered_on_another_replica_runs_in_the_calls_process(
         await call.wait_for_agent_speech(1)
         await call.say(400)
         await call.wait_for_agent_speech(2)
-        ended_there = await other.post(f"/v1/calls/{call.call_id}/end", json={})
+        # The other replica started before redaction was on, so its first
+        # redaction (the end's event) loads the detector: 2-12 s, longer on
+        # a loaded CI runner than the client's 10 s default.
+        ended_there = await other.post(
+            f"/v1/calls/{call.call_id}/end", json={}, timeout=60
+        )
         await call.close_stream()
         await call.finish()
         ended = await _all_call_ended(app)

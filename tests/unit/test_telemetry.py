@@ -83,10 +83,19 @@ def test_tracing_prod_without_endpoint_self_disables():
 
 
 def test_tracing_dev_without_endpoint_uses_console():
-    assert (
-        telemetry.init_tracing(enabled=True, service_name="t", is_production=False)
-        is True
-    )
+    from opentelemetry import trace
+
+    try:
+        assert (
+            telemetry.init_tracing(enabled=True, service_name="t", is_production=False)
+            is True
+        )
+    finally:
+        # The provider is global, and its console exporter writes to this
+        # test's captured stdout: left running, its batch thread exported the
+        # worker's later spans into that closed stream ("Exception while
+        # exporting Span": I/O operation on closed file) as the run exited.
+        trace.get_tracer_provider().shutdown()
 
 
 async def test_a_calls_spans_carry_no_numbers_by_default(monkeypatch):
