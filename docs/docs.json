@@ -42,6 +42,8 @@
                 "group": "Connect a channel",
                 "pages": [
                   "guides/phone-numbers",
+                  "guides/sip-asterisk",
+                  "guides/sip-trunking",
                   "guides/webrtc",
                   "guides/whatsapp",
                   "guides/sms-chat",

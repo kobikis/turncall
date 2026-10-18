@@ -1,0 +1,117 @@
+---
+title: SIP Trunk through Twilio or Telnyx
+description: "Reach an agent from your phone system over a Twilio or Telnyx elastic SIP trunk"
+icon: "network-wired"
+---
+
+TurnCall has no SIP endpoint of its own: it does not accept SIP or RTP. A phone
+system with an elastic SIP trunk on Twilio or Telnyx reaches an agent by
+dialling a number TurnCall already routes. The carrier takes the SIP call off
+your trunk and delivers it to that number like any other call, and TurnCall
+answers it over the carrier's media stream.
+
+```text
+your PBX ── SIP trunk ──▶ Twilio / Telnyx ──▶ number bound in TurnCall ── media stream ──▶ TurnCall
+```
+
+This works from any system that can send a call over the trunk: a PBX, a
+contact-centre platform, an SBC. If you run Asterisk and want no cloud carrier
+in the call, see [SIP trunk through Asterisk](/guides/sip-asterisk).
+
+## TurnCall side
+
+**Bind a Twilio or Telnyx number to the agent**, exactly as in
+[Phone Numbers](/guides/phone-numbers). On Twilio:
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "external_number_sid": "PNxxxxxxxx",
+    "e164_number": "+15551234567",
+    "routing_target_type": "agent",
+    "routing_target_id": "AGENT_UUID"
+  }'
+```
+
+On Telnyx, add `"carrier": "telnyx"` (`external_number_sid` is then optional).
+Binding points the number at TurnCall when `PUBLIC_BASE_URL` is set;
+`webhooks_configured` in the response says whether it did.
+
+The number must route to TurnCall, not to your trunk:
+
+- **Twilio**: a number associated with an Elastic SIP Trunk ignores its voice
+  URL; Twilio sends its calls to the trunk. Binding sets the voice URL but
+  does not take the number off a trunk. Use a number that is on no trunk, or
+  remove it from the trunk (the trunk's **Numbers** list in the Twilio
+  Console) before you bind it.
+- **Telnyx**: a number belongs to one connection. Binding moves it onto
+  TurnCall's Call Control application, so it stops ringing on your SIP
+  Connection. Use a number your phone system does not answer itself.
+
+## Carrier side
+
+Your trunk needs to carry calls out of your phone system (termination). If it
+already dials the public network, there is nothing to change.
+
+### Twilio
+
+In the Twilio Console, under **Elastic SIP Trunking > Trunks**, create a trunk
+and set up **Termination**:
+
+- **Termination SIP URI**: the address your phone system sends calls to,
+  `<name>.pstn.twilio.com`.
+- **Authentication**: a Credential List (digest username and password), an IP
+  Access Control List of your phone system's addresses, or both. Twilio
+  recommends credentials: an IP list alone does not protect against some
+  attacks.
+
+Twilio's requirements for each call your phone system sends:
+
+- **The dialled number in E.164, with the `+`**: `+15551234567`.
+- **A caller ID that is one of your Twilio numbers or a verified caller ID**
+  on the account.
+
+See Twilio's [Elastic SIP Trunking](https://www.twilio.com/docs/sip-trunking)
+docs for the full setup.
+
+### Telnyx
+
+In Mission Control, create a SIP Connection:
+
+- **Authentication**: credentials (your phone system authenticates to
+  `sip.telnyx.com` with the connection's username and password), or your
+  phone system's IP addresses or FQDN.
+- **An Outbound Voice Profile** assigned to the connection. Telnyx requires one
+  for outbound calls.
+
+Dial the number in E.164, with the `+`, as Telnyx's own PBX guides do. See
+Telnyx's
+[SIP trunking](https://developers.telnyx.com/docs/voice/sip-trunking/quickstart)
+docs for the full setup.
+
+## Phone system side
+
+Route a call to the agent by dialling the bound number over the trunk: an
+outbound route, a speed dial, a queue overflow, or a transfer of a live call.
+In an Asterisk dialplan, with the trunk endpoint named `twilio`:
+
+```ini
+; extensions.conf
+[from-internal]
+exten => 7000,1,Dial(PJSIP/+15551234567@twilio)   ; extension 7000 reaches the agent
+```
+
+## What the agent sees
+
+- **`to_number`** is the bound number.
+- **`from_number`** is the caller ID your phone system sent on the trunk. On
+  Twilio that is one of your numbers or a verified caller ID, so a caller your
+  phone system forwards arrives with that caller ID, not their own.
+
+Everything else is as on any Twilio or Telnyx number: routing to an agent or
+a [Call Init](/guides/call-init) webhook, recording, transfers, DTMF, and
+outbound calls from the number. A transfer dials a phone number through the
+carrier; to send a caller back into your phone system, transfer to a number
+that rings there.

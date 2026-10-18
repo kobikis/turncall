@@ -6,6 +6,10 @@ icon: "phone"
 
 Phone numbers connect your Twilio, Telnyx and Asterisk numbers to TurnCall agents. Each number can route to a specific agent or to a webhook for dynamic routing.
 
+TurnCall has no native SIP endpoint: it does not accept SIP or RTP itself. A
+SIP trunk reaches an agent through your Asterisk or a Twilio or Telnyx
+number; see [SIP trunks](#sip-trunks).
+
 A number's `carrier` — the telephony company it belongs to — is `twilio`, the
 default, `telnyx` (see [Telnyx numbers](#telnyx-numbers)), or `asterisk` for a
 PBX of your own (see [Asterisk numbers](#asterisk-numbers)), and is fixed once
@@ -252,6 +256,18 @@ differs:
 A deployment can also serve one Asterisk for every project from the
 environment (`ASTERISK_ARI_URL`, `ASTERISK_ARI_USERNAME`,
 `ASTERISK_ARI_PASSWORD`); a project with its own credential uses its own.
+
+## SIP trunks
+
+TurnCall has no native SIP endpoint, so a SIP trunk is never pointed at
+TurnCall directly. It reaches an agent in one of two ways:
+
+- **[Through Asterisk](/guides/sip-asterisk).** The trunk lands on your
+  Asterisk, which hands each call to TurnCall over ARI. No cloud carrier sits
+  between your PBX and TurnCall.
+- **[Through Twilio or Telnyx](/guides/sip-trunking).** Your phone system
+  sends the call over a Twilio or Telnyx elastic SIP trunk to a number bound
+  here, and the carrier delivers it to TurnCall like any other call.
 
 ## SMS Support
 

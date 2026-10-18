@@ -14,6 +14,13 @@ certification, and the page says so. See [Compliance](/guides/compliance).
 [Server Events](/guides/server-events#redaction) now describes what redaction
 does to webhook payloads.
 
+**SIP trunk guides.** TurnCall has no SIP endpoint of its own; a SIP trunk
+reaches an agent through your Asterisk over ARI, or over a Twilio or Telnyx
+elastic SIP trunk onto a number TurnCall routes. Each path has a guide with
+the carrier's side and TurnCall's: [SIP trunk through
+Asterisk](/guides/sip-asterisk) and [SIP trunk through Twilio or
+Telnyx](/guides/sip-trunking).
+
 **Audit log.** Every change made through the API to a project's agents,
 credentials, phone numbers, API keys and settings is recorded: which API key
 made it, what it did, and what changed, with secrets never recorded. Admin

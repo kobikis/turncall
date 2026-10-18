@@ -873,6 +873,18 @@ and is not part of this repository's history.
 
 ### Documentation
 
+- **SIP trunk guides** (#322, ADR-0025). TurnCall has no SIP endpoint of its
+  own, and the Phone Numbers guide now says so and links two guides for the
+  ways a SIP trunk reaches an agent. *SIP trunk through Asterisk*: the
+  carrier's side (the dialled number in the request, `+E.164` or `E.164` but
+  not national unless mapped in the dialplan; continuous audio), the trunk's
+  context and `Stasis` dialplan, ARI and `websocket_client.conf`, then the
+  `asterisk` credential and binding. *SIP trunk through Twilio or Telnyx*: a
+  number bound in TurnCall, dialled from the phone system over a Twilio
+  Elastic SIP Trunk or a Telnyx SIP Connection, with each carrier's
+  termination setup and its warning that a Twilio number still on a trunk
+  ignores the voice URL binding sets, and that binding a Telnyx number takes
+  it off its SIP Connection.
 - **A compliance mapping** (#318, ADR-0024): the Compliance guide maps
   redaction, caller numbers off spans, retention, recordings, the audit log,
   self-hosting, encrypted project credentials and signed webhooks to GDPR
