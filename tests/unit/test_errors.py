@@ -1,7 +1,5 @@
 """Tests for error handling framework."""
 
-from types import SimpleNamespace
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -95,15 +93,3 @@ class TestCredentialKeyUnavailable:
         r = client.get("/other")
         assert r.status_code == 500
         assert r.json()["code"] == ErrorCode.INTERNAL_ERROR
-
-
-@pytest.mark.unit
-def test_startup_warns_without_the_key() -> None:
-    from turncall.app import _warn_if_no_encryption_key
-
-    def with_key(key: str) -> SimpleNamespace:
-        return SimpleNamespace(credentials=SimpleNamespace(encryption_key=key))
-
-    warning = _warn_if_no_encryption_key(with_key(""))  # type: ignore[arg-type]
-    assert warning is not None and "CREDENTIAL_ENCRYPTION_KEY" in warning
-    assert _warn_if_no_encryption_key(with_key("k")) is None  # type: ignore[arg-type]

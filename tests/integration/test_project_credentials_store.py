@@ -204,3 +204,98 @@ async def test_startup_check_opens_the_secrets_sealed_at_rest(factory, settings)
         with pytest.raises(credential_repo.CredentialKeyError, match="rotated"):
             await credential_repo.ensure_readable(session, other)
         await credential_repo.ensure_readable(session, settings)
+
+
+async def _only_what_the_test_adds(session) -> None:
+    """Blank every stored secret, in this transaction only: the startup check
+    then sees just the rows the test writes, not what other tests left. The
+    caller rolls it back."""
+    for sql in (
+        "DELETE FROM project_credentials",
+        "UPDATE phone_numbers SET twilio_auth_token_ciphertext = NULL,"
+        " server_url_secret = NULL",
+        "UPDATE webhook_subscriptions SET secret = 'plain'",
+        "UPDATE agents SET config_blob = '{}'",
+        "UPDATE calls SET metadata_json = '{}'",
+        "UPDATE sms_sessions SET metadata_json = '{}'",
+        "UPDATE eval_runs SET target = '{}'",
+        "UPDATE eval_scenarios SET default_target = NULL",
+    ):
+        await session.execute(text(sql))
+
+
+def _other_key() -> SimpleNamespace:
+    return SimpleNamespace(
+        credentials=SimpleNamespace(encryption_key=Fernet.generate_key().decode())
+    )
+
+
+@pytest.mark.parametrize("table", ["calls", "sms_sessions", "eval_scenarios"])
+async def test_startup_check_opens_an_inline_config_alone(factory, table):
+    """A database whose only sealed secrets are inline configs — a call's or a
+    session's call-init answer, an eval target — still fails closed on them."""
+    pid = await _project(factory)
+    sealed_under = _other_key()
+    config = map_secrets(
+        {"llm": {"provider": "openai", "api_key": "sk-x"}},
+        lambda v: seal(v, sealed_under),
+    )
+    insert = {
+        "calls": "INSERT INTO calls (id, project_id, provider, direction, status,"
+        " recording_status, metadata_json, created_at) VALUES (:id, :pid,"
+        " 'twilio', 'inbound', 'completed', 'none', CAST(:doc AS jsonb), now())",
+        "sms_sessions": "INSERT INTO sms_sessions (id, project_id,"
+        " customer_number, turncall_number, expires_at, metadata_json) VALUES"
+        " (:id, :pid, '+15550199', '+15550100', now(), CAST(:doc AS jsonb))",
+        "eval_scenarios": "INSERT INTO eval_scenarios (id, project_id, name, kind,"
+        " definition, schema_version, default_target, created_at, updated_at)"
+        " VALUES (:id, :pid, 'greets', 'script', '{}', '1', CAST(:doc AS jsonb),"
+        " now(), now())",
+    }[table]
+    document = (
+        {"type": "inline", "agent": config}
+        if table == "eval_scenarios"
+        else {"dynamic_config": config, "caller": "+15550199"}
+    )
+    async with factory() as session:
+        await _only_what_the_test_adds(session)
+        await session.execute(
+            text(insert), {"id": uuid.uuid4(), "pid": pid, "doc": json.dumps(document)}
+        )
+        with pytest.raises(credential_repo.CredentialKeyError, match="rotated"):
+            await credential_repo.ensure_readable(session, _other_key())
+        await credential_repo.ensure_readable(session, sealed_under)
+        await session.rollback()
+
+
+async def test_startup_check_looks_past_a_prompt_that_mentions_the_prefix(factory):
+    """The first agent matching `"tcs1:` has it only in its prompt; the check
+    walks on to one whose secret really is sealed."""
+    pid = await _project(factory)
+    sealed_under = _other_key()
+    prompt = {"system_prompt": 'reply with "tcs1:" first', "llm": {"model": "x"}}
+    sealed = map_secrets(
+        {"llm": {"provider": "openai", "api_key": "sk-x"}},
+        lambda v: seal(v, sealed_under),
+    )
+    insert = text(
+        "INSERT INTO agents (id, project_id, name, environment, version, state,"
+        " config_blob, created_at) VALUES (:id, :pid, :name, 'development', 1,"
+        " 'draft', CAST(:config AS jsonb), now())"
+    )
+    unset = SimpleNamespace(credentials=SimpleNamespace(encryption_key=""))
+    async with factory() as session:
+        await _only_what_the_test_adds(session)
+        await session.execute(
+            insert,
+            {"id": uuid.uuid4(), "pid": pid, "name": "p", "config": json.dumps(prompt)},
+        )
+        await credential_repo.ensure_readable(session, unset)  # no secret: no key
+        await session.execute(
+            insert,
+            {"id": uuid.uuid4(), "pid": pid, "name": "s", "config": json.dumps(sealed)},
+        )
+        with pytest.raises(credential_repo.CredentialKeyError):
+            await credential_repo.ensure_readable(session, unset)
+        await credential_repo.ensure_readable(session, sealed_under)
+        await session.rollback()
