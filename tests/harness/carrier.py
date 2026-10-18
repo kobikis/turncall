@@ -5,8 +5,9 @@ TurnCall talks to a carrier in two directions. Outbound it makes REST calls
 `TelephonyAdapter`; inbound the carrier posts webhooks and opens a media
 stream. `FakeCarrier` is the first half — every REST action lands in
 `actions` instead of on the network — plus the state the second half needs:
-the numbers it owns and the URLs TurnCall configured on them. The inbound
-edge is per carrier format (`twilio.py`, `telnyx.py`).
+the numbers it owns and the URLs TurnCall configured on them, and the numbers
+it has for sale (`offer`: a search lists them, `buy_number` moves one onto the
+account). The inbound edge is per carrier format (`twilio.py`, `telnyx.py`).
 
 One fake stands in for every carrier: a Telnyx command lands in the same
 `actions` list as a Twilio one, under the same kind (`hang_up` is a hang-up on
@@ -32,7 +33,9 @@ from turncall.adapters.telephony.base import TelephonyAdapter
 class CarrierAction:
     """One REST request TurnCall made. `account_sid` is the account it used."""
 
-    kind: str  # dial | hang_up | transfer | send_dtmf | configure_number | configure_sms | ...
+    # dial | hang_up | transfer | send_dtmf | configure_number | configure_sms |
+    # buy_number | ...
+    kind: str
     account_sid: str
     params: dict[str, Any] = field(default_factory=dict)
 
@@ -49,6 +52,32 @@ class FakeNumber:
     # Telnyx: the Call Control application the number is on, which binding
     # it sets (#219); `voice_url` is then that application's webhook URL.
     connection_id: str = ""
+
+
+@dataclass(frozen=True)
+class OfferedNumber:
+    """A number the fake carrier has for sale, as a search finds it."""
+
+    e164: str
+    country: str = "US"
+    number_type: str = "local"
+    area_code: str = ""
+    locality: str = "Springfield"
+    region: str = "IL"
+
+    def matches(
+        self,
+        country: str,
+        number_type: str,
+        area_code: str | None,
+        contains: str | None,
+    ) -> bool:
+        return (
+            self.country == country
+            and self.number_type == number_type
+            and (not area_code or self.area_code == area_code)
+            and (not contains or contains in self.e164)
+        )
 
 
 class FakeCarrier:
@@ -72,6 +101,7 @@ class FakeCarrier:
         ).decode()
         self.actions: list[CarrierAction] = []
         self._numbers: dict[str, FakeNumber] = {}
+        self._for_sale: dict[str, OfferedNumber] = {}
         self._recorded = asyncio.Condition()
 
     # -- numbers ---------------------------------------------------------
@@ -87,6 +117,25 @@ class FakeCarrier:
 
     def _by_sid(self, sid: str) -> FakeNumber | None:
         return next((n for n in self._numbers.values() if n.sid == sid), None)
+
+    def offer(self, e164: str, **fields: Any) -> OfferedNumber:
+        """Put a number up for sale: a search can list it and a buy takes it.
+        A +1 number's area code is its next three digits unless given."""
+        if e164.startswith("+1"):
+            fields.setdefault("area_code", e164[2:5])
+        offered = OfferedNumber(e164=e164, **fields)
+        self._for_sale[e164] = offered
+        return offered
+
+    def for_sale(self) -> list[OfferedNumber]:
+        return list(self._for_sale.values())
+
+    def _sell(self, e164: str) -> FakeNumber | None:
+        """Move a number from the shelf onto the account; None if it is not
+        for sale (already sold, or never offered)."""
+        if self._for_sale.pop(e164, None) is None:
+            return None
+        return self.add_number(e164)
 
     # -- recording -------------------------------------------------------
 
@@ -232,6 +281,58 @@ class FakeTelephonyAdapter(TelephonyAdapter):
     async def find_number_sid(self, e164_number: str) -> str | None:
         number = self._carrier._numbers.get(e164_number)
         return number.sid if number else None
+
+    async def search_numbers(
+        self,
+        country: str,
+        *,
+        number_type: str = "local",
+        area_code: str | None = None,
+        contains: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """The numbers on sale matching the filters, as `TwilioAdapter`
+        returns them. A read: no action is recorded."""
+        found = [
+            n
+            for n in self._carrier.for_sale()
+            if n.matches(country, number_type, area_code, contains)
+        ]
+        return [
+            {
+                "e164_number": n.e164,
+                "friendly_name": n.e164,
+                "country": n.country,
+                "region": n.region,
+                "locality": n.locality,
+                "postal_code": None,
+                "number_type": n.number_type,
+                "capabilities": {"voice": True, "sms": True, "mms": False},
+            }
+            for n in found[:limit]
+        ]
+
+    async def buy_number(self, e164_number: str) -> dict[str, Any]:
+        """Buy a number on sale onto the account, recorded as `buy_number`.
+        One not on sale is refused as Twilio refuses it: a 400, code 21422."""
+        from twilio.base.exceptions import TwilioRestException
+
+        number = self._carrier._sell(e164_number)
+        if number is None:
+            raise TwilioRestException(
+                400,
+                "/IncomingPhoneNumbers.json",
+                msg=f"Phone number {e164_number} is not available",
+                code=21422,
+                method="POST",
+            )
+        await self._record("buy_number", e164=number.e164, number_sid=number.sid)
+        return {
+            "number_sid": number.sid,
+            "e164_number": number.e164,
+            "friendly_name": number.e164,
+            "status": "active",
+        }
 
     async def send_sms(self, from_number: str, to_number: str, body: str) -> str:
         message_sid = "SM" + secrets.token_hex(16)

@@ -180,7 +180,9 @@ class AuditResource(StrEnum):
 class AuditAction(StrEnum):
     """What was done to the resource. `archived` is an agent version a
     publish or rollback took out of service; `deleted` is an agent deleted
-    through the API (archived too, but asked for)."""
+    through the API (archived too, but asked for). `purchased` is a number
+    bought on a carrier account (ADR-0025): its entry's resource id is the
+    E.164 number, since a bought number has no binding yet."""
 
     CREATED = "created"
     UPDATED = "updated"
@@ -196,6 +198,7 @@ class AuditAction(StrEnum):
     LIMITS_SET = "limits_set"
     REDACTION_SET = "redaction_set"
     RETENTION_SET = "retention_set"
+    PURCHASED = "purchased"
 
 
 class AuditActor(StrEnum):

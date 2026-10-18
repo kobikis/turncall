@@ -7,9 +7,20 @@ from uuid import UUID
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from turncall.api.v1.schemas import E164_PATTERN
-from turncall.domain.carriers import ASTERISK, CARRIERS, DEFAULT_CARRIER, TELNYX, TWILIO
+from turncall.domain.carriers import (
+    ASTERISK,
+    CARRIERS,
+    DEFAULT_CARRIER,
+    NUMBER_TYPES,
+    PURCHASE_CARRIERS,
+    TELNYX,
+    TWILIO,
+)
 
 Carrier = Literal[CARRIERS]  # type: ignore[valid-type]
+# A carrier TurnCall searches and buys numbers on (ADR-0025).
+PurchaseCarrier = Literal[PURCHASE_CARRIERS]  # type: ignore[valid-type]
+NumberType = Literal[NUMBER_TYPES]  # type: ignore[valid-type]
 
 # `provider` is the column's name and the field's old spelling; "provider"
 # means an STT/LLM/TTS backend everywhere else in the API (ADR-0022).
@@ -217,3 +228,67 @@ class PhoneNumberResponse(BaseModel):
             else None,
             twilio_credentials="number" if own else "platform",
         )
+
+
+# --- search and buy (#319, ADR-0025) ---------------------------------------
+
+
+class NumberCapabilities(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    voice: bool
+    sms: bool
+    mms: bool
+
+
+class AvailableNumberResponse(BaseModel):
+    """A number a carrier account can buy. The same shape on every carrier;
+    what a carrier does not say is null."""
+
+    model_config = ConfigDict(frozen=True)
+
+    carrier: str
+    e164_number: str
+    friendly_name: str | None = None
+    country: str | None = None
+    region: str | None = None
+    locality: str | None = None
+    postal_code: str | None = None
+    number_type: str
+    capabilities: NumberCapabilities
+
+
+class BuyPhoneNumberRequest(TwilioAccountFields):
+    """Buy a number a search returned. On Twilio, the account it is bought on
+    is the pair given here, else the platform's TWILIO_* account; bind the
+    number with the same pair."""
+
+    carrier: PurchaseCarrier = Field(
+        default=DEFAULT_CARRIER,
+        description="The carrier whose account the number is bought on.",
+    )
+    e164_number: str = Field(..., pattern=E164_PATTERN)
+
+    @model_validator(mode="after")
+    def validate_account(self) -> "BuyPhoneNumberRequest":
+        if self.carrier != TWILIO:
+            only_on_twilio(self, self.carrier)
+        return self
+
+
+class PurchasedNumberResponse(BaseModel):
+    """A bought number, and what binding it needs: send `carrier`,
+    `e164_number` and `external_number_sid` to `POST /v1/phone-numbers`
+    (with the same Twilio pair, when `twilio_credentials` is "number").
+    `status` is "active" once the number can be bound."""
+
+    model_config = ConfigDict(frozen=True)
+
+    carrier: str
+    e164_number: str
+    external_number_sid: str | None
+    friendly_name: str | None = None
+    status: str = "active"
+    # Twilio only: the account it was bought on, null for the platform's.
+    twilio_account_sid: str | None = None
+    twilio_credentials: str | None = None  # "number" | "platform"; null off Twilio

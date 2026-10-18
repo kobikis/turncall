@@ -2354,6 +2354,254 @@
         }
       }
     },
+    "/v1/phone-numbers/available": {
+      "get": {
+        "tags": [
+          "phone-numbers"
+        ],
+        "summary": "Search Available Numbers",
+        "description": "Numbers the carrier account can buy, voice-capable. Admin only.",
+        "operationId": "search_available_numbers_v1_phone_numbers_available_get",
+        "parameters": [
+          {
+            "name": "carrier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "const": "twilio",
+              "type": "string",
+              "description": "The carrier account to search.",
+              "default": "twilio",
+              "title": "Carrier"
+            },
+            "description": "The carrier account to search."
+          },
+          {
+            "name": "country",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z]{2}$",
+              "description": "ISO 3166 country code.",
+              "default": "US",
+              "title": "Country"
+            },
+            "description": "ISO 3166 country code."
+          },
+          {
+            "name": "number_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "local",
+                "toll_free",
+                "mobile"
+              ],
+              "type": "string",
+              "default": "local",
+              "title": "Number Type"
+            }
+          },
+          {
+            "name": "area_code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9]{2,8}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Area Code"
+            }
+          },
+          {
+            "name": "contains",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9]{2,16}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Digits the number contains.",
+              "title": "Contains"
+            },
+            "description": "Digits the number contains."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "x-twilio-account-sid",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A Twilio account to search instead of the platform's; with X-Twilio-Auth-Token.",
+              "title": "X-Twilio-Account-Sid"
+            },
+            "description": "A Twilio account to search instead of the platform's; with X-Twilio-Auth-Token."
+          },
+          {
+            "name": "x-twilio-auth-token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "That account's Auth Token.",
+              "title": "X-Twilio-Auth-Token"
+            },
+            "description": "That account's Auth Token."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Search Available Numbers V1 Phone Numbers Available Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/phone-numbers/purchase": {
+      "post": {
+        "tags": [
+          "phone-numbers"
+        ],
+        "summary": "Buy Phone Number",
+        "description": "Buy a number onto the carrier account; bind it with\n`POST /v1/phone-numbers`. Admin only. Irreversible on the carrier side:\nthe number stays on the account (and is billed) until released.",
+        "operationId": "buy_phone_number_v1_phone_numbers_purchase_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BuyPhoneNumberRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Buy Phone Number V1 Phone Numbers Purchase Post"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/phone-numbers": {
       "post": {
         "tags": [
@@ -8155,10 +8403,11 @@
           "revoked",
           "limits_set",
           "redaction_set",
-          "retention_set"
+          "retention_set",
+          "purchased"
         ],
         "title": "AuditAction",
-        "description": "What was done to the resource. `archived` is an agent version a\npublish or rollback took out of service; `deleted` is an agent deleted\nthrough the API (archived too, but asked for)."
+        "description": "What was done to the resource. `archived` is an agent version a\npublish or rollback took out of service; `deleted` is an agent deleted\nthrough the API (archived too, but asked for). `purchased` is a number\nbought on a carrier account (ADR-0025): its entry's resource id is the\nE.164 number, since a bought number has no binding yet."
       },
       "AuditResource": {
         "type": "string",
@@ -8537,6 +8786,53 @@
         "type": "object",
         "title": "BriefingSummary",
         "description": "Briefing variant: auto-generate a summary from the transcript."
+      },
+      "BuyPhoneNumberRequest": {
+        "properties": {
+          "twilio_account_sid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^AC[0-9a-fA-F]{32}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Twilio Account Sid"
+          },
+          "twilio_auth_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Twilio Auth Token"
+          },
+          "carrier": {
+            "type": "string",
+            "const": "twilio",
+            "title": "Carrier",
+            "description": "The carrier whose account the number is bought on.",
+            "default": "twilio"
+          },
+          "e164_number": {
+            "type": "string",
+            "pattern": "^\\+[1-9]\\d{1,14}$",
+            "title": "E164 Number"
+          }
+        },
+        "type": "object",
+        "required": [
+          "e164_number"
+        ],
+        "title": "BuyPhoneNumberRequest",
+        "description": "Buy a number a search returned. On Twilio, the account it is bought on\nis the pair given here, else the platform's TWILIO_* account; bind the\nnumber with the same pair."
       },
       "CallingWindowRequest": {
         "properties": {
