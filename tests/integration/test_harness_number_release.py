@@ -6,8 +6,11 @@ while TurnCall binds the number (409) and without `confirm` repeating the
 number (422); developer and viewer keys cannot release at all. Unbinding is
 not releasing: it leaves the number on the account, where it can be bound
 again. Once released, the number is off the account: bind cannot find it and
-a search does not list it. Driven through Seam A (the real app, the fake
-carrier, whose `release_number` action is the release). The unit halves are
+a search does not list it. On the platform's shared account (Twilio without
+an account pair, Telnyx without the project's `telnyx` credential) only a
+number this project bought through the API is released (403 otherwise); the
+project's own account is not restricted. Driven through Seam A (the real app,
+the fake carrier, whose `release_number` action is the release). The unit halves are
 `tests/unit/test_phone_number_release.py` and the adapter tests in
 `test_twilio_number_purchase.py` / `test_telnyx_number_purchase.py`.
 """
@@ -16,9 +19,11 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 import pytest
 
 from tests.harness import HARNESS_AGENT, Harness, Script, run_app
+from tests.harness.app import PLATFORM_KEY
 
 pytestmark = pytest.mark.integration
 
@@ -149,11 +154,11 @@ async def test_refused_while_bound_and_released_after_unbind(
         app.carrier.account_sid if carrier == "twilio" else app.carrier.telnyx_api_key
     )
     assert release.account_sid == expected_account
-    # Gone from the account: neither a second release nor a bind finds it,
-    # and it is not back on sale.
+    # Gone from the account, and no longer the project's: a second release
+    # on the platform's account is refused before the carrier is asked, a
+    # bind does not find it, and it is not back on sale.
     assert not app.carrier.owns(e164)
-    assert again.status_code == 422, again.text
-    assert "not a phone number on" in again.json()["error"]
+    assert again.status_code == 403, again.text
     assert len(app.carrier.actions_of("release_number")) == 1
     assert rebound.status_code == 422, rebound.text
     assert "not a phone number on" in rebound.json()["error"]
@@ -247,3 +252,152 @@ async def test_unbinding_never_releases(monkeypatch, carrier: str) -> None:
     assert voice_url_after_unbind == ""
     assert rebound.status_code == 201, rebound.text
     assert app.carrier.number(e164).sid == number["external_number_sid"]
+
+
+# --- the platform's shared account -------------------------------------------
+
+
+async def _other_project(app: Harness) -> httpx.AsyncClient:
+    """An admin client of a second project, bootstrapped as the builder does."""
+    platform = {"X-Platform-Key": PLATFORM_KEY}
+    project = await app.api.post("/v1/projects", json={"name": "B"}, headers=platform)
+    assert project.status_code == 201, project.text
+    key = await app.api.post(
+        "/v1/api-keys",
+        params={"project_id": project.json()["data"]["id"]},
+        json={"name": "b", "role": "admin"},
+        headers=platform,
+    )
+    assert key.status_code == 201, key.text
+    token = key.json()["data"]["raw_key"]
+    return httpx.AsyncClient(
+        base_url=app.base_url, headers={"Authorization": f"Bearer {token}"}
+    )
+
+
+def _refused_as_not_bought(response: Any) -> None:
+    assert response.status_code == 403, response.text
+    body = response.json()
+    assert body["code"] == "forbidden"
+    assert body["details"] == {"account": "platform"}
+
+
+@pytest.mark.parametrize("carrier", CARRIERS)
+async def test_a_platform_number_the_project_did_not_buy_is_refused(
+    monkeypatch, carrier: str
+) -> None:
+    """A number on the platform's account that no purchase put there (the
+    operator's, bought by hand) is not this project's to release."""
+    e164 = "+13125550164"
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        app.carrier.add_number(e164)
+        log_before = await _log(app)
+        refused = await app.api.post(
+            "/v1/phone-numbers/release", json=_release(carrier, e164, confirm=e164)
+        )
+        log_after = await _log(app)
+
+    _refused_as_not_bought(refused)
+    assert app.carrier.actions_of("release_number") == []
+    assert app.carrier.owns(e164)
+    assert log_after == log_before
+
+
+@pytest.mark.parametrize("carrier", CARRIERS)
+async def test_another_projects_purchase_is_refused(monkeypatch, carrier: str) -> None:
+    e164 = "+13125550165"
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        await _buy(app, carrier, e164)
+        async with await _other_project(app) as other:
+            by_other = await other.post(
+                "/v1/phone-numbers/release",
+                json=_release(carrier, e164, confirm=e164),
+            )
+        owned_after_refusal = app.carrier.owns(e164)
+        by_buyer = await app.api.post(
+            "/v1/phone-numbers/release", json=_release(carrier, e164, confirm=e164)
+        )
+
+    _refused_as_not_bought(by_other)
+    assert owned_after_refusal
+    # The project that bought it still can.
+    assert by_buyer.status_code == 200, by_buyer.text
+    assert len(app.carrier.actions_of("release_number")) == 1
+    assert not app.carrier.owns(e164)
+
+
+@pytest.mark.parametrize("carrier", CARRIERS)
+async def test_a_number_bought_again_belongs_to_its_new_buyer(
+    monkeypatch, carrier: str
+) -> None:
+    """A number that left the platform's account outside TurnCall and was
+    bought again by another project is the new buyer's: the first buyer's
+    record of it no longer lets it release the number."""
+    e164 = "+13125550166"
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        first = await _buy(app, carrier, e164)
+        # Released on the carrier's console, then up for sale again.
+        app.carrier._release(app.carrier.number(e164).sid)
+        app.carrier.offer(e164)
+        async with await _other_project(app) as other:
+            bought = await other.post(
+                "/v1/phone-numbers/purchase",
+                json={"carrier": carrier, "e164_number": e164},
+            )
+            by_first = await app.api.post(
+                "/v1/phone-numbers/release",
+                json=_release(carrier, e164, confirm=e164),
+            )
+            owned_after_refusal = app.carrier.owns(e164)
+            by_new_buyer = await other.post(
+                "/v1/phone-numbers/release",
+                json=_release(carrier, e164, confirm=e164),
+            )
+
+    assert first["e164_number"] == e164
+    assert bought.status_code == 201, bought.text
+    _refused_as_not_bought(by_first)
+    assert owned_after_refusal
+    assert by_new_buyer.status_code == 200, by_new_buyer.text
+    assert not app.carrier.owns(e164)
+
+
+@pytest.mark.parametrize("carrier", CARRIERS)
+async def test_a_release_on_the_projects_own_account_is_unrestricted(
+    monkeypatch, carrier: str
+) -> None:
+    """On the project's own account (a Twilio pair in the body, or the
+    project's `telnyx` credential) any number on it can be released, bought
+    through TurnCall or not."""
+    e164 = "+13125550167"
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        app.carrier.add_number(e164)  # not bought through the API
+        if carrier == "telnyx":
+            stored = await app.api.put(
+                "/v1/credentials/telnyx",
+                json={
+                    "api_key": "KEY-project",
+                    "public_key": app.carrier.telnyx_public_key,
+                },
+            )
+            assert stored.status_code == 200, stored.text
+            own: dict[str, Any] = {}
+        else:
+            own = {"twilio_account_sid": OWN_SID, "twilio_auth_token": OWN_TOKEN}
+        released = await app.api.post(
+            "/v1/phone-numbers/release",
+            json=_release(carrier, e164, confirm=e164, **own),
+        )
+
+    assert released.status_code == 200, released.text
+    [release] = app.carrier.actions_of("release_number")
+    assert release.account_sid == (OWN_SID if carrier == "twilio" else "KEY-project")
+    assert not app.carrier.owns(e164)

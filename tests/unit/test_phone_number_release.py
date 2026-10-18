@@ -9,6 +9,10 @@ on the project's Telnyx account, as a purchase does. It is audited as
 `phone_number` / `released`, keyed by the E.164 number, once the carrier has
 released it. Unbinding (`DELETE /v1/phone-numbers/{id}`) never releases.
 
+On the platform's shared account, only a number the project bought is
+released: here `bought` stands in for that record. The refusals are
+`test_phone_number_release_shared_account.py`.
+
 The end-to-end half is `tests/integration/test_harness_number_release.py`;
 the adapter halves are in `test_twilio_number_purchase.py` and
 `test_telnyx_number_purchase.py`.
@@ -93,6 +97,16 @@ def admin(as_role) -> Any:
 @pytest.fixture
 def unbound() -> Any:
     with patch(f"{REPO}.get_by_e164", AsyncMock(return_value=None)) as lookup:
+        yield lookup
+
+
+@pytest.fixture
+def bought() -> Any:
+    """The project bought the number on the platform's account."""
+    with patch(
+        "turncall.storage.repositories.purchased_number_repo.bought_on_platform",
+        AsyncMock(return_value=True),
+    ) as lookup:
         yield lookup
 
 
@@ -239,7 +253,7 @@ class TestBound:
 
 class TestTwilio:
     def test_releases_from_the_platform_account_and_audits_it(
-        self, admin, unbound, audited
+        self, admin, unbound, bought, audited
     ) -> None:
         with (
             patch(f"{ADAPTER}.find_number_sid", AsyncMock(return_value=PN)) as find,
@@ -301,7 +315,7 @@ class TestTwilio:
         assert OWN_TOKEN not in r.text
 
     def test_a_number_not_on_the_account_is_a_422_and_unrecorded(
-        self, admin, unbound
+        self, admin, unbound, bought
     ) -> None:
         with (
             patch(f"{ADAPTER}.find_number_sid", AsyncMock(return_value=None)),
@@ -313,7 +327,9 @@ class TestTwilio:
         release.assert_not_awaited()
         assert AUDIT_HEADER not in r.headers
 
-    def test_a_number_gone_before_the_release_is_a_422(self, admin, unbound) -> None:
+    def test_a_number_gone_before_the_release_is_a_422(
+        self, admin, unbound, bought
+    ) -> None:
         gone = TwilioRestException(404, "uri", msg="Not Found", code=20404)
         with (
             patch(f"{ADAPTER}.find_number_sid", AsyncMock(return_value=PN)),
@@ -333,7 +349,7 @@ class TestTwilio:
             )
         assert r.status_code == 422
 
-    def test_twilio_failing_is_a_502(self, admin, unbound) -> None:
+    def test_twilio_failing_is_a_502(self, admin, unbound, bought) -> None:
         down = TwilioRestException(500, "uri", msg="Internal")
         with (
             patch(f"{ADAPTER}.find_number_sid", AsyncMock(return_value=PN)),

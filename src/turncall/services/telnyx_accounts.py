@@ -32,10 +32,14 @@ CONNECTION_KEY = "telnyx_connection_id"
 
 @dataclass(frozen=True)
 class TelnyxAccount:
-    """`api_key` / `public_key` are "" when no level holds one."""
+    """`api_key` / `public_key` are "" when no level holds one. `platform`
+    is True for the platform's shared TELNYX_* account, False for a
+    project's own `telnyx` credential: a number release on the shared account
+    is allowed only for a number the project bought (#321)."""
 
     api_key: str
     public_key: str
+    platform: bool = False
 
     def adapter(self) -> Any:
         from turncall.adapters.telephony.telnyx_adapter import TelnyxAdapter
@@ -44,7 +48,9 @@ class TelnyxAccount:
 
 
 def platform_account(settings: Settings) -> TelnyxAccount:
-    return TelnyxAccount(settings.telnyx.api_key, settings.telnyx.public_key)
+    return TelnyxAccount(
+        settings.telnyx.api_key, settings.telnyx.public_key, platform=True
+    )
 
 
 async def account_for_project(

@@ -26,3 +26,11 @@ PURCHASE_CARRIERS: tuple[str, ...] = (TWILIO, TELNYX)
 # The kinds of number a search asks for. Not every carrier sells every kind in
 # every country.
 NUMBER_TYPES: tuple[str, ...] = ("local", "toll_free", "mobile")
+
+# Which account a number was bought on (`purchased_numbers.account`): the
+# platform's shared one (TWILIO_* without a pair; TELNYX_API_KEY when the
+# project holds no `telnyx` credential), or the project's own. A release on
+# the platform's account is allowed only for a number the project bought.
+PLATFORM_ACCOUNT = "platform"
+OWN_ACCOUNT = "own"
+NUMBER_ACCOUNTS: tuple[str, ...] = (PLATFORM_ACCOUNT, OWN_ACCOUNT)

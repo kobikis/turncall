@@ -2611,7 +2611,7 @@
           "phone-numbers"
         ],
         "summary": "Release Phone Number",
-        "description": "Give a number on the carrier account back to the carrier. Admin only.\n**Irreversible**: the carrier may sell the number to someone else.\n`confirm` must repeat `e164_number` (422 otherwise). A number TurnCall\nstill binds is refused (409): unbind it first with\n`DELETE /v1/phone-numbers/{id}`, which leaves it on the account.",
+        "description": "Give a number on the carrier account back to the carrier. Admin only.\n**Irreversible**: the carrier may sell the number to someone else.\n`confirm` must repeat `e164_number` (422 otherwise). A number TurnCall\nstill binds is refused (409): unbind it first with\n`DELETE /v1/phone-numbers/{id}`, which leaves it on the account. On the\nplatform's shared account (Twilio without an account pair; Telnyx when\nthe project holds no `telnyx` credential) only a number this project\nbought through `POST /v1/phone-numbers/purchase` is released (403\notherwise); the project's own account is not restricted.",
         "operationId": "release_phone_number_v1_phone_numbers_release_post",
         "parameters": [
           {

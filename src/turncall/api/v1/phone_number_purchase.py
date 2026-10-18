@@ -11,6 +11,14 @@ that is bound (409: unbind it first, which leaves it on the account), and
 needs `confirm` to repeat the number (422 without it). Unbinding never
 releases.
 
+The platform's carrier accounts are shared by every project, so a release
+that would run on one (Twilio without an account pair; Telnyx when the
+project holds no `telnyx` credential) is allowed only for a number this
+project bought there through `POST /v1/phone-numbers/purchase`, which each
+purchase records in `purchased_numbers` (403 otherwise, before the carrier is
+asked anything). A release on the project's own account is not restricted:
+that account is the operator's.
+
 Twilio has no project credential: its account rides on the number (ADR-0020's
 addendum). So the search and the buy run on the Twilio account the request
 names (`X-Twilio-Account-Sid` + `X-Twilio-Auth-Token` headers on the search,
@@ -53,12 +61,12 @@ from turncall.api.v1.schemas.phone_numbers import (
 )
 from turncall.auth import AdminAuth
 from turncall.config.settings import get_settings
-from turncall.domain.carriers import TELNYX, TWILIO
+from turncall.domain.carriers import OWN_ACCOUNT, PLATFORM_ACCOUNT, TELNYX, TWILIO
 from turncall.domain.enums import AuditAction, AuditResource
 from turncall.services import audit_log, twilio_accounts
 from turncall.services.telnyx_accounts import TelnyxAccount
 from turncall.services.twilio_accounts import TwilioAccount
-from turncall.storage.repositories import phone_number_repo
+from turncall.storage.repositories import phone_number_repo, purchased_number_repo
 
 router = APIRouter(prefix="/phone-numbers", tags=["phone-numbers"])
 
@@ -163,6 +171,7 @@ async def buy_phone_number(
             session, auth.project_id, purpose="buy the number on"
         )
         bought = await _buy_on_telnyx(account, body.e164_number)
+        on_platform = account.platform
         after = audit_log.fields(
             carrier=bought.carrier,
             e164_number=bought.e164_number,
@@ -172,12 +181,22 @@ async def buy_phone_number(
         )
     else:
         bought = await _buy_on_twilio(body)
+        on_platform = not body.has_own_twilio
         after = audit_log.fields(
             carrier=bought.carrier,
             e164_number=bought.e164_number,
             external_number_sid=bought.external_number_sid,
             twilio_account_sid=bought.twilio_account_sid,
         )
+    # Recorded for a pending Telnyx order too: the number is the project's
+    # once Telnyx finishes it.
+    await purchased_number_repo.record(
+        session,
+        project_id=auth.project_id,
+        carrier=bought.carrier,
+        e164_number=bought.e164_number,
+        account=PLATFORM_ACCOUNT if on_platform else OWN_ACCOUNT,
+    )
     audit.record(
         AuditResource.PHONE_NUMBER,
         bought.e164_number,
@@ -198,7 +217,11 @@ async def release_phone_number(
     **Irreversible**: the carrier may sell the number to someone else.
     `confirm` must repeat `e164_number` (422 otherwise). A number TurnCall
     still binds is refused (409): unbind it first with
-    `DELETE /v1/phone-numbers/{id}`, which leaves it on the account."""
+    `DELETE /v1/phone-numbers/{id}`, which leaves it on the account. On the
+    platform's shared account (Twilio without an account pair; Telnyx when
+    the project holds no `telnyx` credential) only a number this project
+    bought through `POST /v1/phone-numbers/purchase` is released (403
+    otherwise); the project's own account is not restricted."""
     bound = await phone_number_repo.get_by_e164(session, body.e164_number)
     if bound is not None:
         ours = bound.project_id == auth.project_id
@@ -211,6 +234,8 @@ async def release_phone_number(
         account = await project_telnyx_account(
             session, auth.project_id, purpose="release the number on"
         )
+        on_platform = account.platform
+        await _bought_here_if_shared(session, auth.project_id, body, on_platform)
         released = await _release_on_telnyx(account, body.e164_number)
         before = audit_log.fields(
             carrier=released.carrier,
@@ -218,13 +243,23 @@ async def release_phone_number(
             external_number_sid=released.external_number_sid,
         )
     else:
-        released = await _release_on_twilio(body)
+        twilio = _twilio_account(body)
+        await _bought_here_if_shared(
+            session, auth.project_id, body, not body.has_own_twilio
+        )
+        released = await _release_on_twilio(body, twilio)
         before = audit_log.fields(
             carrier=released.carrier,
             e164_number=released.e164_number,
             external_number_sid=released.external_number_sid,
             twilio_account_sid=released.twilio_account_sid,
         )
+    await purchased_number_repo.forget(
+        session,
+        project_id=auth.project_id,
+        carrier=released.carrier,
+        e164_number=released.e164_number,
+    )
     audit.record(
         AuditResource.PHONE_NUMBER,
         released.e164_number,
@@ -232,6 +267,44 @@ async def release_phone_number(
         before=before,
     )
     return ok(released.model_dump())
+
+
+async def _bought_here_if_shared(
+    session: Any,
+    project_id: Any,
+    body: ReleasePhoneNumberRequest,
+    on_platform: bool,
+) -> None:
+    """Refuse a release on the platform's shared account of a number this
+    project did not buy there (403), before the carrier is asked anything:
+    the account holds every project's numbers, and the operator's own. The
+    refusal does not say whether the account holds the number."""
+    if not on_platform:
+        return
+    if await purchased_number_repo.bought_on_platform(
+        session,
+        project_id=project_id,
+        carrier=body.carrier,
+        e164_number=body.e164_number,
+    ):
+        return
+    name = "Twilio" if body.carrier == TWILIO else "Telnyx"
+    own = (
+        "send twilio_account_sid + twilio_auth_token"
+        if body.carrier == TWILIO
+        else "store the project's `telnyx` credential"
+    )
+    raise ApiError(
+        status_code=403,
+        code=ErrorCode.FORBIDDEN,
+        message=(
+            f"This project did not buy {body.e164_number} on the platform's "
+            f"{name} account through POST /v1/phone-numbers/purchase, so it "
+            f"cannot release it there; to release a number on your own {name} "
+            f"account, {own}"
+        ),
+        details={"account": PLATFORM_ACCOUNT},
+    )
 
 
 async def _search_on_twilio(
@@ -276,11 +349,10 @@ async def _buy_on_twilio(body: BuyPhoneNumberRequest) -> PurchasedNumberResponse
 
 
 async def _release_on_twilio(
-    body: ReleasePhoneNumberRequest,
+    body: ReleasePhoneNumberRequest, account: TwilioAccount
 ) -> ReleasedNumberResponse:
     from twilio.base.exceptions import TwilioRestException
 
-    account = _twilio_account(body)
     adapter = account.adapter()
     try:
         number_sid = await adapter.find_number_sid(body.e164_number)
