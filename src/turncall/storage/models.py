@@ -19,6 +19,15 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+# The columns that hold a secret seal it on write and unseal it on read (#338):
+# a row in the database holds `tcs1:` ciphertext, an ORM read plaintext.
+from turncall.storage.sealing import (
+    SealedAgentConfig,
+    SealedMetadata,
+    SealedTarget,
+    SealedText,
+)
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -128,7 +137,9 @@ class AgentRow(Base):
         nullable=False,
         default="draft",
     )
-    config_blob: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    config_blob: Mapped[dict] = mapped_column(
+        SealedAgentConfig, nullable=False, default=dict
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )
@@ -170,7 +181,7 @@ class PhoneNumberRow(Base):
         UUID(as_uuid=True), nullable=True
     )
     server_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    server_url_secret: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    server_url_secret: Mapped[str | None] = mapped_column(SealedText, nullable=True)
     sms_enabled: Mapped[bool] = mapped_column(default=False)
     whatsapp_enabled: Mapped[bool] = mapped_column(default=False)
     routing_weights: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -307,7 +318,9 @@ class CallRow(Base):
         default="none",
     )
     recording_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    metadata_json: Mapped[dict] = mapped_column(
+        SealedMetadata, nullable=False, default=dict
+    )
     analysis_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # When a carrier media stream was attached to the call: one per call, ever
     # (`call_repo.attach_media`). Internal — on no read and in no webhook.
@@ -455,7 +468,7 @@ class WebhookSubscriptionRow(Base):
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
     url: Mapped[str] = mapped_column(Text, nullable=False)
-    secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    secret: Mapped[str] = mapped_column(SealedText, nullable=False)
     events: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -493,7 +506,9 @@ class SmsSessionRow(Base):
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    metadata_json: Mapped[dict] = mapped_column(
+        SealedMetadata, nullable=False, default=dict
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )
@@ -846,7 +861,7 @@ class EvalScenarioRow(Base):
         default="mock_only",
     )
     tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
-    default_target: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    default_target: Mapped[dict | None] = mapped_column(SealedTarget, nullable=True)
     # The LLMs an eval runs besides the agent's (#118): the judge that decides
     # `eval:` assertions and every simulation verdict, and the persona that
     # plays the caller. TurnCall columns for the reason above — and because the
@@ -903,7 +918,7 @@ class EvalRunRow(Base):
     kind: Mapped[str] = mapped_column(
         Enum("script", "simulation", name="eval_kind"), nullable=False
     )
-    target: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    target: Mapped[dict] = mapped_column(SealedTarget, nullable=False)
     resolved_config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     resolved_scenario: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     harness_config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)

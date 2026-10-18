@@ -24,8 +24,26 @@ async def _ensure_credentials_readable(settings: Settings) -> None:
     from turncall.storage.database import create_session_factory, get_engine
     from turncall.storage.repositories import credential_repo
 
+    _warn_if_no_encryption_key(settings)
     async with create_session_factory(get_engine())() as session:
         await credential_repo.ensure_readable(session, settings)
+
+
+def _warn_if_no_encryption_key(settings: Settings) -> str | None:
+    """With CREDENTIAL_ENCRYPTION_KEY unset the server still starts, but every
+    write holding a secret is refused (#338), so say so before the first one
+    is. Returns the warning, or None."""
+    if settings.credentials.encryption_key:
+        return None
+    message = (
+        "credential_encryption_key_unset | CREDENTIAL_ENCRYPTION_KEY is not set: "
+        "creating a webhook subscription, giving a number a server_url, saving "
+        "a project credential or an agent with a secret, and taking a call "
+        "whose call-init answers with one are refused (503 "
+        "credential_key_unavailable) until it is"
+    )
+    logger.warning(message)
+    return message
 
 
 async def _warn_unverifiable_webhooks(settings: Settings) -> None:

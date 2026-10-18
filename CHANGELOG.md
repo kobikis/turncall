@@ -722,7 +722,9 @@ and is not part of this repository's history.
   as a call-init's inline config on its call or SMS session, and as an
   inline eval target on a run or scenario. Nothing that uses them changes:
   signatures, call-init, tools and MCP servers get the plaintext as before,
-  and a phone number read still returns its `server_url_secret`. Saving one
+  a phone number read still returns its `server_url_secret`, and an agent
+  read, like the audit log's record of an agent change, still shows a static
+  `access_key_id`, which names the key without unlocking it. Saving one
   without the key is a `503` (`credential_key_unavailable`), never a
   fall back to plaintext, and a call whose call-init answers with an inline
   config holding one fails; a write that holds none needs no key. Startup

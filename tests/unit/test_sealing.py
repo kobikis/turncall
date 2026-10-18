@@ -376,6 +376,18 @@ class TestColumnTypes:
         assert type(blob["llm"]["failover"].type) is JSONB
         assert type(blob[("llm", "api_key")].type) is JSONB
 
+    def test_an_operand_binds_as_on_jsonb(self) -> None:
+        """The SMS redaction claim's `metadata_json - 'claimed_until'` binds
+        its key as text, as on JSONB (bound as the column, it was a JSON
+        string: `jsonb - jsonb`, no such operator); a document merged in is
+        still the column's, so it is sealed on the way."""
+        plain = Column("c", JSONB()).op("-")("claimed_until").right.type
+        for sealed in (SealedAgentConfig(), SealedTarget(), SealedMetadata()):
+            col = Table("t", MetaData(), Column("c", sealed)).c.c
+            assert type(col.op("-")("claimed_until").right.type) is type(plain)
+            merged = col.op("||")({"dynamic_config": {}}).right.type
+            assert type(merged) is type(sealed)
+
     def test_text_is_unbounded(self) -> None:
         """A sealed token_urlsafe(32) is ~145 characters: no String(128)."""
         assert isinstance(SealedText().impl, Text)
