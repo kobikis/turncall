@@ -87,8 +87,8 @@ class TestFinalizeCall:
         self,
     ) -> None:
         """If /status or the end API ended it first, the guarded update ends
-        nothing (#328), and post-call processing starts here only if it is
-        unclaimed and the call ended `completed` (#356)."""
+        nothing (#328), and post-call processing starts here only if they
+        deferred it to the pipeline and nothing has started it (#356)."""
         call_id = uuid4()
         cs = _make_call_session(call_id)
         call = SimpleNamespace(
@@ -120,7 +120,7 @@ class TestFinalizeCall:
             await cs._finalize_call()
 
             mark_ended.assert_awaited_once()
-            assert claim.await_args.kwargs["status"] == "completed"
+            assert claim.await_args.kwargs["deferred"] is True
             trigger.assert_not_called()
 
     async def test_no_agent_and_no_inline_config_skips_analysis(self) -> None:

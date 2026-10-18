@@ -428,16 +428,18 @@ async def status_callback(
 
     await _record_status(session, call, new_status, call_sid, call_status)
 
-    # Post-call processing, which sends call.ended, for a completed call no
-    # pipeline ran. One that did starts it once its last lines are stored, as
-    # it finishes; started here, `call.ended` could lack them (#356).
-    if new_status == CallStatus.COMPLETED and ended.media_attached_at is None:
+    # Post-call processing, which sends call.ended: started for a completed
+    # call no pipeline ran, deferred to the pipeline of one that did (#356).
+    if new_status == CallStatus.COMPLETED:
         try:
-            from turncall.services.call_analysis_trigger import start_post_call
+            from turncall.services.call_analysis_trigger import (
+                start_or_defer_post_call,
+            )
             from turncall.storage.database import get_session_factory
 
-            await start_post_call(get_session_factory(), session, ended)
+            await start_or_defer_post_call(get_session_factory(), session, ended)
         except Exception:
+            await session.rollback()
             logger.exception("analysis_trigger_error", call_id=str(call.id))
 
     return Response(status_code=204)

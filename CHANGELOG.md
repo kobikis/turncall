@@ -723,15 +723,17 @@ and is not part of this repository's history.
   while its pipeline was still storing the last lines, they started
   post-call processing, which read the transcript at once: `call.ended`,
   its analysis and its takeaways could lack the caller's or the agent's last
-  line. On a call a pipeline runs (its media stream attached), they now only
-  end the call, and the pipeline starts post-call processing once it has
-  finished; they still start it for a call no pipeline ran. If the
-  pipeline's process dies first, a sweep on every replica starts it for a
-  call ended over two minutes ago with none, so that call's `call.ended`
-  arrives late rather than never. It is started once per call, recorded in
-  the new `calls.post_call_started_at` (migration `d4b8e2f6a0c3`, which
-  marks every call already over as started, so none is swept).
-
+  line. On a call a pipeline runs (its media stream attached), they now end
+  the call and defer post-call processing to the pipeline, which starts it
+  once it has finished; they still start it for a call no pipeline ran. If
+  the pipeline's process dies first, a sweep on every replica starts it for
+  a call deferred over two minutes ago whose pipeline no longer runs
+  anywhere (its control channel has no subscriber), so that call's
+  `call.ended` arrives late rather than never. Post-call processing starts
+  once per call. Migration `d4b8e2f6a0c3` adds `calls.post_call_deferred_at`
+  and `calls.post_call_started_at`; existing calls, and calls a replica on
+  the previous release ends during a rolling deploy, are never deferred, so
+  none is processed twice.
 - **A log line carrying a Telnyx error is written** (#352). Both log sinks
   are `enqueue=True`, so loguru pickles every record, a logged exception
   included, and rebuilds it on its writer thread. `TelnyxApiError`,

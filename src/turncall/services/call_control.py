@@ -187,19 +187,17 @@ async def end_call(
         # The carrier's status or the pipeline ended it meanwhile, and that
         # path sees to `call.ended` (#328).
         return ControlResult(success=True, message="Call ended")
-    if ended_now.media_attached_at is not None:
-        # A pipeline runs it: the hangup ends that, and it starts post-call
-        # processing once the call's last lines are stored (#356).
-        return ControlResult(success=True, message="Call ended")
 
-    # Post-call processing (transcript, recording, analysis, webhook); the
+    # Post-call processing (transcript, recording, analysis, webhook), or, on
+    # a call a pipeline runs, left to the pipeline the hangup ends (#356). The
     # comprehensive call.ended webhook is dispatched after analysis completes.
     try:
-        from turncall.services.call_analysis_trigger import start_post_call
+        from turncall.services.call_analysis_trigger import start_or_defer_post_call
         from turncall.storage.database import get_session_factory
 
-        await start_post_call(get_session_factory(), session, ended_now)
+        await start_or_defer_post_call(get_session_factory(), session, ended_now)
     except Exception:
+        await session.rollback()
         logger.exception("analysis_trigger_error", call_id=str(call_id))
 
     return ControlResult(success=True, message="Call ended")

@@ -314,9 +314,14 @@ class CallRow(Base):
     media_attached_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # When the call's post-call processing (which sends `call.ended`) was
-    # started: one per call, ever (`call_repo.claim_post_call`, #356).
+    # Post-call processing, which sends `call.ended` (#356). Deferred: when the
+    # carrier or the end API ended a call its pipeline runs and left post-call
+    # processing to the pipeline (`call_repo.defer_post_call`). Started: when
+    # it was started, once per call, ever (`call_repo.claim_post_call`).
     # Internal — on no read and in no webhook.
+    post_call_deferred_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     post_call_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -355,14 +360,13 @@ class CallRow(Base):
             )
             for kind in ("recording", "transcript", "events")
         ),
-        # The post-call sweep (#356): ended calls a pipeline owned whose
-        # post-call processing never started.
+        # The post-call sweep (#356): calls deferred to their pipeline whose
+        # post-call processing has not started.
         Index(
-            "ix_calls_post_call_unstarted",
-            "ended_at",
+            "ix_calls_post_call_deferred",
+            "post_call_deferred_at",
             postgresql_where=text(
-                "post_call_started_at IS NULL AND media_attached_at IS NOT NULL"
-                " AND ended_at IS NOT NULL"
+                "post_call_deferred_at IS NOT NULL AND post_call_started_at IS NULL"
             ),
         ),
     )

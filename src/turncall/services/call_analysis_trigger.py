@@ -13,8 +13,9 @@ Where it runs (#313): analysis reads the call's raw conversation, which only
 the process that ran the call holds (`services/live_transcript`), and only for
 a few minutes. Post-call is started once per call (`start_post_call`, #356):
 by the pipeline's own finalize, once its last lines are stored; by Twilio's
-`/status` callback or the end API only for a call no pipeline ran; and by the
-sweep (`run_sweep`) for a call whose pipeline never finished. The last two
+`/status` callback or the end API only for a call no pipeline ran, deferring
+it to the pipeline otherwise (`start_or_defer_post_call`); and by the sweep
+(`run_sweep`) for a deferred call whose pipeline died. The last two
 can land on another replica. For a project that redacts, with analysis on,
 such a replica hands the run to the process holding the conversation over
 Redis pub/sub (`live_transcript.ask_holder`); no transcript crosses Redis,
@@ -488,61 +489,101 @@ async def start_post_call(
     session: AsyncSession,
     call: Any,
     *,
-    status: str | None = None,
+    deferred: bool = False,
 ) -> bool:
     """Start the call's post-call processing, which sends `call.ended`, unless
     another path already has (`call_repo.claim_post_call`); whether this did.
-    `status`: only if the call ended with it. Commits `session` either way,
-    before starting it: the run reads the call in a session of its own (#328).
-
-    Who calls it (#356): the pipeline, once its transcript and recording are
-    flushed (`finalize_call`); the carrier's status callback or the end API,
-    only for a call no pipeline ran (`media_attached_at` unset), since one
-    that did would have its last lines cut; and the sweep, for a call whose
-    pipeline never finished.
+    `deferred`: only if an ending left it to the call's pipeline. Commits
+    `session` either way, before starting it: the run reads the call in a
+    session of its own (#328).
     """
     from turncall.storage.repositories import call_repo
 
-    claimed = await call_repo.claim_post_call(session, call.id, status=status)
+    claimed = await call_repo.claim_post_call(session, call.id, deferred=deferred)
     await session.commit()
     if not claimed:
         return False
-    # Not gated on active_agent_id: a call running an inline agent has none,
-    # and this is what dispatches call.ended.
-    config = await config_for_call(session, call)
-    if config is not None:
-        trigger_post_call_analysis(session_factory, call.id, call.project_id, config)
+    try:
+        # Not gated on active_agent_id: a call running an inline agent has
+        # none, and this is what dispatches call.ended.
+        config = await config_for_call(session, call)
+        if config is not None:
+            trigger_post_call_analysis(
+                session_factory, call.id, call.project_id, config
+            )
+    except Exception:
+        logger.exception("analysis_trigger_error", call_id=str(call.id))
     return True
 
 
-# The sweep (#356): how long a pipeline gets, after the carrier or the end API
-# ended its call, to finish and start post-call processing itself, and how
-# often a replica looks for calls whose pipeline never did. A pipeline flushes
-# its last lines and recording within seconds of the call ending.
+async def start_or_defer_post_call(
+    session_factory: async_sessionmaker[AsyncSession],
+    session: AsyncSession,
+    call: Any,
+) -> None:
+    """Post-call processing for a call the carrier or the end API just ended
+    (`call`: the row as ended, in `session`'s transaction, not yet
+    committed). A call no pipeline ran gets it now. One a pipeline runs (its
+    media stream attached) is left to the pipeline, which starts it once the
+    call's last lines are stored: started here, the transcript `call.ended`
+    carries could lack them (#356). Commits `session`.
+    """
+    from turncall.storage.repositories import call_repo
+
+    if call.media_attached_at is not None:
+        # Committed with the end: a pipeline finishing meanwhile waits on the
+        # row, then finds the call ended and deferred to it, never just ended.
+        await call_repo.defer_post_call(session, call.id)
+        await session.commit()
+        return
+    await session.commit()  # the end, whatever post-call processing then does
+    await start_post_call(session_factory, session, call)
+
+
+# The sweep (#356): how long a pipeline gets, after its call was deferred to
+# it, before the sweep starts post-call processing itself, and how often a
+# replica looks. A pipeline flushes its last lines within seconds of the call
+# ending; one still running past the grace is left alone.
 SWEEP_GRACE_SECONDS = 120
 SWEEP_INTERVAL_SECONDS = 30
 
 
-async def sweep_unstarted(
+async def _still_running(call_id: UUID) -> bool:
+    """Whether the call's pipeline still runs, on any replica. Without Redis
+    nothing can say, and a call ended minutes ago is taken for over."""
+    from turncall.services import live_call_channel
+    from turncall.storage.redis import get_redis
+
+    try:
+        redis = get_redis()
+    except RuntimeError:
+        return False
+    return await live_call_channel.is_running(redis, call_id)
+
+
+async def sweep_deferred(
     session_factory: async_sessionmaker[AsyncSession], *, now: datetime
 ) -> int:
-    """Start post-call processing for each call the carrier or the end API
-    ended more than the grace ago and left to a pipeline that never started
+    """Start post-call processing for each call deferred to its pipeline more
+    than the grace ago whose pipeline is no longer running and never started
     it — its process died. How many were started here."""
     from turncall.storage.repositories import call_repo
 
     async with session_factory() as session:
-        calls = await call_repo.list_post_call_unstarted(
-            session, ended_before=now - timedelta(seconds=SWEEP_GRACE_SECONDS)
+        calls = await call_repo.list_post_call_deferred(
+            session, deferred_before=now - timedelta(seconds=SWEEP_GRACE_SECONDS)
         )
     started = 0
     for call in calls:
-        async with session_factory() as session:
-            if await start_post_call(
-                session_factory, session, call, status="completed"
-            ):
-                started += 1
-                logger.warning("post_call_swept", call_id=str(call.id))
+        try:
+            if await _still_running(call.id):
+                continue
+            async with session_factory() as session:
+                if await start_post_call(session_factory, session, call, deferred=True):
+                    started += 1
+                    logger.warning("post_call_swept", call_id=str(call.id))
+        except Exception:
+            logger.exception("post_call_sweep_call_error", call_id=str(call.id))
     return started
 
 
@@ -556,7 +597,7 @@ async def run_sweep(
     while True:
         try:
             await asyncio.sleep(interval)
-            await sweep_unstarted(session_factory, now=datetime.now(UTC))
+            await sweep_deferred(session_factory, now=datetime.now(UTC))
         except asyncio.CancelledError:
             break
         except Exception:

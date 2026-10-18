@@ -311,8 +311,8 @@ class CallSession:
                 except Exception:
                     logger.exception("mcp_cleanup_error", call_id=str(self.call_id))
             # Post-call analysis + call.ended are dispatched above on the
-            # completing edge (also from the Twilio /status callback and the
-            # end_call tool for their respective paths). Cancelling the task on
+            # completing edge, also when the Twilio /status callback or the
+            # end API ended the call first (#356). Cancelling the task on
             # on_client_disconnected guarantees we reach here promptly instead of
             # hanging in the runner.
             logger.info("call_session_ended", call_id=str(self.call_id))
@@ -719,11 +719,12 @@ async def finalize_call(session_factory: Any, call_id: UUID, *, failed: bool) ->
     `call.ended` + post-call analysis.
 
     The carrier's status callback and the end API end calls too, and
-    whichever does first sets the status (#328). On a call a pipeline ran they
-    leave post-call processing to it, which reads the transcript only now that
-    its last lines are stored (#356): so this starts it even when they ended
-    the call first, as `completed` — not on a call the carrier ended
-    unanswered or failed. `start_post_call` starts it once.
+    whichever does first sets the status (#328). On a call a pipeline runs
+    they defer post-call processing to it, which reads the transcript only
+    now that its last lines are stored (#356): so this starts it when it ended
+    the call, or when they did and deferred it — never on a call they ended
+    without deferring (unanswered, or ended by a replica on an older release,
+    which started it itself). `start_post_call` starts it once.
     """
     from turncall.services.call_analysis_trigger import start_post_call
     from turncall.storage.repositories import call_repo
@@ -745,12 +746,7 @@ async def finalize_call(session_factory: Any, call_id: UUID, *, failed: bool) ->
             ended_at=ended_at,
             duration_ms=duration_ms,
         )
-        await start_post_call(
-            session_factory,
-            session,
-            call,
-            status=None if ended is not None else CallStatus.COMPLETED.value,
-        )
+        await start_post_call(session_factory, session, call, deferred=ended is None)
 
 
 def _speaks_to_a_peer(transport: object) -> bool:

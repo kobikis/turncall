@@ -165,11 +165,31 @@ async def mark_call_ended(
     return result.scalar_one_or_none()
 
 
+async def defer_post_call(session: AsyncSession, call_id: UUID) -> bool:
+    """Leave the call's post-call processing to its pipeline, which starts it
+    once its last lines are stored (#356); whether this deferred it. The
+    carrier's status callback and the end API, on a call a pipeline runs.
+    The sweep starts it for a pipeline that never does. The caller commits.
+    """
+    result = await session.execute(
+        update(CallRow)
+        .where(
+            CallRow.id == call_id,
+            CallRow.post_call_deferred_at.is_(None),
+            CallRow.post_call_started_at.is_(None),
+        )
+        .values(post_call_deferred_at=func.now())
+    )
+    return bool(result.rowcount)
+
+
 async def claim_post_call(
-    session: AsyncSession, call_id: UUID, *, status: str | None = None
+    session: AsyncSession, call_id: UUID, *, deferred: bool = False
 ) -> bool:
     """Claim the call's one post-call processing run; whether this caller got
-    it. `status`: only if the call ended with it.
+    it. `deferred`: only if an ending left it to the call's pipeline
+    (`defer_post_call`) — the pipeline on a call something else ended, and
+    the sweep.
 
     A guarded UPDATE, as `mark_call_ended`: of the paths that may start it —
     the pipeline finishing, the carrier's status callback or the end API on a
@@ -179,28 +199,26 @@ async def claim_post_call(
     stmt = update(CallRow).where(
         CallRow.id == call_id, CallRow.post_call_started_at.is_(None)
     )
-    if status is not None:
-        stmt = stmt.where(CallRow.status == status)
+    if deferred:
+        stmt = stmt.where(CallRow.post_call_deferred_at.is_not(None))
     result = await session.execute(stmt.values(post_call_started_at=func.now()))
     return bool(result.rowcount)
 
 
-async def list_post_call_unstarted(
-    session: AsyncSession, *, ended_before: datetime, limit: int = 100
+async def list_post_call_deferred(
+    session: AsyncSession, *, deferred_before: datetime, limit: int = 100
 ) -> list[CallRow]:
-    """Calls a pipeline owned, ended as `completed` before `ended_before`,
-    whose post-call processing never started: the carrier or the end API
-    ended them and left it to a pipeline that never finished (#356)."""
+    """Calls deferred to their pipeline before `deferred_before` whose
+    post-call processing has not started: the pipeline has not finished, or
+    never will (#356)."""
     result = await session.execute(
         select(CallRow)
         .where(
+            CallRow.post_call_deferred_at.is_not(None),
+            CallRow.post_call_deferred_at < deferred_before,
             CallRow.post_call_started_at.is_(None),
-            CallRow.media_attached_at.is_not(None),
-            CallRow.ended_at.is_not(None),
-            CallRow.ended_at < ended_before,
-            CallRow.status == "completed",
         )
-        .order_by(CallRow.ended_at)
+        .order_by(CallRow.post_call_deferred_at)
         .limit(limit)
     )
     return list(result.scalars())

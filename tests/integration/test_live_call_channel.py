@@ -113,3 +113,12 @@ async def test_an_unreachable_redis_never_fails_the_call(redis) -> None:
     nowhere = Redis.from_url("redis://127.0.0.1:1/0")
     async with lcc.serve(redis, nowhere, uuid.uuid4(), {}) as up:
         assert up is False
+
+
+async def test_a_call_is_running_while_its_channel_is_served(redis) -> None:
+    """What the post-call sweep reads to leave a live pipeline alone (#356)."""
+    call_id = uuid.uuid4()
+    assert not await lcc.is_running(redis, call_id)
+    async with lcc.serve(redis, _client(), call_id, {"message": _echo}):
+        assert await lcc.is_running(redis, call_id)
+    assert not await lcc.is_running(redis, call_id)
