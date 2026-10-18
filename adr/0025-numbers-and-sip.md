@@ -83,8 +83,13 @@ a Telnyx number up by E.164, so it binds the number once Telnyx has put it on
 the account and refuses it until then. Holding the request open until the
 order finishes was rejected (an order awaiting documents can take days), as was
 a stored "ordered" row (bind has no unbound state to keep it in). Once the
-order is placed only a `failure` status is an error: the money is spent, so a
-pending purchase is audited like a finished one.
+order is placed only a status in which nothing was bought is an error
+(`failure`, `cancelled`, `deleted`: Telnyx's documented terminal states other
+than `success`), and then nothing is recorded or audited. Any other status,
+one Telnyx has not documented included, is answered `pending`: the money may
+be spent, so a pending purchase is audited like a finished one. An order
+request Telnyx never answers (a timeout) is a `502` saying the order may have
+been placed, logged at error level with the number and the project.
 
 **Release** (#321). `POST /v1/phone-numbers/release`, admin-only, on Twilio
 and Telnyx, on the account a purchase uses. A binding has no unbound state
@@ -135,3 +140,42 @@ TurnCall), and a partial unique index keeps one `platform` row per carrier
 and number. A number bought before this table existed, or put on the platform
 account by hand, can be released there only by the operator, on the carrier's
 console.
+
+Which account is shared is the account's own say: `TwilioAccount` and
+`TelnyxAccount` both carry a required, keyword-only `shared` (true for the
+platform's), with no default, so an account built without saying fails to
+construct instead of passing for the project's own. The release route reads
+it the same way on both carriers.
+
+**Hardening** (#344 review). The number lookups are exact: Twilio's
+`PhoneNumber` filter on IncomingPhoneNumbers matches partially, so
+`find_number_sid` reads every match until one's `phone_number` is the E.164
+asked for (None if none is), as Telnyx's `find_number` already did; a release
+or a bind never acts on a longer number that contains it. The carrier is
+called with no database transaction open: the route ends its read-only
+transaction first (a rollback; a legacy key's hash upgrade is then made on
+its next request), and what it writes after the carrier answers is committed
+in the route. A failure there (recording, auditing, the commit) cannot undo
+the carrier side, so it is logged at error level with the carrier, the E.164,
+the number's id or Telnyx order and the project, and answered `500` with the
+number in `details`. Concurrent platform purchases of one number take a
+transaction-scoped advisory lock before recording, so the later one sweeps
+the earlier's row and takes ownership rather than failing on the partial
+unique index. Carrier refusals map through one helper,
+`api/v1/carrier_errors.py`, for bind, search, buy and release: a Telnyx
+400/404/422 is the caller's (`422`) on the buy, search and release, whose
+requests are theirs, and Telnyx's (`502`) on bind's lookup, which is
+TurnCall's own, as before; Telnyx not answering is a `502` `telnyx_error`
+everywhere.
+
+**A purged project's platform numbers stay on the account.** The project FK
+cascade takes a purged project's `purchased_numbers` rows, and with them the
+only way to release its platform-account numbers through TurnCall. Nothing is
+released automatically: releasing is irreversible, a project may have been
+deleted by mistake, and which numbers to keep is the operator's call. So the
+purge logs a warning (`purged_project_left_numbers`) naming the project and
+each carrier and E.164 it bought on the platform's account and never
+released; those numbers stay on the account, billed, until an operator
+releases them in the carrier's console. Keeping the rows past the purge
+(no cascade, or a nullable project) was rejected: nothing could act on them,
+since releasing needs the project's admin key.

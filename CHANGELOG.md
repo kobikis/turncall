@@ -40,6 +40,12 @@ and is not part of this repository's history.
   recorded in a new `purchased_numbers` table (project, carrier, E.164,
   `platform` or `own` account; written by every purchase, pending Telnyx
   orders too, and deleted by the release). Migration `c9e3a5f7b1d4`.
+  Purging a deleted project releases nothing: the purge logs a warning,
+  `purged_project_left_numbers`, naming each number the project bought on
+  the platform's account and never released, which stays there, billed, for
+  an operator to release in the carrier's console. A Telnyx release Telnyx
+  does not answer is a `502` (`telnyx_error`) saying the number may have
+  been released.
 - **Search and buy numbers on Telnyx** (#320, ADR-0025). The same
   `GET /v1/phone-numbers/available` and `POST /v1/phone-numbers/purchase`
   take `carrier=telnyx`, admin-only, on the project's Telnyx account (its
@@ -54,9 +60,13 @@ and is not part of this repository's history.
   which is not the number's id. A number Telnyx will not sell is a `422`
   with `details.telnyx_codes`; a failed order a `422` with
   `details.telnyx_order_id`; a rejected API key a `422`; anything else a
-  `502` (`telnyx_error`). A purchase, pending or not, is audited as
-  `phone_number` / `purchased`. The bought number binds onto the
-  deployment's Call Control application as any other. No migration.
+  `502` (`telnyx_error`). An order that ends `cancelled` or `deleted` is a
+  failed order too. An order request Telnyx does not answer (a timeout) is a
+  `502` (`telnyx_error`) saying the order may have been placed, and is
+  logged at error level with the number and the project. A purchase,
+  pending or not, is audited as `phone_number` / `purchased`. The bought
+  number binds onto the deployment's Call Control application as any other.
+  No migration.
 - **Search and buy numbers on Twilio** (#319, ADR-0025). An admin key
   searches the Twilio account for voice-capable numbers with
   `GET /v1/phone-numbers/available` (`carrier=twilio`, `country`,
@@ -74,7 +84,12 @@ and is not part of this repository's history.
   `details.twilio_code`; a number already bound is a `409`. Each purchase is
   an audit log entry, `phone_number` / `purchased`, keyed by the E.164
   number. Buying binds nothing: the number is bound with
-  `POST /v1/phone-numbers` as before. No migration.
+  `POST /v1/phone-numbers` as before. No migration. The carrier sells the
+  number before TurnCall records it, so if recording, auditing or the
+  commit then fails, on either carrier, the purchase is a `500`
+  (`internal_error`) whose `details.bought` names the number, logged at
+  error level (`phone_number_bought_untracked`) with the carrier, E.164,
+  number id or Telnyx order, and project.
 - **Audit log** (#317, ADR-0024). Every change made through the API to a
   project's agents (create, update, delete, publish, rollback, knowledge base
   links, and the versions a publish or rollback archives), credentials, phone
@@ -680,6 +695,18 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **A Twilio number is found by its exact E.164** (#344). Looking a number up
+  on a Twilio account (bind with `twilio_account_sid` +
+  `twilio_auth_token`, and release) used Twilio's `PhoneNumber` filter,
+  which matches partially, and took the first result: an account holding a
+  longer number that contains the one asked for could bind, or release, that
+  other number. The lookup now reads every match and takes only the one
+  whose number is exactly the E.164; with none, the number is not on the
+  account (`422`).
+- **Telnyx not answering a bind is a `502`** (#344). A timeout or dropped
+  connection while bind looked a number up on Telnyx was a `500`; it is now
+  a `502` `telnyx_error`, like any other Telnyx failure on bind. Bind's other
+  responses are unchanged: Telnyx refusing its lookup is still a `502`.
 - **Binding with a Twilio account that rejects its credentials is a `422`**
   (#321). Looking a number up on a Twilio account (bind with
   `twilio_account_sid` + `twilio_auth_token`, and now release) met the

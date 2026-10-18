@@ -240,6 +240,13 @@ want:
 - **Billing.** The number stays on the carrier account, and is billed, until it
   is [released](#release-a-number). Unbinding (`DELETE /v1/phone-numbers/{id}`)
   does not release it.
+- **If TurnCall cannot record it.** The carrier has sold the number by the
+  time TurnCall records the purchase, so a failure then (the database, the
+  audit log) does not undo it. The call is a `500` (`internal_error`) whose
+  `details.bought` names the number (`e164_number`, `external_number_sid`,
+  `telnyx_order_id`), and the operator's logs carry it at error level
+  (`phone_number_bought_untracked`). Bind it, or release it in the carrier's
+  console.
 
 ### Buying on Telnyx
 
@@ -294,10 +301,13 @@ asynchronously. The call waits up to about five seconds for it:
 not the number's id. Bound, the number goes onto this deployment's Call
 Control application like any other Telnyx number. A number Telnyx will not
 sell is a `422` with `details.telnyx_codes`; an order Telnyx accepts and then
-fails is a `422` with `details.telnyx_order_id`, and buys nothing. An API key
-Telnyx rejects is a `422`; anything else Telnyx fails on is a `502`
-(`telnyx_error`). A pending purchase is audited like any other: the money is
-spent.
+fails, or that ends cancelled or deleted, is a `422` with
+`details.telnyx_order_id`, and buys nothing. An API key Telnyx rejects is a
+`422`; anything else Telnyx fails on is a `502` (`telnyx_error`). If Telnyx
+does not answer the order at all (a timeout), the call is a `502`
+(`telnyx_error`) saying the order may have been placed: check the account's
+number orders in the Telnyx portal before buying the number again. A pending
+purchase is audited like any other: the money is spent.
 
 ## Release a number
 
@@ -367,7 +377,16 @@ curl -X POST http://localhost:8090/v1/phone-numbers/release \
   `422`, and so is a Telnyx number whose order has not finished.
 - **Refusals.** Credentials you sent that the carrier rejects, and anything
   Telnyx refuses, are a `422`; anything else the carrier fails on is a `502`
-  (`twilio_error`, `telnyx_error`), and nothing is recorded.
+  (`twilio_error`, `telnyx_error`), and nothing is recorded. If Telnyx does not
+  answer the release itself, the `502` says the number may have been released:
+  check the account before releasing it again.
+- **Deleting the project.** Numbers your project bought on the platform's
+  account are not released when the project is deleted. Once a deleted
+  project is purged, TurnCall no longer knows they were its, so nobody can
+  release them through the API: release them before deleting the project. The
+  purge logs a warning (`purged_project_left_numbers`) naming each one it
+  leaves on the account, still billed, for the operator to release in the
+  carrier's console.
 - **Audited.** Each release writes an audit log entry, `phone_number` /
   `released`, whose `resource_id` is the E.164 number and whose "before" is the
   number released. See [Audit log](/guides/audit-log).

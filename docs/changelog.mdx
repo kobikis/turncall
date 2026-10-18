@@ -16,15 +16,18 @@ See [Phone numbers](/guides/phone-numbers#search-and-buy-a-number).
 **Search and buy numbers on Telnyx.** The same calls with `carrier: telnyx`
 search and buy on the project's Telnyx account, with each number's price. A
 purchase Telnyx has not finished within a few seconds answers `pending`; bind
-the number once it lands on the account. See
-[Buying on Telnyx](/guides/phone-numbers#buying-on-telnyx).
+the number once it lands on the account. If Telnyx does not answer the order,
+the call says the order may have been placed: check the Telnyx portal before
+buying again. See [Buying on Telnyx](/guides/phone-numbers#buying-on-telnyx).
 
 **Release numbers.** An admin key can give a number back to its carrier, on
 Twilio or Telnyx. Releasing is irreversible, so it is refused while the number
 is bound (unbind it first) and needs `confirm` to repeat the number. It is
 recorded in the audit log. Unbinding still never releases. On the platform's
 shared carrier account, a project can release only the numbers it bought
-through TurnCall; on its own Twilio or Telnyx account, any number. See
+through TurnCall; on its own Twilio or Telnyx account, any number. Deleting a
+project releases none of its numbers: release them first, because once the
+project is purged only the carrier's console can. See
 [Release a number](/guides/phone-numbers#release-a-number).
 
 **A compliance mapping.** One page maps redaction, retention, the audit log,
@@ -317,6 +320,12 @@ the caller heard it. The docs said it was left out, but it has always been in
 the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
+
+**Bind finds your Twilio number exactly.** Binding a number on your own Twilio
+account could pick a different number on that account whose digits contain
+the one you named. It now takes only the exact number.
+
+**Telnyx not answering a bind is a `502`.** It was a `500`.
 
 **A Twilio account that rejects its credentials is a `422` on bind.** Binding
 a number on your own Twilio account with a wrong Auth Token answered `500`; it
