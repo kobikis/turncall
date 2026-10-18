@@ -1,6 +1,8 @@
-"""Searching and buying numbers on a Twilio account (#319, ADR-0025).
+"""Searching, buying and releasing numbers on a Twilio account (#319, #321,
+ADR-0025).
 
-`TwilioAdapter.search_numbers` and `.buy_number` are Twilio's own, not
+`TwilioAdapter.search_numbers`, `.buy_number` and `.release_number` (and the
+`find_number_sid` lookup a release starts with) are Twilio's own, not
 `TelephonyAdapter` actions (Asterisk owns no store of numbers; ADR-0022).
 They run the real Twilio SDK against an in-memory HTTP client, so what is
 checked is the REST request Twilio would receive and what TurnCall makes of
@@ -180,3 +182,49 @@ class TestBuy:
 
         assert raised.value.status == 400
         assert raised.value.code == 21422
+
+
+class TestFindNumberSid:
+    async def test_looks_the_number_up_on_the_account(self) -> None:
+        owned = {"sid": "PN" + "b" * 32, "phone_number": "+13125550100"}
+        http = FakeTwilioHttp((200, _page("incoming_phone_numbers", owned)))
+
+        assert await _adapter(http).find_number_sid("+13125550100") == owned["sid"]
+
+        [request] = http.requests
+        assert request["method"] == "GET"
+        assert request["path"] == f"{API}/IncomingPhoneNumbers.json"
+        assert request["params"]["PhoneNumber"] == "+13125550100"
+
+    async def test_a_number_the_account_does_not_own_is_none(self) -> None:
+        http = FakeTwilioHttp((200, _page("incoming_phone_numbers")))
+        assert await _adapter(http).find_number_sid("+13125550100") is None
+
+    async def test_refused_credentials_raise_a_rest_error(self) -> None:
+        """The SDK's paging raises a bare TwilioException for a refused list;
+        it arrives as the TwilioRestException callers map to a 422."""
+        http = FakeTwilioHttp((401, {"code": 20003, "message": "Authenticate"}))
+
+        with pytest.raises(TwilioRestException) as raised:
+            await _adapter(http).find_number_sid("+13125550100")
+
+        assert raised.value.status == 401
+
+
+class TestRelease:
+    async def test_deletes_the_incoming_number(self) -> None:
+        http = FakeTwilioHttp((204, {}))
+
+        assert await _adapter(http).release_number("PN" + "b" * 32) is None
+
+        [request] = http.requests
+        assert request["method"] == "DELETE"
+        assert request["path"] == f"{API}/IncomingPhoneNumbers/{'PN' + 'b' * 32}.json"
+
+    async def test_a_number_the_account_does_not_own_raises_404(self) -> None:
+        http = FakeTwilioHttp((404, {"code": 20404, "message": "Not Found"}))
+
+        with pytest.raises(TwilioRestException) as raised:
+            await _adapter(http).release_number("PN" + "b" * 32)
+
+        assert raised.value.status == 404

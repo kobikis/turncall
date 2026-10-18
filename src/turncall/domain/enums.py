@@ -182,7 +182,9 @@ class AuditAction(StrEnum):
     publish or rollback took out of service; `deleted` is an agent deleted
     through the API (archived too, but asked for). `purchased` is a number
     bought on a carrier account (ADR-0025): its entry's resource id is the
-    E.164 number, since a bought number has no binding yet."""
+    E.164 number, since a bought number has no binding yet. `released` is a
+    number given back to its carrier (irreversible), keyed the same way: only
+    an unbound number can be released."""
 
     CREATED = "created"
     UPDATED = "updated"
@@ -199,6 +201,7 @@ class AuditAction(StrEnum):
     REDACTION_SET = "redaction_set"
     RETENTION_SET = "retention_set"
     PURCHASED = "purchased"
+    RELEASED = "released"
 
 
 class AuditActor(StrEnum):

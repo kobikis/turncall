@@ -303,3 +303,57 @@ class PurchasedNumberResponse(BaseModel):
     # Telnyx only: the number order the purchase placed. Not the number's id:
     # that is `external_number_sid`, once the order has finished.
     telnyx_order_id: str | None = None
+
+
+# --- release (#321, ADR-0025) ----------------------------------------------
+
+
+class ReleasePhoneNumberRequest(TwilioAccountFields):
+    """Give a number on the carrier account back to the carrier. Irreversible:
+    `confirm` must repeat `e164_number` exactly, so a release is never a
+    default, a copied body or a stray `true`. On Twilio, the account it is
+    released from is the pair given here, else the platform's TWILIO_*
+    account, as on a purchase."""
+
+    carrier: PurchaseCarrier = Field(
+        default=DEFAULT_CARRIER,
+        description="The carrier whose account the number is released from.",
+    )
+    e164_number: str = Field(..., pattern=E164_PATTERN)
+    confirm: str | None = Field(
+        default=None,
+        description=(
+            "The number being released, repeated (it must equal `e164_number`). "
+            "Releasing is irreversible: the carrier may sell the number to "
+            "someone else."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_release(self) -> "ReleasePhoneNumberRequest":
+        if self.carrier != TWILIO:
+            only_on_twilio(self, self.carrier)
+        if self.confirm != self.e164_number:
+            msg = (
+                "releasing a number is irreversible: set confirm to the number "
+                f"being released ({self.e164_number})"
+            )
+            raise ValueError(msg)
+        return self
+
+
+class ReleasedNumberResponse(BaseModel):
+    """A number given back to its carrier: no longer on the account, and no
+    longer TurnCall's to bind."""
+
+    model_config = ConfigDict(frozen=True)
+
+    carrier: str
+    e164_number: str
+    # The carrier's id of the number released: a Twilio PN SID, a Telnyx
+    # phone number id.
+    external_number_sid: str
+    status: str = "released"
+    # Twilio only: the account it was released from, null for the platform's.
+    twilio_account_sid: str | None = None
+    twilio_credentials: str | None = None  # "number" | "platform"; null off Twilio

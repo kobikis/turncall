@@ -1,14 +1,16 @@
-"""Searching and buying numbers on Telnyx (#320, ADR-0025): the adapter's
-REST, against an in-memory Telnyx.
+"""Searching, buying and releasing numbers on Telnyx (#320, #321,
+ADR-0025): the adapter's REST, against an in-memory Telnyx.
 
 A search is `GET /available_phone_numbers`, turned into the carrier-neutral
 shape a Twilio search returns. A purchase is a number order, which Telnyx
 finishes asynchronously, and whose ids are not the number's: the adapter
 looks at the order again for a few seconds, then finds the bought number on
 the account for the id bind stores. An order still pending is reported as
-pending, never as a failure: the money is spent. The route half is
-`test_phone_number_purchase.py`; the end-to-end half
-`tests/integration/test_harness_number_purchase.py`.
+pending, never as a failure: the money is spent. A release is
+`DELETE /phone_numbers/{id}`, by the phone number's id. The route halves are
+`test_phone_number_purchase.py` and `test_phone_number_release.py`; the
+end-to-end halves `tests/integration/test_harness_telnyx_number_purchase.py`
+and `test_harness_number_release.py`.
 """
 
 from __future__ import annotations
@@ -94,6 +96,15 @@ class FakeTelnyx:
             digits = request.url.params["filter[phone_number]"]
             found = [n for n in self.numbers if digits in n["phone_number"]]
             return httpx.Response(200, json={"data": found})
+        if key.startswith("DELETE /phone_numbers/"):
+            number_id = key.removeprefix("DELETE /phone_numbers/")
+            gone = [n for n in self.numbers if n["id"] == number_id]
+            if not gone:
+                return httpx.Response(
+                    404, json={"errors": [{"code": "10005", "detail": "Not found"}]}
+                )
+            self.numbers.remove(gone[0])
+            return httpx.Response(200, json={"data": gone[0]})
         raise AssertionError(f"unexpected {key}")
 
     def _order(self) -> dict[str, Any]:
@@ -267,3 +278,30 @@ class TestBuy:
         bought = await telnyx.adapter().buy_number(E164)
         assert bought["status"] == "pending"
         assert bought["number_sid"] is None
+
+
+class TestRelease:
+    async def test_deletes_the_number_by_its_phone_number_id(self) -> None:
+        telnyx = FakeTelnyx()
+        telnyx.numbers.append({"id": "pn-777", "phone_number": E164})
+
+        assert await telnyx.adapter().release_number("pn-777") is None
+
+        [request] = telnyx.requests
+        assert request.method == "DELETE"
+        assert request.url.path == "/v2/phone_numbers/pn-777"
+        assert request.headers["Authorization"] == "Bearer KEY"
+        assert telnyx.numbers == []
+
+    async def test_the_id_is_escaped_into_the_path(self) -> None:
+        telnyx = FakeTelnyx()
+        with pytest.raises(TelnyxApiError):
+            await telnyx.adapter().release_number("a/b")
+        assert telnyx.requests[0].url.raw_path == b"/v2/phone_numbers/a%2Fb"
+
+    async def test_a_number_not_on_the_account_raises_404(self) -> None:
+        telnyx = FakeTelnyx()
+        with pytest.raises(TelnyxApiError) as raised:
+            await telnyx.adapter().release_number("pn-404")
+        assert raised.value.status == 404
+        assert raised.value.codes == ["10005"]

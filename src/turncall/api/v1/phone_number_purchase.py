@@ -1,8 +1,15 @@
-"""Searching and buying numbers on a carrier account (#319, #320, ADR-0025).
+"""Searching, buying and releasing numbers on a carrier account (#319, #320,
+#321, ADR-0025).
 
-Admin-only: buying spends the operator's money. A bought number is bound with
-`POST /v1/phone-numbers` like any other; buying writes no binding, so the
-audit entry's resource id is the E.164 number.
+Admin-only: buying spends the operator's money and releasing is irreversible.
+A bought number is bound with `POST /v1/phone-numbers` like any other; buying
+writes no binding, so the audit entry's resource id is the E.164 number.
+
+A number is bound exactly when TurnCall has a `phone_numbers` row for it, so
+a release targets a number on the carrier account by its E.164, refuses one
+that is bound (409: unbind it first, which leaves it on the account), and
+needs `confirm` to repeat the number (422 without it). Unbinding never
+releases.
 
 Twilio has no project credential: its account rides on the number (ADR-0020's
 addendum). So the search and the buy run on the Twilio account the request
@@ -40,6 +47,8 @@ from turncall.api.v1.schemas.phone_numbers import (
     NumberType,
     PurchaseCarrier,
     PurchasedNumberResponse,
+    ReleasedNumberResponse,
+    ReleasePhoneNumberRequest,
     TwilioAccountFields,
 )
 from turncall.auth import AdminAuth
@@ -178,6 +187,53 @@ async def buy_phone_number(
     return ok(bought.model_dump())
 
 
+@router.post("/release")
+async def release_phone_number(
+    body: ReleasePhoneNumberRequest,
+    auth: AdminAuth,
+    session: DbSession,
+    audit: Audit,
+) -> dict:
+    """Give a number on the carrier account back to the carrier. Admin only.
+    **Irreversible**: the carrier may sell the number to someone else.
+    `confirm` must repeat `e164_number` (422 otherwise). A number TurnCall
+    still binds is refused (409): unbind it first with
+    `DELETE /v1/phone-numbers/{id}`, which leaves it on the account."""
+    bound = await phone_number_repo.get_by_e164(session, body.e164_number)
+    if bound is not None:
+        ours = bound.project_id == auth.project_id
+        raise ConflictError(
+            f"Phone number {body.e164_number} is bound; unbind it before releasing it",
+            details={"phone_number_id": str(bound.id)} if ours else None,
+        )
+
+    if body.carrier == TELNYX:
+        account = await project_telnyx_account(
+            session, auth.project_id, purpose="release the number on"
+        )
+        released = await _release_on_telnyx(account, body.e164_number)
+        before = audit_log.fields(
+            carrier=released.carrier,
+            e164_number=released.e164_number,
+            external_number_sid=released.external_number_sid,
+        )
+    else:
+        released = await _release_on_twilio(body)
+        before = audit_log.fields(
+            carrier=released.carrier,
+            e164_number=released.e164_number,
+            external_number_sid=released.external_number_sid,
+            twilio_account_sid=released.twilio_account_sid,
+        )
+    audit.record(
+        AuditResource.PHONE_NUMBER,
+        released.e164_number,
+        AuditAction.RELEASED,
+        before=before,
+    )
+    return ok(released.model_dump())
+
+
 async def _search_on_twilio(
     fields: TwilioAccountFields, country: str, **filters: Any
 ) -> list[dict[str, Any]]:
@@ -214,6 +270,36 @@ async def _buy_on_twilio(body: BuyPhoneNumberRequest) -> PurchasedNumberResponse
         external_number_sid=number["number_sid"],
         friendly_name=number.get("friendly_name"),
         status=number.get("status", "active"),
+        twilio_account_sid=account.account_sid if body.has_own_twilio else None,
+        twilio_credentials="number" if body.has_own_twilio else "platform",
+    )
+
+
+async def _release_on_twilio(
+    body: ReleasePhoneNumberRequest,
+) -> ReleasedNumberResponse:
+    from twilio.base.exceptions import TwilioRestException
+
+    account = _twilio_account(body)
+    adapter = account.adapter()
+    try:
+        number_sid = await adapter.find_number_sid(body.e164_number)
+        if number_sid is None:
+            raise _unprocessable(
+                f"{body.e164_number} is not a phone number on this Twilio account"
+            )
+        await adapter.release_number(number_sid)
+    except TwilioRestException as exc:
+        if exc.status == 404:
+            # Gone between the lookup and the release: not released here.
+            raise _unprocessable(
+                f"{body.e164_number} is not a phone number on this Twilio account"
+            ) from exc
+        _twilio_failed(exc, own=body.has_own_twilio)
+    return ReleasedNumberResponse(
+        carrier=TWILIO,
+        e164_number=body.e164_number,
+        external_number_sid=number_sid,
         twilio_account_sid=account.account_sid if body.has_own_twilio else None,
         twilio_credentials="number" if body.has_own_twilio else "platform",
     )
@@ -284,6 +370,29 @@ async def _buy_on_telnyx(account: TelnyxAccount, e164: str) -> PurchasedNumberRe
         friendly_name=number.get("friendly_name"),
         status=number["status"],
         telnyx_order_id=number.get("order_id"),
+    )
+
+
+async def _release_on_telnyx(
+    account: TelnyxAccount, e164: str
+) -> ReleasedNumberResponse:
+    from turncall.adapters.telephony.telnyx_adapter import TelnyxApiError
+
+    adapter = account.adapter()
+    try:
+        found = await adapter.find_number(e164)
+        if found is None:
+            # Also a number whose order has not finished: it is not on the
+            # account yet.
+            raise _unprocessable(
+                f"{e164} is not a phone number on this project's Telnyx account"
+            )
+        number_id = str(found["id"])
+        await adapter.release_number(number_id)
+    except TelnyxApiError as exc:
+        _telnyx_failed(exc)
+    return ReleasedNumberResponse(
+        carrier=TELNYX, e164_number=e164, external_number_sid=number_id
     )
 
 

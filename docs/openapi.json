@@ -2605,6 +2605,77 @@
         }
       }
     },
+    "/v1/phone-numbers/release": {
+      "post": {
+        "tags": [
+          "phone-numbers"
+        ],
+        "summary": "Release Phone Number",
+        "description": "Give a number on the carrier account back to the carrier. Admin only.\n**Irreversible**: the carrier may sell the number to someone else.\n`confirm` must repeat `e164_number` (422 otherwise). A number TurnCall\nstill binds is refused (409): unbind it first with\n`DELETE /v1/phone-numbers/{id}`, which leaves it on the account.",
+        "operationId": "release_phone_number_v1_phone_numbers_release_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleasePhoneNumberRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Release Phone Number V1 Phone Numbers Release Post"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/phone-numbers": {
       "post": {
         "tags": [
@@ -8407,10 +8478,11 @@
           "limits_set",
           "redaction_set",
           "retention_set",
-          "purchased"
+          "purchased",
+          "released"
         ],
         "title": "AuditAction",
-        "description": "What was done to the resource. `archived` is an agent version a\npublish or rollback took out of service; `deleted` is an agent deleted\nthrough the API (archived too, but asked for). `purchased` is a number\nbought on a carrier account (ADR-0025): its entry's resource id is the\nE.164 number, since a bought number has no binding yet."
+        "description": "What was done to the resource. `archived` is an agent version a\npublish or rollback took out of service; `deleted` is an agent deleted\nthrough the API (archived too, but asked for). `purchased` is a number\nbought on a carrier account (ADR-0025): its entry's resource id is the\nE.164 number, since a bought number has no binding yet. `released` is a\nnumber given back to its carrier (irreversible), keyed the same way: only\nan unbound number can be released."
       },
       "AuditResource": {
         "type": "string",
@@ -10317,6 +10389,68 @@
           "description"
         ],
         "title": "RegisterToolRequest"
+      },
+      "ReleasePhoneNumberRequest": {
+        "properties": {
+          "twilio_account_sid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^AC[0-9a-fA-F]{32}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Twilio Account Sid"
+          },
+          "twilio_auth_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Twilio Auth Token"
+          },
+          "carrier": {
+            "type": "string",
+            "enum": [
+              "twilio",
+              "telnyx"
+            ],
+            "title": "Carrier",
+            "description": "The carrier whose account the number is released from.",
+            "default": "twilio"
+          },
+          "e164_number": {
+            "type": "string",
+            "pattern": "^\\+[1-9]\\d{1,14}$",
+            "title": "E164 Number"
+          },
+          "confirm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirm",
+            "description": "The number being released, repeated (it must equal `e164_number`). Releasing is irreversible: the carrier may sell the number to someone else."
+          }
+        },
+        "type": "object",
+        "required": [
+          "e164_number"
+        ],
+        "title": "ReleasePhoneNumberRequest",
+        "description": "Give a number on the carrier account back to the carrier. Irreversible:\n`confirm` must repeat `e164_number` exactly, so a release is never a\ndefault, a copied body or a stray `true`. On Twilio, the account it is\nreleased from is the pair given here, else the platform's TWILIO_*\naccount, as on a purchase."
       },
       "RetentionSchema": {
         "properties": {

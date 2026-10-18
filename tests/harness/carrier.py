@@ -8,7 +8,9 @@ stream. `FakeCarrier` is the first half — every REST action lands in
 the numbers it owns and the URLs TurnCall configured on them, and the numbers
 it has for sale (`offer`: a search lists them, `buy_number` moves one onto the
 account; on Telnyx, `hold_orders` keeps a bought number on order until
-`finish_orders`, as an unfinished Telnyx number order does). The inbound edge
+`finish_orders`, as an unfinished Telnyx number order does; `release_number`
+takes a number off the account, and it is not put back on sale). The inbound
+edge
 is per carrier format (`twilio.py`, `telnyx.py`).
 
 One fake stands in for every carrier: a Telnyx command lands in the same
@@ -36,7 +38,7 @@ class CarrierAction:
     """One REST request TurnCall made. `account_sid` is the account it used."""
 
     # dial | hang_up | transfer | send_dtmf | configure_number | configure_sms |
-    # buy_number | ...
+    # buy_number | release_number | ...
     kind: str
     account_sid: str
     params: dict[str, Any] = field(default_factory=dict)
@@ -122,6 +124,17 @@ class FakeCarrier:
 
     def _by_sid(self, sid: str) -> FakeNumber | None:
         return next((n for n in self._numbers.values() if n.sid == sid), None)
+
+    def owns(self, e164: str) -> bool:
+        return e164 in self._numbers
+
+    def _release(self, sid: str) -> FakeNumber | None:
+        """Take a number off the account for good (a release); None if the
+        account has no number `sid`."""
+        number = self._by_sid(sid)
+        if number is not None:
+            del self._numbers[number.e164]
+        return number
 
     def offer(self, e164: str, **fields: Any) -> OfferedNumber:
         """Put a number up for sale: a search can list it and a buy takes it.
@@ -358,6 +371,22 @@ class FakeTelephonyAdapter(TelephonyAdapter):
             "status": "active",
         }
 
+    async def release_number(self, number_sid: str) -> None:
+        """Release a number off the account, recorded as `release_number`.
+        One the account does not own is refused as Twilio refuses it: a 404."""
+        from twilio.base.exceptions import TwilioRestException
+
+        number = self._carrier._release(number_sid)
+        if number is None:
+            raise TwilioRestException(
+                404,
+                f"/IncomingPhoneNumbers/{number_sid}.json",
+                msg="The requested resource was not found",
+                code=20404,
+                method="DELETE",
+            )
+        await self._record("release_number", number_sid=number.sid, e164=number.e164)
+
     async def send_sms(self, from_number: str, to_number: str, body: str) -> str:
         message_sid = "SM" + secrets.token_hex(16)
         await self._record(
@@ -394,7 +423,8 @@ _DIAL_FIELDS = (
 class FakeTelnyxAdapter(FakeTelephonyAdapter):
     """Telnyx's commands, recorded. `account_sid` on its actions is the API key
     the app used. A search and a purchase answer as `TelnyxAdapter` does (a
-    purchase is a number order, `hold_orders` keeps it pending). `answer` and `reject` are Telnyx's own: Call Control answers
+    purchase is a number order, `hold_orders` keeps it pending), and so does
+    a release. `answer` and `reject` are Telnyx's own: Call Control answers
     or refuses a call with a REST command where Twilio reads TwiML. So is a
     transfer's sequence (`stop_streaming`, `speak`, `start_playback`,
     `stop_playback`, `dial`, `bridge`); `telnyx.TelnyxCall.complete_transfer`
@@ -512,6 +542,16 @@ class FakeTelnyxAdapter(FakeTelephonyAdapter):
             "status": "active" if number else "pending",
             "order_id": order_id,
         }
+
+    async def release_number(self, number_id: str) -> None:
+        """Delete a number off the account, recorded as `release_number`, as
+        `TelnyxAdapter` does. One the account does not have is a 404."""
+        from turncall.adapters.telephony.telnyx_adapter import TelnyxApiError
+
+        number = self._carrier._release(number_id)
+        if number is None:
+            raise TelnyxApiError(404, ["10005"], "Resource not found")
+        await self._record("release_number", number_sid=number.sid, e164=number.e164)
 
     async def find_number(self, e164: str) -> dict[str, Any] | None:
         number = self._carrier._numbers.get(e164)

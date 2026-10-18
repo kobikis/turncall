@@ -445,6 +445,20 @@ class TelnyxAdapter(TelephonyAdapter):
             "order_id": order_id,
         }
 
+    async def release_number(self, number_id: str) -> None:
+        """Delete the phone number from this account, back to Telnyx.
+        Irreversible: Telnyx may sell it to someone else.
+
+        Telnyx's own (ADR-0025), not a `TelephonyAdapter` action. `number_id`
+        is the phone number's id (`find_number(e164)["id"]`, what bind
+        stores), never a number order's or its line's. Raises
+        `TelnyxApiError`: 404 when the account has no such number, 401/403 on
+        a bad key, a 4xx for a number Telnyx will not delete yet (one still
+        on a pending order).
+        """
+        await self._request("DELETE", f"/phone_numbers/{quote(number_id, safe='')}")
+        logger.info("telnyx_number_released", number_id=number_id)
+
     async def _settle(self, order: dict[str, Any]) -> dict[str, Any]:
         """The order once it is no longer pending, or as it stands after
         `ORDER_POLL_DELAYS`. Not waited on when it awaits requirements (a

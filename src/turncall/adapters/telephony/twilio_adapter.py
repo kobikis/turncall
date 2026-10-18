@@ -157,10 +157,20 @@ class TwilioAdapter(TelephonyAdapter):
 
     async def find_number_sid(self, e164_number: str) -> str | None:
         """The PN SID of this E.164 number on this account, or None if the
-        account does not own it. Raises TwilioRestException on bad credentials."""
-        numbers = self._client.incoming_phone_numbers.list(
-            phone_number=e164_number, limit=1
-        )
+        account does not own it. Raises TwilioRestException on bad credentials
+        (a refused list arrives from the SDK as a bare TwilioException; it is
+        converted, so a 401 reads as one). Off the event loop."""
+
+        def _find() -> list[Any]:
+            listing = self._client.incoming_phone_numbers
+            try:
+                return list(listing.list(phone_number=e164_number, limit=1))
+            except TwilioRestException:
+                raise
+            except TwilioException as exc:
+                raise _page_error(exc, listing._uri) from exc
+
+        numbers = await asyncio.to_thread(_find)
         return numbers[0].sid if numbers else None
 
     async def search_numbers(
@@ -222,6 +232,21 @@ class TwilioAdapter(TelephonyAdapter):
             # A Twilio purchase is immediate: the number can be bound now.
             "status": "active",
         }
+
+    async def release_number(self, number_sid: str) -> None:
+        """Release the number from this account, back to Twilio. Irreversible:
+        Twilio may sell it to someone else.
+
+        Twilio's own (ADR-0025), not a `TelephonyAdapter` action. Raises
+        TwilioRestException: 404 when the account does not own `number_sid`,
+        401/403 on bad credentials. Off the event loop.
+        """
+
+        def _release() -> None:
+            self._client.incoming_phone_numbers(number_sid).delete()
+
+        await asyncio.to_thread(_release)
+        logger.info("twilio_number_released", number_sid=number_sid)
 
     async def send_sms(
         self,
