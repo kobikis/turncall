@@ -695,6 +695,17 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **A log line carrying a Telnyx error is written** (#352). Both log sinks
+  are `enqueue=True`, so loguru pickles every record, a logged exception
+  included, and rebuilds it on its writer thread. `TelnyxApiError`,
+  `TelnyxOrderFailed`, `DialNotRecorded` and `ApiError` with two of its
+  subclasses (`NotFoundError`, `InvalidStateTransitionError`) take more than
+  their message, could not be rebuilt, and loguru dropped the line (`Logging
+  error ... Record was: None`); `MissingProviderKeyError` came back with a
+  garbled message. They now rebuild from their arguments and attributes
+  without calling `__init__` (`domain/errors.PicklableError`), and a test
+  holds every TurnCall exception with an `__init__` of its own to that.
+
 - **A Twilio number is found by its exact E.164** (#344). Looking a number up
   on a Twilio account (bind with `twilio_account_sid` +
   `twilio_auth_token`, and release) used Twilio's `PhoneNumber` filter,

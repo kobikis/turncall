@@ -22,6 +22,7 @@ import httpx
 from loguru import logger
 
 from turncall.adapters.telephony.base import TelephonyAdapter
+from turncall.domain.errors import PicklableError
 
 TELNYX_API_BASE = "https://api.telnyx.com/v2"
 # What the media stream carries both ways: 8 kHz mu-law, the encoding pipecat's
@@ -52,7 +53,7 @@ ORDER_SUCCESS = "success"
 ORDER_ENDED_UNBOUGHT: frozenset[str] = frozenset({"failure", "cancelled", "deleted"})
 
 
-class TelnyxApiError(RuntimeError):
+class TelnyxApiError(PicklableError, RuntimeError):
     """Telnyx refused a command. `status` is the HTTP status, `codes` its
     error codes (strings, as Telnyx sends them)."""
 
@@ -67,7 +68,7 @@ class TelnyxNumberError(RuntimeError):
     account, or on no Call Control application to dial from."""
 
 
-class TelnyxOrderFailed(TelnyxNumberError):
+class TelnyxOrderFailed(PicklableError, TelnyxNumberError):
     """Telnyx accepted a number order and then ended it unbought (failed,
     cancelled or deleted): nothing is on the account."""
 
