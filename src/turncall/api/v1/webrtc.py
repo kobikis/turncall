@@ -75,16 +75,8 @@ _request_handler = SmallWebRTCRequestHandler(
 _calls_by_pc: dict[str, tuple[UUID, UUID]] = {}
 
 
-@router.post("/connect", status_code=200)
-async def webrtc_connect(
-    request: Request,
-    auth: WriteAuth,
-    session: DbSession,
-) -> JSONResponse:
-    """WebRTC signaling endpoint — SDP offer/answer exchange.
-
-    Accepts SDP offer, creates pipeline, returns SDP answer.
-    """
+async def _json_object(request: Request) -> dict[str, Any]:
+    """The request's body as a JSON object; 400 otherwise."""
     try:
         body = await request.json()
     except Exception as exc:
@@ -99,6 +91,20 @@ async def webrtc_connect(
             code=ErrorCode.VALIDATION_ERROR,
             message="Request body must be a JSON object",
         )
+    return body
+
+
+@router.post("/connect", status_code=200)
+async def webrtc_connect(
+    request: Request,
+    auth: WriteAuth,
+    session: DbSession,
+) -> JSONResponse:
+    """WebRTC signaling endpoint — SDP offer/answer exchange.
+
+    Accepts SDP offer, creates pipeline, returns SDP answer.
+    """
+    body = await _json_object(request)
     logger.info("WebRTC connect request: {keys}", keys=list(body.keys()))
 
     try:
@@ -357,18 +363,24 @@ async def webrtc_connect(
     return JSONResponse(content=answer)
 
 
+def _held_call_id(pc_id: str | None, project_id: UUID) -> UUID:
+    """The call a held connection carries, if it is the project's.
+
+    A pc_id is the client's to repeat, not a credential: one whose call is
+    another project's, or that no call of ours claims, is a 404 either way, so
+    the answer never says whether the pc_id exists.
+    """
+    held = _calls_by_pc.get(pc_id or "")
+    if held is None or held[1] != project_id:
+        raise NotFoundError("WebRTC connection", str(pc_id))
+    return held[0]
+
+
 async def _renegotiate(
     webrtc_request: SmallWebRTCRequest, project_id: UUID
 ) -> JSONResponse:
-    """Answer a renegotiation of a held connection, under its call's id.
-
-    A pc_id is the client's to repeat, not a credential: one whose call is
-    another project's, or that no call of ours claims, is a 404.
-    """
-    held = _calls_by_pc.get(webrtc_request.pc_id or "")
-    if held is None or held[1] != project_id:
-        raise NotFoundError("WebRTC connection", str(webrtc_request.pc_id))
-    call_id = held[0]
+    """Answer a renegotiation of a held connection, under its call's id."""
+    call_id = _held_call_id(webrtc_request.pc_id, project_id)
 
     async def _no_new_call(_connection: SmallWebRTCConnection) -> None:
         raise RuntimeError("a renegotiation opened a new connection")
@@ -380,30 +392,40 @@ async def _renegotiate(
             code=ErrorCode.INTERNAL_ERROR,
             message="Failed to create WebRTC answer",
         )
+    # A restart (`restart_pc`) replaces the peer connection, and the new one has
+    # a pc_id of its own: the client trickles and renegotiates under it from
+    # here, and its `closed` is what forgets it.
+    old_pc_id, new_pc_id = webrtc_request.pc_id or "", answer.get("pc_id")
+    if new_pc_id and new_pc_id != old_pc_id:
+        _calls_by_pc.pop(old_pc_id, None)
+        _calls_by_pc[new_pc_id] = (call_id, project_id)
     logger.info("WebRTC renegotiated: call={call_id}", call_id=str(call_id))
     return JSONResponse(content={**answer, "call_id": str(call_id)})
 
 
 @router.patch("/connect", status_code=200)
-async def webrtc_ice_candidate(request: Request) -> JSONResponse:
+async def webrtc_ice_candidate(request: Request, auth: WriteAuth) -> JSONResponse:
     """WebRTC signaling endpoint — ICE candidate trickle.
 
-    Accepts ICE candidates and forwards them to the peer connection.
+    Authorised as its connection was (#342): a key that could have opened it,
+    for the project whose call holds the `pc_id`. Anything else is answered
+    before pipecat sees a candidate.
     """
-    body = await request.json()
+    body = await _json_object(request)
+    pc_id = str(body.get("pc_id") or "")
+    _held_call_id(pc_id, auth.project_id)
 
+    raw = body.get("candidates")
     candidates = [
         IceCandidate(
             candidate=c.get("candidate", ""),
             sdp_mid=c.get("sdpMid", c.get("sdp_mid", "")),
             sdp_mline_index=c.get("sdpMLineIndex", c.get("sdp_mline_index", 0)),
         )
-        for c in body.get("candidates", [])
+        for c in (raw if isinstance(raw, list) else [])
+        if isinstance(c, dict)
     ]
-    patch_request = SmallWebRTCPatchRequest(
-        pc_id=body.get("pc_id", ""),
-        candidates=candidates,
-    )
+    patch_request = SmallWebRTCPatchRequest(pc_id=pc_id, candidates=candidates)
 
     await _request_handler.handle_patch_request(patch_request)
     return JSONResponse(content={"status": "ok"})

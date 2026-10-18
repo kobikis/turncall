@@ -7372,14 +7372,42 @@
           "webrtc"
         ],
         "summary": "Webrtc Ice Candidate",
-        "description": "WebRTC signaling endpoint \u2014 ICE candidate trickle.\n\nAccepts ICE candidates and forwards them to the peer connection.",
+        "description": "WebRTC signaling endpoint \u2014 ICE candidate trickle.\n\nAuthorised as its connection was (#342): a key that could have opened it,\nfor the project whose call holds the `pc_id`. Anything else is answered\nbefore pipecat sees a candidate.",
         "operationId": "webrtc_ice_candidate_v1_webrtc_connect_patch",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }

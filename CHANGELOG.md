@@ -693,6 +693,20 @@ and is not part of this repository's history.
   `whatsapp_enabled` number) without it. Meta's subscription handshake
   (`GET`, `hub.challenge`) is unaffected. See the upgrade notes.
 
+- **ICE trickle needs the key that opened the connection** (#342).
+  `PATCH /v1/webrtc/connect` took no API key and checked nothing but the
+  body's `pc_id`, which is not a secret (it shows in logs, browser
+  extensions, shared screens), so whoever learned a live call's `pc_id` could
+  add ICE candidates to its peer connection, whatever project the call was
+  in. It now takes the same key as the `POST` (admin or developer; a viewer
+  key is a `403`): no key is a `401`, and a `pc_id` no call of the key's
+  project holds is a `404` that does not say whether it exists. Nothing
+  reaches pipecat in either case. A body that is not a JSON object is a
+  `400`, as on the `POST` (it was a `500`). A connection restarted with
+  `restart_pc` is now held under the new `pc_id` pipecat answers with, so its
+  trickle and a later renegotiation reach it; a second renegotiation of a
+  restarted connection used to be a `404`. See the upgrade notes.
+
 ### Fixed
 
 - **A Twilio number is found by its exact E.164** (#344). Looking a number up
@@ -1025,6 +1039,13 @@ and is not part of this repository's history.
   `TURNCALL_ENV` still defaults to `development`, which accepts them
   unverified, so a production or staging deployment that never set it must
   set it now (startup says so when it is unset).
+- **Send the API key on the ICE trickle too** (#342). A client that sends
+  `PATCH /v1/webrtc/connect` without `Authorization` now gets a `401`, and
+  its call loses the candidates it trickles. pipecat's browser transport
+  already sends the `POST`'s headers on every `PATCH`, so a client that set
+  `Authorization` in `webrtcRequestParams.headers` (as
+  `examples/webrtc-client` does) needs nothing. A proxy that forwards the
+  `PATCH` must add the key as it does for the `POST`.
 - **Viewer keys lose four routes** (#335): linking and unlinking an agent's
   knowledge base, `POST /v1/calls/{call_id}/analysis/rerun` and
   `POST /v1/webrtc/connect` now need an admin or developer key. Replace a
