@@ -13,6 +13,24 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Release numbers** (#321, ADR-0025). `POST /v1/phone-numbers/release`
+  gives a number on the carrier account back to the carrier, on Twilio and
+  Telnyx, admin-only (a developer or viewer key gets `403`). Releasing is
+  irreversible, so it is refused with a `409` while TurnCall binds the number
+  (`details.phone_number_id` names the binding when it is the caller's
+  project's; unbind it first) and with a `422` unless `confirm` repeats
+  `e164_number` exactly (`true` or another number is refused too). The body
+  is `carrier` (`twilio` default, or `telnyx`), `e164_number`, `confirm`,
+  and on Twilio an optional `twilio_account_sid` + `twilio_auth_token`
+  (else the platform's `TWILIO_*` account); Telnyx uses the project's
+  Telnyx account. The number is looked up on the account by E.164 (`422`
+  when the account does not hold it) and deleted (Twilio
+  `IncomingPhoneNumbers`, Telnyx `DELETE /v2/phone_numbers/{id}`). The
+  response is `carrier`, `e164_number`, `external_number_sid`,
+  `status: "released"`, `twilio_account_sid` / `twilio_credentials`. Each
+  release is an audit log entry, `phone_number` / `released`, keyed by the
+  E.164 number. Unbinding (`DELETE /v1/phone-numbers/{id}`) is unchanged and
+  never releases. No migration.
 - **Search and buy numbers on Telnyx** (#320, ADR-0025). The same
   `GET /v1/phone-numbers/available` and `POST /v1/phone-numbers/purchase`
   take `carrier=telnyx`, admin-only, on the project's Telnyx account (its
@@ -653,6 +671,12 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **Binding with a Twilio account that rejects its credentials is a `422`**
+  (#321). Looking a number up on a Twilio account (bind with
+  `twilio_account_sid` + `twilio_auth_token`, and now release) met the
+  Twilio SDK's bare "Unable to fetch page" exception on a refused request,
+  so a wrong Auth Token was a `500` instead of the documented `422`. The
+  lookup now reads Twilio's status, and runs off the event loop.
 - **A viewer key is refused on every route that changes something** (#335).
   These routes accepted any key, so a viewer key could change what an agent
   retrieves from, overwrite a call's analysis or start a call:

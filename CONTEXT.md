@@ -300,12 +300,14 @@ _Avoid_: "provision", "order" (Telnyx's word for its asynchronous purchase), "ad
 number" (reads as bind).
 
 **Release** (a number) (vs **unbind**):
-Giving a number back to its [[carrier]], so the operator stops paying for it and may
-never get it back. Distinct from unbinding, which only stops routing it to an agent and
-leaves it on the account. Admin-only, refused while the number is bound, and requires
-an explicit confirmation in the request. Its counterpart is buying a number through the
-engine on the project's own carrier account. See ADR-0025 (buying is built on Twilio and
-Telnyx; release is not yet).
+Giving a number back to its [[carrier]] (`POST /v1/phone-numbers/release`), so the
+operator stops paying for it and may never get it back. Distinct from unbinding, which
+only stops routing it to an agent and leaves it on the account; unbinding never
+releases. Admin-only, on Twilio and Telnyx, on the same account a purchase uses. A
+number is bound exactly when TurnCall holds a binding for it, so a release names the
+number on the carrier account by its E.164: it is refused while the number is bound
+(unbind first) and unless `confirm` repeats the number. Its counterpart is buying a
+number through the engine. See ADR-0025.
 _Avoid_: "delete number" (reads as unbind), "port out" (moving it to another carrier).
 
 ## Voicemail

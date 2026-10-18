@@ -1,7 +1,7 @@
 # ADR-0025: Buying and releasing numbers; SIP through a carrier or Asterisk
 
-**Status:** Accepted (search and buy built on Twilio in #319 and Telnyx in
-#320; release not yet)
+**Status:** Accepted (built: search and buy on Twilio in #319 and Telnyx in
+#320, release on both in #321)
 **Date:** 2026-10-16
 **Relates to:** ADR-0020 (project credentials), ADR-0022 (carrier boundary).
 Tracked in #307.
@@ -85,3 +85,25 @@ order finishes was rejected (an order awaiting documents can take days), as was
 a stored "ordered" row (bind has no unbound state to keep it in). Once the
 order is placed only a `failure` status is an error: the money is spent, so a
 pending purchase is audited like a finished one.
+
+**Release** (#321). `POST /v1/phone-numbers/release`, admin-only, on Twilio
+and Telnyx, on the account a purchase uses. A binding has no unbound state
+(`phone_numbers.routing_target_type` is required), so a number is bound
+exactly when TurnCall has a `phone_numbers` row for it, and a release names
+the number on the carrier account by its E.164 rather than by a binding id.
+"Refuses a number that is still bound" is a `409` when any project has a row
+for that E.164; the caller unbinds first, which leaves the number on the
+account (unbind is unchanged and never releases). "An explicit confirmation
+field" is `confirm`, which must repeat `e164_number` exactly: a boolean
+`confirm: true` was rejected as too easy to send by default or copy between
+requests, and repeating the number is what a person confirming would type.
+Anything else is a `422` before TurnCall looks the number up.
+
+The number is found on the account by E.164 (Twilio's PN SID, Telnyx's phone
+number id; a number the account does not hold, including a Telnyx number
+still on order, is a `422`) and deleted with a concrete `release_number` on
+each adapter, again not a `TelephonyAdapter` action. The release is audited
+as `phone_number`/`released`, keyed by the E.164 number with the released
+number as its "before", only once the carrier has released it: a refused
+release raises, so nothing commits. A number released on a shared platform
+account is gone for every project on it; the admin-only rule is the guard.

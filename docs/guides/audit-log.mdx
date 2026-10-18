@@ -14,7 +14,7 @@ Entries are append-only. Nothing in the API updates or deletes one, and they are
 |----------|----------|----------|
 | `agent` | create, update, delete, publish, roll back; link and unlink a knowledge base | `created`, `updated`, `deleted`, `published`, `rolled_back`, `knowledge_base_linked`, `knowledge_base_unlinked`; `archived` for a version a publish or rollback took out of service |
 | `credential` | store or replace, delete (`/v1/credentials/{provider}`) | `created`, `updated`, `deleted` |
-| `phone_number` | bind, update, unbind; set and clear A/B routing; buy a number | `created`, `updated`, `deleted`, `routing_set`, `routing_cleared`, `purchased`; `updated` for a number a publish or rollback re-pointed |
+| `phone_number` | bind, update, unbind; set and clear A/B routing; buy and release a number | `created`, `updated`, `deleted`, `routing_set`, `routing_cleared`, `purchased`, `released`; `updated` for a number a publish or rollback re-pointed |
 | `api_key` | create (the first key and later ones), revoke | `created`, `revoked` |
 | `project` | create, set limits, redaction or retention, delete | `created`, `limits_set`, `redaction_set`, `retention_set`, `deleted` |
 
@@ -69,7 +69,7 @@ This needs an admin key; a developer or viewer key gets `403`. A key reads only 
 | Parameter | |
 |-----------|---|
 | `resource_type` | `agent`, `credential`, `phone_number`, `api_key` or `project` |
-| `resource_id` | The resource's id; a credential's is its provider account (`openai`, `aws`, ...); a bought number's is its E.164 number (`+13125550100`), on Twilio and Telnyx alike |
+| `resource_id` | The resource's id; a credential's is its provider account (`openai`, `aws`, ...); a bought or released number's is its E.164 number (`+13125550100`), on Twilio and Telnyx alike, since neither has a binding |
 | `action` | One of the actions above |
 | `request_id` | Every entry one request wrote: the id in its response's `X-TurnCall-Audit-Id` (see below) |
 | `since`, `until` | ISO 8601 times: entries at or after `since` and before `until`. A time without a zone is UTC |

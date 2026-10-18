@@ -238,8 +238,8 @@ want:
   `purchased`, whose `resource_id` is the E.164 number (a bought number has no
   binding yet). See [Audit log](/guides/audit-log).
 - **Billing.** The number stays on the carrier account, and is billed, until it
-  is released on the carrier. Unbinding (`DELETE /v1/phone-numbers/{id}`) does
-  not release it.
+  is [released](#release-a-number). Unbinding (`DELETE /v1/phone-numbers/{id}`)
+  does not release it.
 
 ### Buying on Telnyx
 
@@ -298,6 +298,67 @@ fails is a `422` with `details.telnyx_order_id`, and buys nothing. An API key
 Telnyx rejects is a `422`; anything else Telnyx fails on is a `502`
 (`telnyx_error`). A pending purchase is audited like any other: the money is
 spent.
+
+## Release a number
+
+Releasing gives a number on the carrier account back to the carrier, so it
+stops being billed. It takes an **admin** key (a developer or viewer key gets a
+`403`) and works on Twilio and Telnyx, on the same account a
+[purchase](#search-and-buy-a-number) uses.
+
+<Warning>
+Releasing is **irreversible**. The number leaves your carrier account, and the
+carrier may sell it to someone else: calls and texts to it stop reaching you,
+and you may never get it back. Unbinding is not releasing, and is the safe way
+to stop a number reaching TurnCall.
+</Warning>
+
+Two guards make a release deliberate:
+
+- **Unbound numbers only.** A number TurnCall still binds is refused with a
+  `409`; `details.phone_number_id` names the binding when it is your project's.
+  Unbind it first with `DELETE /v1/phone-numbers/{phone_number_id}`, which
+  leaves the number on the account.
+- **An explicit confirmation.** `confirm` must repeat `e164_number` exactly.
+  Without it, or with anything else (`true`, `"yes"`, another number), the
+  request is a `422` and nothing is released.
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers/release \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"carrier": "twilio", "e164_number": "+13125550100", "confirm": "+13125550100"}'
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "carrier": "twilio",
+    "e164_number": "+13125550100",
+    "external_number_sid": "PNxxxxxxxx",
+    "status": "released",
+    "twilio_account_sid": null,
+    "twilio_credentials": "platform"
+  }
+}
+```
+
+- **Which account.** On Twilio, the `twilio_account_sid` + `twilio_auth_token`
+  pair in the body, else the platform's `TWILIO_*` account (`503`
+  `no_twilio_account` with neither). On Telnyx (`"carrier": "telnyx"`), the
+  project's `telnyx` credential, else the platform's `TELNYX_API_KEY` (`503`
+  `no_telnyx_account` with neither). `carrier=asterisk` is a `422`.
+- **Found by its number.** TurnCall looks the number up on the account by its
+  E.164 and releases what it finds (Twilio's PN SID, Telnyx's phone number id,
+  returned as `external_number_sid`). A number the account does not hold is a
+  `422`, and so is a Telnyx number whose order has not finished.
+- **Refusals.** Credentials you sent that the carrier rejects, and anything
+  Telnyx refuses, are a `422`; anything else the carrier fails on is a `502`
+  (`twilio_error`, `telnyx_error`), and nothing is recorded.
+- **Audited.** Each release writes an audit log entry, `phone_number` /
+  `released`, whose `resource_id` is the E.164 number and whose "before" is the
+  number released. See [Audit log](/guides/audit-log).
 
 ## Update a Binding
 

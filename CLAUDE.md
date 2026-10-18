@@ -543,6 +543,28 @@ row's keys.
   is the order. Harness: `FakeTelnyxAdapter` has its own search/buy (records
   `buy_number` with `order_id`); `carrier.hold_orders = True` keeps bought
   numbers on order until `carrier.finish_orders()`.
+- **Release** (#321): `POST /v1/phone-numbers/release` (200, same module),
+  **admin-only**, Twilio and Telnyx. A number is bound exactly when it has a
+  `phone_numbers` row, so release targets a number on the carrier account by
+  **E.164**: a row for it (any project) → **409** (`details.phone_number_id`
+  only for the caller's own project); `confirm` must **equal `e164_number`**
+  (absent, `true`, another number → 422, from the schema's validator). Account
+  as for a buy (Twilio body pair or platform; Telnyx
+  `project_telnyx_account(purpose="release the number on")`). Lookup by E.164
+  (`find_number_sid` / `find_number`; not found → 422), then the concrete
+  `release_number(sid)` on `TwilioAdapter` (`IncomingPhoneNumbers(sid).delete()`)
+  / `TelnyxAdapter` (`DELETE /phone_numbers/{id}`, the phone-number id, never
+  an order's). Audited as `phone_number`/`released` keyed by the E.164 with
+  the released number as "before", only after the carrier released it.
+  **Unbind never releases** (it deletes the row and clears the carrier
+  routing; the number stays on the account) — pinned by
+  `test_phone_number_release.py::TestUnbindIsNotRelease` and the harness's
+  `test_unbinding_never_releases`. Harness: both fakes' `release_number`
+  records a `release_number` action `{number_sid, e164}` and takes the number
+  off the account (`carrier.owns(e164)` is then false; not back on sale).
+  Note that bind on Twilio's **platform** account trusts a given PN SID without
+  asking Twilio, so a released number's "gone" shows through a lookup (bind
+  with an own pair, a second release), not a platform bind.
 
 ## WhatsApp
 
@@ -909,6 +931,7 @@ Weighted traffic routing on phone numbers. Deterministic by caller number (SHA25
 ```
 GET    /v1/phone-numbers/available       # Search a carrier account's numbers (admin)
 POST   /v1/phone-numbers/purchase        # Buy one; bind it with POST /v1/phone-numbers (admin)
+POST   /v1/phone-numbers/release         # Give an unbound number back to the carrier; confirm = the E.164 (admin)
 PUT    /v1/phone-numbers/{id}            # Update binding in place (id + server_url_secret stable)
 PUT    /v1/phone-numbers/{id}/routing    # Set weights (must sum to 100)
 GET    /v1/phone-numbers/{id}/routing    # Get routing config

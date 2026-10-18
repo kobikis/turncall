@@ -19,6 +19,12 @@ purchase Telnyx has not finished within a few seconds answers `pending`; bind
 the number once it lands on the account. See
 [Buying on Telnyx](/guides/phone-numbers#buying-on-telnyx).
 
+**Release numbers.** An admin key can give a number back to its carrier, on
+Twilio or Telnyx. Releasing is irreversible, so it is refused while the number
+is bound (unbind it first) and needs `confirm` to repeat the number. It is
+recorded in the audit log. Unbinding still never releases. See
+[Release a number](/guides/phone-numbers#release-a-number).
+
 **A compliance mapping.** One page maps redaction, retention, the audit log,
 self-hosting, encrypted project credentials and signed webhooks to the GDPR
 and then HIPAA, and lists what stays your responsibility. TurnCall holds no
@@ -309,6 +315,10 @@ the caller heard it. The docs said it was left out, but it has always been in
 the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
+
+**A Twilio account that rejects its credentials is a `422` on bind.** Binding
+a number on your own Twilio account with a wrong Auth Token answered `500`; it
+now answers the documented `422`.
 
 **Numbers in event payloads are redacted.** With redaction on, a phone or
 card number a tool's arguments or a call's `metadata` carried as a JSON number
