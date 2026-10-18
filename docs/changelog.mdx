@@ -315,6 +315,15 @@ now, and a text session's never appears in a session read.
 as the call's agent, around every check an agent create makes. See
 [Returning an inline agent](/guides/call-init#returning-an-inline-agent).
 
+**ICE trickle needs your API key (security).** `PATCH /v1/webrtc/connect`
+took no key, so anyone who learned a live call's `pc_id` could add ICE
+candidates to its connection. It now needs the same admin or developer key as
+the `POST`, for the call's project: no key is a `401`, another project's or an
+unknown `pc_id` a `404`. pipecat's browser transport sends the `POST`'s
+headers on every `PATCH`, so a client that put `Authorization` there needs no
+change; a proxy that forwards the `PATCH` must add the key. See
+[ICE Trickle](/guides/webrtc#ice-trickle).
+
 **Ambience is in the call recording.** The agent's channel carries the room, as
 the caller heard it. The docs said it was left out, but it has always been in
 the recording. See [Ambience](/guides/ambience).

@@ -64,8 +64,15 @@ A call that does start and then loses a provider ends like any other from the br
 curl -X PATCH http://localhost:8090/v1/webrtc/connect \
   -H "Authorization: Bearer tc_xxx" \
   -H "Content-Type: application/json" \
-  -d '{"candidate": "...", "sdpMid": "0", "sdpMLineIndex": 0}'
+  -d '{"pc_id": "PC_ID", "candidates": [{"candidate": "...", "sdpMid": "0", "sdpMLineIndex": 0}]}'
 ```
+
+The trickle needs the same kind of key as the `POST` that opened the
+connection (admin or developer), for the project whose call it is. Without a
+key it is a `401`; a `pc_id` no call of that project holds is a `404`, whether
+it exists or not. pipecat's browser transport sends the headers it was given
+for the `POST` on every `PATCH` too, so a client that set `Authorization`
+there needs nothing more.
 
 ## Behind NAT: a TURN relay
 
