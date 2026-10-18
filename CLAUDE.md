@@ -510,6 +510,25 @@ row's keys.
   signature check (matched by the webhook's `AccountSid`) uses that account.
   `services/twilio_accounts.py` is the one place that decides; nothing else
   constructs a `TwilioAdapter`.
+- **Search and buy** (#319, ADR-0025): `GET /v1/phone-numbers/available`
+  (`carrier`, `country`, `number_type` local|toll_free|mobile, `area_code`,
+  `contains` digits, `limit` ≤ 50) and `POST /v1/phone-numbers/purchase`
+  (201), in `api/v1/phone_number_purchase.py`. **Admin-only**, both. That
+  router is mounted **before** `phone_numbers.router`, whose
+  `GET /{phone_number_id}` would take `/available`. Carriers are
+  `PURCHASE_CARRIERS` (`domain/carriers.py`; Twilio only for now, never
+  Asterisk). Twilio has no project credential, so the account is the request's
+  own pair (`X-Twilio-Account-Sid`/`X-Twilio-Auth-Token` headers on the search,
+  keeping the token out of URLs; `twilio_account_sid`/`twilio_auth_token` in
+  the buy's body) or the platform's; no account = 503 `no_twilio_account`. The
+  buy returns what bind needs (`carrier`, `e164_number`, `external_number_sid`,
+  `status`, `twilio_account_sid`, `twilio_credentials`) and writes no row; it
+  records `phone_number`/`purchased` keyed by the **E.164**, after the carrier
+  sold it (a refused buy raises, so nothing commits). `search_numbers` /
+  `buy_number` are concrete `TwilioAdapter` methods, not `TelephonyAdapter`
+  actions (`test_carrier_boundary.py` pins the ABC). Harness:
+  `carrier.offer(e164)` puts a number up for sale; the fake's `buy_number` moves
+  it onto the account and records a `buy_number` action.
 
 ## WhatsApp
 
@@ -874,6 +893,8 @@ Weighted traffic routing on phone numbers. Deterministic by caller number (SHA25
 ### API
 
 ```
+GET    /v1/phone-numbers/available       # Search a carrier account's numbers (admin)
+POST   /v1/phone-numbers/purchase        # Buy one; bind it with POST /v1/phone-numbers (admin)
 PUT    /v1/phone-numbers/{id}            # Update binding in place (id + server_url_secret stable)
 PUT    /v1/phone-numbers/{id}/routing    # Set weights (must sum to 100)
 GET    /v1/phone-numbers/{id}/routing    # Get routing config

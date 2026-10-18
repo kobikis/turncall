@@ -1,6 +1,7 @@
 # ADR-0025: Buying and releasing numbers; SIP through a carrier or Asterisk
 
-**Status:** Accepted (not yet built)
+**Status:** Accepted (search and buy on Twilio built in #319; Telnyx and
+release not yet)
 **Date:** 2026-10-16
 **Relates to:** ADR-0020 (project credentials), ADR-0022 (carrier boundary).
 Tracked in #307.
@@ -49,3 +50,22 @@ Connect, Five9). They serve a buyer we are not targeting.
 - **Number purchase in the builder only.** The builder never calls a carrier
   (it delegates binding to TurnCall); keeping purchase in the engine keeps that
   true and gives API users the same ability.
+
+## As built
+
+**Search and buy on Twilio** (#319). `GET /v1/phone-numbers/available` and
+`POST /v1/phone-numbers/purchase`, both admin-only. The buy writes no binding:
+it returns what bind needs (`carrier`, `e164_number`, `external_number_sid`)
+and is audited as `phone_number`/`purchased`, keyed by the E.164 number.
+
+Twilio has no project credential (ADR-0020's addendum: a Twilio account rides
+on the number), so "the account a project already holds" is, on Twilio, the
+`twilio_account_sid` + `twilio_auth_token` pair the request names (headers on
+the search, to keep the token out of URLs; the body on the buy), else the
+platform's `TWILIO_*` account, exactly as bind resolves it. The buy echoes
+`twilio_account_sid` so the number is bound with the same pair. A `twilio`
+project credential was the alternative; it would change how webhooks are
+verified and was not needed for this.
+
+Search and buy are concrete methods on the carrier adapters that sell numbers,
+not `TelephonyAdapter` actions: Asterisk has no number store (ADR-0022).

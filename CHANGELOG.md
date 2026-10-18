@@ -13,6 +13,24 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Search and buy numbers on Twilio** (#319, ADR-0025). An admin key
+  searches the Twilio account for voice-capable numbers with
+  `GET /v1/phone-numbers/available` (`carrier=twilio`, `country`,
+  `number_type` of `local`, `toll_free` or `mobile`, `area_code`, `contains`
+  digits, `limit` up to 50) and buys one with
+  `POST /v1/phone-numbers/purchase` (`201`). The buy returns what binding
+  needs: `carrier`, `e164_number`, `external_number_sid` (the PN SID),
+  `status`, and `twilio_account_sid` / `twilio_credentials`. Twilio has no
+  project credential, so both run on the Twilio account the request names
+  (`twilio_account_sid` + `twilio_auth_token` in the buy's body, the
+  `X-Twilio-Account-Sid` + `X-Twilio-Auth-Token` headers on the search) or
+  on the platform's `TWILIO_*` account; bind with the same pair. A developer
+  or viewer key gets `403`; no account at all is a `503`
+  (`no_twilio_account`); a number Twilio will not sell is a `422` with
+  `details.twilio_code`; a number already bound is a `409`. Each purchase is
+  an audit log entry, `phone_number` / `purchased`, keyed by the E.164
+  number. Buying binds nothing: the number is bound with
+  `POST /v1/phone-numbers` as before. No migration.
 - **Audit log** (#317, ADR-0024). Every change made through the API to a
   project's agents (create, update, delete, publish, rollback, knowledge base
   links, and the versions a publish or rollback archives), credentials, phone

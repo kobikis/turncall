@@ -288,12 +288,23 @@ operator's legal record, not the platform's.
 _Avoid_: "DNC list" unqualified (that is the national registry), "blocklist" (reads as
 inbound blocking).
 
+**Buy** (a number) (vs **bind**):
+Putting an available number onto a [[carrier]] account through the engine
+(`POST /v1/phone-numbers/purchase`), found by a search of that account
+(`GET /v1/phone-numbers/available`). Admin-only: it spends the operator's money. Buying
+routes nothing; the bought number is then bound like any other. On Twilio the account is
+the one the request names or the platform's (Twilio has no project credential). See
+ADR-0025.
+_Avoid_: "provision", "order" (Telnyx's word for its asynchronous purchase), "add a
+number" (reads as bind).
+
 **Release** (a number) (vs **unbind**):
 Giving a number back to its [[carrier]], so the operator stops paying for it and may
 never get it back. Distinct from unbinding, which only stops routing it to an agent and
 leaves it on the account. Admin-only, refused while the number is bound, and requires
 an explicit confirmation in the request. Its counterpart is buying a number through the
-engine on the project's own carrier account. See ADR-0025 (decided, not yet built).
+engine on the project's own carrier account. See ADR-0025 (buying is built; release is
+not yet).
 _Avoid_: "delete number" (reads as unbind), "port out" (moving it to another carrier).
 
 ## Voicemail

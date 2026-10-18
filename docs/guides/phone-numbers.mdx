@@ -147,6 +147,92 @@ curl -X POST http://localhost:8090/v1/phone-numbers \
 
 Binding with a `server_url` returns a `server_url_secret` — TurnCall signs each call-init request with it so your endpoint can verify the source.
 
+## Search and buy a number
+
+A number you do not have yet can be found and bought through the API, then
+bound like any other. Both calls take an **admin** key: buying spends money on
+the carrier account. A developer or viewer key gets a `403`. Twilio is the only
+carrier for now.
+
+Search the account's available numbers. Every filter is optional: `country`
+(ISO code, default `US`), `number_type` (`local`, the default, `toll_free` or
+`mobile`), `area_code`, `contains` (2 to 16 digits) and `limit` (1 to 50,
+default 20). Only voice-capable numbers are listed.
+
+```bash
+curl "http://localhost:8090/v1/phone-numbers/available?carrier=twilio&country=US&area_code=312&contains=555" \
+  -H "Authorization: Bearer tc_xxx"
+```
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "carrier": "twilio",
+      "e164_number": "+13125550100",
+      "friendly_name": "(312) 555-0100",
+      "country": "US",
+      "region": "IL",
+      "locality": "Chicago",
+      "postal_code": "60601",
+      "number_type": "local",
+      "capabilities": {"voice": true, "sms": true, "mms": false}
+    }
+  ]
+}
+```
+
+Buy one:
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers/purchase \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"carrier": "twilio", "e164_number": "+13125550100"}'
+```
+
+The `201` response is what binding needs. Send its `carrier`, `e164_number`
+and `external_number_sid` to `POST /v1/phone-numbers` with the routing you
+want:
+
+```json
+{
+  "success": true,
+  "data": {
+    "carrier": "twilio",
+    "e164_number": "+13125550100",
+    "external_number_sid": "PNxxxxxxxx",
+    "friendly_name": "(312) 555-0100",
+    "status": "active",
+    "twilio_account_sid": null,
+    "twilio_credentials": "platform"
+  }
+}
+```
+
+- **Which Twilio account.** Without a pair, the platform's
+  `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` account searches and buys. To use
+  [your own Twilio account](#bring-your-own-twilio-account), send
+  `twilio_account_sid` + `twilio_auth_token` in the buy's body, and the
+  `X-Twilio-Account-Sid` + `X-Twilio-Auth-Token` headers on the search (headers
+  keep the token out of the URL). The buy then returns `twilio_account_sid` and
+  `"twilio_credentials": "number"`. Bind with the same pair; the token is never
+  returned. With neither a pair nor a platform account the call is a `503`
+  (`no_twilio_account`).
+- **Refusals.** A number Twilio will not sell (already taken, or its country
+  needs an address or regulatory bundle on the account first) is a `422` with
+  Twilio's message and `details.twilio_code`. A number already bound in
+  TurnCall is a `409`. A `number_type` Twilio does not sell in that country is
+  a `422`. Credentials you sent that Twilio rejects are a `422`; anything else
+  Twilio fails on is a `502` (`twilio_error`).
+- **Audited.** Each purchase writes an audit log entry, `phone_number` /
+  `purchased`, whose `resource_id` is the E.164 number (a bought number has no
+  binding yet). See [Audit log](/guides/audit-log).
+- **Billing.** The number stays on the carrier account, and is billed, until it
+  is released on the carrier. Unbinding (`DELETE /v1/phone-numbers/{id}`) does
+  not release it.
+
 ## Update a Binding
 
 Re-route a number in place — the phone id and its `server_url_secret` stay stable, so a call-init endpoint keeps verifying with the same secret across edits:
