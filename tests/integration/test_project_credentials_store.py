@@ -3,18 +3,21 @@
 The upsert is one `ON CONFLICT` statement, which only Postgres can exercise.
 """
 
+import json
 import uuid
 from types import SimpleNamespace
 
 import pytest
 from cryptography.fernet import Fernet
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 from turncall.config.settings import Settings
+from turncall.domain.config_secrets import map_secrets
 from turncall.orchestrator.pipeline_builder import load_call_credentials
 from turncall.storage.database import create_engine, create_session_factory
 from turncall.storage.models import ProjectCredentialRow, ProjectRow
 from turncall.storage.repositories import credential_repo
+from turncall.storage.sealing import seal
 
 pytestmark = pytest.mark.integration
 
@@ -160,3 +163,44 @@ async def test_startup_check_fails_closed(factory, settings):
             await credential_repo.ensure_readable(session, unset)
         await credential_repo.delete_credential(session, pid, "tavus")
         await session.commit()
+
+
+async def test_startup_check_opens_the_secrets_sealed_at_rest(factory, settings):
+    """The LIKE samples run against Postgres, and fail closed on what they find.
+
+    Written with raw SQL, as stored: whether the columns seal on their own is
+    the column types' business, not this check's.
+    """
+    pid = await _project(factory)
+    config = map_secrets(
+        {"system_prompt": "hi", "llm": {"provider": "openai", "api_key": "sk-x"}},
+        lambda v: seal(v, settings),
+    )
+    async with factory() as session:
+        await session.execute(
+            text(
+                "INSERT INTO webhook_subscriptions"
+                " (id, project_id, url, secret, events, active, created_at)"
+                " VALUES (:id, :pid, 'https://x', :secret, '{}', true, now())"
+            ),
+            {"id": uuid.uuid4(), "pid": pid, "secret": seal("s", settings)},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO agents (id, project_id, name, environment, version,"
+                " state, config_blob, created_at) VALUES (:id, :pid, 'sealed',"
+                " 'development', 1, 'draft', CAST(:config AS jsonb), now())"
+            ),
+            {"id": uuid.uuid4(), "pid": pid, "config": json.dumps(config)},
+        )
+        await session.commit()
+    unset = SimpleNamespace(credentials=SimpleNamespace(encryption_key=""))
+    other = SimpleNamespace(
+        credentials=SimpleNamespace(encryption_key=Fernet.generate_key().decode())
+    )
+    async with factory() as session:
+        with pytest.raises(credential_repo.CredentialKeyError):
+            await credential_repo.ensure_readable(session, unset)
+        with pytest.raises(credential_repo.CredentialKeyError, match="rotated"):
+            await credential_repo.ensure_readable(session, other)
+        await credential_repo.ensure_readable(session, settings)
