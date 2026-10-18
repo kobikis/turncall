@@ -299,3 +299,32 @@ async def test_startup_check_looks_past_a_prompt_that_mentions_the_prefix(factor
             await credential_repo.ensure_readable(session, unset)
         await credential_repo.ensure_readable(session, sealed_under)
         await session.rollback()
+
+
+async def test_a_secret_written_without_the_key_raises_the_key_error(
+    factory, monkeypatch
+):
+    """The column type seals in SQLAlchemy's bind step, which wraps what it
+    raises; the engine's listener raises CredentialKeyError as itself, so
+    every `except CredentialKeyError` sees it (#338)."""
+    from sqlalchemy.exc import StatementError
+
+    from turncall.config.settings import get_settings
+    from turncall.storage.models import WebhookSubscriptionRow
+
+    pid = await _project(factory)
+    monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", "")
+    get_settings.cache_clear()
+    try:
+        async with factory() as session:
+            session.add(
+                WebhookSubscriptionRow(
+                    project_id=pid, url="https://x", secret="whsec", events=[]
+                )
+            )
+            with pytest.raises(credential_repo.CredentialKeyError) as raised:
+                await session.flush()
+            assert not isinstance(raised.value, StatementError)
+            await session.rollback()
+    finally:
+        get_settings.cache_clear()

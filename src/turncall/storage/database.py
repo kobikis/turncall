@@ -2,6 +2,8 @@
 
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import event
+from sqlalchemy.engine import ExceptionContext
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -10,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from turncall.config.settings import DatabaseSettings
+from turncall.storage.sealing import CredentialKeyError
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -17,7 +20,7 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 def create_engine(settings: DatabaseSettings) -> AsyncEngine:
     """Create a new async database engine."""
-    return create_async_engine(
+    engine = create_async_engine(
         str(settings.url),
         pool_size=settings.pool_size,
         max_overflow=settings.max_overflow,
@@ -25,6 +28,22 @@ def create_engine(settings: DatabaseSettings) -> AsyncEngine:
         echo=settings.echo,
         pool_pre_ping=True,
     )
+    event.listen(engine.sync_engine, "handle_error", _credential_key_error_as_is)
+    return engine
+
+
+def _credential_key_error_as_is(context: ExceptionContext) -> None:
+    """A secret's column type seals it as the statement's parameters are
+    bound (#338), and SQLAlchemy wraps whatever a bind step raises in a
+    StatementError. Raised as itself, a write with no usable key is the
+    CredentialKeyError every caller already catches — the API's 503, the
+    carrier and text handlers, the workers — not an anonymous 500.
+
+    A new instance, so the original is its cause rather than its own.
+    """
+    original = context.original_exception
+    if isinstance(original, CredentialKeyError):
+        raise CredentialKeyError(*original.args)
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

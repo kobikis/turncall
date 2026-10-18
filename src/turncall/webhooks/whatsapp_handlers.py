@@ -41,6 +41,7 @@ from turncall.storage.repositories import (
     call_repo,
     phone_number_repo,
 )
+from turncall.storage.sealing import CredentialKeyError
 from turncall.webhooks.whatsapp_signature import validate_whatsapp_signature
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp-webhooks"])
@@ -513,6 +514,12 @@ async def _handle_message_event(
             logger.warning(
                 "whatsapp_message_rate_limited", from_number=from_number, **exc.details
             )
+        except CredentialKeyError as exc:
+            # An inline agent with a secret and no key to seal it (#338):
+            # nothing is kept, and the request still commits, so Meta is
+            # answered 200 rather than retrying the message.
+            await db.rollback()
+            logger.error("whatsapp_message_credential_key_unavailable", error=str(exc))
         except ValueError as exc:
             logger.error(f"whatsapp_message_error: {exc}")
         except Exception:

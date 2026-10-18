@@ -21,8 +21,9 @@ stored value as it is.
 
 No key, no write: a value to seal with CREDENTIAL_ENCRYPTION_KEY unset raises
 CredentialKeyError, never a silent fall back to plaintext. A value with no
-secret in it needs no key. Raised from a bind processor, the error reaches the
-caller wrapped in SQLAlchemy's StatementError, with this one as `.orig`.
+secret in it needs no key. Raised from a bind processor, the error is wrapped
+in SQLAlchemy's StatementError; the engine's handle_error listener
+(storage/database) raises it as itself, so callers catch CredentialKeyError.
 """
 
 from collections.abc import Callable

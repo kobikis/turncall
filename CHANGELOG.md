@@ -727,7 +727,9 @@ and is not part of this repository's history.
   `access_key_id`, which names the key without unlocking it. Saving one
   without the key is a `503` (`credential_key_unavailable`), never a
   fall back to plaintext, and a call whose call-init answers with an inline
-  config holding one fails; a write that holds none needs no key. Startup
+  config holding one fails, as does a text that would open such a session
+  (SMS is answered with an apology; nothing is kept); a write that holds none
+  needs no key. Startup
   warns when the key is unset, and fails, as it does for credentials, when
   what is stored cannot be read with it. This protects a dump on its own: a
   dump *and* the key still read every one of them, and call data
@@ -1114,8 +1116,8 @@ and is not part of this repository's history.
   encrypts them under it, and without it refuses to run and changes
   nothing. A deployment that stores project credentials has it set already.
   From then on the key is also needed to create a webhook subscription, give
-  a number a `server_url`, save an agent with a secret, or take a call whose
-  call-init answers with one. Set it once and never rotate it: rotating
+  a number a `server_url`, save an agent with a secret, or take a call or a
+  text whose call-init answers with one. Set it once and never rotate it: rotating
   makes every one of them unreadable, as it does credentials. Dumps and
   backups taken before the upgrade still hold the secrets in plaintext;
   expire them, or rotate the secrets themselves.
