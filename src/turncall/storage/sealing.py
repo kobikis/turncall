@@ -140,10 +140,16 @@ class _PlainPaths(TypeDecorator.Comparator[Any], JSONB.Comparator[Any]):
 
     Left as the decorator, `col["llm"]` would run the whole-config walker over
     the `llm` block on the way out, find no `llm` key in it, and hand back its
-    api_key still sealed while looking unsealed. A path reads what is stored,
-    as raw SQL does; a whole-column read is the one that unseals. It also
-    renders as it did on JSONB (PG14's `col['k']`, which SQLAlchemy only picks
-    for a JSONB-typed left side), so no query into the column changes.
+    api_key still sealed while looking unsealed. It also renders as it did on
+    JSONB (PG14's `col['k']`, which SQLAlchemy only picks for a JSONB-typed
+    left side), so no query into the column changes.
+
+    The hazard: a path reads what is stored, ciphertext included, as raw SQL
+    does. `col["llm"]["api_key"]` selected, compared or written is the sealed
+    value, never the secret, and a value written by path is not sealed. Only
+    a whole-column read unseals, so read the whole column for a secret. No
+    code reads one by path; test_sealing pins the path reads there are, so a
+    new one is looked at before it lands.
     """
 
     def __getitem__(self, index: Any) -> Any:

@@ -6,6 +6,7 @@ added later is caught whichever list it was left out of — and the rows the
 migration sealed are the ones the app opens.
 """
 
+import ast
 import importlib.util
 import json
 import re
@@ -33,6 +34,7 @@ from turncall.domain.config_secrets import (
 )
 from turncall.domain.models import AgentConfig
 from turncall.storage import sealing
+from turncall.storage.models import Base
 from turncall.storage.repositories import credential_repo
 from turncall.storage.sealing import (
     PREFIX,
@@ -377,6 +379,61 @@ class TestColumnTypes:
 
         for sealed in (SealedAgentConfig(), SealedTarget(), SealedMetadata()):
             assert sql(sealed) == sql(JSONB())
+
+    def test_the_path_reads_into_sealed_columns_are_these(self) -> None:
+        """A path reads the stored value, ciphertext included (`_PlainPaths`),
+        so each one into a sealed column is listed here, and none of them
+        reads a secret as if it were plaintext. A new one is a test failure:
+        read the whole column instead, or add it with why it is safe."""
+        sealed = {
+            (mapper.class_.__name__, attr.key)
+            for mapper in Base.registry.mappers
+            for attr in mapper.column_attrs
+            if isinstance(attr.columns[0].type, (SealedText, sealing._SealedJSONB))
+        }
+        found = set()
+        src = Path(__file__).parents[2] / "src/turncall"
+        for path in src.rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not (
+                    isinstance(node, ast.Subscript)
+                    and isinstance(node.value, ast.Attribute)
+                    and isinstance(node.value.value, ast.Name)
+                ):
+                    continue
+                column = (node.value.value.id, node.value.attr)
+                if column in sealed:
+                    key = node.slice
+                    found.add(
+                        (
+                            str(path.relative_to(src)),
+                            ".".join(column),
+                            key.value
+                            if isinstance(key, ast.Constant)
+                            else ast.unparse(key),
+                        )
+                    )
+        repos = "storage/repositories"
+        assert found == {
+            # No secret under any of these.
+            ("services/retention.py", "AgentRow.config_blob", "retention"),
+            (f"{repos}/ambience_repo.py", "AgentRow.config_blob", "ambience"),
+            (f"{repos}/takeaway_repo.py", "AgentRow.config_blob", "analysis"),
+            (
+                f"{repos}/sms_message_repo.py",
+                "SmsSessionRow.metadata_json",
+                "REDACTION",
+            ),
+            # The startup check reads the stored ciphertext on purpose.
+            (f"{repos}/credential_repo.py", "CallRow.metadata_json", "dynamic_config"),
+            (
+                f"{repos}/credential_repo.py",
+                "SmsSessionRow.metadata_json",
+                "dynamic_config",
+            ),
+            (f"{repos}/credential_repo.py", "EvalRunRow.target", "agent"),
+            (f"{repos}/credential_repo.py", "EvalScenarioRow.default_target", "agent"),
+        }
 
     def test_a_path_is_plain_jsonb(self, env_key) -> None:
         """`col["llm"]` read back must not go through the whole-config walker,
