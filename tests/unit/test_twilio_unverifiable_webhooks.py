@@ -31,7 +31,7 @@ from turncall.webhooks import twilio_handlers as th
 pytestmark = pytest.mark.unit
 
 REPO = "turncall.storage.repositories.phone_number_repo"
-CALL_ID = uuid.uuid4()
+CALL_ID = uuid.UUID(int=1)  # fixed: it names parametrized tests
 ROUTES = [
     "/webhooks/twilio/voice/inbound",
     "/webhooks/twilio/voice/outbound",

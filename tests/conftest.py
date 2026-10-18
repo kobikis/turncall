@@ -1,6 +1,10 @@
 """Shared test fixtures."""
 
+import asyncio
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -166,3 +170,66 @@ def pytest_sessionfinish(session, exitstatus) -> None:
     redaction = sys.modules.get("turncall.services.redaction")
     if redaction is not None:
         redaction.shutdown()
+
+
+def pytest_configure(config) -> None:
+    """Under pytest-xdist, give each worker a database and a Redis database of
+    its own, so tests running side by side never meet: a campaign worker or a
+    sweep in one sees every project in its database, not only its test's."""
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker is None:
+        return
+    from turncall.config.settings import get_settings
+
+    base = os.environ.get(
+        "DATABASE_URL",
+        "postgresql+asyncpg://turncall:turncall@localhost:5432/turncall",
+    )
+    if (own := _worker_database(base, worker)) is not None:
+        os.environ["DATABASE_URL"] = own
+    redis = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    # gw0 -> 1, gw1 -> 2, ...: database 0 stays the developer's own.
+    os.environ["REDIS_URL"] = f"{redis.rsplit('/', 1)[0]}/{int(worker[2:]) + 1}"
+    get_settings.cache_clear()
+
+
+def _worker_database(base: str, worker: str) -> str | None:
+    """A fresh, migrated `<db>_<worker>` beside the configured database, and
+    its URL. None when Postgres isn't there, and the tests that need it skip
+    as they would without xdist."""
+    import asyncpg
+    from sqlalchemy.engine import make_url
+
+    url = make_url(base)
+    name = f"{url.database}_{worker}"
+
+    async def create() -> None:
+        server = await asyncpg.connect(
+            user=url.username,
+            password=url.password,
+            host=url.host,
+            port=url.port or 5432,
+            database="postgres",
+        )
+        try:
+            await server.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+            await server.execute(f'CREATE DATABASE "{name}"')
+        finally:
+            await server.close()
+
+    try:
+        asyncio.run(create())
+    except (OSError, asyncpg.PostgresError):
+        return None
+    own = url.set(database=name).render_as_string(hide_password=False)
+    # A process of its own: alembic's env.py reconfigures logging.
+    migrated = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, "DATABASE_URL": own},
+        capture_output=True,
+        text=True,
+    )
+    if migrated.returncode != 0:
+        raise RuntimeError(f"migrating {name} failed:\n{migrated.stderr}")
+    return own
