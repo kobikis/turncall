@@ -144,8 +144,10 @@ jobs:
       # without one, so migrating is what keeps it from silently not running.
       - run: alembic upgrade head
       # sys.monitoring (Python 3.12+) measures line coverage at a fraction of
-      # the settrace tracer's overhead.
-      - run: pytest --cov=src/turncall --cov-report=term-missing
+      # the settrace tracer's overhead. One worker per core, each with a
+      # database and a Redis database of its own (tests/conftest.py); most of
+      # the integration time is calls running in real time, so they overlap.
+      - run: pytest -n auto --dist worksteal --cov=src/turncall --cov-report=term-missing
         env:
           COVERAGE_CORE: sysmon
       - run: bandit -r src/ --severity-level high

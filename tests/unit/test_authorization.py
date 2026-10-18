@@ -169,9 +169,9 @@ class TestWriteRbacEnforcement:
         "method,path",
         [
             ("post", "/v1/agents"),
-            ("delete", "/v1/agents/" + str(uuid.uuid4())),
+            ("delete", "/v1/agents/" + str(uuid.UUID(int=1))),
             ("post", "/v1/phone-numbers"),
-            ("delete", "/v1/takeaways/" + str(uuid.uuid4())),
+            ("delete", "/v1/takeaways/" + str(uuid.UUID(int=2))),
             ("post", "/v1/webhooks"),
             ("post", "/v1/calls/outbound"),
         ],

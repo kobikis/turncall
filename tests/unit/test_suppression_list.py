@@ -102,7 +102,7 @@ def test_delete_of_an_entry_not_in_the_project_is_404(app, ctx) -> None:
 
 
 @pytest.mark.parametrize(
-    "method,path", [("post", URL), ("delete", f"{URL}/{uuid.uuid4()}")]
+    "method,path", [("post", URL), ("delete", f"{URL}/{uuid.UUID(int=1)}")]
 )
 def test_a_viewer_cannot_change_the_list(app, method, path) -> None:
     ctx = AuthContext(
