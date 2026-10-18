@@ -127,6 +127,35 @@ async def attach_media(session: AsyncSession, call_id: UUID, *, carrier: str) ->
     return bool(result.rowcount)
 
 
+async def mark_call_ended(
+    session: AsyncSession,
+    call_id: UUID,
+    *,
+    status: str,
+    ended_at: datetime,
+    duration_ms: int | None = None,
+) -> CallRow | None:
+    """End the call: its terminal status, `ended_at` and duration, unless it is
+    already over. The row if this caller ended it, else None.
+
+    A guarded UPDATE, as `attach_media`: of the paths that end a call — its
+    pipeline finishing, the carrier's status callback, the end API — exactly
+    one does, and only that one starts post-call processing, which sends
+    `call.ended` (#328). The caller commits, and must before starting
+    post-call processing, which reads the call in a session of its own.
+    """
+    values: dict[str, Any] = {"status": status, "ended_at": ended_at}
+    if duration_ms is not None:
+        values["duration_ms"] = duration_ms
+    result = await session.execute(
+        update(CallRow)
+        .where(CallRow.id == call_id, CallRow.status.not_in(_ENDED))
+        .values(**values)
+        .returning(CallRow)
+    )
+    return result.scalar_one_or_none()
+
+
 async def update_call_recording_url(
     session: AsyncSession,
     call_id: UUID,

@@ -152,6 +152,16 @@ class Harness:
         assert response.json()["data"]["twilio_webhooks_configured"] is True
         return e164
 
+    async def post_call_settled(self, *, timeout: float = 20.0) -> None:
+        """Wait until no post-call processing or webhook delivery is left in
+        the app, so a test can count what a call sent, not what arrived first
+        (#328: a call's `call.ended` could go out twice)."""
+        from turncall.services.drain import _post_call_work
+
+        async with asyncio.timeout(timeout):
+            while _post_call_work():
+                await asyncio.sleep(0.05)
+
 
 # A harness agent: the stubs answer for its providers, and what they don't
 # cover (post-call analysis, the idle check-in) is off.

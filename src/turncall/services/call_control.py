@@ -173,15 +173,21 @@ async def end_call(
     duration_ms = None
     if call.started_at is not None:
         duration_ms = int((ended_at - call.started_at).total_seconds() * 1000)
-    await call_repo.update_call_status(
+    ended_now = await call_repo.mark_call_ended(
         session,
         call_id,
         status=CallStatus.COMPLETED.value,
         ended_at=ended_at,
         duration_ms=duration_ms,
     )
-
     await _record_control_end(session, call, ended)
+    if ended_now is None:
+        # The carrier's status or the pipeline ended it meanwhile, and that
+        # path sends `call.ended` (#328).
+        return ControlResult(success=True, message="Call ended")
+    # Committed first: post-call processing reads the call in a session of its
+    # own, and found it still in progress (#328).
+    await session.commit()
 
     # Trigger post-call processing (transcript, recording, analysis, webhook)
     # The comprehensive call.ended webhook is dispatched after analysis completes.
