@@ -22,17 +22,28 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio
 
-# hatchling builds the wheel from src/, so both must be present. The BuildKit pip
-# cache mount keeps wheels across builds (outside image layers) so a code change
-# doesn't re-download the heavy pipecat/ML stack. Prod deps only — no [dev].
 # Optional extras for this build. The eval worker passes `evals-audio` (Kokoro
 # speaks the caller, Moonshine transcribes the bot for the judge, ~66MB); the
 # API image takes none, since nothing on the call path ever loads them.
 ARG INSTALL_EXTRAS=""
 
+# The dependencies first, read from pyproject.toml alone, then the package with
+# --no-deps: a change to src/ reuses the dependency layer instead of reinstalling
+# the whole pipecat/ML stack. The BuildKit pip cache mount doesn't survive
+# between CI runners; the layer does, in the GitHub Actions cache. Prod deps
+# only — no [dev].
 COPY pyproject.toml ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -c 'import sys, tomllib; \
+p = tomllib.load(open("pyproject.toml", "rb"))["project"]; \
+extras = [e for e in sys.argv[1].split(",") if e]; \
+print("\n".join(p["dependencies"] + [d for e in extras for d in p["optional-dependencies"][e]]))' \
+        "$INSTALL_EXTRAS" > /tmp/requirements.txt \
+    && pip install -r /tmp/requirements.txt
+
+# hatchling builds the wheel from src/, so both must be present.
 COPY src/ src/
-RUN --mount=type=cache,target=/root/.cache/pip     if [ -n "$INSTALL_EXTRAS" ]; then pip install ".[$INSTALL_EXTRAS]";     else pip install .; fi
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-deps .
 
 # No NLTK step. Pipecat's TTS sentence splitting used NLTK and needed its
 # `punkt_tab` data baked in, or the runtime hit "Resource punkt_tab not found"

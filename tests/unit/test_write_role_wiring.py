@@ -15,6 +15,7 @@ What this guards:
 The end-to-end half is `tests/integration/test_harness_knowledge_link_roles.py`.
 """
 
+import functools
 import re
 import uuid
 from datetime import UTC, datetime
@@ -23,6 +24,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
@@ -58,9 +60,17 @@ NOT_KEYED: dict[tuple[str, str], str] = {
 }
 
 
-def _client(role: ProjectRole, session: Any) -> TestClient:
+@functools.cache
+def _app() -> FastAPI:
+    """One app for the module: building one per request was most of its
+    runtime. Each client below sets its own overrides on it."""
     app = create_app()
     app.router.lifespan_context = None  # type: ignore[assignment]
+    return app
+
+
+def _client(role: ProjectRole, session: Any) -> TestClient:
+    app = _app()
     ctx = AuthContext(project_id=uuid.uuid4(), api_key_id=uuid.uuid4(), role=role)
     app.dependency_overrides[resolve_auth_context] = lambda: ctx
     app.dependency_overrides[get_session] = lambda: session
@@ -81,7 +91,7 @@ def _takes_api_key(route: APIRoute) -> bool:
 def _mutating_routes(*, keyed: bool) -> list[tuple[str, str]]:
     return sorted(
         (method, path)
-        for path, route in api_routes(create_app())
+        for path, route in api_routes(_app())
         if _takes_api_key(route) is keyed
         for method in route.methods & MUTATING_METHODS
     )

@@ -263,6 +263,7 @@ async def run_app(
     from turncall import app as turncall_app
     from turncall.app import create_app
     from turncall.config.settings import get_settings
+    from turncall.services import redaction
 
     if (reason := await _database_usable()) is not None:
         pytest.skip(reason)
@@ -280,6 +281,11 @@ async def run_app(
     # moment — pytest's capture, closed after this test, so every later log
     # line would be a "Logging error". Pytest captures the default sink anyway.
     set_attr(turncall_app, "setup_logging", lambda **_: None)
+    # The redaction worker outlives the app. Stopped at every app's shutdown, it
+    # started again (`spawn`) for the next test that redacts and reloaded spaCy
+    # and Presidio: about 10s a test, a third of CI. The session stops it once
+    # (tests/conftest.py).
+    set_attr(redaction, "shutdown", lambda: None)
 
     server = uvicorn.Server(
         uvicorn.Config(create_app(), log_config=None, lifespan="on")
