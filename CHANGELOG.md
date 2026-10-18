@@ -701,7 +701,11 @@ and is not part of this repository's history.
   in. It now takes the same key as the `POST` (admin or developer; a viewer
   key is a `403`): no key is a `401`, and a `pc_id` no call of the key's
   project holds is a `404` that does not say whether it exists. Nothing
-  reaches pipecat in either case. See the upgrade notes.
+  reaches pipecat in either case. A body that is not a JSON object is a
+  `400`, as on the `POST` (it was a `500`). A connection restarted with
+  `restart_pc` is now held under the new `pc_id` pipecat answers with, so its
+  trickle and a later renegotiation reach it; a second renegotiation of a
+  restarted connection used to be a `404`. See the upgrade notes.
 
 ### Fixed
 

@@ -75,16 +75,8 @@ _request_handler = SmallWebRTCRequestHandler(
 _calls_by_pc: dict[str, tuple[UUID, UUID]] = {}
 
 
-@router.post("/connect", status_code=200)
-async def webrtc_connect(
-    request: Request,
-    auth: WriteAuth,
-    session: DbSession,
-) -> JSONResponse:
-    """WebRTC signaling endpoint — SDP offer/answer exchange.
-
-    Accepts SDP offer, creates pipeline, returns SDP answer.
-    """
+async def _json_object(request: Request) -> dict[str, Any]:
+    """The request's body as a JSON object; 400 otherwise."""
     try:
         body = await request.json()
     except Exception as exc:
@@ -99,6 +91,20 @@ async def webrtc_connect(
             code=ErrorCode.VALIDATION_ERROR,
             message="Request body must be a JSON object",
         )
+    return body
+
+
+@router.post("/connect", status_code=200)
+async def webrtc_connect(
+    request: Request,
+    auth: WriteAuth,
+    session: DbSession,
+) -> JSONResponse:
+    """WebRTC signaling endpoint — SDP offer/answer exchange.
+
+    Accepts SDP offer, creates pipeline, returns SDP answer.
+    """
+    body = await _json_object(request)
     logger.info("WebRTC connect request: {keys}", keys=list(body.keys()))
 
     try:
@@ -386,6 +392,13 @@ async def _renegotiate(
             code=ErrorCode.INTERNAL_ERROR,
             message="Failed to create WebRTC answer",
         )
+    # A restart (`restart_pc`) replaces the peer connection, and the new one has
+    # a pc_id of its own: the client trickles and renegotiates under it from
+    # here, and its `closed` is what forgets it.
+    old_pc_id, new_pc_id = webrtc_request.pc_id or "", answer.get("pc_id")
+    if new_pc_id and new_pc_id != old_pc_id:
+        _calls_by_pc.pop(old_pc_id, None)
+        _calls_by_pc[new_pc_id] = (call_id, project_id)
     logger.info("WebRTC renegotiated: call={call_id}", call_id=str(call_id))
     return JSONResponse(content={**answer, "call_id": str(call_id)})
 
@@ -398,17 +411,19 @@ async def webrtc_ice_candidate(request: Request, auth: WriteAuth) -> JSONRespons
     for the project whose call holds the `pc_id`. Anything else is answered
     before pipecat sees a candidate.
     """
-    body = await request.json()
-    pc_id = body.get("pc_id", "")
+    body = await _json_object(request)
+    pc_id = str(body.get("pc_id") or "")
     _held_call_id(pc_id, auth.project_id)
 
+    raw = body.get("candidates")
     candidates = [
         IceCandidate(
             candidate=c.get("candidate", ""),
             sdp_mid=c.get("sdpMid", c.get("sdp_mid", "")),
             sdp_mline_index=c.get("sdpMLineIndex", c.get("sdp_mline_index", 0)),
         )
-        for c in body.get("candidates", [])
+        for c in (raw if isinstance(raw, list) else [])
+        if isinstance(c, dict)
     ]
     patch_request = SmallWebRTCPatchRequest(pc_id=pc_id, candidates=candidates)
 
