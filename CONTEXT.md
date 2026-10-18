@@ -306,8 +306,10 @@ only stops routing it to an agent and leaves it on the account; unbinding never
 releases. Admin-only, on Twilio and Telnyx, on the same account a purchase uses. A
 number is bound exactly when TurnCall holds a binding for it, so a release names the
 number on the carrier account by its E.164: it is refused while the number is bound
-(unbind first) and unless `confirm` repeats the number. Its counterpart is buying a
-number through the engine. See ADR-0025.
+(unbind first) and unless `confirm` repeats the number. On the platform's shared
+carrier account a project releases only numbers it bought there through the engine;
+on its own account, any number. Its counterpart is buying a number through the
+engine. See ADR-0025.
 _Avoid_: "delete number" (reads as unbind), "port out" (moving it to another carrier).
 
 ## Voicemail

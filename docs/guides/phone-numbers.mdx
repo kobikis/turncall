@@ -313,7 +313,7 @@ and you may never get it back. Unbinding is not releasing, and is the safe way
 to stop a number reaching TurnCall.
 </Warning>
 
-Two guards make a release deliberate:
+Three guards make a release deliberate:
 
 - **Unbound numbers only.** A number TurnCall still binds is refused with a
   `409`; `details.phone_number_id` names the binding when it is your project's.
@@ -322,6 +322,16 @@ Two guards make a release deliberate:
 - **An explicit confirmation.** `confirm` must repeat `e164_number` exactly.
   Without it, or with anything else (`true`, `"yes"`, another number), the
   request is a `422` and nothing is released.
+- **Your purchases only, on the shared platform account.** The platform's
+  carrier accounts hold every project's numbers: Twilio's `TWILIO_*` account
+  (used when you send no `twilio_account_sid` + `twilio_auth_token`) and
+  Telnyx's `TELNYX_API_KEY` (used when the project has no `telnyx`
+  credential). A release there is allowed only for a number your project bought
+  with `POST /v1/phone-numbers/purchase`. Any other number, including one
+  another project bought or one put on the account outside TurnCall, is a
+  `403` (`forbidden`, `details.account: "platform"`), and the carrier is not
+  asked anything. A release on your own account (your Twilio pair, or your
+  project's `telnyx` credential) has no such limit.
 
 ```bash
 curl -X POST http://localhost:8090/v1/phone-numbers/release \
@@ -348,7 +358,9 @@ curl -X POST http://localhost:8090/v1/phone-numbers/release \
   pair in the body, else the platform's `TWILIO_*` account (`503`
   `no_twilio_account` with neither). On Telnyx (`"carrier": "telnyx"`), the
   project's `telnyx` credential, else the platform's `TELNYX_API_KEY` (`503`
-  `no_telnyx_account` with neither). `carrier=asterisk` is a `422`.
+  `no_telnyx_account` with neither). `carrier=asterisk` is a `422`. On the
+  platform's account, only a number your project bought there is released
+  (see above).
 - **Found by its number.** TurnCall looks the number up on the account by its
   E.164 and releases what it finds (Twilio's PN SID, Telnyx's phone number id,
   returned as `external_number_sid`). A number the account does not hold is a

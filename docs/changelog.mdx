@@ -22,7 +22,9 @@ the number once it lands on the account. See
 **Release numbers.** An admin key can give a number back to its carrier, on
 Twilio or Telnyx. Releasing is irreversible, so it is refused while the number
 is bound (unbind it first) and needs `confirm` to repeat the number. It is
-recorded in the audit log. Unbinding still never releases. See
+recorded in the audit log. Unbinding still never releases. On the platform's
+shared carrier account, a project can release only the numbers it bought
+through TurnCall; on its own Twilio or Telnyx account, any number. See
 [Release a number](/guides/phone-numbers#release-a-number).
 
 **A compliance mapping.** One page maps redaction, retention, the audit log,

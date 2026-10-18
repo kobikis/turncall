@@ -564,7 +564,21 @@ row's keys.
   off the account (`carrier.owns(e164)` is then false; not back on sale).
   Note that bind on Twilio's **platform** account trusts a given PN SID without
   asking Twilio, so a released number's "gone" shows through a lookup (bind
-  with an own pair, a second release), not a platform bind.
+  with an own pair), not a platform bind.
+  **Shared platform account:** a release that would run on the platform's
+  account (Twilio with no body pair; Telnyx when `TelnyxAccount.platform`,
+  i.e. no project `telnyx` credential) is allowed only for a number the
+  project bought there: `purchased_number_repo.bought_on_platform` (table
+  `purchased_numbers`, migration `c9e3a5f7b1d4`: project, carrier, E.164,
+  `account` platform|own). Otherwise **403** `forbidden`
+  `details={"account": "platform"}`, checked after the 409 and the account
+  resolution and **before any carrier call** (`_bought_here_if_shared`). The
+  buy calls `purchased_number_repo.record` (pending Telnyx orders too; a
+  platform purchase drops other projects' stale `platform` rows for the
+  number); the release calls `forget`. Own-account releases are unrestricted.
+  Not the audit log (retention may drop it). Harness: a number put on the
+  account with `carrier.add_number` is not "bought", so releasing it on the
+  platform account is a 403; `_buy` through the API first.
 
 ## WhatsApp
 

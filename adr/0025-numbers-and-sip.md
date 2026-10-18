@@ -105,5 +105,33 @@ still on order, is a `422`) and deleted with a concrete `release_number` on
 each adapter, again not a `TelephonyAdapter` action. The release is audited
 as `phone_number`/`released`, keyed by the E.164 number with the released
 number as its "before", only once the carrier has released it: a refused
-release raises, so nothing commits. A number released on a shared platform
-account is gone for every project on it; the admin-only rule is the guard.
+release raises, so nothing commits.
+
+**The shared platform account** (#321). The platform's carrier accounts are
+shared: Twilio's `TWILIO_*` account (a request with no account pair) and
+Telnyx's `TELNYX_API_KEY` (a project with no `telnyx` credential) hold every
+project's numbers, and the operator's own. Admin-only is not enough there: an
+admin of one project could release another's number. So a release that would
+run on the platform's account is allowed only for a number this project
+bought through `POST /v1/phone-numbers/purchase`; anything else is a `403`
+(`forbidden`, `details.account: "platform"`), refused before the carrier is
+asked anything, so the refusal does not say whether the account holds the
+number. `403` rather than `422`: the request is well formed and names a real
+number; this caller is not allowed to act on it, as with a role refusal. A
+release on the project's own account (its Twilio pair, its `telnyx`
+credential) is unrestricted apart from the `409` and `422` rules: that account
+is the operator's.
+
+Purchases are recorded in a `purchased_numbers` table (migration
+`c9e3a5f7b1d4`): project, carrier, E.164, and which account (`platform` or
+`own`), written by every purchase (a pending Telnyx order too) and deleted by
+the release; the project's FK cascade takes its rows with it. The audit log
+was rejected as the source: its entries can be dropped by retention, and it
+answers "what happened", not "whose is it now". `phone_numbers` was rejected
+too: it is the binding, and a release needs the number unbound. A platform
+purchase drops any other project's `platform` row for the same number (the
+number was for sale, so that row is stale: it left the account outside
+TurnCall), and a partial unique index keeps one `platform` row per carrier
+and number. A number bought before this table existed, or put on the platform
+account by hand, can be released there only by the operator, on the carrier's
+console.

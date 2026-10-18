@@ -30,7 +30,16 @@ and is not part of this repository's history.
   `status: "released"`, `twilio_account_sid` / `twilio_credentials`. Each
   release is an audit log entry, `phone_number` / `released`, keyed by the
   E.164 number. Unbinding (`DELETE /v1/phone-numbers/{id}`) is unchanged and
-  never releases. No migration.
+  never releases. On the platform's shared carrier account (Twilio's
+  `TWILIO_*` when no pair is sent; Telnyx's `TELNYX_API_KEY` when the
+  project has no `telnyx` credential) a release is allowed only for a number
+  the project bought there through `POST /v1/phone-numbers/purchase`;
+  anything else, including another project's purchase, is a `403`
+  (`forbidden`, `details.account: "platform"`) before the carrier is asked.
+  A release on the project's own account is unrestricted. Purchases are
+  recorded in a new `purchased_numbers` table (project, carrier, E.164,
+  `platform` or `own` account; written by every purchase, pending Telnyx
+  orders too, and deleted by the release). Migration `c9e3a5f7b1d4`.
 - **Search and buy numbers on Telnyx** (#320, ADR-0025). The same
   `GET /v1/phone-numbers/available` and `POST /v1/phone-numbers/purchase`
   take `carrier=telnyx`, admin-only, on the project's Telnyx account (its
