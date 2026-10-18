@@ -516,7 +516,7 @@ row's keys.
   (201), in `api/v1/phone_number_purchase.py`. **Admin-only**, both. That
   router is mounted **before** `phone_numbers.router`, whose
   `GET /{phone_number_id}` would take `/available`. Carriers are
-  `PURCHASE_CARRIERS` (`domain/carriers.py`; Twilio only for now, never
+  `PURCHASE_CARRIERS` (`domain/carriers.py`; Twilio and Telnyx, never
   Asterisk). Twilio has no project credential, so the account is the request's
   own pair (`X-Twilio-Account-Sid`/`X-Twilio-Auth-Token` headers on the search,
   keeping the token out of URLs; `twilio_account_sid`/`twilio_auth_token` in
@@ -529,6 +529,20 @@ row's keys.
   actions (`test_carrier_boundary.py` pins the ABC). Harness:
   `carrier.offer(e164)` puts a number up for sale; the fake's `buy_number` moves
   it onto the account and records a `buy_number` action.
+- **Search and buy on Telnyx** (#320): the same routes with `carrier=telnyx`,
+  on `phone_numbers.project_telnyx_account` (project `telnyx` credential, else
+  `TELNYX_API_KEY`, else 503). `TelnyxAdapter.search_numbers` /
+  `buy_number` are concrete methods too. A Telnyx purchase is an **async
+  number order** whose ids are not the number's: `buy_number` re-reads the
+  order for up to `ORDER_POLL_DELAYS` (~5 s; not when `requirements_met` is
+  false), then `find_number(e164)` for the phone-number id → `"active"`;
+  otherwise `"pending"` with `external_number_sid` null (bind finds it by
+  E.164 once it lands, 422 until then). Once the order is placed nothing but
+  a `failure` status raises (`TelnyxOrderFailed` → 422): the money is spent,
+  so a pending purchase is still audited. The response's `telnyx_order_id`
+  is the order. Harness: `FakeTelnyxAdapter` has its own search/buy (records
+  `buy_number` with `order_id`); `carrier.hold_orders = True` keeps bought
+  numbers on order until `carrier.finish_orders()`.
 
 ## WhatsApp
 

@@ -151,8 +151,9 @@ Binding with a `server_url` returns a `server_url_secret` — TurnCall signs eac
 
 A number you do not have yet can be found and bought through the API, then
 bound like any other. Both calls take an **admin** key: buying spends money on
-the carrier account. A developer or viewer key gets a `403`. Twilio is the only
-carrier for now.
+the carrier account. A developer or viewer key gets a `403`. Both work on
+Twilio and on [Telnyx](#buying-on-telnyx) (`carrier=telnyx`); an Asterisk PBX's
+numbers belong to its dialplan, so `carrier=asterisk` is a `422`.
 
 Search the account's available numbers. Every filter is optional: `country`
 (ISO code, default `US`), `number_type` (`local`, the default, `toll_free` or
@@ -177,11 +178,17 @@ curl "http://localhost:8090/v1/phone-numbers/available?carrier=twilio&country=US
       "locality": "Chicago",
       "postal_code": "60601",
       "number_type": "local",
-      "capabilities": {"voice": true, "sms": true, "mms": false}
+      "capabilities": {"voice": true, "sms": true, "mms": false},
+      "upfront_cost": null,
+      "monthly_cost": null,
+      "currency": null
     }
   ]
 }
 ```
+
+What a carrier does not say is `null`: Twilio's search gives no price, Telnyx's
+gives no `friendly_name` or `postal_code`.
 
 Buy one:
 
@@ -206,7 +213,8 @@ want:
     "friendly_name": "(312) 555-0100",
     "status": "active",
     "twilio_account_sid": null,
-    "twilio_credentials": "platform"
+    "twilio_credentials": "platform",
+    "telnyx_order_id": null
   }
 }
 ```
@@ -232,6 +240,64 @@ want:
 - **Billing.** The number stays on the carrier account, and is billed, until it
   is released on the carrier. Unbinding (`DELETE /v1/phone-numbers/{id}`) does
   not release it.
+
+### Buying on Telnyx
+
+The same two calls with `carrier=telnyx` search and buy on the project's
+Telnyx account: its `telnyx` credential, else the platform's `TELNYX_API_KEY`,
+the account [binding](#telnyx-numbers) uses. With neither, the call is a `503`
+(`no_telnyx_account`, `details.missing_keys: ["telnyx"]`). The `X-Twilio-*`
+headers and the `twilio_*` body fields are refused (`422`) on Telnyx.
+
+```bash
+curl "http://localhost:8090/v1/phone-numbers/available?carrier=telnyx&country=US&area_code=312" \
+  -H "Authorization: Bearer tc_xxx"
+
+curl -X POST http://localhost:8090/v1/phone-numbers/purchase \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"carrier": "telnyx", "e164_number": "+13125550100"}'
+```
+
+A search lists only exact, voice-capable matches, with Telnyx's price
+(`upfront_cost`, `monthly_cost`, `currency`, as Telnyx sends them).
+
+A Telnyx purchase is a **number order**, which Telnyx completes
+asynchronously. The call waits up to about five seconds for it:
+
+- **`"status": "active"`**: the order went through and the number is on the
+  account. `external_number_sid` is its Telnyx phone number id. Bind it now.
+- **`"status": "pending"`**: the order is placed, and paid for, but Telnyx has
+  not finished it (it is slow, or the number's country needs documents in the
+  Telnyx portal first). `external_number_sid` is `null`. Bind with just
+  `carrier` and `e164_number` once Telnyx completes it: bind looks a Telnyx
+  number up on the account by its E.164 and refuses it (`422`, "not a phone
+  number on this project's Telnyx account") until it is there.
+
+```json
+{
+  "success": true,
+  "data": {
+    "carrier": "telnyx",
+    "e164_number": "+13125550100",
+    "external_number_sid": "2304818855919010880",
+    "friendly_name": null,
+    "status": "active",
+    "twilio_account_sid": null,
+    "twilio_credentials": null,
+    "telnyx_order_id": "1d9e1fd6-5bd1-4e2d-a3f4-0123456789ab"
+  }
+}
+```
+
+`telnyx_order_id` is the number order, to look up in the Telnyx portal; it is
+not the number's id. Bound, the number goes onto this deployment's Call
+Control application like any other Telnyx number. A number Telnyx will not
+sell is a `422` with `details.telnyx_codes`; an order Telnyx accepts and then
+fails is a `422` with `details.telnyx_order_id`, and buys nothing. An API key
+Telnyx rejects is a `422`; anything else Telnyx fails on is a `502`
+(`telnyx_error`). A pending purchase is audited like any other: the money is
+spent.
 
 ## Update a Binding
 

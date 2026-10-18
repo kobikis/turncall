@@ -69,7 +69,7 @@ This needs an admin key; a developer or viewer key gets `403`. A key reads only 
 | Parameter | |
 |-----------|---|
 | `resource_type` | `agent`, `credential`, `phone_number`, `api_key` or `project` |
-| `resource_id` | The resource's id; a credential's is its provider account (`openai`, `aws`, ...); a bought number's is its E.164 number (`+13125550100`) |
+| `resource_id` | The resource's id; a credential's is its provider account (`openai`, `aws`, ...); a bought number's is its E.164 number (`+13125550100`), on Twilio and Telnyx alike |
 | `action` | One of the actions above |
 | `request_id` | Every entry one request wrote: the id in its response's `X-TurnCall-Audit-Id` (see below) |
 | `since`, `until` | ISO 8601 times: entries at or after `since` and before `until`. A time without a zone is UTC |

@@ -1,7 +1,7 @@
 # ADR-0025: Buying and releasing numbers; SIP through a carrier or Asterisk
 
-**Status:** Accepted (search and buy on Twilio built in #319; Telnyx and
-release not yet)
+**Status:** Accepted (search and buy built on Twilio in #319 and Telnyx in
+#320; release not yet)
 **Date:** 2026-10-16
 **Relates to:** ADR-0020 (project credentials), ADR-0022 (carrier boundary).
 Tracked in #307.
@@ -69,3 +69,19 @@ verified and was not needed for this.
 
 Search and buy are concrete methods on the carrier adapters that sell numbers,
 not `TelephonyAdapter` actions: Asterisk has no number store (ADR-0022).
+
+**Search and buy on Telnyx** (#320). The same endpoints with `carrier=telnyx`,
+on the project's Telnyx account (its `telnyx` credential, else the platform's
+`TELNYX_API_KEY`), as bind resolves it. A Telnyx purchase is a number order
+that completes asynchronously, and neither the order's id nor its line's is
+the phone number's id that bind stores and release deletes. The buy re-reads
+the order for about five seconds; once it succeeds it finds the number on the
+account by E.164 and answers `active` with that id. An order still pending
+(Telnyx is slow, or the country needs documents) answers `pending` with no id
+and the order's `telnyx_order_id`. That needs no new state: bind already looks
+a Telnyx number up by E.164, so it binds the number once Telnyx has put it on
+the account and refuses it until then. Holding the request open until the
+order finishes was rejected (an order awaiting documents can take days), as was
+a stored "ordered" row (bind has no unbound state to keep it in). Once the
+order is placed only a `failure` status is an error: the money is spent, so a
+pending purchase is audited like a finished one.

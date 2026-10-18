@@ -13,6 +13,23 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Search and buy numbers on Telnyx** (#320, ADR-0025). The same
+  `GET /v1/phone-numbers/available` and `POST /v1/phone-numbers/purchase`
+  take `carrier=telnyx`, admin-only, on the project's Telnyx account (its
+  `telnyx` credential, else the platform's `TELNYX_API_KEY`; neither is a
+  `503`, `no_telnyx_account`). A search lists exact, voice-capable matches
+  and adds `upfront_cost` / `monthly_cost` / `currency` (null on Twilio). A
+  purchase places a Telnyx number order and waits up to about five seconds
+  for it: `status: "active"` with `external_number_sid` = the Telnyx phone
+  number id, or `status: "pending"` with it null when the order has not
+  finished (bind looks the number up by E.164 and refuses it with a `422`
+  until it lands). The response adds `telnyx_order_id` (null on Twilio),
+  which is not the number's id. A number Telnyx will not sell is a `422`
+  with `details.telnyx_codes`; a failed order a `422` with
+  `details.telnyx_order_id`; a rejected API key a `422`; anything else a
+  `502` (`telnyx_error`). A purchase, pending or not, is audited as
+  `phone_number` / `purchased`. The bought number binds onto the
+  deployment's Call Control application as any other. No migration.
 - **Search and buy numbers on Twilio** (#319, ADR-0025). An admin key
   searches the Twilio account for voice-capable numbers with
   `GET /v1/phone-numbers/available` (`carrier=twilio`, `country`,
