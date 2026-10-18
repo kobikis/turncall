@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from turncall.domain.errors import PicklableError
 from turncall.domain.models import resolve_delegation
 from turncall.domain.providers import AWS_ACCOUNT, account_for
 
@@ -162,7 +163,7 @@ class Credentials:
         return missing
 
 
-class MissingProviderKeyError(RuntimeError):
+class MissingProviderKeyError(PicklableError, RuntimeError):
     """An agent names a provider no level holds a key for (ADR-0020)."""
 
     def __init__(self, accounts: list[str]) -> None:

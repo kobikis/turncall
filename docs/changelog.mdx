@@ -330,6 +330,10 @@ the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
 
+**Telnyx errors reach the logs.** A log line carrying a Telnyx error, or a few
+of TurnCall's own, was dropped with a loguru "Logging error" instead of being
+written. It is written now.
+
 **Bind finds your Twilio number exactly.** Binding a number on your own Twilio
 account could pick a different number on that account whose digits contain
 the one you named. It now takes only the exact number.

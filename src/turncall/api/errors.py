@@ -10,6 +10,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from turncall.domain.errors import PicklableError
+
 
 class ErrorCode(StrEnum):
     """Application error codes."""
@@ -78,7 +80,7 @@ class ErrorResponse(BaseModel):
     request_id: str | None = None
 
 
-class ApiError(Exception):
+class ApiError(PicklableError):
     """Base API exception."""
 
     def __init__(

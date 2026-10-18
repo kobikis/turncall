@@ -22,6 +22,7 @@ from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundErro
 from turncall.config import get_settings
 from turncall.domain.carriers import TELNYX, TWILIO
 from turncall.domain.enums import CallDirection, CallEventType
+from turncall.domain.errors import PicklableError
 from turncall.events.server_events import send_call_init
 from turncall.services.call_init_resolver import resolve_call_init, usable_agent
 from turncall.services.limits import admit_outbound_call, release_live_call
@@ -235,7 +236,7 @@ async def _call_init(
     return runs_as, merged
 
 
-class DialNotRecorded(Exception):
+class DialNotRecorded(PicklableError):
     """The carrier placed the call, and writing that down failed. The phone
     may be ringing; the call keeps its live-call slot."""
 
