@@ -134,7 +134,7 @@ async def test_a_telnyx_number_is_taken_off_telnyx_not_twilio():
     with (
         patch(
             "turncall.services.telnyx_accounts.account_for_project",
-            AsyncMock(return_value=TelnyxAccount("KEY", "PUB")),
+            AsyncMock(return_value=TelnyxAccount("KEY", "PUB", shared=False)),
         ),
         patch(
             "turncall.adapters.telephony.telnyx_adapter.TelnyxAdapter"
@@ -181,6 +181,11 @@ async def test_purge_hard_deletes_each_aged_project():
         ),
         patch.object(pd, "_sweep_storage", new=AsyncMock()) as sweep,
         patch.object(pd.project_repo, "hard_delete_project", new=AsyncMock()) as hard,
+        patch.object(
+            pd.purchased_number_repo,
+            "bought_on_platform_by",
+            new=AsyncMock(return_value=[]),
+        ),
     ):
         n = await pd.purge_soft_deleted_projects(
             factory, _settings(), retention_days=30
@@ -208,3 +213,82 @@ async def test_purge_noop_when_nothing_aged():
         )
     assert n == 0
     hard.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_purge_names_the_platform_numbers_a_project_leaves_billed():
+    """The cascade drops the project's `purchased_numbers` rows, and with
+    them the only way to release its numbers on the platform's shared
+    account through TurnCall. Nothing is released automatically; the purge
+    warns with each number, so an operator can release it in the carrier's
+    console."""
+    from loguru import logger
+
+    pid = uuid.uuid4()
+    factory, _session = _session_factory()
+    seen: list[str] = []
+    sink = logger.add(lambda m: seen.append(str(m)), level="WARNING")
+    try:
+        with (
+            patch.object(
+                pd.project_repo,
+                "list_purgeable_project_ids",
+                new=AsyncMock(return_value=[pid]),
+            ),
+            patch.object(pd, "_sweep_storage", new=AsyncMock()),
+            patch.object(pd.project_repo, "hard_delete_project", new=AsyncMock()),
+            patch.object(
+                pd.purchased_number_repo,
+                "bought_on_platform_by",
+                new=AsyncMock(
+                    return_value=[
+                        ("twilio", "+13125550100"),
+                        ("telnyx", "+13125550101"),
+                    ]
+                ),
+            ) as bought,
+        ):
+            await pd.purge_soft_deleted_projects(
+                factory, _settings(), retention_days=30
+            )
+    finally:
+        logger.remove(sink)
+
+    bought.assert_awaited_once()
+    [warning] = [m for m in seen if "purged_project_left_numbers" in m]
+    assert str(pid) in warning
+    assert "twilio +13125550100" in warning
+    assert "telnyx +13125550101" in warning
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_purge_is_quiet_about_a_project_that_bought_nothing_there():
+    from loguru import logger
+
+    factory, _session = _session_factory()
+    seen: list[str] = []
+    sink = logger.add(lambda m: seen.append(str(m)), level="WARNING")
+    try:
+        with (
+            patch.object(
+                pd.project_repo,
+                "list_purgeable_project_ids",
+                new=AsyncMock(return_value=[uuid.uuid4()]),
+            ),
+            patch.object(pd, "_sweep_storage", new=AsyncMock()),
+            patch.object(pd.project_repo, "hard_delete_project", new=AsyncMock()),
+            patch.object(
+                pd.purchased_number_repo,
+                "bought_on_platform_by",
+                new=AsyncMock(return_value=[]),
+            ),
+        ):
+            await pd.purge_soft_deleted_projects(
+                factory, _settings(), retention_days=30
+            )
+    finally:
+        logger.remove(sink)
+
+    assert not [m for m in seen if "purged_project_left_numbers" in m]

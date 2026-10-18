@@ -223,7 +223,7 @@ class TestRoute:
         with (
             patch(
                 f"{TELNYX_ACCOUNT}",
-                AsyncMock(return_value=TelnyxAccount("KEY", "PUB")),
+                AsyncMock(return_value=TelnyxAccount("KEY", "PUB", shared=False)),
             ),
             patch(f"{TELNYX_ADAPTER}.connection_for", AsyncMock(return_value="app-1")),
             patch(f"{TELNYX_ADAPTER}.initiate_outbound_call", telnyx),
@@ -256,7 +256,10 @@ class TestRoute:
         from turncall.services.telnyx_accounts import TelnyxAccount
 
         dial.number.provider = "telnyx"
-        with patch(f"{TELNYX_ACCOUNT}", AsyncMock(return_value=TelnyxAccount("", ""))):
+        with patch(
+            f"{TELNYX_ACCOUNT}",
+            AsyncMock(return_value=TelnyxAccount("", "", shared=False)),
+        ):
             r = dial.post()
         assert r.status_code == 503
         assert r.json()["code"] == "no_telnyx_account"
@@ -273,7 +276,7 @@ class TestRoute:
         with (
             patch(
                 f"{TELNYX_ACCOUNT}",
-                AsyncMock(return_value=TelnyxAccount("KEY", "PUB")),
+                AsyncMock(return_value=TelnyxAccount("KEY", "PUB", shared=False)),
             ),
             patch(f"{TELNYX_ADAPTER}.connection_for", refused),
             patch(f"{TELNYX_ADAPTER}.initiate_outbound_call", telnyx),

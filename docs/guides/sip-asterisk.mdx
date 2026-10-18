@@ -1,0 +1,204 @@
+---
+title: SIP Trunk through Asterisk
+description: "Point a SIP trunk at your Asterisk, and let it hand calls to TurnCall over ARI"
+icon: "server"
+---
+
+TurnCall has no SIP endpoint of its own: it does not accept SIP or RTP. A SIP
+trunk reaches an agent through your Asterisk, which TurnCall drives over ARI.
+The carrier delivers the call to Asterisk as it would to any PBX; Asterisk
+hands it to TurnCall, and the agent answers. No cloud carrier sits between your
+Asterisk and TurnCall.
+
+```text
+carrier ── SIP + RTP ──▶ Asterisk ◀── ARI (events, control) ── TurnCall
+                         Asterisk ── WebSocket (call audio) ──▶ TurnCall
+```
+
+Two connections, opened from opposite ends:
+
+- **TurnCall connects to Asterisk** for ARI: its HTTP server (`http.conf`),
+  port 8088, or 8089 with TLS. TurnCall keeps the events WebSocket open.
+- **Asterisk connects to TurnCall** for each call's audio, at
+  `wss://<your TurnCall host>/ws/asterisk-media`.
+
+Open your firewall for both. If your phone system can trunk to Twilio or
+Telnyx instead, see [SIP trunk through Twilio or Telnyx](/guides/sip-trunking).
+
+You need **Asterisk 20.18, 22.8, 23.2 or later** (the WebSocket channel driver
+with JSON control messages) and a SIP trunk from any carrier.
+
+## Carrier side
+
+The carrier sends calls for your number to your Asterisk. This is the same
+setup as for any PBX, so follow your carrier's own Asterisk guide. TurnCall
+needs two things from it:
+
+- **The dialled number, in the request.** Asterisk reads it as the extension,
+  and TurnCall looks the call up by it. `+15551234567` and `15551234567` both
+  work: TurnCall adds a `+` to bare digits. A national number (`5551234567`)
+  does not, so map it in the dialplan (below).
+- **Continuous audio.** A trunk's RTP carries silence between words, and turn
+  detection depends on it. Turn off silence suppression (VAD, comfort noise)
+  where your carrier or endpoint offers it.
+
+For example:
+
+- **Telnyx**: a SIP Connection that your Asterisk authenticates to
+  (`sip.telnyx.com`), with the number assigned to it. Under the connection's
+  Inbound settings, choose a DNIS number format of `+E.164` or `E.164` (the
+  default), not National. Telnyx's
+  [Asterisk guide](https://developers.telnyx.com/docs/voice/sip-trunking/asterisk)
+  covers the rest.
+- **Twilio**: an [Elastic SIP Trunk](https://www.twilio.com/docs/sip-trunking)
+  whose Origination SIP URI is your Asterisk (`sip:pbx.example.com`), with the
+  number associated with the trunk. Twilio puts the dialled Twilio number in
+  the request's user part.
+
+Bind the number in TurnCall as an `asterisk` number, not as a `twilio` or
+`telnyx` one. On this path the carrier talks to your Asterisk, and TurnCall
+never talks to the carrier.
+
+## Asterisk side
+
+**1. Send the trunk's calls to a context of their own.** The trunk endpoint is
+your carrier's configuration; the only line TurnCall cares about is its
+`context`. With Telnyx's credentials connection, in `pjsip_wizard.conf`:
+
+```ini
+; pjsip_wizard.conf
+[telnyx]
+type = wizard
+remote_hosts = sip.telnyx.com:5060
+sends_auth = yes
+sends_registrations = yes
+outbound_auth/username = TELNYX_SIP_USERNAME
+outbound_auth/password = TELNYX_SIP_PASSWORD
+registration/expiration = 600
+endpoint/context = from-trunk
+endpoint/allow = !all,ulaw,alaw
+endpoint/dtmf_mode = rfc4733
+endpoint/rewrite_contact = yes
+endpoint/force_rport = yes
+aor/qualify_frequency = 60
+```
+
+TurnCall's audio is ulaw. Offering it first spares Asterisk a transcode.
+
+**2. Hand the calls to TurnCall** in that context, and give it a transfer
+context that dials out through the trunk:
+
+```ini
+; extensions.conf
+[from-trunk]
+exten => _X.,1,Stasis(turncall,${EXTEN})      ; 15551234567: TurnCall adds the +
+ same => n,Queue(support)                     ; reached if TurnCall cannot take the call
+exten => _+X.,1,Stasis(turncall,${EXTEN})     ; +15551234567
+ same => n,Queue(support)
+exten => 5551234567,1,Stasis(turncall,+15551234567)  ; a national number, mapped
+ same => n,Queue(support)
+
+[turncall-transfer]
+exten => _+X.,1,Dial(PJSIP/${EXTEN}@telnyx)
+```
+
+The first `Stasis` argument is the number TurnCall looks up. A call TurnCall
+cannot take (a number it does not know, or one over the project's live-call
+limit, which also sends `call.rejected`) comes back to the dialplan
+**unanswered**, at the line after `Stasis`, so your own fallback takes it. The
+caller's channel carries `TURNCALL_CALL_ID` from then on.
+
+An agent's transfer continues the caller in `turncall-transfer`, with the
+target as the extension in E.164 (`+15557654321`). Your carrier decides what
+caller ID it accepts on that outbound leg; Twilio, for example, accepts only
+one of your Twilio numbers or a verified caller ID.
+
+**3. Turn on ARI** for TurnCall's user:
+
+```ini
+; http.conf
+[general]
+enabled = yes
+bindaddr = 0.0.0.0
+bindport = 8088
+
+; ari.conf
+[general]
+enabled = yes
+
+[turncall]
+type = user
+read_only = no
+password = ARI_PASSWORD
+```
+
+ARI carries the call's control and the password. Across the internet, serve it
+over TLS (`tlsenable`, `tlsbindaddr`, `tlscertfile`, `tlsprivatekey` in
+`http.conf`) and give TurnCall the `https://` URL.
+
+**4. Tell Asterisk where to send call audio:**
+
+```ini
+; websocket_client.conf
+[turncall]
+type = websocket_client
+uri = wss://turncall.example.com/ws/asterisk-media
+protocols = media
+connection_type = per_call_config
+```
+
+## TurnCall side
+
+**1. Give TurnCall your Asterisk** as the project's `asterisk` credential:
+
+```bash
+curl -X PUT http://localhost:8090/v1/credentials/asterisk \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ari_url": "https://pbx.example.com:8089",
+    "username": "turncall",
+    "password": "ARI_PASSWORD"
+  }'
+```
+
+`ari_url` is the `http(s)://` base of ARI. TurnCall connects out to it, so it
+must pass `BYOM_ALLOWED_URL_PATTERNS`, the allowlist for every URL TurnCall
+reaches on a project's behalf. Optional fields, each matching a name in your
+Asterisk configuration: `app` (the `Stasis` app, default `turncall`),
+`media_connection` (the `websocket_client.conf` entry, default `turncall`) and
+`transfer_context` (default `turncall-transfer`).
+
+**2. Bind the number** with `carrier: "asterisk"`, as it arrives on the trunk:
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "carrier": "asterisk",
+    "e164_number": "+15551234567",
+    "routing_target_type": "agent",
+    "routing_target_id": "AGENT_UUID"
+  }'
+```
+
+Every routing type works, including a `server_url` for
+[Call Init](/guides/call-init).
+
+**3. Run the ARI connection on one replica.** Asterisk gives an app's calls to
+one connection only. With several TurnCall replicas, set
+`ASTERISK_EDGE_ENABLED=false` on all but one; the others still serve call
+audio and call control.
+
+Call the number. The agent answers, and the call's events and transcript are
+recorded as on any other number.
+
+## What differs from a cloud carrier
+
+- **Transfers are cold only.** A warm transfer, a `transfer_message` or a
+  `fallback_message` is refused, and the agent is told why.
+- **No outbound calls or SMS** from an Asterisk number.
+
+See [Asterisk numbers](/guides/phone-numbers#asterisk-numbers) for the rest,
+including serving one Asterisk for every project from the environment.

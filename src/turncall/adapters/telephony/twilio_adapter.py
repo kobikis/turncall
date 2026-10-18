@@ -1,15 +1,20 @@
 """Twilio telephony adapter implementation."""
 
 import asyncio
+import json
 import xml.etree.ElementTree as ET
 from typing import Any
 
 from loguru import logger
-from twilio.base.exceptions import TwilioRestException
+from twilio.base.exceptions import TwilioException, TwilioRestException
 from twilio.request_validator import RequestValidator
 from twilio.rest import Client as TwilioClient
 
 from turncall.adapters.telephony.base import TelephonyAdapter
+from turncall.domain.carriers import NUMBER_TYPES
+
+# How many partial matches each page of a number lookup reads.
+_LOOKUP_PAGE_SIZE = 50
 
 
 class TwilioAdapter(TelephonyAdapter):
@@ -156,11 +161,108 @@ class TwilioAdapter(TelephonyAdapter):
 
     async def find_number_sid(self, e164_number: str) -> str | None:
         """The PN SID of this E.164 number on this account, or None if the
-        account does not own it. Raises TwilioRestException on bad credentials."""
-        numbers = self._client.incoming_phone_numbers.list(
-            phone_number=e164_number, limit=1
+        account does not own it. Raises TwilioRestException on bad credentials
+        (a refused list arrives from the SDK as a bare TwilioException; it is
+        converted, so a 401 reads as one). Off the event loop.
+
+        Twilio's PhoneNumber filter matches partially (a number that merely
+        contains `e164_number` matches too), so every match is read, page by
+        page, until the exact number turns up: a release or a bind must never
+        act on a different number.
+        """
+
+        def _find() -> str | None:
+            listing = self._client.incoming_phone_numbers
+            try:
+                for number in listing.stream(
+                    phone_number=e164_number, page_size=_LOOKUP_PAGE_SIZE
+                ):
+                    if number.phone_number == e164_number:
+                        return str(number.sid)
+            except TwilioRestException:
+                raise
+            except TwilioException as exc:
+                raise _page_error(exc, listing._uri) from exc
+            return None
+
+        return await asyncio.to_thread(_find)
+
+    async def search_numbers(
+        self,
+        country: str,
+        *,
+        number_type: str = "local",
+        area_code: str | None = None,
+        contains: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Numbers this account can buy, voice-capable, in TurnCall's shape.
+
+        Twilio's own (ADR-0025), not a `TelephonyAdapter` action. Raises
+        TwilioRestException: 404 when Twilio sells no `number_type` numbers in
+        `country`, 401/403 on bad credentials. Off the event loop: the SDK
+        blocks.
+        """
+        if number_type not in NUMBER_TYPES:
+            raise ValueError(f"Twilio has no number type {number_type!r}")
+        filters: dict[str, Any] = {"voice_enabled": True, "limit": limit}
+        if area_code:
+            # As given: a leading zero is part of an area code.
+            filters["area_code"] = area_code
+        if contains:
+            filters["contains"] = contains
+
+        def _search() -> list[Any]:
+            numbers = self._client.available_phone_numbers(country)
+            # The SDK names each type's list as TurnCall does.
+            listing = getattr(numbers, number_type)
+            try:
+                return list(listing.list(**filters))
+            except TwilioRestException:
+                raise
+            except TwilioException as exc:
+                raise _page_error(exc, listing._uri) from exc
+
+        records = await asyncio.to_thread(_search)
+        return [_available_number(record, number_type) for record in records]
+
+    async def buy_number(self, e164_number: str) -> dict[str, Any]:
+        """Buy the number onto this account; what binding it needs.
+
+        Raises TwilioRestException: 400 when the number is no longer available
+        or its country needs an address or regulatory bundle first, 401/403 on
+        bad credentials. Off the event loop.
+        """
+
+        def _buy() -> Any:
+            return self._client.incoming_phone_numbers.create(phone_number=e164_number)
+
+        number = await asyncio.to_thread(_buy)
+        logger.info(
+            "twilio_number_bought", number_sid=number.sid, e164=number.phone_number
         )
-        return numbers[0].sid if numbers else None
+        return {
+            "number_sid": number.sid,
+            "e164_number": number.phone_number,
+            "friendly_name": number.friendly_name,
+            # A Twilio purchase is immediate: the number can be bound now.
+            "status": "active",
+        }
+
+    async def release_number(self, number_sid: str) -> None:
+        """Release the number from this account, back to Twilio. Irreversible:
+        Twilio may sell it to someone else.
+
+        Twilio's own (ADR-0025), not a `TelephonyAdapter` action. Raises
+        TwilioRestException: 404 when the account does not own `number_sid`,
+        401/403 on bad credentials. Off the event loop.
+        """
+
+        def _release() -> None:
+            self._client.incoming_phone_numbers(number_sid).delete()
+
+        await asyncio.to_thread(_release)
+        logger.info("twilio_number_released", number_sid=number_sid)
 
     async def send_sms(
         self,
@@ -235,3 +337,40 @@ class TwilioAdapter(TelephonyAdapter):
         else:
             dial.text = target_number
         return ET.tostring(response, encoding="unicode")
+
+
+def _available_number(record: Any, number_type: str) -> dict[str, Any]:
+    """An available Twilio number in the carrier-neutral shape a search
+    returns. Twilio spells SMS and MMS upper-case in `capabilities`."""
+    capabilities = {k.lower(): bool(v) for k, v in (record.capabilities or {}).items()}
+    return {
+        "e164_number": record.phone_number,
+        "friendly_name": record.friendly_name,
+        "country": record.iso_country,
+        "region": record.region,
+        "locality": record.locality,
+        "postal_code": record.postal_code,
+        "number_type": number_type,
+        "capabilities": {
+            "voice": capabilities.get("voice", False),
+            "sms": capabilities.get("sms", False),
+            "mms": capabilities.get("mms", False),
+        },
+    }
+
+
+def _page_error(exc: TwilioException, uri: str) -> Exception:
+    """A list request Twilio refused, as the TwilioRestException any other
+    refused request is. The SDK's paging raises a bare TwilioException
+    carrying the response instead, so a 404 or a 401 would read as neither."""
+    response = exc.args[1] if len(exc.args) > 1 else None
+    status = getattr(response, "status_code", None)
+    if status is None:
+        return exc
+    try:
+        body = json.loads(response.text)
+    except (TypeError, ValueError):
+        body = {}
+    return TwilioRestException(
+        status, uri, msg=body.get("message", ""), code=body.get("code")
+    )

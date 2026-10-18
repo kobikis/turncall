@@ -13,6 +13,83 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Release numbers** (#321, ADR-0025). `POST /v1/phone-numbers/release`
+  gives a number on the carrier account back to the carrier, on Twilio and
+  Telnyx, admin-only (a developer or viewer key gets `403`). Releasing is
+  irreversible, so it is refused with a `409` while TurnCall binds the number
+  (`details.phone_number_id` names the binding when it is the caller's
+  project's; unbind it first) and with a `422` unless `confirm` repeats
+  `e164_number` exactly (`true` or another number is refused too). The body
+  is `carrier` (`twilio` default, or `telnyx`), `e164_number`, `confirm`,
+  and on Twilio an optional `twilio_account_sid` + `twilio_auth_token`
+  (else the platform's `TWILIO_*` account); Telnyx uses the project's
+  Telnyx account. The number is looked up on the account by E.164 (`422`
+  when the account does not hold it) and deleted (Twilio
+  `IncomingPhoneNumbers`, Telnyx `DELETE /v2/phone_numbers/{id}`). The
+  response is `carrier`, `e164_number`, `external_number_sid`,
+  `status: "released"`, `twilio_account_sid` / `twilio_credentials`. Each
+  release is an audit log entry, `phone_number` / `released`, keyed by the
+  E.164 number. Unbinding (`DELETE /v1/phone-numbers/{id}`) is unchanged and
+  never releases. On the platform's shared carrier account (Twilio's
+  `TWILIO_*` when no pair is sent; Telnyx's `TELNYX_API_KEY` when the
+  project has no `telnyx` credential) a release is allowed only for a number
+  the project bought there through `POST /v1/phone-numbers/purchase`;
+  anything else, including another project's purchase, is a `403`
+  (`forbidden`, `details.account: "platform"`) before the carrier is asked.
+  A release on the project's own account is unrestricted. Purchases are
+  recorded in a new `purchased_numbers` table (project, carrier, E.164,
+  `platform` or `own` account; written by every purchase, pending Telnyx
+  orders too, and deleted by the release). Migration `c9e3a5f7b1d4`.
+  Purging a deleted project releases nothing: the purge logs a warning,
+  `purged_project_left_numbers`, naming each number the project bought on
+  the platform's account and never released, which stays there, billed, for
+  an operator to release in the carrier's console. A Telnyx release Telnyx
+  does not answer is a `502` (`telnyx_error`) saying the number may have
+  been released.
+- **Search and buy numbers on Telnyx** (#320, ADR-0025). The same
+  `GET /v1/phone-numbers/available` and `POST /v1/phone-numbers/purchase`
+  take `carrier=telnyx`, admin-only, on the project's Telnyx account (its
+  `telnyx` credential, else the platform's `TELNYX_API_KEY`; neither is a
+  `503`, `no_telnyx_account`). A search lists exact, voice-capable matches
+  and adds `upfront_cost` / `monthly_cost` / `currency` (null on Twilio). A
+  purchase places a Telnyx number order and waits up to about five seconds
+  for it: `status: "active"` with `external_number_sid` = the Telnyx phone
+  number id, or `status: "pending"` with it null when the order has not
+  finished (bind looks the number up by E.164 and refuses it with a `422`
+  until it lands). The response adds `telnyx_order_id` (null on Twilio),
+  which is not the number's id. A number Telnyx will not sell is a `422`
+  with `details.telnyx_codes`; a failed order a `422` with
+  `details.telnyx_order_id`; a rejected API key a `422`; anything else a
+  `502` (`telnyx_error`). An order that ends `cancelled` or `deleted` is a
+  failed order too. An order request Telnyx does not answer (a timeout) is a
+  `502` (`telnyx_error`) saying the order may have been placed, and is
+  logged at error level with the number and the project. A purchase,
+  pending or not, is audited as `phone_number` / `purchased`. The bought
+  number binds onto the deployment's Call Control application as any other.
+  No migration.
+- **Search and buy numbers on Twilio** (#319, ADR-0025). An admin key
+  searches the Twilio account for voice-capable numbers with
+  `GET /v1/phone-numbers/available` (`carrier=twilio`, `country`,
+  `number_type` of `local`, `toll_free` or `mobile`, `area_code`, `contains`
+  digits, `limit` up to 50) and buys one with
+  `POST /v1/phone-numbers/purchase` (`201`). The buy returns what binding
+  needs: `carrier`, `e164_number`, `external_number_sid` (the PN SID),
+  `status`, and `twilio_account_sid` / `twilio_credentials`. Twilio has no
+  project credential, so both run on the Twilio account the request names
+  (`twilio_account_sid` + `twilio_auth_token` in the buy's body, the
+  `X-Twilio-Account-Sid` + `X-Twilio-Auth-Token` headers on the search) or
+  on the platform's `TWILIO_*` account; bind with the same pair. A developer
+  or viewer key gets `403`; no account at all is a `503`
+  (`no_twilio_account`); a number Twilio will not sell is a `422` with
+  `details.twilio_code`; a number already bound is a `409`. Each purchase is
+  an audit log entry, `phone_number` / `purchased`, keyed by the E.164
+  number. Buying binds nothing: the number is bound with
+  `POST /v1/phone-numbers` as before. No migration. The carrier sells the
+  number before TurnCall records it, so if recording, auditing or the
+  commit then fails, on either carrier, the purchase is a `500`
+  (`internal_error`) whose `details.bought` names the number, logged at
+  error level (`phone_number_bought_untracked`) with the carrier, E.164,
+  number id or Telnyx order, and project.
 - **Audit log** (#317, ADR-0024). Every change made through the API to a
   project's agents (create, update, delete, publish, rollback, knowledge base
   links, and the versions a publish or rollback archives), credentials, phone
@@ -618,6 +695,24 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **A Twilio number is found by its exact E.164** (#344). Looking a number up
+  on a Twilio account (bind with `twilio_account_sid` +
+  `twilio_auth_token`, and release) used Twilio's `PhoneNumber` filter,
+  which matches partially, and took the first result: an account holding a
+  longer number that contains the one asked for could bind, or release, that
+  other number. The lookup now reads every match and takes only the one
+  whose number is exactly the E.164; with none, the number is not on the
+  account (`422`).
+- **Telnyx not answering a bind is a `502`** (#344). A timeout or dropped
+  connection while bind looked a number up on Telnyx was a `500`; it is now
+  a `502` `telnyx_error`, like any other Telnyx failure on bind. Bind's other
+  responses are unchanged: Telnyx refusing its lookup is still a `502`.
+- **Binding with a Twilio account that rejects its credentials is a `422`**
+  (#321). Looking a number up on a Twilio account (bind with
+  `twilio_account_sid` + `twilio_auth_token`, and now release) met the
+  Twilio SDK's bare "Unable to fetch page" exception on a refused request,
+  so a wrong Auth Token was a `500` instead of the documented `422`. The
+  lookup now reads Twilio's status, and runs off the event loop.
 - **A viewer key is refused on every route that changes something** (#335).
   These routes accepted any key, so a viewer key could change what an agent
   retrieves from, overwrite a call's analysis or start a call:
@@ -873,6 +968,18 @@ and is not part of this repository's history.
 
 ### Documentation
 
+- **SIP trunk guides** (#322, ADR-0025). TurnCall has no SIP endpoint of its
+  own, and the Phone Numbers guide now says so and links two guides for the
+  ways a SIP trunk reaches an agent. *SIP trunk through Asterisk*: the
+  carrier's side (the dialled number in the request, `+E.164` or `E.164` but
+  not national unless mapped in the dialplan; continuous audio), the trunk's
+  context and `Stasis` dialplan, ARI and `websocket_client.conf`, then the
+  `asterisk` credential and binding. *SIP trunk through Twilio or Telnyx*: a
+  number bound in TurnCall, dialled from the phone system over a Twilio
+  Elastic SIP Trunk or a Telnyx SIP Connection, with each carrier's
+  termination setup and its warning that a Twilio number still on a trunk
+  ignores the voice URL binding sets, and that binding a Telnyx number takes
+  it off its SIP Connection.
 - **A compliance mapping** (#318, ADR-0024): the Compliance guide maps
   redaction, caller numbers off spans, retention, recordings, the audit log,
   self-hosting, encrypted project credentials and signed webhooks to GDPR

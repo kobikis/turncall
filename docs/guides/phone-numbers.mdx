@@ -6,6 +6,10 @@ icon: "phone"
 
 Phone numbers connect your Twilio, Telnyx and Asterisk numbers to TurnCall agents. Each number can route to a specific agent or to a webhook for dynamic routing.
 
+TurnCall has no native SIP endpoint: it does not accept SIP or RTP itself. A
+SIP trunk reaches an agent through your Asterisk or a Twilio or Telnyx
+number; see [SIP trunks](#sip-trunks).
+
 A number's `carrier` — the telephony company it belongs to — is `twilio`, the
 default, `telnyx` (see [Telnyx numbers](#telnyx-numbers)), or `asterisk` for a
 PBX of your own (see [Asterisk numbers](#asterisk-numbers)), and is fixed once
@@ -143,6 +147,250 @@ curl -X POST http://localhost:8090/v1/phone-numbers \
 
 Binding with a `server_url` returns a `server_url_secret` — TurnCall signs each call-init request with it so your endpoint can verify the source.
 
+## Search and buy a number
+
+A number you do not have yet can be found and bought through the API, then
+bound like any other. Both calls take an **admin** key: buying spends money on
+the carrier account. A developer or viewer key gets a `403`. Both work on
+Twilio and on [Telnyx](#buying-on-telnyx) (`carrier=telnyx`); an Asterisk PBX's
+numbers belong to its dialplan, so `carrier=asterisk` is a `422`.
+
+Search the account's available numbers. Every filter is optional: `country`
+(ISO code, default `US`), `number_type` (`local`, the default, `toll_free` or
+`mobile`), `area_code`, `contains` (2 to 16 digits) and `limit` (1 to 50,
+default 20). Only voice-capable numbers are listed.
+
+```bash
+curl "http://localhost:8090/v1/phone-numbers/available?carrier=twilio&country=US&area_code=312&contains=555" \
+  -H "Authorization: Bearer tc_xxx"
+```
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "carrier": "twilio",
+      "e164_number": "+13125550100",
+      "friendly_name": "(312) 555-0100",
+      "country": "US",
+      "region": "IL",
+      "locality": "Chicago",
+      "postal_code": "60601",
+      "number_type": "local",
+      "capabilities": {"voice": true, "sms": true, "mms": false},
+      "upfront_cost": null,
+      "monthly_cost": null,
+      "currency": null
+    }
+  ]
+}
+```
+
+What a carrier does not say is `null`: Twilio's search gives no price, Telnyx's
+gives no `friendly_name` or `postal_code`.
+
+Buy one:
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers/purchase \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"carrier": "twilio", "e164_number": "+13125550100"}'
+```
+
+The `201` response is what binding needs. Send its `carrier`, `e164_number`
+and `external_number_sid` to `POST /v1/phone-numbers` with the routing you
+want:
+
+```json
+{
+  "success": true,
+  "data": {
+    "carrier": "twilio",
+    "e164_number": "+13125550100",
+    "external_number_sid": "PNxxxxxxxx",
+    "friendly_name": "(312) 555-0100",
+    "status": "active",
+    "twilio_account_sid": null,
+    "twilio_credentials": "platform",
+    "telnyx_order_id": null
+  }
+}
+```
+
+- **Which Twilio account.** Without a pair, the platform's
+  `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` account searches and buys. To use
+  [your own Twilio account](#bring-your-own-twilio-account), send
+  `twilio_account_sid` + `twilio_auth_token` in the buy's body, and the
+  `X-Twilio-Account-Sid` + `X-Twilio-Auth-Token` headers on the search (headers
+  keep the token out of the URL). The buy then returns `twilio_account_sid` and
+  `"twilio_credentials": "number"`. Bind with the same pair; the token is never
+  returned. With neither a pair nor a platform account the call is a `503`
+  (`no_twilio_account`).
+- **Refusals.** A number Twilio will not sell (already taken, or its country
+  needs an address or regulatory bundle on the account first) is a `422` with
+  Twilio's message and `details.twilio_code`. A number already bound in
+  TurnCall is a `409`. A `number_type` Twilio does not sell in that country is
+  a `422`. Credentials you sent that Twilio rejects are a `422`; anything else
+  Twilio fails on is a `502` (`twilio_error`).
+- **Audited.** Each purchase writes an audit log entry, `phone_number` /
+  `purchased`, whose `resource_id` is the E.164 number (a bought number has no
+  binding yet). See [Audit log](/guides/audit-log).
+- **Billing.** The number stays on the carrier account, and is billed, until it
+  is [released](#release-a-number). Unbinding (`DELETE /v1/phone-numbers/{id}`)
+  does not release it.
+- **If TurnCall cannot record it.** The carrier has sold the number by the
+  time TurnCall records the purchase, so a failure then (the database, the
+  audit log) does not undo it. The call is a `500` (`internal_error`) whose
+  `details.bought` names the number (`e164_number`, `external_number_sid`,
+  `telnyx_order_id`), and the operator's logs carry it at error level
+  (`phone_number_bought_untracked`). Bind it, or release it in the carrier's
+  console.
+
+### Buying on Telnyx
+
+The same two calls with `carrier=telnyx` search and buy on the project's
+Telnyx account: its `telnyx` credential, else the platform's `TELNYX_API_KEY`,
+the account [binding](#telnyx-numbers) uses. With neither, the call is a `503`
+(`no_telnyx_account`, `details.missing_keys: ["telnyx"]`). The `X-Twilio-*`
+headers and the `twilio_*` body fields are refused (`422`) on Telnyx.
+
+```bash
+curl "http://localhost:8090/v1/phone-numbers/available?carrier=telnyx&country=US&area_code=312" \
+  -H "Authorization: Bearer tc_xxx"
+
+curl -X POST http://localhost:8090/v1/phone-numbers/purchase \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"carrier": "telnyx", "e164_number": "+13125550100"}'
+```
+
+A search lists only exact, voice-capable matches, with Telnyx's price
+(`upfront_cost`, `monthly_cost`, `currency`, as Telnyx sends them).
+
+A Telnyx purchase is a **number order**, which Telnyx completes
+asynchronously. The call waits up to about five seconds for it:
+
+- **`"status": "active"`**: the order went through and the number is on the
+  account. `external_number_sid` is its Telnyx phone number id. Bind it now.
+- **`"status": "pending"`**: the order is placed, and paid for, but Telnyx has
+  not finished it (it is slow, or the number's country needs documents in the
+  Telnyx portal first). `external_number_sid` is `null`. Bind with just
+  `carrier` and `e164_number` once Telnyx completes it: bind looks a Telnyx
+  number up on the account by its E.164 and refuses it (`422`, "not a phone
+  number on this project's Telnyx account") until it is there.
+
+```json
+{
+  "success": true,
+  "data": {
+    "carrier": "telnyx",
+    "e164_number": "+13125550100",
+    "external_number_sid": "2304818855919010880",
+    "friendly_name": null,
+    "status": "active",
+    "twilio_account_sid": null,
+    "twilio_credentials": null,
+    "telnyx_order_id": "1d9e1fd6-5bd1-4e2d-a3f4-0123456789ab"
+  }
+}
+```
+
+`telnyx_order_id` is the number order, to look up in the Telnyx portal; it is
+not the number's id. Bound, the number goes onto this deployment's Call
+Control application like any other Telnyx number. A number Telnyx will not
+sell is a `422` with `details.telnyx_codes`; an order Telnyx accepts and then
+fails, or that ends cancelled or deleted, is a `422` with
+`details.telnyx_order_id`, and buys nothing. An API key Telnyx rejects is a
+`422`; anything else Telnyx fails on is a `502` (`telnyx_error`). If Telnyx
+does not answer the order at all (a timeout), the call is a `502`
+(`telnyx_error`) saying the order may have been placed: check the account's
+number orders in the Telnyx portal before buying the number again. A pending
+purchase is audited like any other: the money is spent.
+
+## Release a number
+
+Releasing gives a number on the carrier account back to the carrier, so it
+stops being billed. It takes an **admin** key (a developer or viewer key gets a
+`403`) and works on Twilio and Telnyx, on the same account a
+[purchase](#search-and-buy-a-number) uses.
+
+<Warning>
+Releasing is **irreversible**. The number leaves your carrier account, and the
+carrier may sell it to someone else: calls and texts to it stop reaching you,
+and you may never get it back. Unbinding is not releasing, and is the safe way
+to stop a number reaching TurnCall.
+</Warning>
+
+Three guards make a release deliberate:
+
+- **Unbound numbers only.** A number TurnCall still binds is refused with a
+  `409`; `details.phone_number_id` names the binding when it is your project's.
+  Unbind it first with `DELETE /v1/phone-numbers/{phone_number_id}`, which
+  leaves the number on the account.
+- **An explicit confirmation.** `confirm` must repeat `e164_number` exactly.
+  Without it, or with anything else (`true`, `"yes"`, another number), the
+  request is a `422` and nothing is released.
+- **Your purchases only, on the shared platform account.** The platform's
+  carrier accounts hold every project's numbers: Twilio's `TWILIO_*` account
+  (used when you send no `twilio_account_sid` + `twilio_auth_token`) and
+  Telnyx's `TELNYX_API_KEY` (used when the project has no `telnyx`
+  credential). A release there is allowed only for a number your project bought
+  with `POST /v1/phone-numbers/purchase`. Any other number, including one
+  another project bought or one put on the account outside TurnCall, is a
+  `403` (`forbidden`, `details.account: "platform"`), and the carrier is not
+  asked anything. A release on your own account (your Twilio pair, or your
+  project's `telnyx` credential) has no such limit.
+
+```bash
+curl -X POST http://localhost:8090/v1/phone-numbers/release \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"carrier": "twilio", "e164_number": "+13125550100", "confirm": "+13125550100"}'
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "carrier": "twilio",
+    "e164_number": "+13125550100",
+    "external_number_sid": "PNxxxxxxxx",
+    "status": "released",
+    "twilio_account_sid": null,
+    "twilio_credentials": "platform"
+  }
+}
+```
+
+- **Which account.** On Twilio, the `twilio_account_sid` + `twilio_auth_token`
+  pair in the body, else the platform's `TWILIO_*` account (`503`
+  `no_twilio_account` with neither). On Telnyx (`"carrier": "telnyx"`), the
+  project's `telnyx` credential, else the platform's `TELNYX_API_KEY` (`503`
+  `no_telnyx_account` with neither). `carrier=asterisk` is a `422`. On the
+  platform's account, only a number your project bought there is released
+  (see above).
+- **Found by its number.** TurnCall looks the number up on the account by its
+  E.164 and releases what it finds (Twilio's PN SID, Telnyx's phone number id,
+  returned as `external_number_sid`). A number the account does not hold is a
+  `422`, and so is a Telnyx number whose order has not finished.
+- **Refusals.** Credentials you sent that the carrier rejects, and anything
+  Telnyx refuses, are a `422`; anything else the carrier fails on is a `502`
+  (`twilio_error`, `telnyx_error`), and nothing is recorded. If Telnyx does not
+  answer the release itself, the `502` says the number may have been released:
+  check the account before releasing it again.
+- **Deleting the project.** Numbers your project bought on the platform's
+  account are not released when the project is deleted. Once a deleted
+  project is purged, TurnCall no longer knows they were its, so nobody can
+  release them through the API: release them before deleting the project. The
+  purge logs a warning (`purged_project_left_numbers`) naming each one it
+  leaves on the account, still billed, for the operator to release in the
+  carrier's console.
+- **Audited.** Each release writes an audit log entry, `phone_number` /
+  `released`, whose `resource_id` is the E.164 number and whose "before" is the
+  number released. See [Audit log](/guides/audit-log).
+
 ## Update a Binding
 
 Re-route a number in place — the phone id and its `server_url_secret` stay stable, so a call-init endpoint keeps verifying with the same secret across edits:
@@ -252,6 +500,18 @@ differs:
 A deployment can also serve one Asterisk for every project from the
 environment (`ASTERISK_ARI_URL`, `ASTERISK_ARI_USERNAME`,
 `ASTERISK_ARI_PASSWORD`); a project with its own credential uses its own.
+
+## SIP trunks
+
+TurnCall has no native SIP endpoint, so a SIP trunk is never pointed at
+TurnCall directly. It reaches an agent in one of two ways:
+
+- **[Through Asterisk](/guides/sip-asterisk).** The trunk lands on your
+  Asterisk, which hands each call to TurnCall over ARI. No cloud carrier sits
+  between your PBX and TurnCall.
+- **[Through Twilio or Telnyx](/guides/sip-trunking).** Your phone system
+  sends the call over a Twilio or Telnyx elastic SIP trunk to a number bound
+  here, and the carrier delivers it to TurnCall like any other call.
 
 ## SMS Support
 

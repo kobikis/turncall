@@ -20,9 +20,13 @@ Pieces
   them off (`HARNESS_AGENT` does).
 - `carrier.py` — `FakeCarrier`: owns numbers, records every REST action in
   `actions` (`dial`, `hang_up`, `transfer`, `send_dtmf`, `configure_number`,
-  `configure_sms`, `send_sms`, and Telnyx's `answer`, `reject`,
-  `stop_streaming`, `speak`, `start_playback`, `stop_playback`, `bridge`),
-  `wait_for(kind)` and `action_at(index)`.
+  `configure_sms`, `send_sms`, `buy_number`, `release_number`, and Telnyx's
+  `answer`, `reject`, `stop_streaming`, `speak`, `start_playback`,
+  `stop_playback`, `bridge`),
+  `wait_for(kind)` and `action_at(index)`. `offer(e164)` puts a number up
+  for sale: a number search lists it, and buying it moves it onto the account
+  (on Telnyx, `hold_orders = True` keeps it on a pending number order until
+  `finish_orders()`); releasing a number takes it off the account for good.
   `install(set_attr)` replaces the adapters `services/twilio_accounts
   .TwilioAccount` and `services/telnyx_accounts.TelnyxAccount` hand out, which
   is every carrier REST call the app makes. It also holds the Telnyx account's

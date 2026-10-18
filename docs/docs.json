@@ -42,6 +42,8 @@
                 "group": "Connect a channel",
                 "pages": [
                   "guides/phone-numbers",
+                  "guides/sip-asterisk",
+                  "guides/sip-trunking",
                   "guides/webrtc",
                   "guides/whatsapp",
                   "guides/sms-chat",
@@ -158,6 +160,9 @@
             "pages": [
               "POST /v1/phone-numbers",
               "GET /v1/phone-numbers",
+              "GET /v1/phone-numbers/available",
+              "POST /v1/phone-numbers/purchase",
+              "POST /v1/phone-numbers/release",
               "GET /v1/phone-numbers/{phone_number_id}",
               "PUT /v1/phone-numbers/{phone_number_id}",
               "DELETE /v1/phone-numbers/{phone_number_id}",

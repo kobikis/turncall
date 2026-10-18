@@ -298,6 +298,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from turncall.api.v1.call_control import router as call_control_router
     from turncall.api.v1.calls import router as calls_router
     from turncall.api.v1.calls_outbound import router as calls_outbound_router
+    from turncall.api.v1.phone_number_purchase import (
+        router as phone_number_purchase_router,
+    )
     from turncall.api.v1.phone_numbers import router as phone_numbers_router
     from turncall.api.v1.projects import router as projects_router
 
@@ -307,6 +310,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(calls_router, prefix="/v1")
     app.include_router(calls_outbound_router, prefix="/v1")
     app.include_router(call_control_router, prefix="/v1")
+    # Before phone_numbers_router: its GET /{phone_number_id} would take
+    # GET /phone-numbers/available.
+    app.include_router(phone_number_purchase_router, prefix="/v1")
     app.include_router(phone_numbers_router, prefix="/v1")
 
     from turncall.api.v1.suppression import router as suppression_router

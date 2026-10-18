@@ -12,6 +12,7 @@ from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -23,6 +24,7 @@ from turncall.storage.repositories import (
     ambience_repo,
     phone_number_repo,
     project_repo,
+    purchased_number_repo,
 )
 
 
@@ -101,6 +103,25 @@ async def _sweep_storage(
     )
 
 
+async def _warn_numbers_left_on_platform(
+    session: AsyncSession, project_id: UUID
+) -> None:
+    """Name the numbers the project bought on the platform's account and
+    never released, which the purge leaves there."""
+    left = await purchased_number_repo.bought_on_platform_by(session, project_id)
+    if not left:
+        return
+    logger.warning(
+        "purged_project_left_numbers: project {project_id} bought {count} "
+        "number(s) on the platform's carrier account and never released them: "
+        "{numbers}. They stay on the account, billed; release them in the "
+        "carrier's console.",
+        project_id=str(project_id),
+        count=len(left),
+        numbers=", ".join(f"{carrier} {e164}" for carrier, e164 in left),
+    )
+
+
 async def delete_project(
     session: AsyncSession, settings: Settings, project_id: UUID
 ) -> None:
@@ -124,7 +145,14 @@ async def purge_soft_deleted_projects(
     """Hard-delete projects soft-deleted longer than retention_days ago — the FK
     cascade reclaims each tree. Sweeps storage again first (belt-and-suspenders:
     the soft-delete already swept, but a project soft-deleted by any other path
-    is still cleaned). Returns the number purged. retention_days <= 0 disables."""
+    is still cleaned). Returns the number purged. retention_days <= 0 disables.
+
+    Numbers the project bought on the platform's shared carrier account
+    (ADR-0025) are NOT released: releasing is irreversible and the operator's
+    call. The cascade drops their `purchased_numbers` rows, the only way
+    TurnCall could release them, so each is named in a warning for an
+    operator to release in the carrier's console; until then it stays on
+    the account, billed."""
     if retention_days <= 0:
         return 0
 
@@ -133,6 +161,7 @@ async def purge_soft_deleted_projects(
         project_ids = await project_repo.list_purgeable_project_ids(session, cutoff)
         for project_id in project_ids:
             await _sweep_storage(session, settings, project_id)
+            await _warn_numbers_left_on_platform(session, project_id)
             await project_repo.hard_delete_project(session, project_id)
         await session.commit()
     return len(project_ids)

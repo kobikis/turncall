@@ -7,9 +7,20 @@ from uuid import UUID
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from turncall.api.v1.schemas import E164_PATTERN
-from turncall.domain.carriers import ASTERISK, CARRIERS, DEFAULT_CARRIER, TELNYX, TWILIO
+from turncall.domain.carriers import (
+    ASTERISK,
+    CARRIERS,
+    DEFAULT_CARRIER,
+    NUMBER_TYPES,
+    PURCHASE_CARRIERS,
+    TELNYX,
+    TWILIO,
+)
 
 Carrier = Literal[CARRIERS]  # type: ignore[valid-type]
+# A carrier TurnCall searches and buys numbers on (ADR-0025).
+PurchaseCarrier = Literal[PURCHASE_CARRIERS]  # type: ignore[valid-type]
+NumberType = Literal[NUMBER_TYPES]  # type: ignore[valid-type]
 
 # `provider` is the column's name and the field's old spelling; "provider"
 # means an STT/LLM/TTS backend everywhere else in the API (ADR-0022).
@@ -217,3 +228,132 @@ class PhoneNumberResponse(BaseModel):
             else None,
             twilio_credentials="number" if own else "platform",
         )
+
+
+# --- search and buy (#319, ADR-0025) ---------------------------------------
+
+
+class NumberCapabilities(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    voice: bool
+    sms: bool
+    mms: bool
+
+
+class AvailableNumberResponse(BaseModel):
+    """A number a carrier account can buy. The same shape on every carrier;
+    what a carrier does not say is null."""
+
+    model_config = ConfigDict(frozen=True)
+
+    carrier: str
+    e164_number: str
+    friendly_name: str | None = None
+    country: str | None = None
+    region: str | None = None
+    locality: str | None = None
+    postal_code: str | None = None
+    number_type: str
+    capabilities: NumberCapabilities
+    # Telnyx says what a number costs (decimal strings, as Telnyx sends them);
+    # Twilio's search does not.
+    upfront_cost: str | None = None
+    monthly_cost: str | None = None
+    currency: str | None = None
+
+
+class BuyPhoneNumberRequest(TwilioAccountFields):
+    """Buy a number a search returned. On Twilio, the account it is bought on
+    is the pair given here, else the platform's TWILIO_* account; bind the
+    number with the same pair."""
+
+    carrier: PurchaseCarrier = Field(
+        default=DEFAULT_CARRIER,
+        description="The carrier whose account the number is bought on.",
+    )
+    e164_number: str = Field(..., pattern=E164_PATTERN)
+
+    @model_validator(mode="after")
+    def validate_account(self) -> "BuyPhoneNumberRequest":
+        if self.carrier != TWILIO:
+            only_on_twilio(self, self.carrier)
+        return self
+
+
+class PurchasedNumberResponse(BaseModel):
+    """A bought number, and what binding it needs: send `carrier`,
+    `e164_number` and `external_number_sid` to `POST /v1/phone-numbers`
+    (with the same Twilio pair, when `twilio_credentials` is "number").
+    `status` is "active" once the number can be bound. A Telnyx number order
+    that has not finished yet is "pending", with `external_number_sid` null:
+    bind finds the number by its E.164 once Telnyx has put it on the account,
+    and refuses it (422) until then."""
+
+    model_config = ConfigDict(frozen=True)
+
+    carrier: str
+    e164_number: str
+    external_number_sid: str | None
+    friendly_name: str | None = None
+    status: str = "active"
+    # Twilio only: the account it was bought on, null for the platform's.
+    twilio_account_sid: str | None = None
+    twilio_credentials: str | None = None  # "number" | "platform"; null off Twilio
+    # Telnyx only: the number order the purchase placed. Not the number's id:
+    # that is `external_number_sid`, once the order has finished.
+    telnyx_order_id: str | None = None
+
+
+# --- release (#321, ADR-0025) ----------------------------------------------
+
+
+class ReleasePhoneNumberRequest(TwilioAccountFields):
+    """Give a number on the carrier account back to the carrier. Irreversible:
+    `confirm` must repeat `e164_number` exactly, so a release is never a
+    default, a copied body or a stray `true`. On Twilio, the account it is
+    released from is the pair given here, else the platform's TWILIO_*
+    account, as on a purchase."""
+
+    carrier: PurchaseCarrier = Field(
+        default=DEFAULT_CARRIER,
+        description="The carrier whose account the number is released from.",
+    )
+    e164_number: str = Field(..., pattern=E164_PATTERN)
+    confirm: str | None = Field(
+        default=None,
+        description=(
+            "The number being released, repeated (it must equal `e164_number`). "
+            "Releasing is irreversible: the carrier may sell the number to "
+            "someone else."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_release(self) -> "ReleasePhoneNumberRequest":
+        if self.carrier != TWILIO:
+            only_on_twilio(self, self.carrier)
+        if self.confirm != self.e164_number:
+            msg = (
+                "releasing a number is irreversible: set confirm to the number "
+                f"being released ({self.e164_number})"
+            )
+            raise ValueError(msg)
+        return self
+
+
+class ReleasedNumberResponse(BaseModel):
+    """A number given back to its carrier: no longer on the account, and no
+    longer TurnCall's to bind."""
+
+    model_config = ConfigDict(frozen=True)
+
+    carrier: str
+    e164_number: str
+    # The carrier's id of the number released: a Twilio PN SID, a Telnyx
+    # phone number id.
+    external_number_sid: str
+    status: str = "released"
+    # Twilio only: the account it was released from, null for the platform's.
+    twilio_account_sid: str | None = None
+    twilio_credentials: str | None = None  # "number" | "platform"; null off Twilio

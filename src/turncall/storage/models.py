@@ -192,6 +192,56 @@ class PhoneNumberRow(Base):
     )
 
 
+class PurchasedNumberRow(Base):
+    """A number a project bought through `POST /v1/phone-numbers/purchase`
+    (#321, ADR-0025), and the account it was bought on: the platform's shared
+    one or the project's own (`domain/carriers.NUMBER_ACCOUNTS`).
+
+    A release on the platform's account is allowed only for a number the
+    project has a `platform` row for, so one project cannot give back a
+    number another bought, or one the operator put on the account by hand.
+    Written on a purchase (a pending Telnyx order too), deleted on the
+    release. Not a binding: `phone_numbers` is. Not the audit log either,
+    whose entries a retention period may drop.
+    """
+
+    __tablename__ = "purchased_numbers"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    carrier: Mapped[str] = mapped_column(String(16), nullable=False)
+    e164_number: Mapped[str] = mapped_column(String(20), nullable=False)
+    account: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+
+    __table_args__ = (
+        # Also the index the release's lookup uses.
+        UniqueConstraint(
+            "project_id",
+            "carrier",
+            "e164_number",
+            name="uq_purchased_numbers_project_number",
+        ),
+        # A number is on the platform's account once: one project bought it.
+        Index(
+            "uq_purchased_numbers_platform_number",
+            "carrier",
+            "e164_number",
+            unique=True,
+            postgresql_where=text("account = 'platform'"),
+        ),
+        CheckConstraint(
+            "account IN ('platform', 'own')", name="ck_purchased_numbers_account"
+        ),
+    )
+
+
 class CallRow(Base):
     __tablename__ = "calls"
 

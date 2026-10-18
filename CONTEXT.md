@@ -288,12 +288,28 @@ operator's legal record, not the platform's.
 _Avoid_: "DNC list" unqualified (that is the national registry), "blocklist" (reads as
 inbound blocking).
 
+**Buy** (a number) (vs **bind**):
+Putting an available number onto a [[carrier]] account through the engine
+(`POST /v1/phone-numbers/purchase`), found by a search of that account
+(`GET /v1/phone-numbers/available`). Admin-only: it spends the operator's money. Buying
+routes nothing; the bought number is then bound like any other. On Twilio the account is
+the one the request names or the platform's (Twilio has no project credential); on
+Telnyx it is the project's Telnyx account, where a purchase is an asynchronous number
+order that may still be pending when the call returns. See ADR-0025.
+_Avoid_: "provision", "order" (Telnyx's word for its asynchronous purchase), "add a
+number" (reads as bind).
+
 **Release** (a number) (vs **unbind**):
-Giving a number back to its [[carrier]], so the operator stops paying for it and may
-never get it back. Distinct from unbinding, which only stops routing it to an agent and
-leaves it on the account. Admin-only, refused while the number is bound, and requires
-an explicit confirmation in the request. Its counterpart is buying a number through the
-engine on the project's own carrier account. See ADR-0025 (decided, not yet built).
+Giving a number back to its [[carrier]] (`POST /v1/phone-numbers/release`), so the
+operator stops paying for it and may never get it back. Distinct from unbinding, which
+only stops routing it to an agent and leaves it on the account; unbinding never
+releases. Admin-only, on Twilio and Telnyx, on the same account a purchase uses. A
+number is bound exactly when TurnCall holds a binding for it, so a release names the
+number on the carrier account by its E.164: it is refused while the number is bound
+(unbind first) and unless `confirm` repeats the number. On the platform's shared
+carrier account a project releases only numbers it bought there through the engine;
+on its own account, any number. Its counterpart is buying a number through the
+engine. See ADR-0025.
 _Avoid_: "delete number" (reads as unbind), "port out" (moving it to another carrier).
 
 ## Voicemail

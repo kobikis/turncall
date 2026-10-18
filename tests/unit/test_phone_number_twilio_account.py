@@ -85,7 +85,7 @@ class TestResolution:
         )
         assert twilio_accounts.account_for_number(
             row, s
-        ) == twilio_accounts.TwilioAccount(SID, TOKEN)
+        ) == twilio_accounts.TwilioAccount(SID, TOKEN, shared=False)
 
     def test_a_number_without_one_uses_the_platforms(self) -> None:
         s = _settings()

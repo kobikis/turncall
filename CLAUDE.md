@@ -510,6 +510,98 @@ row's keys.
   signature check (matched by the webhook's `AccountSid`) uses that account.
   `services/twilio_accounts.py` is the one place that decides; nothing else
   constructs a `TwilioAdapter`.
+- **Search and buy** (#319, ADR-0025): `GET /v1/phone-numbers/available`
+  (`carrier`, `country`, `number_type` local|toll_free|mobile, `area_code`,
+  `contains` digits, `limit` ≤ 50) and `POST /v1/phone-numbers/purchase`
+  (201), in `api/v1/phone_number_purchase.py`. **Admin-only**, both. That
+  router is mounted **before** `phone_numbers.router`, whose
+  `GET /{phone_number_id}` would take `/available`. Carriers are
+  `PURCHASE_CARRIERS` (`domain/carriers.py`; Twilio and Telnyx, never
+  Asterisk). Twilio has no project credential, so the account is the request's
+  own pair (`X-Twilio-Account-Sid`/`X-Twilio-Auth-Token` headers on the search,
+  keeping the token out of URLs; `twilio_account_sid`/`twilio_auth_token` in
+  the buy's body) or the platform's; no account = 503 `no_twilio_account`. The
+  buy returns what bind needs (`carrier`, `e164_number`, `external_number_sid`,
+  `status`, `twilio_account_sid`, `twilio_credentials`) and writes no row; it
+  records `phone_number`/`purchased` keyed by the **E.164**, after the carrier
+  sold it (a refused buy raises, so nothing commits). `search_numbers` /
+  `buy_number` are concrete `TwilioAdapter` methods, not `TelephonyAdapter`
+  actions (`test_carrier_boundary.py` pins the ABC). Harness:
+  `carrier.offer(e164)` puts a number up for sale; the fake's `buy_number` moves
+  it onto the account and records a `buy_number` action.
+- **Search and buy on Telnyx** (#320): the same routes with `carrier=telnyx`,
+  on `phone_numbers.project_telnyx_account` (project `telnyx` credential, else
+  `TELNYX_API_KEY`, else 503). `TelnyxAdapter.search_numbers` /
+  `buy_number` are concrete methods too. A Telnyx purchase is an **async
+  number order** whose ids are not the number's: `buy_number` re-reads the
+  order for up to `ORDER_POLL_DELAYS` (~5 s; not when `requirements_met` is
+  false), then `find_number(e164)` for the phone-number id → `"active"`;
+  otherwise `"pending"` with `external_number_sid` null (bind finds it by
+  E.164 once it lands, 422 until then). Once the order is placed only a
+  status in `ORDER_ENDED_UNBOUGHT` (failure, cancelled, deleted) raises
+  (`TelnyxOrderFailed` → 422, nothing recorded); any other status, unknown
+  ones included, is "pending": the money is spent, so a pending purchase is
+  still audited. One httpx client serves the order, its polls and the lookup
+  (`_request(client=)`). The order POST getting no answer (`httpx.HTTPError`)
+  → 502 `telnyx_error` "may have been placed", logged at error level. The response's `telnyx_order_id`
+  is the order. Harness: `FakeTelnyxAdapter` has its own search/buy (records
+  `buy_number` with `order_id`); `carrier.hold_orders = True` keeps bought
+  numbers on order until `carrier.finish_orders()`.
+- **Release** (#321): `POST /v1/phone-numbers/release` (200, same module),
+  **admin-only**, Twilio and Telnyx. A number is bound exactly when it has a
+  `phone_numbers` row, so release targets a number on the carrier account by
+  **E.164**: a row for it (any project) → **409** (`details.phone_number_id`
+  only for the caller's own project); `confirm` must **equal `e164_number`**
+  (absent, `true`, another number → 422, from the schema's validator). Account
+  as for a buy (Twilio body pair or platform; Telnyx
+  `project_telnyx_account(purpose="release the number on")`). Lookup by E.164
+  (`find_number_sid` / `find_number`; not found → 422), then the concrete
+  `release_number(sid)` on `TwilioAdapter` (`IncomingPhoneNumbers(sid).delete()`)
+  / `TelnyxAdapter` (`DELETE /phone_numbers/{id}`, the phone-number id, never
+  an order's). Audited as `phone_number`/`released` keyed by the E.164 with
+  the released number as "before", only after the carrier released it.
+  **Unbind never releases** (it deletes the row and clears the carrier
+  routing; the number stays on the account) — pinned by
+  `test_phone_number_release.py::TestUnbindIsNotRelease` and the harness's
+  `test_unbinding_never_releases`. Harness: both fakes' `release_number`
+  records a `release_number` action `{number_sid, e164}` and takes the number
+  off the account (`carrier.owns(e164)` is then false; not back on sale).
+  Note that bind on Twilio's **platform** account trusts a given PN SID without
+  asking Twilio, so a released number's "gone" shows through a lookup (bind
+  with an own pair), not a platform bind.
+  **Shared platform account:** a release that would run on the platform's
+  account (`account.shared`: required, keyword-only, no default, on both
+  `TwilioAccount` and `TelnyxAccount`; true for the platform's) is allowed
+  only for a number the
+  project bought there: `purchased_number_repo.bought_on_platform` (table
+  `purchased_numbers`, migration `c9e3a5f7b1d4`: project, carrier, E.164,
+  `account` platform|own). Otherwise **403** `forbidden`
+  `details={"account": "platform"}`, checked after the 409 and the account
+  resolution and **before any carrier call** (`_bought_here_if_shared`). The
+  buy calls `purchased_number_repo.record` (pending Telnyx orders too; a
+  platform purchase drops other projects' stale `platform` rows for the
+  number); the release calls `forget`. Own-account releases are unrestricted.
+  Not the audit log (retention may drop it). Harness: a number put on the
+  account with `carrier.add_number` is not "bought", so releasing it on the
+  platform account is a 403; `_buy` through the API first. Concurrent
+  platform purchases of one number serialize on a
+  `pg_advisory_xact_lock` in `record`, so the later takes ownership instead
+  of tripping `uq_purchased_numbers_platform_number`. A purge releases
+  nothing: it logs `purged_project_left_numbers` with the project's
+  platform-account numbers (`bought_on_platform_by`) before the cascade
+  drops their rows.
+  **Around the carrier call** (buy and release): the route ends its
+  read-only transaction first (`_end_reads`, a rollback: a commit before the
+  audit entry would be refused), so no pooled connection idles in a
+  transaction while the carrier answers; the writes after it run in
+  `_tracked`, which commits in the route and, on any failure, logs
+  `phone_number_{bought,released}_untracked` at error level (carrier, E.164,
+  number id / order, project) and answers 500 with the number in `details`.
+  Carrier errors map through `api/v1/carrier_errors.py`, shared with bind:
+  a Telnyx 400/404/422 is 422 on search/buy/release
+  (`request_is_callers=True`) but 502 on bind's lookup; `httpx.HTTPError` is
+  502 `telnyx_error` everywhere. Number lookups are exact: Twilio's
+  `find_number_sid` streams every partial match for the exact E.164.
 
 ## WhatsApp
 
@@ -874,6 +966,9 @@ Weighted traffic routing on phone numbers. Deterministic by caller number (SHA25
 ### API
 
 ```
+GET    /v1/phone-numbers/available       # Search a carrier account's numbers (admin)
+POST   /v1/phone-numbers/purchase        # Buy one; bind it with POST /v1/phone-numbers (admin)
+POST   /v1/phone-numbers/release         # Give an unbound number back to the carrier; confirm = the E.164 (admin)
 PUT    /v1/phone-numbers/{id}            # Update binding in place (id + server_url_secret stable)
 PUT    /v1/phone-numbers/{id}/routing    # Set weights (must sum to 100)
 GET    /v1/phone-numbers/{id}/routing    # Get routing config
