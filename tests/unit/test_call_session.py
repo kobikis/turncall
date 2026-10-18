@@ -83,9 +83,12 @@ class TestFinalizeCall:
             assert kwargs["duration_ms"] is not None and kwargs["duration_ms"] > 0
             trigger.assert_called_once()
 
-    async def test_skips_a_call_already_ended(self) -> None:
+    async def test_a_call_already_ended_gets_post_call_only_if_unclaimed(
+        self,
+    ) -> None:
         """If /status or the end API ended it first, the guarded update ends
-        nothing, and only that path sends `call.ended` (#328)."""
+        nothing (#328), and post-call processing starts here only if it is
+        unclaimed and the call ended `completed` (#356)."""
         call_id = uuid4()
         cs = _make_call_session(call_id)
         call = SimpleNamespace(
@@ -106,6 +109,10 @@ class TestFinalizeCall:
                 AsyncMock(return_value=None),
             ) as mark_ended,
             patch(
+                "turncall.storage.repositories.call_repo.claim_post_call",
+                AsyncMock(return_value=False),
+            ) as claim,
+            patch(
                 "turncall.services.call_analysis_trigger.trigger_post_call_analysis",
                 MagicMock(),
             ) as trigger,
@@ -113,6 +120,7 @@ class TestFinalizeCall:
             await cs._finalize_call()
 
             mark_ended.assert_awaited_once()
+            assert claim.await_args.kwargs["status"] == "completed"
             trigger.assert_not_called()
 
     async def test_no_agent_and_no_inline_config_skips_analysis(self) -> None:

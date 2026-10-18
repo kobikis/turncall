@@ -148,9 +148,10 @@ async def mark_call_ended(
 
     A guarded UPDATE, as `attach_media`: of the paths that end a call — its
     pipeline finishing, the carrier's status callback, the end API — exactly
-    one does, and only that one starts post-call processing, which sends
-    `call.ended` (#328). The caller commits, and must before starting
-    post-call processing, which reads the call in a session of its own.
+    one does (#328). Which of them starts post-call processing, which sends
+    `call.ended`, is `claim_post_call`'s to settle (#356). The caller commits,
+    and must before starting post-call processing, which reads the call in a
+    session of its own.
     """
     values: dict[str, Any] = {"status": status, "ended_at": ended_at}
     if duration_ms is not None:
@@ -162,6 +163,47 @@ async def mark_call_ended(
         .returning(CallRow)
     )
     return result.scalar_one_or_none()
+
+
+async def claim_post_call(
+    session: AsyncSession, call_id: UUID, *, status: str | None = None
+) -> bool:
+    """Claim the call's one post-call processing run; whether this caller got
+    it. `status`: only if the call ended with it.
+
+    A guarded UPDATE, as `mark_call_ended`: of the paths that may start it —
+    the pipeline finishing, the carrier's status callback or the end API on a
+    call no pipeline ran, the sweep — exactly one does, so `call.ended` is
+    sent once (#356). The caller commits, before starting it.
+    """
+    stmt = update(CallRow).where(
+        CallRow.id == call_id, CallRow.post_call_started_at.is_(None)
+    )
+    if status is not None:
+        stmt = stmt.where(CallRow.status == status)
+    result = await session.execute(stmt.values(post_call_started_at=func.now()))
+    return bool(result.rowcount)
+
+
+async def list_post_call_unstarted(
+    session: AsyncSession, *, ended_before: datetime, limit: int = 100
+) -> list[CallRow]:
+    """Calls a pipeline owned, ended as `completed` before `ended_before`,
+    whose post-call processing never started: the carrier or the end API
+    ended them and left it to a pipeline that never finished (#356)."""
+    result = await session.execute(
+        select(CallRow)
+        .where(
+            CallRow.post_call_started_at.is_(None),
+            CallRow.media_attached_at.is_not(None),
+            CallRow.ended_at.is_not(None),
+            CallRow.ended_at < ended_before,
+            CallRow.status == "completed",
+        )
+        .order_by(CallRow.ended_at)
+        .limit(limit)
+    )
+    return list(result.scalars())
 
 
 async def update_call_recording_url(

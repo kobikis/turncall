@@ -419,7 +419,7 @@ async def status_callback(
 
     if is_terminal_state(new_status):
         # Only if this ends the call: the pipeline finishing and the end API
-        # end calls too, and only the first sends `call.ended` (#328).
+        # end calls too, and only the first sets how it ended (#328).
         ended = await call_repo.mark_call_ended(session, call.id, **update_kwargs)
         if ended is None:
             return Response(status_code=204)
@@ -428,28 +428,15 @@ async def status_callback(
 
     await _record_status(session, call, new_status, call_sid, call_status)
 
-    # Trigger post-call processing when call completes
-    if new_status == CallStatus.COMPLETED:
-        # Committed first: post-call processing reads the call in a session of
-        # its own, and found it still in progress (#328).
-        await session.commit()
+    # Post-call processing, which sends call.ended, for a completed call no
+    # pipeline ran. One that did starts it once its last lines are stored, as
+    # it finishes; started here, `call.ended` could lack them (#356).
+    if new_status == CallStatus.COMPLETED and ended.media_attached_at is None:
         try:
-            from turncall.services.call_analysis_trigger import (
-                config_for_call,
-                trigger_post_call_analysis,
-            )
+            from turncall.services.call_analysis_trigger import start_post_call
             from turncall.storage.database import get_session_factory
 
-            # Not gated on active_agent_id: a call running an inline agent has
-            # none, and this is what dispatches call.ended.
-            config = await config_for_call(session, call)
-            if config is not None:
-                trigger_post_call_analysis(
-                    get_session_factory(),
-                    call.id,
-                    call.project_id,
-                    config,
-                )
+            await start_post_call(get_session_factory(), session, ended)
         except Exception:
             logger.exception("analysis_trigger_error", call_id=str(call.id))
 

@@ -185,30 +185,20 @@ async def end_call(
     )
     if ended_now is None:
         # The carrier's status or the pipeline ended it meanwhile, and that
-        # path sends `call.ended` (#328).
+        # path sees to `call.ended` (#328).
         return ControlResult(success=True, message="Call ended")
-    # Committed first: post-call processing reads the call in a session of its
-    # own, and found it still in progress (#328).
-    await session.commit()
+    if ended_now.media_attached_at is not None:
+        # A pipeline runs it: the hangup ends that, and it starts post-call
+        # processing once the call's last lines are stored (#356).
+        return ControlResult(success=True, message="Call ended")
 
-    # Trigger post-call processing (transcript, recording, analysis, webhook)
-    # The comprehensive call.ended webhook is dispatched after analysis completes.
+    # Post-call processing (transcript, recording, analysis, webhook); the
+    # comprehensive call.ended webhook is dispatched after analysis completes.
     try:
-        from turncall.services.call_analysis_trigger import (
-            config_for_call,
-            trigger_post_call_analysis,
-        )
+        from turncall.services.call_analysis_trigger import start_post_call
         from turncall.storage.database import get_session_factory
 
-        # Not gated on active_agent_id: a call running an inline agent has none.
-        config = await config_for_call(session, call)
-        if config is not None:
-            trigger_post_call_analysis(
-                get_session_factory(),
-                call_id,
-                call.project_id,
-                config,
-            )
+        await start_post_call(get_session_factory(), session, ended_now)
     except Exception:
         logger.exception("analysis_trigger_error", call_id=str(call_id))
 

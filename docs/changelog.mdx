@@ -334,6 +334,11 @@ the recording. See [Ambience](/guides/ambience).
 the carrier reported the call over, a subscriber could get `call.ended` twice,
 or once with `status: "in_progress"`. It now arrives once.
 
+**`call.ended` carries the call's last lines.** When the caller hung up right
+after speaking, or the call was ended through the API, `call.ended` and its
+analysis could miss the last thing said. They now wait for the call's
+transcript to be complete.
+
 **Telnyx errors reach the logs.** A log line carrying a Telnyx error, or a few
 of TurnCall's own, was dropped with a loguru "Logging error" instead of being
 written. It is written now.

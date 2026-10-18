@@ -11,12 +11,14 @@ When a call completes, this module:
 
 Where it runs (#313): analysis reads the call's raw conversation, which only
 the process that ran the call holds (`services/live_transcript`), and only for
-a few minutes. Post-call is triggered from wherever the call's end is noticed:
-the pipeline's own finalize, but also Twilio's `/status` callback or the end
-API, which can land on another replica. For a project that redacts, with
-analysis on, such a replica hands the run to the process holding the
-conversation over Redis pub/sub (`live_transcript.ask_holder`); no transcript
-crosses Redis, only the request. When no process holds it (a restart, or the
+a few minutes. Post-call is started once per call (`start_post_call`, #356):
+by the pipeline's own finalize, once its last lines are stored; by Twilio's
+`/status` callback or the end API only for a call no pipeline ran; and by the
+sweep (`run_sweep`) for a call whose pipeline never finished. The last two
+can land on another replica. For a project that redacts, with analysis on,
+such a replica hands the run to the process holding the conversation over
+Redis pub/sub (`live_transcript.ask_holder`); no transcript crosses Redis,
+only the request. When no process holds it (a restart, or the
 minutes are up, as for a re-run), the run is local, on the stored and redacted
 transcript, and logged as such.
 """
@@ -24,6 +26,7 @@ transcript, and logged as such.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -478,6 +481,86 @@ async def config_for_call(session: AsyncSession, call: Any) -> dict[str, Any] | 
             return agent.config_blob
     dynamic = (call.metadata_json or {}).get("dynamic_config")
     return dynamic if isinstance(dynamic, dict) else None
+
+
+async def start_post_call(
+    session_factory: async_sessionmaker[AsyncSession],
+    session: AsyncSession,
+    call: Any,
+    *,
+    status: str | None = None,
+) -> bool:
+    """Start the call's post-call processing, which sends `call.ended`, unless
+    another path already has (`call_repo.claim_post_call`); whether this did.
+    `status`: only if the call ended with it. Commits `session` either way,
+    before starting it: the run reads the call in a session of its own (#328).
+
+    Who calls it (#356): the pipeline, once its transcript and recording are
+    flushed (`finalize_call`); the carrier's status callback or the end API,
+    only for a call no pipeline ran (`media_attached_at` unset), since one
+    that did would have its last lines cut; and the sweep, for a call whose
+    pipeline never finished.
+    """
+    from turncall.storage.repositories import call_repo
+
+    claimed = await call_repo.claim_post_call(session, call.id, status=status)
+    await session.commit()
+    if not claimed:
+        return False
+    # Not gated on active_agent_id: a call running an inline agent has none,
+    # and this is what dispatches call.ended.
+    config = await config_for_call(session, call)
+    if config is not None:
+        trigger_post_call_analysis(session_factory, call.id, call.project_id, config)
+    return True
+
+
+# The sweep (#356): how long a pipeline gets, after the carrier or the end API
+# ended its call, to finish and start post-call processing itself, and how
+# often a replica looks for calls whose pipeline never did. A pipeline flushes
+# its last lines and recording within seconds of the call ending.
+SWEEP_GRACE_SECONDS = 120
+SWEEP_INTERVAL_SECONDS = 30
+
+
+async def sweep_unstarted(
+    session_factory: async_sessionmaker[AsyncSession], *, now: datetime
+) -> int:
+    """Start post-call processing for each call the carrier or the end API
+    ended more than the grace ago and left to a pipeline that never started
+    it — its process died. How many were started here."""
+    from turncall.storage.repositories import call_repo
+
+    async with session_factory() as session:
+        calls = await call_repo.list_post_call_unstarted(
+            session, ended_before=now - timedelta(seconds=SWEEP_GRACE_SECONDS)
+        )
+    started = 0
+    for call in calls:
+        async with session_factory() as session:
+            if await start_post_call(
+                session_factory, session, call, status="completed"
+            ):
+                started += 1
+                logger.warning("post_call_swept", call_id=str(call.id))
+    return started
+
+
+async def run_sweep(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    interval: float = SWEEP_INTERVAL_SECONDS,
+) -> None:
+    """Sweep every `interval` seconds until cancelled (the API's lifespan).
+    Every replica sweeps; the claim lets one start each call."""
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            await sweep_unstarted(session_factory, now=datetime.now(UTC))
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("post_call_sweep_error")
 
 
 def trigger_post_call_analysis(

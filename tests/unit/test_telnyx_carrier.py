@@ -284,6 +284,7 @@ class TestCallControlActsOnTheCallsCarrier:
             provider_call_sid="v3:abc",
             status="in_progress",
             started_at=None,
+            media_attached_at=None,
         )
         adapter = SimpleNamespace(end_call=AsyncMock())
         account = MagicMock(spec=TelnyxAccount, api_key="KEY")
@@ -295,6 +296,10 @@ class TestCallControlActsOnTheCallsCarrier:
                 AsyncMock(return_value=call),
             ),
             patch("turncall.storage.repositories.call_repo.update_call_status"),
+            patch(
+                "turncall.storage.repositories.call_repo.mark_call_ended",
+                AsyncMock(return_value=call),
+            ),
             patch.object(call_control, "_record_control_end", AsyncMock()),
             patch(
                 "turncall.services.telnyx_accounts.account_for_project",

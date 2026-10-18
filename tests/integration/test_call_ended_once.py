@@ -1,24 +1,28 @@
-"""A call ends once, and only that ending sends `call.ended` (#328).
+"""A call ends once, and sends `call.ended` once (#328, #356).
 
 Its pipeline finishing (`finalize_call`), the carrier's status callback and
 the end API all end calls. Each read the status, saw the call in progress and
 ended it, so two arriving together each started post-call processing, and the
 subscriber got `call.ended` twice. `call_repo.mark_call_ended` is a guarded
-UPDATE: of any number racing, one ends the call.
+UPDATE: of any number racing, one ends the call. `call_repo.claim_post_call`
+is another: of the paths that may start post-call processing — on a call a
+pipeline runs, the pipeline, else whoever ended it, and the sweep behind
+both — one does.
 
 Needs a real Postgres (genuinely concurrent transactions); skips without one.
 """
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import update
 
 from turncall.config.settings import Settings
 from turncall.orchestrator.call_session import finalize_call
 from turncall.storage.database import create_engine, create_session_factory
-from turncall.storage.models import ProjectRow
+from turncall.storage.models import CallRow, ProjectRow
 from turncall.storage.repositories import call_repo
 
 pytestmark = pytest.mark.integration
@@ -220,3 +224,116 @@ async def test_the_end_api_racing_the_pipeline_ends_the_call_once(live_call) -> 
         await asyncio.gather(end_api(), finalize_call(sessions, call_id, failed=False))
 
     trigger.assert_called_once()
+
+
+async def _attach_media(sessions, call_id) -> None:
+    """The call's stream attached: a pipeline runs it (#356)."""
+    async with sessions() as session:
+        await session.execute(
+            update(CallRow)
+            .where(CallRow.id == call_id)
+            .values(media_attached_at=datetime.now(UTC))
+        )
+        await session.commit()
+
+
+async def test_the_end_api_leaves_post_call_to_the_pipeline(live_call) -> None:
+    """On a call a pipeline runs, the end API ends the call but leaves
+    post-call processing to the pipeline: started then, `call.ended` would
+    read the transcript before its last lines are stored (#356)."""
+    from turncall.services import call_control
+
+    sessions, call_id = live_call
+    await _attach_media(sessions, call_id)
+    with (
+        patch("turncall.storage.database.get_session_factory", lambda: sessions),
+        patch(
+            "turncall.services.call_analysis_trigger.config_for_call",
+            AsyncMock(return_value={}),
+        ),
+        patch(
+            "turncall.services.call_analysis_trigger.trigger_post_call_analysis",
+            MagicMock(),
+        ) as trigger,
+    ):
+        async with sessions() as session:
+            result = await call_control.end_call(session, call_id, reason="test")
+            await session.commit()
+        assert result.success, result.message
+        trigger.assert_not_called()
+
+        await finalize_call(sessions, call_id, failed=False)
+        await finalize_call(sessions, call_id, failed=False)
+
+    trigger.assert_called_once()
+    async with sessions() as session:
+        call = await call_repo.get_call_by_id(session, call_id)
+    assert call.status == "completed" and call.post_call_started_at is not None
+
+
+async def _end_long_ago(sessions, call_id, *, seconds: int) -> None:
+    async with sessions() as session:
+        await call_repo.mark_call_ended(
+            session,
+            call_id,
+            status="completed",
+            ended_at=datetime.now(UTC) - timedelta(seconds=seconds),
+        )
+        await session.commit()
+
+
+async def _sweep(sessions) -> list:
+    """Sweep as RACERS replicas at once; the calls it started post-call
+    processing for. Other tests' calls may be among them: count only yours."""
+    from turncall.services import call_analysis_trigger
+
+    with (
+        patch.object(
+            call_analysis_trigger, "config_for_call", AsyncMock(return_value={})
+        ),
+        patch.object(
+            call_analysis_trigger, "trigger_post_call_analysis", MagicMock()
+        ) as trigger,
+    ):
+        await asyncio.gather(
+            *(
+                call_analysis_trigger.sweep_unstarted(sessions, now=datetime.now(UTC))
+                for _ in range(RACERS)
+            )
+        )
+    return [c.args[1] for c in trigger.call_args_list]
+
+
+async def test_the_sweep_starts_post_call_a_dead_pipeline_never_did(
+    live_call,
+) -> None:
+    """The carrier ended a call whose pipeline's process then died: nothing
+    else would ever send its `call.ended` (#356). Every replica sweeps; one
+    starts it."""
+    from turncall.services.call_analysis_trigger import SWEEP_GRACE_SECONDS
+
+    sessions, call_id = live_call
+    await _attach_media(sessions, call_id)
+    await _end_long_ago(sessions, call_id, seconds=SWEEP_GRACE_SECONDS + 5)
+
+    assert (await _sweep(sessions)).count(call_id) == 1
+    assert call_id not in await _sweep(sessions)  # and never again
+
+
+async def test_the_sweep_gives_the_pipeline_its_grace(live_call) -> None:
+    sessions, call_id = live_call
+    await _attach_media(sessions, call_id)
+    await _end_long_ago(sessions, call_id, seconds=5)
+
+    assert call_id not in await _sweep(sessions)
+
+
+async def test_the_sweep_leaves_a_call_no_pipeline_ran(live_call) -> None:
+    """Whoever ended it started its post-call processing, or it sends none
+    (unanswered): either way not the sweep's."""
+    from turncall.services.call_analysis_trigger import SWEEP_GRACE_SECONDS
+
+    sessions, call_id = live_call
+    await _end_long_ago(sessions, call_id, seconds=SWEEP_GRACE_SECONDS + 5)
+
+    assert call_id not in await _sweep(sessions)

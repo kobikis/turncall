@@ -718,6 +718,19 @@ and is not part of this repository's history.
   path that ends it sends `call.ended`, after committing), and a call the
   carrier reported as `no_answer` or `busy` is no longer turned `completed`
   when its pipeline finishes.
+- **`call.ended` carries the call's last lines** (#356). When Twilio's
+  `completed` status callback or `POST /v1/calls/{id}/end` ended a call
+  while its pipeline was still storing the last lines, they started
+  post-call processing, which read the transcript at once: `call.ended`,
+  its analysis and its takeaways could lack the caller's or the agent's last
+  line. On a call a pipeline runs (its media stream attached), they now only
+  end the call, and the pipeline starts post-call processing once it has
+  finished; they still start it for a call no pipeline ran. If the
+  pipeline's process dies first, a sweep on every replica starts it for a
+  call ended over two minutes ago with none, so that call's `call.ended`
+  arrives late rather than never. It is started once per call, recorded in
+  the new `calls.post_call_started_at` (migration `d4b8e2f6a0c3`, which
+  marks every call already over as started, so none is swept).
 
 - **A log line carrying a Telnyx error is written** (#352). Both log sinks
   are `enqueue=True`, so loguru pickles every record, a logged exception
