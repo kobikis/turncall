@@ -57,7 +57,7 @@ Every delivery is one envelope:
 | Event | When |
 |-------|------|
 | `call.initializing` | The call is created, after call-init |
-| `call.started` | The agent is about to answer |
+| `call.started` | An inbound call is about to be answered, or an outbound call was dialled (sent once; the callee answering adds none) |
 | `transcript.final` | Each final utterance, the caller's or the agent's |
 | `tool.result` | A tool call returned |
 | `call.transferred` / `transfer.answered` | A transfer started / the transfer target answered |

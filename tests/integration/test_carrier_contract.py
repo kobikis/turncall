@@ -260,7 +260,11 @@ async def _dial(app: Harness, edge: CarrierEdge) -> tuple[str, CarrierAction]:
 
 @pytest.mark.parametrize("edge", OUTBOUND_CARRIERS)
 async def test_an_outbound_call(edge: CarrierEdge, monkeypatch) -> None:
-    """Dialled through the API, picked up, ended by the agent (#218)."""
+    """Dialled through the API, picked up, ended by the agent (#218).
+
+    `call.started` is sent once, when the call is dialled: the callee
+    answering adds none on any carrier, though Twilio reports the answer to
+    the dial's status callback and Telnyx does not (#329)."""
     script = Script(
         caller=("Please end the call.",),
         agent=(ToolCall("end_call", {"reason": "callee asked"}), "Goodbye!"),
@@ -276,8 +280,11 @@ async def test_an_outbound_call(edge: CarrierEdge, monkeypatch) -> None:
         await call.finish()
         ended = (await app.sink.wait_for("call.ended"))["payload"]
         events = await _events(app, call_id)
+        sent = [e["event"] for e in app.sink.events if e["call_id"] == call_id]
 
     assert call.call_id == call_id
+    assert events.count("call.started") == 1, events
+    assert sent.count("call.started") == 1, sent
     assert call.agent_utterances() == 2  # the greeting, the goodbye
     hung_up = [a.params["call_sid"] for a in app.carrier.actions_of("hang_up")]
     assert hung_up == ([call.call_sid] if edge.hangs_up_by_command else [])

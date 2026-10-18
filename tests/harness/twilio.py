@@ -180,9 +180,10 @@ async def place_inbound_call(
 async def answer_outbound_call(
     carrier: FakeCarrier, http: httpx.AsyncClient, dial: CarrierAction
 ) -> TwilioCall:
-    """The callee picks up a call TurnCall dialled: POST the dial's webhook
-    URL, then open the stream its TwiML asks for. `finish` reports to the
-    dial's status callback."""
+    """The callee picks up a call TurnCall dialled: report `in-progress` to
+    the dial's status callback (the dial asks for `answered`), POST the dial's
+    webhook URL, then open the stream its TwiML asks for. `finish` reports to
+    the dial's status callback."""
     params = {
         "AccountSid": carrier.account_sid,
         "ApiVersion": "2010-04-01",
@@ -192,12 +193,16 @@ async def answer_outbound_call(
         "From": dial.params["from_number"],
         "To": dial.params["to_number"],
     }
+    status_callback_url = dial.params["status_callback_url"] or ""
+    if status_callback_url:
+        response = await post_signed(http, carrier, status_callback_url, params)
+        response.raise_for_status()
     return await _connect(
         carrier,
         http,
         dial.params["webhook_url"],
         params,
-        status_callback_url=dial.params["status_callback_url"] or "",
+        status_callback_url=status_callback_url,
     )
 
 

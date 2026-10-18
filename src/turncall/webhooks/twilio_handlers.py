@@ -465,15 +465,16 @@ async def _record_status(
 ) -> None:
     """The call event a status callback leaves, as Telnyx's edge leaves one.
 
-    - answered (`in-progress`): `call.started`, stored and sent.
+    - `queued`, `ringing`, answered (`in-progress`): nothing beyond the call
+      row's status (and an answer's `started_at`). `call.started` went out
+      when the call was dialled, or when it came in, so a callback never
+      repeats it; Telnyx's answer sends nothing either (#329).
     - `failed`/`canceled`: `call.failed`, stored and sent, which reads back
       as `telephony_failed`.
     - `completed`, `busy`, `no-answer`: the carrier's `call.ended` row,
       stored only. A completed call's subscribers hear the comprehensive
       `call.ended` from post-call processing (ADR-0006); an unanswered one's
       status, and so its `ended_reason`, is on the call row.
-    - `ringing`, `queued`: nothing beyond the call row's status. A call that
-      rings out is not a call that started.
     """
     from turncall.events.emit import emit_call_event, record_call_event
 
@@ -484,16 +485,12 @@ async def _record_status(
         "from_number": call.from_number,
         "to_number": call.to_number,
     }
-    sent = {
-        CallStatus.IN_PROGRESS: CallEventType.CALL_STARTED,
-        CallStatus.FAILED: CallEventType.CALL_FAILED,
-    }.get(new_status)
-    if sent is not None:
+    if new_status == CallStatus.FAILED:
         await emit_call_event(
             session,
             call_id=call.id,
             project_id=call.project_id,
-            event_type=sent,
+            event_type=CallEventType.CALL_FAILED,
             payload=payload,
         )
     elif new_status in {CallStatus.COMPLETED, CallStatus.BUSY, CallStatus.NO_ANSWER}:
