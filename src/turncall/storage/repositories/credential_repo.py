@@ -8,41 +8,27 @@ import json
 from typing import Any
 from uuid import UUID
 
-from cryptography.fernet import Fernet, InvalidToken
-from sqlalchemy import delete, select
+from cryptography.fernet import InvalidToken
+from sqlalchemy import Text, cast, delete, select, type_coerce
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.config.settings import Settings
+from turncall.domain.config_secrets import map_secrets
 from turncall.storage.models import (
+    AgentRow,
     PhoneNumberRow,
     ProjectCredentialRow,
     ProjectRow,
+    WebhookSubscriptionRow,
     utc_now,
 )
+from turncall.storage.sealing import PREFIX, fernet, unseal
+from turncall.storage.sealing import CredentialKeyError as CredentialKeyError
 
-
-class CredentialKeyError(RuntimeError):
-    """CREDENTIAL_ENCRYPTION_KEY is unset, malformed, or not the one used."""
-
-
-def _fernet(settings: Settings) -> Fernet:
-    key = settings.credentials.encryption_key
-    if not key:
-        raise CredentialKeyError(
-            "CREDENTIAL_ENCRYPTION_KEY is not set, so project credentials "
-            'cannot be stored or read. Generate one with `python -c "from '
-            "cryptography.fernet import Fernet; print(Fernet.generate_key()"
-            '.decode())"` and set it once — rotating it orphans every '
-            "stored credential."
-        )
-    try:
-        return Fernet(key.encode())
-    except ValueError as exc:
-        raise CredentialKeyError(
-            "CREDENTIAL_ENCRYPTION_KEY is not a valid Fernet key "
-            "(32 url-safe base64-encoded bytes)."
-        ) from exc
+# The key, its error and the cipher live with the rest of what the key seals
+# (#338); every `credential_repo.CredentialKeyError` keeps working through here.
+_fernet = fernet
 
 
 def encrypt(document: dict[str, Any], settings: Settings) -> str:
@@ -163,10 +149,17 @@ async def documents_for_provider(
 
 
 async def ensure_readable(session: AsyncSession, settings: Settings) -> None:
-    """Startup check: fail closed when credentials exist and the key is unusable.
+    """Startup check: fail closed when secrets exist and the key is unusable.
 
     Raises CredentialKeyError rather than letting the first call on a project
-    with a credential discover it with a caller on the line.
+    with a credential discover it with a caller on the line. One stored value
+    per column is opened: the key reads all of them or none.
+
+    The values sealed at rest (#338) are sampled where they are few — webhook
+    secrets, numbers' server_url secrets, agent configs. A call's or an eval
+    run's inline config is sealed with the same key, so these prove it too
+    without a startup scan of the largest tables. Read past the column type,
+    so the check sees what is stored whether or not the column unseals.
     """
     if settings.credentials.encryption_key:
         _fernet(settings)  # malformed is an error whether or not rows exist
@@ -178,3 +171,32 @@ async def ensure_readable(session: AsyncSession, settings: Settings) -> None:
         first = await session.scalar(select(column).where(column.is_not(None)).limit(1))
         if first is not None:
             decrypt(first, settings)
+    for secret in (
+        type_coerce(WebhookSubscriptionRow.secret, Text),
+        type_coerce(PhoneNumberRow.server_url_secret, Text),
+    ):
+        first = await session.scalar(
+            select(secret).where(secret.startswith(PREFIX, autoescape=True)).limit(1)
+        )
+        if first is not None:
+            unseal(first, settings)
+    blob = cast(AgentRow.config_blob, Text)
+    first = await session.scalar(
+        select(blob).where(blob.contains(f'"{PREFIX}', autoescape=True)).limit(1)
+    )
+    if first is not None:
+        _unseal_one(json.loads(first), settings)
+
+
+def _unseal_one(config: dict[str, Any], settings: Settings) -> None:
+    """Open the first sealed secret in an agent config, if it holds one."""
+    sealed: list[str] = []
+
+    def collect(value: str) -> str:
+        if value.startswith(PREFIX):
+            sealed.append(value)
+        return value
+
+    map_secrets(config, collect)
+    if sealed:
+        unseal(sealed[0], settings)
