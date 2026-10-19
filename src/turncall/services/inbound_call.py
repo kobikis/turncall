@@ -173,18 +173,25 @@ async def open_inbound_call(
             else {}
         ),
     }
-    call = await call_repo.create_call(
-        session,
-        project_id=number.project_id,
-        call_id=call_id,
-        direction=CallDirection.INBOUND,
-        from_number=from_number,
-        to_number=to_number,
-        active_agent_id=agent_id,
-        provider_call_sid=provider_call_sid,
-        metadata_json=metadata,
-        carrier=carrier,
-    )
+    try:
+        call = await call_repo.create_call(
+            session,
+            project_id=number.project_id,
+            call_id=call_id,
+            direction=CallDirection.INBOUND,
+            from_number=from_number,
+            to_number=to_number,
+            active_agent_id=agent_id,
+            provider_call_sid=provider_call_sid,
+            metadata_json=metadata,
+            carrier=carrier,
+        )
+    except Exception:
+        # No row, so no media stream will ever hold the slot or free it: an
+        # inline agent holding a secret with no key to seal it (#338) fails
+        # here, and every such call would otherwise keep a slot until it lapsed.
+        await release_live_call(number.project_id, call_id)
+        raise
 
     from turncall.events.emit import emit_call_event
 

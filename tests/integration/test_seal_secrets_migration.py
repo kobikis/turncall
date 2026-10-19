@@ -8,6 +8,7 @@ a half-sealed database is the thing the transaction is there to prevent.
 """
 
 import asyncio
+import importlib.util
 import json
 import os
 import subprocess
@@ -28,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BEFORE = "d4b8e2f6a0c3"
 REVISION = "e6c2a8f4b0d9"
 PREFIX = "tcs1:"
+MIGRATION = ROOT / "alembic/versions/e6c2a8f4b0d9_seal_secrets_at_rest.py"
 
 CONFIG: dict[str, Any] = {
     "name": "support",
@@ -338,7 +340,7 @@ def test_refuses_without_a_key_and_changes_nothing(database):
     up = _alembic(database, "upgrade", REVISION, key=None)
 
     assert up.returncode != 0
-    assert "hold secrets in plaintext" in up.stderr
+    assert "hold secrets" in up.stderr
     assert "CREDENTIAL_ENCRYPTION_KEY is not set" in up.stderr
     assert _run(database, _snapshot) == before
 
@@ -348,14 +350,15 @@ def test_a_failure_halfway_through_rolls_every_row_back(database):
     before = _seeded(database)
 
     # The last table sealed refuses its update, after every other table's
-    # rows have been rewritten in the same transaction.
+    # rows have been rewritten, and the columns widened, in the same
+    # transaction.
     async def trap(conn: asyncpg.Connection) -> None:
         await conn.execute(
             "CREATE FUNCTION seal_trap() RETURNS trigger LANGUAGE plpgsql AS "
             "$$ BEGIN RAISE EXCEPTION 'seal trap'; END $$"
         )
         await conn.execute(
-            "CREATE TRIGGER seal_trap BEFORE UPDATE ON eval_scenarios "
+            "CREATE TRIGGER seal_trap BEFORE UPDATE ON phone_numbers "
             "FOR EACH ROW EXECUTE FUNCTION seal_trap()"
         )
 
@@ -390,3 +393,50 @@ def test_a_database_without_secrets_upgrades_without_a_key(database):
     assert up.returncode == 0, up.stderr
     down = _alembic(database, "downgrade", BEFORE, key=None)
     assert down.returncode == 0, down.stderr
+
+
+def test_a_plaintext_secret_that_looks_sealed_is_sealed(database):
+    """Prefixed is sealed only if the key opens it, as in the app's `seal`."""
+    key = Fernet.generate_key().decode()
+    _seeded(database)
+    lookalike = f"{PREFIX}a-secret-of-my-own"
+
+    async def plant(conn: asyncpg.Connection) -> None:
+        await conn.execute("UPDATE webhook_subscriptions SET secret = $1", lookalike)
+
+    _run(database, plant)
+    assert _alembic(database, "upgrade", REVISION, key=key).returncode == 0
+    [(_, stored)] = _run(database, _snapshot)["webhook_subscriptions.secret"]
+    assert stored != lookalike
+    assert _unseal(key, stored) == lookalike
+
+
+def test_the_candidate_filter_misses_no_secret_path(database):
+    """Only rows the SQL filter picks leave the database; on Postgres, it picks
+    every config holding a secret at any one path, and skips one with none."""
+    spec = importlib.util.spec_from_file_location("seal_migration", MIGRATION)
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    one_path = [
+        {"llm": {"api_key": "k"}},
+        {"llm": {"failover": [{"api_key": "k"}]}},
+        {"aws": {"session_token": "k"}},
+        {"server_url": {"secret": "k"}},
+        {"tools": [{"webhook_secret": "k"}]},
+        {"mcp_servers": [{"headers": {"A": "k"}}]},
+    ]
+    none: list[dict[str, Any]] = [
+        {"name": "plain", "llm": {"provider": "openai"}},
+        {},
+    ]
+
+    async def picked(conn: asyncpg.Connection) -> list[bool]:
+        clause = migration._secret_bearing("c")
+        # The clause is the migration's constant, never input.
+        query = f"SELECT {clause} FROM (SELECT $1::jsonb AS c) AS t"  # noqa: S608
+        return [
+            bool(await conn.fetchval(query, json.dumps(c))) for c in one_path + none
+        ]
+
+    assert _run(database, picked) == [True] * len(one_path) + [False] * len(none)

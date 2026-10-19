@@ -21,11 +21,13 @@ stored value as it is.
 
 No key, no write: a value to seal with CREDENTIAL_ENCRYPTION_KEY unset raises
 CredentialKeyError, never a silent fall back to plaintext. A value with no
-secret in it needs no key. Raised from a bind processor, the error reaches the
-caller wrapped in SQLAlchemy's StatementError, with this one as `.orig`.
+secret in it needs no key. Raised from a bind processor, the error is wrapped
+in SQLAlchemy's StatementError; the engine's handle_error listener
+(storage/database) raises it as itself, so callers catch CredentialKeyError.
 """
 
 from collections.abc import Callable
+from functools import lru_cache
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -58,6 +60,14 @@ def fernet(settings: Settings | None = None) -> Fernet:
             'print(Fernet.generate_key().decode())"` and set it once — '
             "rotating it orphans every stored secret."
         )
+    return _cipher(key)
+
+
+@lru_cache(maxsize=4)
+def _cipher(key: str) -> Fernet:
+    """One Fernet per key, not one per value sealed or opened: a config holds
+    a dozen secrets, and a page of calls a config each. A malformed key raises
+    each time it is asked for; lru_cache keeps no exception."""
     try:
         return Fernet(key.encode())
     except ValueError as exc:
@@ -131,10 +141,16 @@ class _PlainPaths(TypeDecorator.Comparator[Any], JSONB.Comparator[Any]):
 
     Left as the decorator, `col["llm"]` would run the whole-config walker over
     the `llm` block on the way out, find no `llm` key in it, and hand back its
-    api_key still sealed while looking unsealed. A path reads what is stored,
-    as raw SQL does; a whole-column read is the one that unseals. It also
-    renders as it did on JSONB (PG14's `col['k']`, which SQLAlchemy only picks
-    for a JSONB-typed left side), so no query into the column changes.
+    api_key still sealed while looking unsealed. It also renders as it did on
+    JSONB (PG14's `col['k']`, which SQLAlchemy only picks for a JSONB-typed
+    left side), so no query into the column changes.
+
+    The hazard: a path reads what is stored, ciphertext included, as raw SQL
+    does. `col["llm"]["api_key"]` selected, compared or written is the sealed
+    value, never the secret, and a value written by path is not sealed. Only
+    a whole-column read unseals, so read the whole column for a secret. No
+    code reads one by path; test_sealing pins the path reads there are, so a
+    new one is looked at before it lands.
     """
 
     def __getitem__(self, index: Any) -> Any:

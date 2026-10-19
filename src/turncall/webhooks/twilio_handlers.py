@@ -29,6 +29,7 @@ from turncall.storage.repositories import (
     call_repo,
     phone_number_repo,
 )
+from turncall.storage.sealing import CredentialKeyError
 from turncall.webhooks.twilio_signature import validate_twilio_signature
 
 router = APIRouter(prefix="/webhooks/twilio", tags=["twilio-webhooks"])
@@ -211,6 +212,13 @@ async def inbound_sms_webhook(
             "twilio_sms_rate_limited", from_number=from_number, **exc.details
         )
         return _sms_twiml(None)
+    except CredentialKeyError as exc:
+        # Call-init answered with an inline agent holding a secret, and with
+        # no key it cannot be stored sealed (#338). Nothing is kept: rolled
+        # back here, or the request's own commit fails and Twilio gets a 500.
+        await session.rollback()
+        logger.error("twilio_sms_credential_key_unavailable", error=str(exc))
+        return _sms_twiml("Sorry, I'm unable to process your message right now.")
     except ValueError as exc:
         logger.error("twilio_sms_error", error=str(exc))
         return _sms_twiml("Sorry, I'm unable to process your message right now.")

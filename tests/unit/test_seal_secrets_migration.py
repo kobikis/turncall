@@ -198,27 +198,48 @@ def test_unseal_under_another_key_says_so(migration):
         migration.unsealer(Fernet(Fernet.generate_key()))(sealed)
 
 
+def test_a_value_that_only_looks_sealed_is_sealed(migration, key):
+    """As the app's `seal`: prefixed counts as sealed only if the key opens it,
+    or a plaintext secret starting `tcs1:` would be left for the app to fail
+    reading."""
+    fernet = Fernet(key.encode())
+    seal, unseal = migration.sealer(fernet), migration.unsealer(fernet)
+    for lookalike in ("tcs1:my-own-secret", "tcs1:", seal("x")[:-4]):
+        assert not migration.sealed_under(fernet, lookalike)
+        sealed = seal(lookalike)
+        assert sealed != lookalike
+        assert unseal(sealed) == lookalike
+    assert migration.sealed_under(fernet, seal("whsec"))
+    assert not migration.sealed_under(None, seal("whsec"))
+
+
 # --- upgrade / downgrade against a fake op ---
 
 
 class _Op:
-    """Rows per table; records DDL and the updates the migration issues."""
+    """Rows per table; logs the ALTERs and updates, in the order issued.
+
+    The SQL candidate filter is not applied: every row of a table is offered,
+    and the migration's own walk must skip what holds no secret.
+    """
 
     def __init__(self, rows: dict[str, list[tuple[Any, Any]]]) -> None:
         self.rows = rows
-        self.calls: list[str] = []
+        self.log: list[tuple[str, str]] = []
         self.updates: list[tuple[str, Any, Any]] = []
+        self.batches: list[int] = []
 
-    def _execute(self, statement: Any) -> Any:
+    def _execute(self, statement: Any, params: Any = None) -> Any:
         if isinstance(statement, sa.Update):
-            params = statement.compile().params
-            row_id = params.pop("id_1")
-            (value,) = params.values()
-            self.updates.append((statement.table.name, row_id, value))
+            assert isinstance(params, list), "updates go out batched"
+            self.batches.append(len(params))
+            for p in params:
+                self.updates.append((statement.table.name, p["row_id"], p["sealed"]))
+                self.log.append(("update", statement.table.name))
             return None
         # A page: rows after the last id seen, in id order, up to the limit.
-        params = statement.compile().params
-        after = params.get("id_1")
+        compiled = statement.compile().params
+        after = compiled.get("id_1")
         rows = sorted(self.rows.get(statement.get_final_froms()[0].name, []))
         page = [r for r in rows if after is None or r[0] > after]
         page = page[: statement._limit]
@@ -227,8 +248,15 @@ class _Op:
     def get_bind(self) -> Any:
         return SimpleNamespace(execute=self._execute)
 
-    def __getattr__(self, name: str) -> Any:
-        return lambda *args, **kwargs: self.calls.append(name)
+    def alter_column(self, table: str, *args: Any, **kwargs: Any) -> None:
+        self.log.append(("alter", table))
+
+    @property
+    def alters(self) -> list[str]:
+        return [table for kind, table in self.log if kind == "alter"]
+
+
+WIDENED = ["webhook_subscriptions", "phone_numbers"]
 
 
 def _with(migration: Any, op: _Op) -> Any:
@@ -237,9 +265,9 @@ def _with(migration: Any, op: _Op) -> Any:
 
 
 def test_upgrade_with_nothing_to_seal_needs_no_key(migration, no_key):
-    op = _Op({})
+    op = _Op({"agents": [("a1", {"name": "no secrets"})]})
     _with(migration, op).upgrade()
-    assert op.calls == ["alter_column", "alter_column"]
+    assert op.alters == WIDENED
     assert op.updates == []
 
 
@@ -257,43 +285,74 @@ def test_upgrade_refuses_without_a_key_and_changes_nothing(migration, no_key):
     assert "webhook_subscriptions.secret: 1" in message
     assert "agents.config_blob: 1" in message
     assert "CREDENTIAL_ENCRYPTION_KEY is not set" in message
-    assert op.calls == []
-    assert op.updates == []
+    assert op.log == []
 
 
-def test_upgrade_with_only_sealed_secrets_needs_no_key(migration, no_key):
+def test_without_a_key_a_prefixed_value_is_not_taken_as_sealed(migration, no_key):
+    """No key opens it, so it cannot be told from a secret that starts `tcs1:`."""
     op = _Op({"webhook_subscriptions": [("w1", "tcs1:already")]})
-    _with(migration, op).upgrade()
-    assert op.updates == []
+    with pytest.raises(RuntimeError, match=r"webhook_subscriptions\.secret: 1"):
+        _with(migration, op).upgrade()
+    assert op.log == []
 
 
 def test_upgrade_seals_each_row_holding_plaintext(migration, key):
+    fernet = Fernet(key.encode())
+    sealed = migration.sealer(fernet)("sealed-before")
     op = _Op(
         {
-            "webhook_subscriptions": [("w1", "whsec"), ("w2", "tcs1:already")],
+            "webhook_subscriptions": [
+                ("w1", "whsec"),
+                ("w2", sealed),
+                ("w3", "tcs1:lookalike"),
+            ],
             "agents": [("a1", CONFIG), ("a2", {"name": "no secrets"})],
         }
     )
     _with(migration, op).upgrade()
-    unseal = migration.unsealer(Fernet(key.encode()))
-    assert op.calls == ["alter_column", "alter_column"]
+    unseal = migration.unsealer(fernet)
     assert [(t, i) for t, i, _ in op.updates] == [
-        ("webhook_subscriptions", "w1"),
         ("agents", "a1"),
+        ("webhook_subscriptions", "w1"),
+        ("webhook_subscriptions", "w3"),
     ]
-    (_, _, secret), (_, _, config) = op.updates
+    (_, _, config), (_, _, secret), (_, _, lookalike) = op.updates
     assert unseal(secret) == "whsec"
+    assert unseal(lookalike) == "tcs1:lookalike"
     assert migration.map_config(config, unseal) == CONFIG
     assert not migration.holds(
-        config, migration.map_config, lambda v: not migration.is_sealed(v)
+        config, migration.map_config, lambda v: not migration.sealed_under(fernet, v)
     )
 
 
-def test_upgrade_pages_through_every_row_once(migration, key, monkeypatch):
+def test_upgrade_takes_the_alter_lock_after_the_large_tables(migration, key):
+    """The ALTER's exclusive lock lasts to commit: the large tables are sealed
+    before it is taken, and only the two small ones after."""
+    op = _Op(
+        {
+            "webhook_subscriptions": [("w1", "whsec")],
+            "phone_numbers": [("p1", "srv")],
+            "agents": [("a1", CONFIG)],
+            "calls": [("c1", {"dynamic_config": CONFIG})],
+            "sms_sessions": [("s1", {"dynamic_config": CONFIG})],
+            "eval_runs": [("r1", {"type": "inline", "agent": CONFIG})],
+            "eval_scenarios": [("e1", {"type": "inline", "agent": CONFIG})],
+        }
+    )
+    _with(migration, op).upgrade()
+    first_alter = op.log.index(("alter", "webhook_subscriptions"))
+    before = {table for _, table in op.log[:first_alter]}
+    after = {table for kind, table in op.log[first_alter:] if kind == "update"}
+    assert before == {"agents", "calls", "sms_sessions", "eval_runs", "eval_scenarios"}
+    assert after == set(WIDENED)
+
+
+def test_upgrade_pages_and_batches_every_row_once(migration, key, monkeypatch):
     monkeypatch.setattr(migration, "PAGE", 2)
     op = _Op({"webhook_subscriptions": [(f"w{i}", f"whsec{i}") for i in range(5)]})
     _with(migration, op).upgrade()
     assert [i for _, i, _ in op.updates] == ["w0", "w1", "w2", "w3", "w4"]
+    assert op.batches == [2, 2, 1]
 
 
 def test_upgrade_refuses_a_malformed_key(migration, monkeypatch):
@@ -301,15 +360,14 @@ def test_upgrade_refuses_a_malformed_key(migration, monkeypatch):
     op = _Op({"webhook_subscriptions": [("w1", "whsec")]})
     with pytest.raises(RuntimeError, match="not a valid Fernet key"):
         _with(migration, op).upgrade()
-    assert op.calls == []
+    assert op.log == []
 
 
 def test_downgrade_refuses_sealed_rows_without_a_key(migration, no_key):
     op = _Op({"phone_numbers": [("p1", "tcs1:sealed")]})
     with pytest.raises(RuntimeError, match=r"phone_numbers\.server_url_secret: 1"):
         _with(migration, op).downgrade()
-    assert op.calls == []
-    assert op.updates == []
+    assert op.log == []
 
 
 def test_downgrade_unseals_then_narrows(migration, key):
@@ -323,14 +381,16 @@ def test_downgrade_unseals_then_narrows(migration, key):
     )
     _with(migration, op).downgrade()
     assert op.updates == [
-        ("phone_numbers", "p1", "srv"),
         ("eval_runs", "r1", {"type": "inline", "agent": CONFIG}),
+        ("phone_numbers", "p1", "srv"),
     ]
-    assert op.calls == ["alter_column", "alter_column"]
+    # Narrowed last: no row is rewritten under the ALTER's lock.
+    assert op.log[-2:] == [("alter", t) for t in WIDENED]
+    assert op.alters == WIDENED
 
 
 def test_downgrade_with_nothing_sealed_needs_no_key(migration, no_key):
     op = _Op({"webhook_subscriptions": [("w1", "plaintext")]})
     _with(migration, op).downgrade()
-    assert op.calls == ["alter_column", "alter_column"]
+    assert op.alters == WIDENED
     assert op.updates == []

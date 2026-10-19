@@ -6,6 +6,7 @@ added later is caught whichever list it was left out of — and the rows the
 migration sealed are the ones the app opens.
 """
 
+import ast
 import importlib.util
 import json
 import re
@@ -18,6 +19,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from cryptography.fernet import Fernet
+from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import Column, MetaData, String, Table, Text, cast, select
 from sqlalchemy.dialects import postgresql
@@ -32,6 +34,7 @@ from turncall.domain.config_secrets import (
 )
 from turncall.domain.models import AgentConfig
 from turncall.storage import sealing
+from turncall.storage.models import Base
 from turncall.storage.repositories import credential_repo
 from turncall.storage.sealing import (
     PREFIX,
@@ -118,6 +121,15 @@ class TestSeal:
     def test_plaintext_passes_through_unseal_without_a_key(self) -> None:
         """A row from before the migration, or a test fake."""
         assert unseal(SECRET, _settings()) == SECRET
+
+    def test_one_cipher_per_key(self, keyed) -> None:
+        """Built once per key, not per value; a bad key still fails each time."""
+        assert sealing.fernet(keyed) is sealing.fernet(keyed)
+        other = _settings(Fernet.generate_key().decode())
+        assert sealing.fernet(other) is not sealing.fernet(keyed)
+        for _ in range(2):
+            with pytest.raises(CredentialKeyError, match="not a valid Fernet key"):
+                sealing.fernet(_settings("not-a-key"))
 
     def test_credential_repo_keeps_the_error(self) -> None:
         """Callers catch `credential_repo.CredentialKeyError`; it is this one."""
@@ -368,6 +380,61 @@ class TestColumnTypes:
         for sealed in (SealedAgentConfig(), SealedTarget(), SealedMetadata()):
             assert sql(sealed) == sql(JSONB())
 
+    def test_the_path_reads_into_sealed_columns_are_these(self) -> None:
+        """A path reads the stored value, ciphertext included (`_PlainPaths`),
+        so each one into a sealed column is listed here, and none of them
+        reads a secret as if it were plaintext. A new one is a test failure:
+        read the whole column instead, or add it with why it is safe."""
+        sealed = {
+            (mapper.class_.__name__, attr.key)
+            for mapper in Base.registry.mappers
+            for attr in mapper.column_attrs
+            if isinstance(attr.columns[0].type, (SealedText, sealing._SealedJSONB))
+        }
+        found = set()
+        src = Path(__file__).parents[2] / "src/turncall"
+        for path in src.rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not (
+                    isinstance(node, ast.Subscript)
+                    and isinstance(node.value, ast.Attribute)
+                    and isinstance(node.value.value, ast.Name)
+                ):
+                    continue
+                column = (node.value.value.id, node.value.attr)
+                if column in sealed:
+                    key = node.slice
+                    found.add(
+                        (
+                            str(path.relative_to(src)),
+                            ".".join(column),
+                            key.value
+                            if isinstance(key, ast.Constant)
+                            else ast.unparse(key),
+                        )
+                    )
+        repos = "storage/repositories"
+        assert found == {
+            # No secret under any of these.
+            ("services/retention.py", "AgentRow.config_blob", "retention"),
+            (f"{repos}/ambience_repo.py", "AgentRow.config_blob", "ambience"),
+            (f"{repos}/takeaway_repo.py", "AgentRow.config_blob", "analysis"),
+            (
+                f"{repos}/sms_message_repo.py",
+                "SmsSessionRow.metadata_json",
+                "REDACTION",
+            ),
+            # The startup check reads the stored ciphertext on purpose.
+            (f"{repos}/credential_repo.py", "CallRow.metadata_json", "dynamic_config"),
+            (
+                f"{repos}/credential_repo.py",
+                "SmsSessionRow.metadata_json",
+                "dynamic_config",
+            ),
+            (f"{repos}/credential_repo.py", "EvalRunRow.target", "agent"),
+            (f"{repos}/credential_repo.py", "EvalScenarioRow.default_target", "agent"),
+        }
+
     def test_a_path_is_plain_jsonb(self, env_key) -> None:
         """`col["llm"]` read back must not go through the whole-config walker,
         which would find no `llm` key in the block and leave it sealed."""
@@ -397,12 +464,37 @@ class TestColumnTypes:
 class TestStartupCheck:
     """ensure_readable samples the sealed columns: one value per column."""
 
-    # session.scalar order: project credential, Twilio token, webhook secret,
-    # server_url secret, agent config text.
+    @staticmethod
+    def _session(**found: Any) -> AsyncMock:
+        """What each startup query finds, by name; nothing elsewhere.
+
+        In order: project credential, Twilio token, webhook secret, server_url
+        secret, then a sample of documents from agents, calls, sms_sessions,
+        eval_runs and eval_scenarios.
+        """
+        order = [
+            "credential",
+            "twilio",
+            "webhook",
+            "server_url",
+            "agents",
+            "calls",
+            "sms_sessions",
+            "eval_runs",
+            "eval_scenarios",
+        ]
+        assert set(found) <= set(order)
+        session = AsyncMock()
+        session.scalar.side_effect = [found.get(name) for name in order]
+        return session
+
+    @staticmethod
+    def _sealed(keyed: Any) -> str:
+        return json.dumps(map_secrets(SECRETFUL, lambda v: seal(v, keyed)))
+
     @pytest.mark.asyncio
     async def test_a_sealed_webhook_secret_with_no_key_fails(self, keyed) -> None:
-        session = AsyncMock()
-        session.scalar.side_effect = [None, None, seal("whsec", keyed), None, None]
+        session = self._session(webhook=seal("whsec", keyed))
         with pytest.raises(CredentialKeyError):
             await credential_repo.ensure_readable(session, _settings())
 
@@ -410,35 +502,77 @@ class TestStartupCheck:
     async def test_a_sealed_server_url_secret_under_another_key_fails(
         self, keyed
     ) -> None:
-        session = AsyncMock()
-        session.scalar.side_effect = [None, None, None, seal("s", keyed), None]
+        session = self._session(server_url=seal("s", keyed))
         other = _settings(Fernet.generate_key().decode())
         with pytest.raises(CredentialKeyError, match="rotated"):
             await credential_repo.ensure_readable(session, other)
 
     @pytest.mark.asyncio
-    async def test_a_sealed_agent_config_is_opened(self, keyed) -> None:
-        stored = json.dumps(map_secrets(SECRETFUL, lambda v: seal(v, keyed)))
-        session = AsyncMock()
-        session.scalar.side_effect = [None, None, None, None, stored]
-        with pytest.raises(CredentialKeyError):
-            await credential_repo.ensure_readable(session, _settings())
-        session.scalar.side_effect = [None, None, None, None, stored]
-        await credential_repo.ensure_readable(session, keyed)
+    @pytest.mark.parametrize(
+        "column", ["agents", "calls", "sms_sessions", "eval_runs", "eval_scenarios"]
+    )
+    async def test_a_sealed_config_in_any_document_column_is_opened(
+        self, keyed, column
+    ) -> None:
+        """A database whose only sealed secrets are inline configs — a call's,
+        a session's, an eval target's — is checked too."""
+        other = _settings(Fernet.generate_key().decode())
+        with pytest.raises(CredentialKeyError, match="rotated"):
+            await credential_repo.ensure_readable(
+                self._session(**{column: [self._sealed(keyed)]}), other
+            )
+        await credential_repo.ensure_readable(
+            self._session(**{column: [self._sealed(keyed)]}), keyed
+        )
 
     @pytest.mark.asyncio
-    async def test_a_prompt_that_mentions_the_prefix_is_no_secret(self) -> None:
-        stored = json.dumps({"system_prompt": f'say "{PREFIX}"'})
-        session = AsyncMock()
-        session.scalar.side_effect = [None, None, None, None, stored]
-        await credential_repo.ensure_readable(session, _settings())
+    async def test_a_prompt_that_mentions_the_prefix_is_no_sample(self, keyed) -> None:
+        """The first match only mentions the prefix in its prompt; the next row
+        holds a real sealed secret, and that one is opened."""
+        prompt = json.dumps({"system_prompt": f'say "{PREFIX}"'})
+        other = _settings(Fernet.generate_key().decode())
+        with pytest.raises(CredentialKeyError, match="rotated"):
+            await credential_repo.ensure_readable(
+                self._session(agents=[prompt, self._sealed(keyed)]), other
+            )
+
+    @pytest.mark.asyncio
+    async def test_only_prompts_that_mention_the_prefix_need_no_key(self) -> None:
+        prompt = json.dumps({"system_prompt": f'say "{PREFIX}"'})
+        await credential_repo.ensure_readable(
+            self._session(agents=[prompt], calls=[prompt]), _settings()
+        )
 
     @pytest.mark.asyncio
     async def test_nothing_sealed_needs_no_key(self) -> None:
         session = AsyncMock()
         session.scalar.return_value = None
         await credential_repo.ensure_readable(session, _settings())
-        assert session.scalar.await_count == 5
+        assert session.scalar.await_count == 9
+
+    @pytest.mark.asyncio
+    async def test_it_warns_when_the_key_is_unset(self, keyed) -> None:
+        """The API and both workers run it, so each says so at startup."""
+        seen: list[str] = []
+        sink = logger.add(lambda m: seen.append(str(m)), level="WARNING")
+        try:
+            session = AsyncMock()
+            session.scalar.return_value = None
+            await credential_repo.ensure_readable(session, _settings())
+            await credential_repo.ensure_readable(session, keyed)
+        finally:
+            logger.remove(sink)
+        [warning] = seen
+        assert "credential_encryption_key_unset" in warning
+        assert "CREDENTIAL_ENCRYPTION_KEY is not set" in warning
+
+
+@pytest.mark.unit
+def test_every_process_that_reads_secrets_runs_the_check() -> None:
+    """The warning lives in ensure_readable, so each must call it."""
+    src = Path(__file__).parents[2] / "src/turncall"
+    for path in ("app.py", "evals/worker.py", "campaigns/worker.py"):
+        assert "credential_repo.ensure_readable(" in (src / path).read_text(), path
 
 
 def test_the_prefix_is_not_base64() -> None:

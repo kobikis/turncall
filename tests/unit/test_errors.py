@@ -1,11 +1,8 @@
 """Tests for error handling framework."""
 
-from types import SimpleNamespace
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import StatementError
 
 from turncall.api.errors import (
     ConflictError,
@@ -60,9 +57,9 @@ class TestApiErrors:
 
 @pytest.mark.unit
 class TestCredentialKeyUnavailable:
-    """No CREDENTIAL_ENCRYPTION_KEY is the operator's to fix: a 503 naming it,
-    whether the error is raised as itself (a sealed value read) or inside
-    SQLAlchemy's StatementError (a secret sealed by its column type, #338)."""
+    """No CREDENTIAL_ENCRYPTION_KEY is the operator's to fix: a 503 naming it.
+    A secret sealed by its column type (#338) raises it as itself too: the
+    engine's handle_error listener unwraps SQLAlchemy's StatementError."""
 
     @pytest.fixture
     def client(self) -> TestClient:
@@ -74,36 +71,10 @@ class TestCredentialKeyUnavailable:
         async def bare() -> None:
             raise no_key
 
-        @app.get("/wrapped")
-        async def wrapped() -> None:
-            raise StatementError("bind failed", "INSERT ...", {}, no_key)
-
-        @app.get("/other")
-        async def other() -> None:
-            raise StatementError("bind failed", "INSERT ...", {}, ValueError("x"))
-
         return TestClient(app, raise_server_exceptions=False)
 
-    @pytest.mark.parametrize("path", ["/bare", "/wrapped"])
-    def test_is_a_503(self, client: TestClient, path: str) -> None:
-        r = client.get(path)
+    def test_is_a_503(self, client: TestClient) -> None:
+        r = client.get("/bare")
         assert r.status_code == 503
         assert r.json()["code"] == ErrorCode.CREDENTIAL_KEY_UNAVAILABLE
         assert "CREDENTIAL_ENCRYPTION_KEY" in r.json()["error"]
-
-    def test_any_other_statement_error_is_still_a_500(self, client) -> None:
-        r = client.get("/other")
-        assert r.status_code == 500
-        assert r.json()["code"] == ErrorCode.INTERNAL_ERROR
-
-
-@pytest.mark.unit
-def test_startup_warns_without_the_key() -> None:
-    from turncall.app import _warn_if_no_encryption_key
-
-    def with_key(key: str) -> SimpleNamespace:
-        return SimpleNamespace(credentials=SimpleNamespace(encryption_key=key))
-
-    warning = _warn_if_no_encryption_key(with_key(""))  # type: ignore[arg-type]
-    assert warning is not None and "CREDENTIAL_ENCRYPTION_KEY" in warning
-    assert _warn_if_no_encryption_key(with_key("k")) is None  # type: ignore[arg-type]

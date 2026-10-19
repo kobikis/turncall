@@ -280,3 +280,76 @@ async def test_a_scenario_from_an_inline_session_targets_its_config(
     target = r.json()["data"]["default_target"]
     assert target["type"] == "inline"
     assert target["agent"]["system_prompt"] == "Built for this conversation."
+
+
+async def _forget_server_url_secret(e164: str) -> None:
+    """A number whose call-init goes unsigned, as one bound before secrets
+    were minted: readable with no key at all."""
+    from sqlalchemy import update
+
+    from turncall.config.settings import Settings
+    from turncall.storage.database import create_engine, create_session_factory
+    from turncall.storage.models import PhoneNumberRow
+
+    engine = create_engine(Settings().database)
+    async with create_session_factory(engine)() as session:
+        await session.execute(
+            update(PhoneNumberRow)
+            .where(PhoneNumberRow.e164_number == e164)
+            .values(server_url_secret=None)
+        )
+        await session.commit()
+    await engine.dispose()
+
+
+@pytest.mark.parametrize("channel", ["sms", "whatsapp"])
+async def test_without_the_key_a_text_whose_call_init_holds_a_secret_is_refused(
+    monkeypatch, prompts, channel
+):
+    """No CREDENTIAL_ENCRYPTION_KEY, and call-init answers with an inline
+    agent holding an api_key (#338): the session cannot be stored sealed, so
+    nothing is stored and no LLM runs. The webhook still answers — SMS with an
+    apology, WhatsApp a 200 — rather than a 500 the carrier drops or retries."""
+    from turncall.config.settings import get_settings
+
+    sent: list[str] = []
+
+    async def _send(_http, *, text: str, **_kwargs) -> dict:
+        sent.append(text)
+        return {}
+
+    monkeypatch.setattr("turncall.services.whatsapp_chat.send_whatsapp_text", _send)
+    monkeypatch.delenv("WHATSAPP_APP_SECRET", raising=False)
+    answer = {"agent": {**HARNESS_AGENT, "llm": {"api_key": "sk-inline-secret"}}}
+    async with (
+        CallInitServer(answer) as server,
+        run_app(
+            SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+        ) as app,
+    ):
+        number = await _call_init_number(
+            app, server.url, whatsapp=channel == "whatsapp"
+        )
+        await _forget_server_url_secret(number)
+        key = get_settings().credentials.encryption_key
+        monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", "")
+        get_settings.cache_clear()
+        try:
+            if channel == "sms":
+                r = await _sms(app, number, "SM1", "hi")
+            else:
+                r = await app.api.post(
+                    "/webhooks/whatsapp", json=_whatsapp(number, "hi")
+                )
+        finally:
+            monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", key)
+            get_settings.cache_clear()
+        sessions = (await app.api.get("/v1/chat/sessions")).json()["data"]
+
+    assert r.status_code == 200, r.text
+    if channel == "sms":
+        assert "unable to process your message" in r.text
+    assert len(server.requests) == 1
+    assert prompts == []
+    assert sent == []
+    assert sessions == []

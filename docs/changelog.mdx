@@ -13,8 +13,8 @@ signing secrets, numbers' `server_url_secret` and the secrets in agent configs
 under it, and without it refuses to run and changes nothing. A deployment that
 stores project credentials has it set already. From then on, creating a webhook
 subscription, giving a number a `server_url`, saving an agent with a secret, or
-taking a call whose call-init answers with one needs the key too. Set it once and
-never rotate it. Backups taken before the upgrade still hold the secrets in
+taking a call or a text whose call-init answers with one needs the key too. Set
+it once and never rotate it. Backups taken before the upgrade still hold the secrets in
 plaintext. See [Compliance](/guides/compliance#the-controls).
 
 ## Added

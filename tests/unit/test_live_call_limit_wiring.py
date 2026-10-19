@@ -89,3 +89,46 @@ async def test_without_redis_a_call_is_admitted(monkeypatch):
     monkeypatch.setattr(limits, "get_redis", _down)
     assert await limits.claim_live_call(uuid.uuid4(), uuid.uuid4(), 1)
     await limits.release_live_call(uuid.uuid4(), uuid.uuid4())  # never raises
+
+
+async def test_a_call_row_that_cannot_be_written_frees_its_slot(monkeypatch):
+    """Call-init answered with an inline agent holding a secret and there is
+    no key to seal it (#338): the row is never written, so no media stream
+    will hold the slot or free it. The inbound call frees it as it fails."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+
+    from turncall.services import inbound_call
+    from turncall.storage.sealing import CredentialKeyError
+
+    admit = AsyncMock(return_value=True)
+    released: list[tuple] = []
+
+    async def release(project_id, call_id) -> None:
+        released.append((project_id, call_id))
+
+    resolved = inbound_call._Resolved(dynamic_config={"llm": {"api_key": "sk-x"}})
+    monkeypatch.setattr(inbound_call.telemetry_redaction, "for_project", AsyncMock())
+    monkeypatch.setattr(inbound_call, "admit_inbound_call", admit)
+    monkeypatch.setattr(
+        inbound_call, "_resolve_agent", AsyncMock(return_value=resolved)
+    )
+    monkeypatch.setattr(
+        inbound_call.call_repo,
+        "create_call",
+        AsyncMock(side_effect=CredentialKeyError("CREDENTIAL_ENCRYPTION_KEY")),
+    )
+    monkeypatch.setattr(inbound_call, "release_live_call", release)
+    number = SimpleNamespace(project_id=uuid4())
+
+    with pytest.raises(CredentialKeyError):
+        await inbound_call.open_inbound_call(
+            AsyncMock(),
+            number,  # type: ignore[arg-type]
+            carrier="twilio",
+            from_number="+15550100",
+            to_number="+15550101",
+            provider_call_sid="CA1",
+        )
+    assert released == [(number.project_id, admit.await_args.kwargs["call_id"])]

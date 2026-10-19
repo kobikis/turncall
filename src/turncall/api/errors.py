@@ -8,7 +8,6 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy.exc import StatementError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from turncall.domain.errors import PicklableError
@@ -221,17 +220,6 @@ def register_error_handlers(app: FastAPI) -> None:
         request: Request, exc: CredentialKeyError
     ) -> JSONResponse:
         return _credential_key_unavailable(request, exc)
-
-    @app.exception_handler(StatementError)
-    async def statement_error_handler(
-        request: Request, exc: StatementError
-    ) -> JSONResponse:
-        # A secret sealed at rest is sealed by its column type (#338), so a
-        # write holding one with no key fails in SQLAlchemy's bind step, which
-        # wraps the error. Unwrapped, it is the 503 a credential write gets.
-        if isinstance(exc.orig, CredentialKeyError):
-            return _credential_key_unavailable(request, exc.orig)
-        raise exc  # any other is the unhandled 500 below
 
     @app.exception_handler(Exception)
     async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
