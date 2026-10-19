@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from turncall.domain.errors import PicklableError
+from turncall.storage.sealing import CredentialKeyError
 
 
 class ErrorCode(StrEnum):
@@ -214,6 +215,12 @@ def register_error_handlers(app: FastAPI) -> None:
             ).model_dump(),
         )
 
+    @app.exception_handler(CredentialKeyError)
+    async def credential_key_error_handler(
+        request: Request, exc: CredentialKeyError
+    ) -> JSONResponse:
+        return _credential_key_unavailable(request, exc)
+
     @app.exception_handler(Exception)
     async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
         from loguru import logger
@@ -232,3 +239,19 @@ def register_error_handlers(app: FastAPI) -> None:
                 request_id=getattr(request.state, "request_id", None),
             ).model_dump(),
         )
+
+
+def _credential_key_unavailable(
+    request: Request, exc: CredentialKeyError
+) -> JSONResponse:
+    """Fail closed, legibly (ADR-0020): a secret that cannot be sealed or opened
+    for want of CREDENTIAL_ENCRYPTION_KEY is the operator's to fix, not a 500.
+    The message names the key and how to make one; it holds no secret."""
+    return JSONResponse(
+        status_code=503,
+        content=ErrorResponse(
+            error=str(exc),
+            code=ErrorCode.CREDENTIAL_KEY_UNAVAILABLE,
+            request_id=getattr(request.state, "request_id", None),
+        ).model_dump(),
+    )

@@ -169,16 +169,19 @@ certification.
 
 - **Mapping as built** (#318). `docs/guides/compliance.mdx` maps redaction,
   `trace_include_pii`, retention, recordings, the audit log, self-hosting,
-  encrypted project credentials and signed webhooks to GDPR articles, then
+  encrypted secrets and signed webhooks to GDPR articles, then
   to HIPAA Security and Privacy Rule sections, and lists what stays the
   operator's: vendor DPAs and BAAs, infrastructure, access control, backups,
   the carrier's recording copy, text conversations (not under retention)
   and audio (not redacted). It cites a provision only where the control
   plainly bears on it, and says where one does not reach: redaction is not
   de-identification, the call record's numbers and metadata are neither
-  redacted nor deleted by retention, and only project credentials (and a
-  number's Twilio token) are encrypted by TurnCall, not call data, webhook
-  signing secrets, call-init secrets or the secrets in agent config. The
+  redacted nor deleted by retention, and TurnCall encrypts its secrets,
+  not call data. As first built only project credentials (and a number's
+  Twilio token) were encrypted; since #338 webhook signing secrets,
+  call-init secrets and the secrets in agent config are too, under the same
+  key, so a dump on its own no longer exposes them and one held with the
+  key still does. The
   builder's audit of people (builder-api #101, #102, built since in
   builder-api #105) is named as one way to identify the person behind a
   change, never as the only one: one key per person serves too. There is no switch that turns recording off (every voice call is

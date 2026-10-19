@@ -106,3 +106,29 @@ answer: a **phone number** may carry its own Twilio account
 (`services/twilio_accounts.py`), sealed with the same key. Per number rather
 than per project because Twilio's own unit is the number — webhooks name their
 account by `AccountSid`, and one project can hold numbers from two accounts. Tracked as #186.
+
+Since #338 the other secrets TurnCall keeps are sealed with the same key:
+webhook subscriptions' signing secrets, a number's call-init
+`server_url_secret`, and the secrets an agent config can hold (`llm.api_key`
+and its failovers', static AWS keys, `server_url.secret`, a tool's
+`webhook_secret`, the values of MCP `headers` and `env`) wherever a config is
+stored — `agents.config_blob`, a call-init's inline config on its call or SMS
+session, and an inline eval target. Each value is sealed on its own, as
+`tcs1:` and a Fernet token, by column types in `storage/sealing.py` that seal
+on write and unseal on read, so every reader of a config still sees plaintext
+and nothing that signs or calls out changed. The no-key rule is the one under
+"Encryption": a write holding one of these secrets fails closed
+(`credential_key_unavailable`), a write holding none needs no key, and the
+startup check samples the sealed columns too. The `seal_secrets_at_rest`
+migration (`e6c2a8f4b0d9`) sealed the rows that existed. It is protection for a dump or backup
+taken without the key, not against one taken with it, and call data stays
+unencrypted.
+
+The reasoning under "Why not an `api_key` field" is kept as it was decided:
+`config_blob` was unencrypted JSONB then, and the quoted comment has since been
+reworded. The separate table still buys what it did besides encryption —
+absence from every agent read, and a `sanitize_config` that does not grow per
+provider. What changed is the reason `AWS_AGENT_CREDENTIALS_ENABLED` gives:
+static AWS keys are no longer plaintext at rest, but they are long-lived and
+kept with every agent version that carries them, so the flag stays off by
+default.

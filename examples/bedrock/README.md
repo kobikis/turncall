@@ -41,8 +41,9 @@ flow a server cannot perform, and the cached token expires. It's fine for local
 development; in production use an instance profile, IRSA, or `--role-arn`.
 
 Static per-agent keys exist as an escape hatch and are rejected at agent-create
-unless `AWS_AGENT_CREDENTIALS_ENABLED=true`, because they persist in
-`config_blob`, which is unencrypted JSONB.
+unless `AWS_AGENT_CREDENTIALS_ENABLED=true`, because they are long-lived and
+kept with every agent version in `config_blob` (encrypted at rest under
+`CREDENTIAL_ENCRYPTION_KEY`).
 
 ## Region and model access
 

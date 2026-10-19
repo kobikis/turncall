@@ -707,6 +707,37 @@ and is not part of this repository's history.
   trickle and a later renegotiation reach it; a second renegotiation of a
   restarted connection used to be a `404`. See the upgrade notes.
 
+- **The secrets TurnCall keeps are encrypted at rest** (#338). Only project
+  credentials and a number's own Twilio auth token were; every other secret
+  sat in Postgres in plaintext, so a database dump or backup gave away
+  webhook subscriptions' signing secrets, a number's call-init
+  `server_url_secret`, and in an agent's config its `llm.api_key` (its
+  failovers' too), static AWS keys in `config.aws` (all three of
+  `access_key_id`, `secret_access_key` and `session_token`),
+  `server_url.secret`, a tool's `webhook_secret` and the values of MCP
+  servers' `headers` and `env`, and with a signing secret the means to sign
+  an event or call-init request your receivers accept. They are now
+  Fernet-encrypted under `CREDENTIAL_ENCRYPTION_KEY`, the key project
+  credentials already use, wherever an agent config is kept: on the agent,
+  as a call-init's inline config on its call or SMS session, and as an
+  inline eval target on a run or scenario. Nothing that uses them changes:
+  signatures, call-init, tools and MCP servers get the plaintext as before,
+  a phone number read still returns its `server_url_secret`, and an agent
+  read, like the audit log's record of an agent change, still shows a static
+  `access_key_id`, which names the key without unlocking it. Saving one
+  without the key is a `503` (`credential_key_unavailable`), never a
+  fall back to plaintext, and a call whose call-init answers with an inline
+  config holding one fails, as does a text that would open such a session
+  (SMS is answered with an apology; nothing is kept); a write that holds none
+  needs no key. Startup
+  warns when the key is unset, and fails, as it does for credentials, when
+  what is stored cannot be read with it. This protects a dump on its own: a
+  dump *and* the key still read every one of them, and call data
+  (recordings, transcripts, events, analysis, the call record) is stored as
+  it was. The `seal_secrets_at_rest` migration (`e6c2a8f4b0d9`) encrypts existing rows in one
+  transaction, and refuses to run without the key when any exist. See the
+  upgrade notes.
+
 ### Fixed
 
 - **`call.ended` is sent once** (#328). A call's pipeline finishing, the
@@ -1078,6 +1109,18 @@ and is not part of this repository's history.
   `TURNCALL_ENV` still defaults to `development`, which accepts them
   unverified, so a production or staging deployment that never set it must
   set it now (startup says so when it is unset).
+- **Set `CREDENTIAL_ENCRYPTION_KEY` before upgrading a database that holds
+  any secret** (#338): a webhook subscription, a number with a `server_url`,
+  an agent with a secret in its config, or one in an inline config on a
+  call, SMS session, eval run or scenario. The `seal_secrets_at_rest` migration (`e6c2a8f4b0d9`)
+  encrypts them under it, and without it refuses to run and changes
+  nothing. A deployment that stores project credentials has it set already.
+  From then on the key is also needed to create a webhook subscription, give
+  a number a `server_url`, save an agent with a secret, or take a call or a
+  text whose call-init answers with one. Set it once and never rotate it: rotating
+  makes every one of them unreadable, as it does credentials. Dumps and
+  backups taken before the upgrade still hold the secrets in plaintext;
+  expire them, or rotate the secrets themselves.
 - **Send the API key on the ICE trickle too** (#342). A client that sends
   `PATCH /v1/webrtc/connect` without `Authorization` now gets a `401`, and
   its call loses the candidates it trickles. pipecat's browser transport

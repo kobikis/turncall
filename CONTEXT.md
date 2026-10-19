@@ -565,7 +565,9 @@ Per-agent *static* AWS keys — off by default, rejected at agent create when di
 the deliberate escape hatch rather than the normal path (mirroring `BYOM_ENABLED`). The
 default multi-tenant route is a per-agent `role_arn` assumed from platform credentials,
 which yields temporary credentials and persists no durable secret. The flag exists because
-`config_blob` is plain JSONB: secrets are masked on read but not encrypted at rest. It
+static keys are long-lived and kept with every agent version in `config_blob`; it was
+plain JSONB when the flag was added, and since #338 its secrets are encrypted at rest under
+`CREDENTIAL_ENCRYPTION_KEY` as well as masked on read. It
 governs the *inline* path only — a [[Project credential]] is encrypted and outside agent
 config, so this flag neither gates nor describes one (ADR-0020). Read as "no static AWS
 keys here" it is a security flag misread in the unsafe direction.
@@ -586,8 +588,8 @@ STT and TTS and OpenAI one key serving four. Resolved below an agent's own inlin
 above the platform environment ("narrowest wins", the ordering the eval [[judge]] already
 uses) — at pipeline build for a call, and the same way for a text turn, a post-call analysis,
 a knowledge-base embedding and an eval run. Exists because the alternative — an `api_key` on every config
-block — writes third-party secrets into `config_blob`, the unencrypted JSONB that
-[[Agent AWS credentials]] is switched off by default to stay out of. See ADR-0020.
+block — writes third-party secrets into `config_blob`, then unencrypted JSONB (sealed since
+#338), which [[Agent AWS credentials]] is switched off by default to stay out of. See ADR-0020.
 _Avoid_: "integration" (the Builder's word for the console-side record it is projected
 from), "the project's API key" (that is a `tc_...` [[API key]], authorizing calls *to*
 TurnCall rather than out of it).

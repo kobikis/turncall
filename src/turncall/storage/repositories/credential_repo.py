@@ -8,50 +8,40 @@ import json
 from typing import Any
 from uuid import UUID
 
-from cryptography.fernet import Fernet, InvalidToken
-from sqlalchemy import delete, select
-from sqlalchemy.dialects.postgresql import insert
+from cryptography.fernet import InvalidToken
+from loguru import logger
+from sqlalchemy import Text, cast, delete, func, select, type_coerce
+from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.config.settings import Settings
+from turncall.domain.config_secrets import map_secrets
 from turncall.storage.models import (
+    AgentRow,
+    CallRow,
+    EvalRunRow,
+    EvalScenarioRow,
     PhoneNumberRow,
     ProjectCredentialRow,
     ProjectRow,
+    SmsSessionRow,
+    WebhookSubscriptionRow,
     utc_now,
 )
+from turncall.storage.sealing import PREFIX, fernet, unseal
+from turncall.storage.sealing import CredentialKeyError as CredentialKeyError
 
-
-class CredentialKeyError(RuntimeError):
-    """CREDENTIAL_ENCRYPTION_KEY is unset, malformed, or not the one used."""
-
-
-def _fernet(settings: Settings) -> Fernet:
-    key = settings.credentials.encryption_key
-    if not key:
-        raise CredentialKeyError(
-            "CREDENTIAL_ENCRYPTION_KEY is not set, so project credentials "
-            'cannot be stored or read. Generate one with `python -c "from '
-            "cryptography.fernet import Fernet; print(Fernet.generate_key()"
-            '.decode())"` and set it once — rotating it orphans every '
-            "stored credential."
-        )
-    try:
-        return Fernet(key.encode())
-    except ValueError as exc:
-        raise CredentialKeyError(
-            "CREDENTIAL_ENCRYPTION_KEY is not a valid Fernet key "
-            "(32 url-safe base64-encoded bytes)."
-        ) from exc
+# The key, its error and the cipher live with the rest of what the key seals
+# (#338); every `credential_repo.CredentialKeyError` keeps working through here.
 
 
 def encrypt(document: dict[str, Any], settings: Settings) -> str:
-    return _fernet(settings).encrypt(json.dumps(document).encode()).decode()
+    return fernet(settings).encrypt(json.dumps(document).encode()).decode()
 
 
 def decrypt(token: str, settings: Settings) -> dict[str, Any]:
     try:
-        return dict(json.loads(_fernet(settings).decrypt(token.encode())))
+        return dict(json.loads(fernet(settings).decrypt(token.encode())))
     except InvalidToken as exc:
         raise CredentialKeyError(
             "A project credential cannot be decrypted with the configured "
@@ -162,14 +152,30 @@ async def documents_for_provider(
     }
 
 
+# How many documents per column the startup check reads looking for a sealed
+# secret: a match on `"tcs1:` can be a prompt that mentions the prefix.
+SAMPLE_DOCUMENTS = 20
+
+
 async def ensure_readable(session: AsyncSession, settings: Settings) -> None:
-    """Startup check: fail closed when credentials exist and the key is unusable.
+    """Startup check: fail closed when secrets exist and the key is unusable.
 
     Raises CredentialKeyError rather than letting the first call on a project
-    with a credential discover it with a caller on the line.
+    with a credential discover it with a caller on the line. One stored value
+    per column is opened: the key reads all of them or none. Every process
+    that reads secrets runs it (the API and both workers), so each warns when
+    the key is unset.
+
+    Every column a secret is sealed in (#338) gives one sealed value, when it
+    holds any. For the documents, a row whose text matches `"tcs1:` is walked
+    to its secret paths, so a prompt that only mentions the prefix is no
+    sample; at most SAMPLE_DOCUMENTS rows per column are looked at. Read past
+    the column type, so the check sees what is stored whether or not the
+    column unseals.
     """
+    warn_if_no_key(settings)
     if settings.credentials.encryption_key:
-        _fernet(settings)  # malformed is an error whether or not rows exist
+        fernet(settings)  # malformed is an error whether or not rows exist
     # Phone numbers' own Twilio tokens are sealed with the same key.
     for column in (
         ProjectCredentialRow.ciphertext,
@@ -178,3 +184,64 @@ async def ensure_readable(session: AsyncSession, settings: Settings) -> None:
         first = await session.scalar(select(column).where(column.is_not(None)).limit(1))
         if first is not None:
             decrypt(first, settings)
+    for secret in (
+        type_coerce(WebhookSubscriptionRow.secret, Text),
+        type_coerce(PhoneNumberRow.server_url_secret, Text),
+    ):
+        first = await session.scalar(
+            select(secret).where(secret.startswith(PREFIX, autoescape=True)).limit(1)
+        )
+        if first is not None:
+            unseal(first, settings)
+    # The agent config in each: the whole blob, a call-init's inline config,
+    # an inline eval target's agent. Each is walked as an agent config.
+    for config in (
+        AgentRow.config_blob,
+        CallRow.metadata_json["dynamic_config"],
+        SmsSessionRow.metadata_json["dynamic_config"],
+        EvalRunRow.target["agent"],
+        EvalScenarioRow.default_target["agent"],
+    ):
+        document = cast(type_coerce(config, JSONB), Text)
+        sample = (
+            select(document.label("doc"))
+            .where(document.contains(f'"{PREFIX}', autoescape=True))
+            .limit(SAMPLE_DOCUMENTS)
+            .subquery()
+        )
+        found = await session.scalar(select(func.array_agg(sample.c.doc)))
+        for stored in found or ():
+            if _unseal_one(json.loads(stored), settings):
+                break
+
+
+def warn_if_no_key(settings: Settings) -> str | None:
+    """With CREDENTIAL_ENCRYPTION_KEY unset a process still starts, but every
+    write holding a secret is refused (#338), so say so before the first one
+    is. Returns the warning, or None."""
+    if settings.credentials.encryption_key:
+        return None
+    message = (
+        "credential_encryption_key_unset | CREDENTIAL_ENCRYPTION_KEY is not set: "
+        "creating a webhook subscription, giving a number a server_url, saving "
+        "a project credential or an agent with a secret, and taking a call or "
+        "a text whose call-init answers with one are refused (the API answers "
+        "503 credential_key_unavailable) until it is"
+    )
+    logger.warning(message)
+    return message
+
+
+def _unseal_one(config: Any, settings: Settings) -> bool:
+    """Open the first sealed secret in an agent config; whether it held one."""
+    sealed: list[str] = []
+
+    def collect(value: str) -> str:
+        if value.startswith(PREFIX):
+            sealed.append(value)
+        return value
+
+    map_secrets(config, collect)
+    if sealed:
+        unseal(sealed[0], settings)
+    return bool(sealed)

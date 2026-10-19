@@ -5,6 +5,18 @@ description: "Latest updates and improvements to TurnCall"
 
 <Update label="Unreleased" description="Unreleased" tags={["Feature", "Fix"]}>
 
+## ⚠️ Upgrade notes
+
+**Set `CREDENTIAL_ENCRYPTION_KEY` before upgrading a database that holds a
+secret.** The `seal_secrets_at_rest` migration (`e6c2a8f4b0d9`) encrypts webhook subscriptions'
+signing secrets, numbers' `server_url_secret` and the secrets in agent configs
+under it, and without it refuses to run and changes nothing. A deployment that
+stores project credentials has it set already. From then on, creating a webhook
+subscription, giving a number a `server_url`, saving an agent with a secret, or
+taking a call or a text whose call-init answers with one needs the key too. Set
+it once and never rotate it. Backups taken before the upgrade still hold the secrets in
+plaintext. See [Compliance](/guides/compliance#the-controls).
+
 ## Added
 
 **Search and buy numbers.** An admin key can search a Twilio account for
@@ -487,6 +499,19 @@ rows went and the uploaded files stayed in storage forever. Re-uploading a
 filename to one knowledge base also no longer overwrites the first document's
 file. Deleting a project now also removes recordings stored through Twilio's
 recording callback.
+
+## Security
+
+**Secrets are encrypted at rest.** Webhook subscriptions' signing secrets, a
+number's call-init `server_url_secret`, and an agent config's `llm.api_key`,
+static AWS keys, `server_url.secret`, tool `webhook_secret`s and MCP `headers`
+and `env` values were stored in plaintext, so a database dump or backup gave
+them away. They are now encrypted under `CREDENTIAL_ENCRYPTION_KEY`, on the
+agent and in inline configs on calls, SMS sessions and eval targets alike.
+Signatures, call-init, tools and MCP servers work as before. Without the key,
+saving one is a `503` (`credential_key_unavailable`) rather than a plaintext
+write. A dump together with the key still reads them, and call data is stored
+as it was. See [Compliance](/guides/compliance).
 
 </Update>
 
