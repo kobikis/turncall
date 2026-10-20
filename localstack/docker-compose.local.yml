@@ -107,6 +107,18 @@ services:
         [ "$$d" -gt "$$t" ] && t=$$d;
         exec watchfiles --target-type=command --filter=python
         --sigint-timeout=$$(( t + 60 )) turncall-eval-worker /app/src
+    # The image's HEALTHCHECK probes the API's /live, which a worker does not
+    # serve, so it always read unhealthy. Healthy while the worker process
+    # watchfiles runs (not watchfiles itself) is alive.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import pathlib, sys; sys.exit(not any(a.endswith(b'/turncall-eval-worker') for p in pathlib.Path('/proc').glob('[0-9]*/cmdline') for a in p.read_bytes().split(b'\\0')[1:2]))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
     env_file:
       - ../.env
     environment:
@@ -150,6 +162,18 @@ services:
       - --filter=python
       - turncall-campaign-worker
       - /app/src
+    # The image's HEALTHCHECK probes the API's /live, which a worker does not
+    # serve, so it always read unhealthy. Healthy while the worker process
+    # watchfiles runs (not watchfiles itself) is alive.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import pathlib, sys; sys.exit(not any(a.endswith(b'/turncall-campaign-worker') for p in pathlib.Path('/proc').glob('[0-9]*/cmdline') for a in p.read_bytes().split(b'\\0')[1:2]))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
     env_file:
       - ../.env
     environment:
