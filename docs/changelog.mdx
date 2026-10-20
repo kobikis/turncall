@@ -22,8 +22,8 @@ deployment that is not a development one.** Outside `TURNCALL_ENV=development`,
 a plain `http://` URL is now refused with a `422` when a webhook subscription is
 created, a number is bound or updated, or an agent is created or replaced,
 unless its host ends in `.svc` or `.svc.cluster.local` (a Kubernetes Service in
-the same cluster). Rows that already hold one keep being delivered to, and each
-delivery logs `plain_http_delivery`. Agent and number `PUT` replace the whole
+the same cluster). Rows that already hold one keep being delivered to, and
+deliveries to them log `plain_http_delivery`, at most once a minute per kind. Agent and number `PUT` replace the whole
 row, so editing one that still holds an `http://` URL is a `422` until the URL
 is fixed. A WebRTC `server_url` over plain http is now refused in staging too,
 not only in production. `ALLOW_PLAIN_HTTP_URLS=true` allows plain http

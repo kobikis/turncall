@@ -18,6 +18,7 @@ from loguru import logger
 
 from turncall.adapters.http_client import get_http_client
 from turncall.events.webhook_signing import sign_payload
+from turncall.services.outbound_url import warn_if_plain_http
 
 MAX_RETRIES = 5
 BASE_DELAY_SECONDS = 1.0
@@ -90,6 +91,14 @@ async def deliver_webhook(
     }
 
     import asyncio
+
+    # Once per subscriber per event, not per retry. The delivery goes ahead.
+    try:
+        warn_if_plain_http(
+            "webhook", url, project_id=event.project_id, event=event.event_type
+        )
+    except Exception as exc:  # a log line must never cost the delivery
+        logger.warning("plain_http_warning_failed", error=type(exc).__name__)
 
     client = get_http_client()
     for attempt in range(max_retries + 1):
