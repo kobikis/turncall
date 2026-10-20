@@ -31,6 +31,11 @@ _GEMINI_LIVE_MODEL = "gemini-3.8-live"
 _GEMINI_LIVE_VOICE = "Charon"
 
 
+# The role of the opening message per provider; one without an entry opens on
+# an empty context.
+_OPENING_ROLE = {"openai_live": "developer", "google": "user", "aws": "user"}
+
+
 def _say_first(first_message: str) -> str:
     return f'Start the conversation by saying exactly: "{first_message}"'
 
@@ -44,23 +49,30 @@ def _build_s2s_system_prompt(config: AgentConfig) -> str:
 
 
 def s2s_opening_messages(config: AgentConfig) -> list[dict[str, str]]:
-    """The messages an S2S session's context starts with (#248).
+    """The messages an S2S session's context starts with (#248, #381).
 
     gpt-live-1 is full duplex and does not act on the instructions' "start the
     conversation" until it hears speech, so a caller waiting for a greeting
     heard silence. A trailing developer message is what pipecat delivers as
     commentary once the session starts — the API's way of asking the model to
-    speak first. Realtime and Gemini Live greet from the empty run, and are
-    left alone.
+    speak first.
+
+    Gemini Live and Nova Sonic answer an empty context with nothing either.
+    Gemini's adapter hands back the system instruction as a message, so the
+    service skips the seed it would otherwise add and then finds no turn to
+    answer; Nova Sonic 2 answers only a context ending in a user message. A
+    trailing user message is the turn both answer. Realtime greets from the
+    empty run, and is left alone.
     """
-    if config.s2s.provider != "openai_live":
+    role = _OPENING_ROLE.get(config.s2s.provider)
+    if role is None:
         return []
     text = (
         _say_first(config.first_message)
         if config.first_message
         else "Greet the person on the call."  # inbound or outbound alike
     )
-    return [{"role": "developer", "content": text}]
+    return [{"role": role, "content": text}]
 
 
 def create_s2s_service(
