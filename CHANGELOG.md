@@ -329,7 +329,8 @@ and is not part of this repository's history.
     the work over, so a wait behind an earlier delegation counts. When the
     delegate ends the call, everything it says for the caller after that is
     voiced as one last reply before the hangup, where the call used to end
-    after the first. An agent with `llm.failover` on a client delegate, which
+    after the first — once the delegation finishes, or 5 seconds after the
+    first message if it is still working. An agent with `llm.failover` on a client delegate, which
     did not build on 1.13, does.
   - **Evals.** A delegate's tool calls reach scenarios as `function_call`
     events, so a scenario expecting none on an `openai_live` client delegate
@@ -804,11 +805,13 @@ and is not part of this repository's history.
 
 - **`call.ended` is prompt for a caller who hangs up while the call
   connects** (#367, ADR-0028). On pipecat 1.13 a pipeline cancelled before it
-  started never starts the recorder, so `recording_status` stayed `none`, which
-  post-call did not count as final: `call.ended` waited out its 15-second
-  recording wait. Post-call runs once the pipeline has finished, when `none`
-  can no longer change, so it is final now and `call.ended` goes out at once
-  with `recording_status: "none"`.
+  finished starting sends no frame to a processor not yet started, and no
+  `CancelFrame` to one that had: the recording was left `none` (not counted as
+  final) or `in_progress` (never ended), and `call.ended` waited out its
+  15-second recording wait. Post-call runs once the pipeline has finished, so
+  `none` is final now; the recorder ends a recording still running when it is
+  cleaned up; and its `in_progress`, cancelled mid-write, can no longer land
+  after that end. `call.ended` goes out at once.
 - **`call.ended` is sent once** (#328). A call's pipeline finishing, the
   carrier's status callback and `POST /v1/calls/{id}/end` each ended the call
   after reading it as in progress, so two arriving together each sent
