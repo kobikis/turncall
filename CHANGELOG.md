@@ -1159,8 +1159,8 @@ and is not part of this repository's history.
   in `.svc` or `.svc.cluster.local` is now a `422` when a webhook
   subscription is created, a number is bound or updated, or an agent is
   created or replaced. Rows that already hold one keep being delivered to,
-  and each delivery logs `plain_http_delivery`, so search for that event to
-  find them. Agent and number `PUT` replace the whole row, so editing one
+  and deliveries to them log `plain_http_delivery` (at most once a minute per
+  kind, naming the host), so search for that event to find them. Agent and number `PUT` replace the whole row, so editing one
   that still holds an `http://` URL is a `422` until the URL is fixed, even
   when the edit is to something else. A WebRTC `requestData.server_url` over
   plain http is now refused (`400`) in staging too, not only in production.

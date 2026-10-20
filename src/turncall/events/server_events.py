@@ -27,6 +27,7 @@ from loguru import logger
 
 from turncall.adapters.http_client import get_http_client
 from turncall.events.webhook_signing import sign_payload
+from turncall.services.outbound_url import warn_if_plain_http
 
 
 class ServerEventType(StrEnum):
@@ -89,6 +90,14 @@ async def send_server_event(
         signature, timestamp = sign_payload(body, secret)
         headers["X-TurnCall-Signature"] = signature
         headers["X-TurnCall-Timestamp"] = str(timestamp)
+
+    # The server_url may be stored or inline; either way the event is sent.
+    try:
+        warn_if_plain_http(
+            "call_init", server_url, call_id=event.call_id, event=event.event_type
+        )
+    except Exception as exc:  # a log line must never cost the delivery
+        logger.warning("plain_http_warning_failed", error=type(exc).__name__)
 
     client = get_http_client()
     try:

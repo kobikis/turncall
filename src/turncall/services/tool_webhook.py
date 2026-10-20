@@ -23,6 +23,7 @@ from turncall.config.settings import get_settings
 from turncall.domain.models import ToolDefinition
 from turncall.events.webhook_signing import sign_payload
 from turncall.services import redaction
+from turncall.services.outbound_url import warn_if_plain_http
 
 # How much of an oversized result to show the model. Enough to see what the
 # tool was answering, small enough that the cap still means something.
@@ -142,6 +143,14 @@ async def post_tool_webhook(
         signature, ts = sign_payload(body, tool_def.webhook_secret)
         headers["X-TurnCall-Signature"] = signature
         headers["X-TurnCall-Timestamp"] = str(ts)
+
+    # An inline call-init tool's URL was never checked; the call still goes.
+    try:
+        warn_if_plain_http(
+            "tool", tool_def.webhook_url, project_id=project_id, tool=tool_def.name
+        )
+    except Exception as exc:  # a log line must never cost the delivery
+        logger.warning("plain_http_warning_failed", error=type(exc).__name__)
 
     client = get_http_client()
     try:

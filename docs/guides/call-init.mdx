@@ -57,7 +57,8 @@ Outside development `server_url` must be `https://` (a number's is a `422`, a
 WebRTC one a `400`), except a Kubernetes Service in the same cluster, whose host
 ends in `.svc` or `.svc.cluster.local`. Loopback and private addresses are not
 exempt. An inline `agent` you answer with is not refused for a plain-http tool
-or MCP URL, but each delivery to one is logged. See
+or MCP URL, but deliveries to one are logged as `plain_http_delivery`, at most
+once a minute per kind and naming only the host. See
 [Compliance](/guides/compliance#the-controls).
 
 ## Your Server Receives
