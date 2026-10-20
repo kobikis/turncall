@@ -181,7 +181,10 @@ def test_a_scheme_other_than_http_is_refused_everywhere(env, field) -> None:
     # A webhook subscription used to take any scheme at all.
     env(None, allow="true")
     build, _ = FIELDS[field]
-    with pytest.raises(ValidationError, match="must be an https:// URL, not ftp://"):
+    # Where plain http is allowed, the message says so.
+    with pytest.raises(
+        ValidationError, match="must be an http:// or https:// URL, not ftp://"
+    ):
         build("ftp://receiver.example.com/hook")
 
 

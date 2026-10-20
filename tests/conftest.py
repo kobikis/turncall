@@ -51,7 +51,13 @@ def mcp_tool(name: str, schema: dict | None = None):
     return Tool(name=name, description="d", input_schema=schema or {"type": "object"})
 
 
-def mcp_settings(*, allowed_url_patterns: list[str] | None = None, **mcp_over):
+def mcp_settings(
+    *,
+    allowed_url_patterns: list[str] | None = None,
+    environment: str = "development",
+    allow_plain_http_urls: bool | None = None,
+    **mcp_over,
+):
     """A Settings stand-in for the MCP tests.
 
     Built from MCPSettings' own field definitions rather than hand-listed, so a
@@ -64,7 +70,7 @@ def mcp_settings(*, allowed_url_patterns: list[str] | None = None, **mcp_over):
     """
     from types import SimpleNamespace
 
-    from turncall.config.settings import MCPSettings
+    from turncall.config.settings import Environment, MCPSettings
 
     declared = {
         name: field.get_default(call_default_factory=True)
@@ -73,6 +79,9 @@ def mcp_settings(*, allowed_url_patterns: list[str] | None = None, **mcp_over):
     return SimpleNamespace(
         mcp=SimpleNamespace(**{**declared, **mcp_over}),
         byom=SimpleNamespace(allowed_url_patterns=allowed_url_patterns or []),
+        # What the plain-http warning reads (#340).
+        environment=Environment(environment),
+        allow_plain_http_urls=allow_plain_http_urls,
     )
 
 

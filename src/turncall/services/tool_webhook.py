@@ -144,13 +144,10 @@ async def post_tool_webhook(
         headers["X-TurnCall-Signature"] = signature
         headers["X-TurnCall-Timestamp"] = str(ts)
 
-    # An inline call-init tool's URL was never checked; the call still goes.
-    try:
-        warn_if_plain_http(
-            "tool", tool_def.webhook_url, project_id=project_id, tool=tool_def.name
-        )
-    except Exception as exc:  # a log line must never cost the delivery
-        logger.warning("plain_http_warning_failed", error=type(exc).__name__)
+    # An inline config's tool URL was never checked; the call still goes.
+    warn_if_plain_http(
+        "tool", tool_def.webhook_url, project_id=project_id, tool=tool_def.name
+    )
 
     client = get_http_client()
     try:
