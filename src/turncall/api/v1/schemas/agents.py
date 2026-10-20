@@ -11,11 +11,14 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
+    ValidationInfo,
     computed_field,
     field_serializer,
+    field_validator,
     model_validator,
 )
 
+from turncall.api.v1.schemas import outbound_url
 from turncall.api.v1.schemas.knowledge import LinkKnowledgeBaseRequest
 from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
@@ -228,6 +231,11 @@ class ToolDefinitionSchema(BaseModel):
     timeout_seconds: int = Field(default=10, ge=1, le=300)
     max_retries: int = Field(default=1, ge=0, le=5)
 
+    @field_validator("webhook_url")
+    @classmethod
+    def https_webhook_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+        return outbound_url(value, info, "webhook_url")
+
     @model_validator(mode="after")
     def validate_webhook_required_for_non_builtin(self) -> "ToolDefinitionSchema":
         if self.name not in BUILTIN_TOOL_NAMES and not self.webhook_url:
@@ -314,6 +322,11 @@ class ServerUrlConfigSchema(BaseModel):
     secret: str | None = Field(default=None, max_length=128)
     timeout_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
     events: list[str] = Field(default_factory=lambda: ["*"])
+
+    @field_validator("url")
+    @classmethod
+    def https_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+        return outbound_url(value, info, "server_url.url")
 
 
 class VoicemailBackoffSchema(BaseModel):
@@ -524,6 +537,12 @@ class MCPServerSchema(BaseModel):
         description="Only expose these tools (None = all tools)",
     )
 
+    @field_validator("url")
+    @classmethod
+    def https_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+        # Also the scheme check: anything but http(s) is refused here.
+        return outbound_url(value, info, "url")
+
     @model_validator(mode="after")
     def validate_transport_fields(self) -> "MCPServerSchema":
         if self.transport in ("http", "sse") and not self.url:
@@ -531,9 +550,6 @@ class MCPServerSchema(BaseModel):
             raise ValueError(msg)
         if self.transport == "stdio" and not self.command:
             msg = "command is required for stdio transport"
-            raise ValueError(msg)
-        if self.url and not self.url.startswith(("http://", "https://")):
-            msg = "url must start with http:// or https://"
             raise ValueError(msg)
         return self
 

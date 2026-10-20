@@ -264,6 +264,17 @@ class MCPSessionManager:
             settings.byom.allowed_url_patterns,
             label=f"MCP server '{server.name}' url",
         )
+        # Past the allowlist, so this server is connected to: the TLS rule
+        # only warns here, as an inline config's MCP server was never checked.
+        from turncall.services.outbound_url import warn_if_plain_http
+
+        warn_if_plain_http(
+            "mcp",
+            server.url or "",
+            settings=settings,
+            project_id=self.project_id,
+            server=server.name,
+        )
 
         if server.transport == "sse":
             return await self._create_sse_session(server)

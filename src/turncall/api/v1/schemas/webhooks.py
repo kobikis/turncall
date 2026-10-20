@@ -4,7 +4,9 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+
+from turncall.api.v1.schemas import outbound_url
 
 
 class CreateWebhookRequest(BaseModel):
@@ -13,6 +15,12 @@ class CreateWebhookRequest(BaseModel):
         default_factory=lambda: ["*"],
         description="Event types to subscribe to, or ['*'] for all",
     )
+
+    @field_validator("url")
+    @classmethod
+    def https_url(cls, value: str, info: ValidationInfo) -> str | None:
+        # Events carry transcripts and caller numbers (#340).
+        return outbound_url(value, info, "url")
 
 
 class UpdateWebhookRequest(BaseModel):

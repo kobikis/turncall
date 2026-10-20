@@ -27,6 +27,7 @@ from loguru import logger
 
 from turncall.adapters.http_client import get_http_client
 from turncall.events.webhook_signing import sign_payload
+from turncall.services.outbound_url import warn_if_plain_http
 
 
 class ServerEventType(StrEnum):
@@ -89,6 +90,13 @@ async def send_server_event(
         signature, timestamp = sign_payload(body, secret)
         headers["X-TurnCall-Signature"] = signature
         headers["X-TurnCall-Timestamp"] = str(timestamp)
+
+    # The server_url may be stored or inline; either way the event is sent.
+    # Call-init, the request for an agent, is counted apart from the rest.
+    kind = (
+        "call_init" if event.event_type == ServerEventType.CALL_INIT else "server_event"
+    )
+    warn_if_plain_http(kind, server_url, call_id=event.call_id, event=event.event_type)
 
     client = get_http_client()
     try:

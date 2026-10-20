@@ -123,12 +123,18 @@ An empty list allows everything, which keeps local development and a
 self-hosted server on the same docker network working. Set it in production:
 
 ```bash
-BYOM_ALLOWED_URL_PATTERNS='["https://mcp.example.com/*", "http://activepieces:80/*"]'
+BYOM_ALLOWED_URL_PATTERNS='["https://mcp.example.com/*", "http://activepieces.tools.svc.cluster.local/*"]'
 ```
 
 A server whose URL is rejected is skipped with a logged error; the rest of the
 agent's tools still load. `stdio` is gated separately by `MCP_STDIO_ENABLED`
 and `MCP_STDIO_ALLOWED_COMMANDS`.
+
+The allowlist does not lift the https rule: outside development an MCP `url`
+must be `https://`, or saving the agent is a `422`, except a Kubernetes Service
+in the same cluster, whose host ends in `.svc` or `.svc.cluster.local`.
+Loopback and private addresses are not exempt. See
+[Compliance](/guides/compliance#the-controls).
 
 ## Tool names must be unique
 

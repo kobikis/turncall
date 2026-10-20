@@ -4,9 +4,17 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
-from turncall.api.v1.schemas import E164_PATTERN
+from turncall.api.v1.schemas import E164_PATTERN, outbound_url
 from turncall.domain.carriers import (
     ASTERISK,
     CARRIERS,
@@ -98,6 +106,12 @@ class BindPhoneNumberRequest(TwilioAccountFields, CarrierField):
     sms_enabled: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("server_url")
+    @classmethod
+    def https_server_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+        # Call-init is sent the caller's number and the call's variables.
+        return outbound_url(value, info, "server_url")
+
     @model_validator(mode="after")
     def validate_routing(self) -> "BindPhoneNumberRequest":
         if self.carrier != TWILIO:
@@ -138,6 +152,12 @@ class UpdatePhoneNumberRequest(TwilioAccountFields, CarrierField):
     server_url: str | None = Field(default=None, max_length=2048)
     sms_enabled: bool = False
     metadata: dict[str, Any] | None = None
+
+    @field_validator("server_url")
+    @classmethod
+    def https_server_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+        # Call-init is sent the caller's number and the call's variables.
+        return outbound_url(value, info, "server_url")
 
     @model_validator(mode="after")
     def validate_routing(self) -> "UpdatePhoneNumberRequest":

@@ -103,15 +103,20 @@ class RefusalLog:
     Anyone who can reach a webhook can be refused as often as they like, and
     the configuration behind the refusal is already reported at startup. So a
     route's first refusal is a warning, the ones in the next `interval`
-    seconds are only counted, and the next warning says how many it left out.
-    Keyed by route template, so the keys are bounded.
+    seconds are only counted, and the next warning says how many it left out,
+    in words `note` gives. Keyed by route template, so the keys are bounded.
     """
 
     def __init__(
-        self, interval: float = 60.0, clock: Callable[[], float] = time.monotonic
+        self,
+        interval: float = 60.0,
+        clock: Callable[[], float] = time.monotonic,
+        *,
+        note: str = "more refused on this route since the last",
     ) -> None:
         self._interval = interval
         self._clock = clock
+        self._note = note
         self._last: dict[str, float] = {}
         self._suppressed: dict[str, int] = {}
 
@@ -127,7 +132,7 @@ class RefusalLog:
         self._last[route] = now
         suppressed = self._suppressed.pop(route, 0)
         if suppressed:
-            message += " ({suppressed} more refused on this route since the last)"
+            message += " ({suppressed} " + self._note + ")"
         logger.warning(
             message,
             route=route,

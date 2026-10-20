@@ -7,7 +7,6 @@ Pipecat 1.0 uses SmallWebRTCRequestHandler for signaling:
 
 from dataclasses import fields
 from typing import Any
-from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Request
@@ -37,24 +36,12 @@ from turncall.orchestrator.transport_factory import (
 )
 from turncall.services.credentials import MissingProviderKeyError
 from turncall.services.limits import admit_live_call, release_live_call
+from turncall.services.outbound_url import check_outbound_url
 from turncall.services.template_renderer import check_variables
 from turncall.storage.database import create_session_factory, get_engine
 from turncall.storage.repositories import agent_repo
 
 router = APIRouter(prefix="/webrtc", tags=["webrtc"])
-
-
-# A Kubernetes Service name: the request never leaves the cluster, and in-cluster
-# traffic is plain HTTP unless a mesh adds TLS (the builder's Agent Backends).
-_IN_CLUSTER_SUFFIXES = (".svc", ".svc.cluster.local")
-
-
-def _https_or_in_cluster(url: str) -> bool:
-    """What a production server_url must be: HTTPS, or a cluster-internal Service."""
-    if url.startswith("https://"):
-        return True
-    host = urlsplit(url).hostname or ""
-    return url.startswith("http://") and host.endswith(_IN_CLUSTER_SUFFIXES)
 
 
 # SmallWebRTCRequest.from_dict is a bare cls(**data): extra top-level keys like
@@ -73,6 +60,18 @@ _request_handler = SmallWebRTCRequestHandler(
 # (call_id, project_id), from the connection's start until it closes. A
 # renegotiation names one of these, and is that call — never a new one.
 _calls_by_pc: dict[str, tuple[UUID, UUID]] = {}
+
+
+def _is_uuid(value: object) -> bool:
+    """Whether a request's agent_id is a UUID string. Not a string at all
+    (`123`) is no: UUID() raises AttributeError on one, not ValueError."""
+    if not isinstance(value, str):
+        return False
+    try:
+        UUID(value)
+    except ValueError:
+        return False
+    return True
 
 
 async def _json_object(request: Request) -> dict[str, Any]:
@@ -151,25 +150,35 @@ async def webrtc_connect(
         )
 
     # Validate agent_id shape here so a malformed value is a clean 400, not a
-    # ValueError -> 500 when _resolve_agent does UUID(agent_id_str).
-    if agent_id_str:
-        try:
-            UUID(agent_id_str)
-        except (ValueError, TypeError) as exc:
-            raise ApiError(
-                status_code=400,
-                code=ErrorCode.VALIDATION_ERROR,
-                message=f"agent_id must be a UUID, got {agent_id_str!r}",
-            ) from exc
-
-    # Validate server_url is HTTPS in production
-    settings = get_settings()
-    if server_url and settings.is_production and not _https_or_in_cluster(server_url):
+    # 500 when _resolve_agent does UUID(agent_id_str).
+    if agent_id_str and not _is_uuid(agent_id_str):
         raise ApiError(
             status_code=400,
             code=ErrorCode.VALIDATION_ERROR,
-            message="server_url must use HTTPS in production",
+            message=f"agent_id must be a UUID, got {agent_id_str!r}",
         )
+
+    # server_url must be https:// (or an in-cluster Service) wherever plain
+    # http is not allowed (#340). Not a pydantic body, so a 400, not a 422.
+    # Checked only when it is used: an agent_id wins over it.
+    settings = get_settings()
+    if server_url and not agent_id_str:
+        if not isinstance(server_url, str):
+            raise ApiError(
+                status_code=400,
+                code=ErrorCode.VALIDATION_ERROR,
+                message="server_url must be a string",
+            )
+        try:
+            server_url = check_outbound_url(
+                server_url, label="server_url", settings=settings
+            )
+        except ValueError as exc:
+            raise ApiError(
+                status_code=400,
+                code=ErrorCode.VALIDATION_ERROR,
+                message=str(exc),
+            ) from exc
 
     # The call's id, chosen before call-init so the server is told the id the
     # call is then created with, not a stand-in nothing else ever carries.
