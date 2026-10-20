@@ -273,6 +273,14 @@ gateway, use the `openai` provider with a `base_url` (see
 is not validated on save, so one with any of these fails when its call is
 built, ending as `pipeline_error` with the reason in `error.raised`.
 
+Tools work as on OpenAI Realtime: the agent's webhook and MCP tools, the
+built-ins and a `tool`-mode knowledge base's `query_knowledge` are offered to
+Grok and run through TurnCall, so they are recorded, mocked in evals and
+redacted. `end_call` ends the call after Grok's goodbye. xAI's own
+server-side tools (web search, X search, file search, hosted MCP) are never
+sent. Knowledge bases work in `prompt` and `tool` mode; `auto` is ignored with
+a warning, as on every S2S provider.
+
 ## Gateways and third-party models
 
 The `openai` provider speaks the OpenAI-Realtime WebSocket protocol — and so do OpenAI-Realtime-compatible gateways ([Vercel AI Gateway](https://vercel.com/docs/ai-gateway), [LiteLLM](https://docs.litellm.ai/)). Set `s2s.base_url` to route the realtime connection through one; provider-prefixed models like `openai/gpt-realtime-2` then flow over the same protocol — no new provider, same pipeline.
