@@ -5,7 +5,11 @@ the voice, the instructions and the key. The socket itself is the live file's
 (`tests/live/test_live_xai_realtime.py`).
 """
 
+import asyncio
 import inspect
+from typing import Any, ClassVar
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -391,8 +395,6 @@ class TestTheS2SRulesHold:
             _schema({"delegation": {"mode": "client"}})
 
     def test_pronunciations_and_barge_in_settings_are_warned_about(self) -> None:
-        from unittest.mock import MagicMock
-
         from tests.unit.test_tts_pronunciations import METFORMIN
         from turncall.domain.models import TTSConfig
         from turncall.orchestrator.pipeline_factory import _create_s2s_pipeline
@@ -416,3 +418,105 @@ class TestTheS2SRulesHold:
         assert any("tts.pronunciations is ignored on S2S" in m for m in said), said
         assert any("interruption_enabled=false is not applied" in m for m in said)
         assert any("greeting_interruptible=false is not applied" in m for m in said)
+
+
+class TestTheSessionToolsAreTheAgents:
+    """xAI's own server-side tools (`web_search`, `x_search`, `file_search`,
+    hosted `mcp`) run outside TurnCall's tool bridge — unrecorded, unmockable,
+    unredacted — so none is ever in the session (#388). What is checked is the
+    `session.update` pipecat sends for an agent the factory built with every
+    kind of tool TurnCall has, not only the service's settings."""
+
+    _EMPTY: ClassVar[dict[str, Any]] = {"type": "object", "properties": {}}
+
+    def _wire_tools(
+        self, *, with_tools: bool, extra: dict[str, Any] | None = None
+    ) -> list[dict]:
+        """The `tools` of the `session.update` pipecat sends for an `xai`
+        agent built by the factory — with a webhook tool, a built-in, an MCP
+        tool and a `tool`-mode KB, or with none at all (where pipecat falls
+        back to the session's own tools)."""
+        from pipecat.processors.aggregators.llm_response_universal import (
+            LLMUserAggregator,
+        )
+        from pipecat.services.xai.realtime.events import SessionUpdateEvent
+        from pipecat.services.xai.realtime.llm import GrokRealtimeLLMService
+
+        from turncall.domain.models import ToolDefinition
+        from turncall.orchestrator.pipeline_factory import create_pipeline
+
+        tools = [
+            {
+                "name": "book_table",
+                "description": "Book a table.",
+                "parameters_schema": self._EMPTY,
+                "webhook_url": "https://example.com/book",
+            },
+            {
+                "name": "end_call",
+                "description": "Hang up.",
+                "parameters_schema": self._EMPTY,
+            },
+        ]
+        crm = ToolDefinition(
+            name="crm_lookup",
+            description="Look up a caller.",
+            parameters_schema=self._EMPTY,
+        )
+        kb = {
+            "knowledge_base_id": uuid4(),
+            "mode": "tool",
+            "top_k": 3,
+            "similarity_threshold": 0.3,
+            "tool_description": None,
+        }
+        config = AgentConfig.model_validate(
+            {
+                "pipeline_mode": "s2s",
+                "system_prompt": "You are a receptionist.",
+                "s2s": {"provider": "xai", "extra": extra or {}},
+                "tools": tools if with_tools else [],
+            }
+        )
+        pipeline = create_pipeline(
+            config=config,
+            transport=MagicMock(),
+            call_context=MagicMock(is_eval=False, records=False, has_database=True),
+            pipecat_settings=MagicMock(),
+            credentials=creds("sk-test", xai="xai-key"),
+            mcp_tools=[crm] if with_tools else None,
+            knowledge_base_attachments=[kb] if with_tools else None,
+        )
+        grok = next(
+            p for p in pipeline.processors if isinstance(p, GrokRealtimeLLMService)
+        )
+        user = next(p for p in pipeline.processors if isinstance(p, LLMUserAggregator))
+        grok._context = user.context
+        grok.send_client_event = AsyncMock()
+        asyncio.run(grok._send_session_update())
+        (event,) = [c.args[0] for c in grok.send_client_event.await_args_list]
+        assert isinstance(event, SessionUpdateEvent)
+        return event.model_dump(exclude_none=True)["session"].get("tools", [])
+
+    def test_only_the_agents_function_tools_are_sent(self) -> None:
+        tools = self._wire_tools(with_tools=True)
+
+        assert {t["type"] for t in tools} == {"function"}
+        assert {t["name"] for t in tools} == {
+            "book_table",
+            "end_call",
+            "crm_lookup",
+            "query_knowledge",
+        }
+
+    def test_an_agent_without_tools_sends_none(self) -> None:
+        """Where the context has no tools pipecat sends the session's own, so
+        this is where one set at build would reach xAI."""
+        assert self._wire_tools(with_tools=False) == []
+
+    def test_s2s_extra_cannot_add_one(self) -> None:
+        """`tools` in `s2s.extra` is dropped, like every key outside the
+        three the session takes from it."""
+        extra = {"tools": [{"type": "web_search"}, {"type": "x_search"}]}
+
+        assert self._wire_tools(with_tools=False, extra=extra) == []
