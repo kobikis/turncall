@@ -1,6 +1,6 @@
 """call.ended gates on the recording via a bounded poll of recording_status.
 
-It must return as soon as the status is terminal (completed/failed) and must
+It must return as soon as the status is terminal (none/completed/failed) and must
 NOT block forever if the recording is stuck.
 """
 
@@ -79,6 +79,21 @@ async def test_a_call_that_never_started_has_nothing_to_wait_for() -> None:
     """A pipeline that failed to build records nothing; call.ended should not
     sit out the whole timeout for it."""
     never = _call("none", None, started=False)
+    with (
+        patch.object(trig, "RECORDING_WAIT_TIMEOUT_S", 60),
+        patch.object(call_repo, "get_call_by_id", AsyncMock(return_value=never)),
+    ):
+        url, status = await asyncio.wait_for(
+            trig._wait_for_recording(_factory, CALL_ID), 1
+        )
+    assert (url, status) == (None, "none")
+
+
+@pytest.mark.asyncio
+async def test_a_pipeline_cancelled_before_it_started_has_nothing_to_wait_for() -> None:
+    """The caller hung up while the services connected: the recorder never saw
+    the pipeline start, so `none` is all there will ever be (#367)."""
+    never = _call("none", None, started=True)
     with (
         patch.object(trig, "RECORDING_WAIT_TIMEOUT_S", 60),
         patch.object(call_repo, "get_call_by_id", AsyncMock(return_value=never)),

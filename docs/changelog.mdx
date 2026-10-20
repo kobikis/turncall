@@ -35,7 +35,8 @@ everywhere; `false` refuses it in development too. See
 **Rebuild an image built on or after 2026-10-19.** TurnCall's pipecat requirement
 allowed any 1.x, so an install or image made from that day on got pipecat
 1.13.0, on which an S2S agent's handoff to its own LLM (delegation) breaks.
-pipecat is now held at `>=1.12.0,<1.13.0`; rebuilding picks up 1.12.
+TurnCall now runs on pipecat 1.13 and holds it at `>=1.13.0,<1.14.0`, so a new
+pipecat minor only arrives with a TurnCall release. See *pipecat 1.13* below.
 
 ## Added
 
@@ -303,6 +304,25 @@ See [Kubernetes](/guides/kubernetes#everything-in-the-cluster-development).
 
 ## Changed
 
+**pipecat 1.13.** The speech framework TurnCall runs on moves to 1.13, with
+these changes you may notice:
+
+- An `openai_live` agent's delegations run one at a time, a later one waiting
+  for the delegate to finish. A `delegation.completed` event reads `answered`
+  only when the delegate said something to the caller, and its `duration_ms`
+  includes the wait. When the delegate ends the call, everything it says after
+  that is spoken before the hangup, not just the first thing.
+- In evals, the tool calls an `openai_live` agent's delegate makes appear as
+  `function_call` events. A scenario that expected none may change its verdict.
+- Anthropic and Google models now run at their lowest reasoning setting when
+  the agent sets none, for a faster first word.
+- The voice activity detector is better at quiet voices and phone audio, and
+  may report that the caller stopped speaking a little later.
+- Fixes that come with it, among them: the agent's voice going silent for the
+  rest of a call, a Telnyx call ended by one malformed message, the end of a
+  turn cut mid-word, speech recognition that never failed over after its first
+  connection failed, and Anthropic input tokens reported doubled.
+
 **A production WebRTC `server_url` may be a Kubernetes Service.**
 `http://<name>.<namespace>.svc.cluster.local` is accepted beside HTTPS, so a
 call-init server in the same cluster works; any other `http://` URL is
@@ -362,9 +382,9 @@ the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
 
-**pipecat is held below 1.13.** pipecat 1.13.0 (2026-10-19) changed the
-backend-LLM worker an S2S agent delegates to its own LLM through, and the
-requirement allowed it. See the upgrade note above.
+**`call.ended` is prompt when the caller hangs up while the call connects.** It
+used to arrive about 15 seconds late, waiting for a recording that was never
+started. It now arrives at once, with `recording_status: "none"`.
 
 **`call.ended` arrives once, as `completed`.** When the agent hung up just as
 the carrier reported the call over, a subscriber could get `call.ended` twice,

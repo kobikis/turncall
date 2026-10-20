@@ -155,6 +155,13 @@ gpt-live-1's instructions a paragraph telling it to delegate whenever the caller
 wants something done, listing each tool's name and description — so an existing
 prompt needs no rewrite.
 
+In `client` mode pipecat adds a paragraph to the delegate's instructions too
+(after `instructions` when you set them): that it works behind a voice
+assistant, that the caller hears only the messages it starts with `>>` — the
+rest are notes gpt-live-1 keeps to itself — and how to take a request that
+arrives while it works. Delegations run one at a time: one gpt-live-1 hands
+over while the delegate is busy waits for it to finish.
+
 `end_call` and `do_not_call` work as everywhere else, in both modes: the call
 ends after gpt-live-1's goodbye. gpt-live-1 decides by itself whether to
 delegate, and it sometimes says goodbye without handing over `end_call` — the

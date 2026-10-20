@@ -39,6 +39,13 @@ _BOOK = {
 _FAILOVER = {"failover": [{"provider": "anthropic"}]}
 
 
+def _paired(prompt: str) -> str:
+    """The delegate's prompt, with pipecat's pairing instruction after it (1.13)."""
+    from pipecat.workers.llm.backend_llm_worker import BACKEND_PAIRING_INSTRUCTION
+
+    return f"{prompt}\n\n{BACKEND_PAIRING_INSTRUCTION}"
+
+
 def _schema(s2s: dict[str, Any], **config: Any) -> AgentConfigSchema:
     return AgentConfigSchema.model_validate(
         {"pipeline_mode": "s2s", "s2s": s2s, "llm": _FAILOVER, **config}
@@ -134,7 +141,7 @@ def test_the_delegate_is_a_failover_group_whose_members_all_hold_the_tools() -> 
     ]
     for member in group.llms:
         assert set(member._functions) == {"book_table"}
-        assert member._settings.system_instruction == "You are a receptionist."
+        assert member._settings.system_instruction == _paired("You are a receptionist.")
 
 
 @pytest.mark.unit
@@ -200,8 +207,10 @@ async def test_an_unusable_delegate_fails_over_and_the_delegation_is_answered() 
     from pipecat.pipeline.worker import PipelineParams, PipelineWorker
     from pipecat.processors.filters.identity_filter import IdentityFilter
     from pipecat.workers.llm.backend_llm_worker import (
+        BackendIdle,
         BackendLLMWorker,
-        _delegate_to_backend,
+        BackendOutput,
+        _BackendSession,
     )
     from pipecat.workers.runner import WorkerRunner
 
@@ -220,12 +229,24 @@ async def test_an_unusable_delegate_fails_over_and_the_delegation_is_answered() 
     await runner.add_workers(front, backend)
 
     async def _delegate() -> str:
+        # What gpt-live-1's client delegation does: attach, send the request,
+        # read the delegate's outputs until it goes idle.
+        outputs: list[str] = []
+        idle = False
         try:
-            return await _delegate_to_backend(
-                front, "delegate", request="book a table", timeout_secs=5
-            )
+            async with _BackendSession(front, "delegate", timeout_secs=5) as session:
+                await session.send("book a table")
+                async for event in session:
+                    if isinstance(event, BackendOutput):
+                        outputs.append(event.text)
+                    elif isinstance(event, BackendIdle):
+                        idle = True
+                        break
         finally:
             await front.cancel()
+        # The replayed context is one run, not two: the delegate goes idle.
+        assert idle, "the delegate never went idle after failing over"
+        return " ".join(outputs)
 
     answer = asyncio.create_task(_delegate())
     await asyncio.wait_for(runner.run(), 10)
@@ -233,3 +254,33 @@ async def test_an_unusable_delegate_fails_over_and_the_delegation_is_answered() 
     assert await answer == "backup"
     assert (primary.contexts, backup.contexts) == (1, 1)
     assert switched == [("openai/gpt-x", "anthropic/c")]
+
+
+@pytest.mark.unit
+async def test_every_member_hears_what_the_backend_worker_asks_of_its_llm() -> None:
+    """pipecat 1.13's worker takes an `LLMService` and asks it things a group
+    answers for its members: a backup the call fails over to is the same
+    delegate, so it needs the pairing instruction and the reasoning default
+    too, and a member that cannot be a backend refuses for the group."""
+    from pipecat.workers.llm.backend_llm_worker import (
+        BACKEND_PAIRING_INSTRUCTION,
+        BackendLLMWorker,
+    )
+
+    group = FailoverLLM([("a/1", _Fake("a")), ("b/2", _Fake("b"))])
+    BackendLLMWorker(llm=group, name="delegate")
+
+    for member in group.llms:
+        assert member._settings.use_provider_thinking_default is True
+        assert member._settings.system_instruction.endswith(BACKEND_PAIRING_INSTRUCTION)
+    assert group.settings.use_provider_thinking_default is True
+    group.settings.temperature = 0.2
+    assert [m._settings.temperature for m in group.llms] == [0.2, 0.2]
+    assert await group.cancel_function_calls(reason="detached") == []
+
+    refusing = _Fake("c")
+    refusing.llm_with_backend_role_objection = lambda role: f"no {role} here"
+    with pytest.raises(ValueError, match="no backend here"):
+        BackendLLMWorker(
+            llm=FailoverLLM([("a/1", _Fake("a")), ("c/3", refusing)]), name="d2"
+        )

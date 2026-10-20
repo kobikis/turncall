@@ -16,7 +16,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from pipecat.services.openai.live import llm
+from pipecat.workers.llm.backend_llm_worker import _BackendSession
 
 from turncall.config.settings import Settings
 from turncall.domain.enums import EvalKind, EvalModality
@@ -100,13 +100,15 @@ async def test_a_caller_waiting_on_the_delegate_is_not_asked(
     without the guard, 3/3 were asked "are you still there?" mid-delegation
     and hung up on the second strike before the answer arrived. With it,
     3/3 heard the hours first."""
-    real = llm._delegate_to_backend
+    # Each delegation is put to the delegate over its session (pipecat 1.13):
+    # held there, the delegation is in flight and the delegate slow.
+    real = _BackendSession.send
 
     async def _slow(*args: Any, **kwargs: Any) -> Any:
         await asyncio.sleep(9)
         return await real(*args, **kwargs)
 
-    monkeypatch.setattr(llm, "_delegate_to_backend", _slow)
+    monkeypatch.setattr(_BackendSession, "send", _slow)
     blob = {
         **_AGENT,
         "tools": [

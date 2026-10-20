@@ -15,6 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 from tests.conftest import creds
+from tests.unit.test_openai_live_delegate_failover import _paired
 from turncall.api.v1.schemas.agents import AgentConfigSchema
 from turncall.domain.models import AgentConfig, ToolDefinition
 from turncall.orchestrator.pipeline_factory import CallContext, create_pipeline
@@ -160,7 +161,9 @@ class TestBuild:
         )
         delegate_llm = live._delegation.backend.llm
         assert isinstance(delegate_llm, AnthropicLLMService)
-        assert delegate_llm._settings.system_instruction == "You are a receptionist."
+        assert delegate_llm._settings.system_instruction == _paired(
+            "You are a receptionist."
+        )
 
     def test_delegation_instructions_replace_the_delegates_prompt(self) -> None:
         live, _ = _build(
@@ -170,7 +173,7 @@ class TestBuild:
             )
         )
         delegate_llm = live._delegation.backend.llm
-        assert delegate_llm._settings.system_instruction == "Weekdays only."
+        assert delegate_llm._settings.system_instruction == _paired("Weekdays only.")
         assert live._settings.system_instruction.startswith("You are a receptionist.")
 
 

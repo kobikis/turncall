@@ -315,6 +315,41 @@ and is not part of this repository's history.
 
 ### Changed
 
+- **pipecat 1.13** (#367, ADR-0028). The requirement is now
+  `>=1.13.0,<1.14.0`: capped at the next minor, so each pipecat minor is
+  adopted on purpose rather than picked up by a fresh install (1.13.0 reached
+  every image built from 2026-10-19 and broke S2S delegation). What changes:
+  - **`openai_live` client delegation.** pipecat now runs delegations one at a
+    time, a later one waiting for the delegate to finish, and the delegate's
+    output is a stream. The delegate's system prompt gains pipecat's pairing
+    instruction (the caller hears only what it marks with `>>`).
+    `delegation.completed` reads `answered` only when the delegate said
+    something for the caller (its notes do not count; one that ended the call
+    is still `answered`), and `duration_ms` runs from when gpt-live-1 handed
+    the work over, so a wait behind an earlier delegation counts. When the
+    delegate ends the call, everything it says for the caller after that is
+    voiced as one last reply before the hangup, where the call used to end
+    after the first — once the delegation finishes, or 5 seconds after the
+    first message if it is still working. An agent with `llm.failover` on a client delegate, which
+    did not build on 1.13, does.
+  - **Evals.** A delegate's tool calls reach scenarios as `function_call`
+    events, so a scenario expecting none on an `openai_live` client delegate
+    may change its verdict. Scenarios are recorded as validated against
+    `pipecat-1.13`; 1.13 only added fields, so older ones stay valid.
+  - **Reasoning.** Anthropic and Google LLMs now send a listed model its
+    lowest reasoning setting when the agent configures none, where they left
+    it at the provider's default.
+  - **Turn detection.** Silero VAD 6.2: better on quiet voices and phone
+    audio; a stop can be reported slightly later.
+  - **Fixes that come with it**, among them: TTS that went silent for the rest
+    of a call (metrics are on in every call); a Telnyx stream ended by one
+    malformed message; a turn ended mid-word; STT (AssemblyAI, Deepgram Flux)
+    that transcribed nothing and never failed over after a failed first
+    connect; ElevenLabs keepalives and mid-turn reconnects; a hangup while
+    services connect now cancels at once; Bedrock on expiring credentials
+    from the default AWS chain (IRSA, task roles); Anthropic `prompt_tokens`
+    reported doubled, and Gemini and Grok thinking tokens left out;
+    credentials masked in error messages.
 - **Caller numbers are off spans by default** (#315, ADR-0024).
   `PIPECAT_TRACE_INCLUDE_PII` now defaults to `false`: caller numbers in an
   external tracing backend are a choice, not a default. The non-PII attributes
@@ -768,10 +803,15 @@ and is not part of this repository's history.
 
 ### Fixed
 
-- **pipecat is held below 1.13** (#367). The requirement allowed any 1.x,
-  so installs and images built from 2026-10-19 got pipecat 1.13.0, whose
-  backend-LLM worker no longer has what an S2S agent's delegation to its own
-  LLM relies on. It is now `>=1.12.0,<1.13.0` until the delegation is ported.
+- **`call.ended` is prompt for a caller who hangs up while the call
+  connects** (#367, ADR-0028). On pipecat 1.13 a pipeline cancelled before it
+  finished starting sends no frame to a processor not yet started, and no
+  `CancelFrame` to one that had: the recording was left `none` (not counted as
+  final) or `in_progress` (never ended), and `call.ended` waited out its
+  15-second recording wait. Post-call runs once the pipeline has finished, so
+  `none` is final now; the recorder ends a recording still running when it is
+  cleaned up; and its `in_progress`, cancelled mid-write, can no longer land
+  after that end. `call.ended` goes out at once.
 - **`call.ended` is sent once** (#328). A call's pipeline finishing, the
   carrier's status callback and `POST /v1/calls/{id}/end` each ended the call
   after reading it as in progress, so two arriving together each sent

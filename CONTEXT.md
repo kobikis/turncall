@@ -68,7 +68,8 @@ over transparently — ordinary phone calls exercise that path. See ADR-0016.
 **Delegation**:
 How the `openai_live` S2S [[provider]] (gpt-live-1) gets work done that needs tools or
 reasoning: the live model, which only listens and speaks, hands it to a [[delegate]] and
-voices the result in its own words. Two modes, named as OpenAI names them: *client* (the
+voices, in its own words, what the delegate marks for the caller to hear. In *client*
+mode delegations run one at a time: a later one waits for the delegate to finish. Two modes, named as OpenAI names them: *client* (the
 delegate is the agent's own `llm`) and *responses* (the delegate is an OpenAI-hosted
 model). *client* is the default for an agent with tools. No other S2S provider delegates — they call tools themselves. See #241.
 _Avoid_: "backend delegation", "tool forwarding".
@@ -78,6 +79,15 @@ The model gpt-live-1 hands work to under [[delegation]], which runs the agent's 
 the agent's own `llm` in *client* mode, an OpenAI Responses model in *responses* mode.
 _Avoid_: "backend" — taken by [[provider]] and by the builder's Agent Backends, so "the
 agent's backend" would mean three things.
+
+**Delegation outcome**:
+How one [[delegation]] ended, from the caller's side: `answered` (the [[delegate]] gave
+the caller at least one spoken message, or ended the call as asked), `timed_out`, `failed` (an error, or a run that
+spoke nothing — notes the delegate kept to itself are not an answer), or `declined` (no
+delegate to hand it to). Its duration runs from when gpt-live-1 handed the work over,
+so time spent waiting behind an earlier delegation counts. A delegation the call's end
+cut short has no outcome. _Avoid_: "completed" for `answered` — every delegation that
+has an outcome completed.
 
 **Classifier**:
 A small object that answers *typed* questions about some state — yes/no, a
@@ -343,7 +353,9 @@ no clean caller track to reprocess. _Avoid_: "mixed recording".
 Lifecycle of a call's recording: `none` (default, never started) → `in_progress`
 (capture started, set on StartFrame) → `completed` (WAV written) / `failed`, and
 `expired` once the [[retention policy]] deleted it. A value stuck at `in_progress`
-means the [[recording flush]] never ran.
+means the [[recording flush]] never ran. `none` is final once the call's pipeline has
+finished: the pipeline ended before capture started, such as a caller who hung up while
+its services were still connecting.
 
 **Recording flush**:
 The `stop_recording` → `on_audio_data` step that writes the buffered audio. It

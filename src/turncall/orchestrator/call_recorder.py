@@ -82,7 +82,21 @@ class CallRecorder(AudioBufferProcessor):
         # base class; guard so we only start (and stamp status) once.
         if isinstance(frame, StartFrame) and not self._recording:
             await self.start_recording()
-            await self._set_status(RecordingStatus.IN_PROGRESS)
+            # Only from `none`: cancelled mid-write, this can land after the
+            # cleanup flush below has already ended the recording (#367).
+            await self._set_status(
+                RecordingStatus.IN_PROGRESS, only_from=RecordingStatus.NONE
+            )
+
+    async def cleanup(self) -> None:
+        # The last chance to flush. A pipeline cancelled before it finished
+        # starting sends no CancelFrame to a processor that had started
+        # (pipecat 1.13), and a caller who hung up then has already had the
+        # disconnect flush run — before this recorder started. Without this
+        # the status stays `in_progress` and call.ended waits out its bound.
+        # stop_recording does nothing when nothing is recording.
+        await self.stop_recording()
+        await super().cleanup()
 
     async def _on_audio_data(
         self,
@@ -151,7 +165,9 @@ class CallRecorder(AudioBufferProcessor):
             url=url,
         )
 
-    async def _set_status(self, status: RecordingStatus) -> None:
+    async def _set_status(
+        self, status: RecordingStatus, *, only_from: RecordingStatus | None = None
+    ) -> None:
         if not self._call_context.records:
             return
         try:
@@ -159,7 +175,10 @@ class CallRecorder(AudioBufferProcessor):
                 from turncall.storage.repositories import call_repo
 
                 await call_repo.update_call_recording_status(
-                    session, self._call_context.call_id, status.value
+                    session,
+                    self._call_context.call_id,
+                    status.value,
+                    only_from=only_from.value if only_from else None,
                 )
                 await session.commit()
         except Exception:

@@ -243,13 +243,19 @@ async def update_call_recording_status(
     session: AsyncSession,
     call_id: UUID,
     recording_status: str,
+    *,
+    only_from: str | None = None,
 ) -> CallRow | None:
-    """Set the recording lifecycle status on a call record."""
+    """Set the recording lifecycle status on a call record.
+
+    `only_from`: change it only while it is still that value — so a write that
+    lands late cannot take back a status already moved past it.
+    """
+    stmt = update(CallRow).where(CallRow.id == call_id)
+    if only_from is not None:
+        stmt = stmt.where(CallRow.recording_status == only_from)
     result = await session.execute(
-        update(CallRow)
-        .where(CallRow.id == call_id)
-        .values(recording_status=recording_status)
-        .returning(CallRow)
+        stmt.values(recording_status=recording_status).returning(CallRow)
     )
     return result.scalar_one_or_none()
 
