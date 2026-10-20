@@ -34,6 +34,7 @@ from turncall.domain.providers import (
     STT_PROVIDERS,
     TTS_PROVIDERS,
 )
+from turncall.orchestrator import grok_voice
 from turncall.orchestrator.deepgram_flux import MIXED_FLUX_GROUP, mixes_flux
 
 
@@ -413,6 +414,7 @@ class S2SConfigSchema(BaseModel):
     base_url: str | None = Field(default=None, max_length=2048)
     # None = provider default. temperature is google-only (OpenAI Realtime GA
     # has no temperature control); max_tokens maps to max_output_tokens on openai.
+    # Grok Voice (xai) has neither, so either is a 422 there (#387).
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, ge=1, le=128000)
     extra: dict[str, Any] = Field(default_factory=dict)
@@ -444,6 +446,10 @@ class S2SConfigSchema(BaseModel):
                 "(see adr/0016). Set config.aws.region instead."
             )
             raise ValueError(msg)
+        # Ahead of the generic base_url and temperature validators, so an xai
+        # agent hears the way out (gateway mode) rather than a URL-shape rule.
+        if self.provider == "xai" and (problem := grok_voice.refusal(self)):
+            raise ValueError(problem)
         return self
 
     @model_validator(mode="after")

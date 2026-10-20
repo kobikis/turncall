@@ -202,3 +202,217 @@ class TestARefusedKeyIsNamed:
 
         bad = self._handshake(400, b'{"error":"Model grok-voice-9 not found"}')
         assert await self._category(bad) is ErrorCategory.INVALID_REQUEST
+
+
+# --- #387: what Grok lacks is refused, what it has is applied ---------------
+
+
+def _schema(s2s: dict, **agent) -> AgentConfigSchema:
+    return AgentConfigSchema.model_validate(
+        {"pipeline_mode": "s2s", "s2s": {"provider": "xai", **s2s}, **agent}
+    )
+
+
+def _inline_schema(s2s: dict) -> AgentConfigSchema:
+    from turncall.api.v1.schemas import INLINE_CONFIG
+
+    return AgentConfigSchema.model_validate(
+        {"pipeline_mode": "s2s", "s2s": {"provider": "xai", **s2s}},
+        context=INLINE_CONFIG,
+    )
+
+
+def _warnings(call) -> list[str]:
+    """Loguru does not reach caplog; test_interruption_enabled.py's idiom."""
+    from loguru import logger
+
+    said: list[str] = []
+    sink = logger.add(lambda m: said.append(str(m)), level="WARNING")
+    try:
+        call()
+    finally:
+        logger.remove(sink)
+    return said
+
+
+def _built_with_warnings(config: AgentConfig):
+    built = []
+    said = _warnings(lambda: built.append(_service(config)))
+    return built[0], said
+
+
+_LACKED = [
+    ("base_url", "wss://gateway.example.com/v1/realtime"),
+    ("temperature", 0.5),
+    ("max_tokens", 256),
+]
+
+
+class TestWhatGrokLacksIsRefused:
+    @pytest.mark.parametrize(("field", "value"), _LACKED)
+    def test_a_stored_agent_is_a_422_naming_the_field(self, field, value) -> None:
+        with pytest.raises(ValidationError, match=rf"s2s\.{field}.*xai"):
+            _schema({field: value})
+
+    @pytest.mark.parametrize(("field", "value"), _LACKED)
+    def test_an_inline_agent_is_refused_the_same(self, field, value) -> None:
+        with pytest.raises(ValidationError, match=rf"s2s\.{field}.*xai"):
+            _inline_schema({field: value})
+
+    @pytest.mark.parametrize(
+        "url", ["wss://api.x.ai/v1/realtime", "https://gateway.example.com"]
+    )
+    def test_base_url_points_to_gateway_mode_on_openai(self, url) -> None:
+        """Whatever the URL, the answer is the same: a gateway is S2S gateway
+        mode on `openai`, so an xAI key is never sent to an arbitrary URL."""
+        with pytest.raises(ValidationError) as refused:
+            _schema({"base_url": url})
+        message = str(refused.value)
+        assert "S2S gateway mode" in message
+        assert "provider 'openai'" in message
+        # Not the generic validators' messages, which would hide the way out.
+        assert "must start with ws://" not in message
+        assert "only supported for the openai provider" not in message
+
+    def test_gateway_mode_on_openai_is_untouched(self) -> None:
+        url = "wss://api.x.ai/v1/realtime"
+        schema = AgentConfigSchema.model_validate(
+            {"pipeline_mode": "s2s", "s2s": {"provider": "openai", "base_url": url}}
+        )
+        assert schema.s2s.base_url == url
+
+    @pytest.mark.parametrize(("field", "value"), _LACKED)
+    def test_a_call_init_agent_fails_at_build_rather_than_dropping_it(
+        self, field, value
+    ) -> None:
+        """A call-init inline agent is validated by the domain model, not the
+        API schema, so the build applies the same rule (the Flux precedent)."""
+        with pytest.raises(ValueError, match=rf"s2s\.{field}"):
+            _service(_agent(**{field: value}))
+
+
+class TestSessionExtras:
+    def test_reasoning_reaches_the_session(self) -> None:
+        session = _session(_service(_agent(extra={"reasoning": {"effort": "none"}})))
+        assert session.reasoning.effort == "none"
+
+    def test_replace_reaches_the_session(self) -> None:
+        replace = {"TurnCall": "Turn Call"}
+        assert _session(_service(_agent(extra={"replace": replace}))).replace == replace
+
+    def test_resumption_reaches_the_session(self) -> None:
+        session = _session(_service(_agent(extra={"resumption": {"enabled": True}})))
+        assert session.resumption.enabled is True
+
+    def test_all_three_go_out_on_the_session_update(self) -> None:
+        """What xAI is sent, not only what the settings hold."""
+        from pipecat.services.xai.realtime.events import SessionUpdateEvent
+
+        extra = {
+            "reasoning": {"effort": "high"},
+            "replace": {"SKU": "S K U"},
+            "resumption": {"enabled": True},
+        }
+        session = _session(_service(_agent(extra=extra)))
+        wire = SessionUpdateEvent(session=session).model_dump(exclude_none=True)
+        assert {k: wire["session"][k] for k in extra} == extra
+
+    def test_known_keys_are_not_warned_about(self) -> None:
+        _, said = _built_with_warnings(_agent(extra={"replace": {"a": "b"}}))
+        assert not [m for m in said if "extra" in m], said
+
+    def test_an_unknown_key_is_warned_about_and_dropped(self) -> None:
+        service, said = _built_with_warnings(_agent(extra={"speed": 1.2}))
+        assert any("xai" in m and "speed" in m for m in said), said
+        assert "speed" not in _session(service).model_dump(exclude_none=True)
+
+    def test_a_session_field_outside_the_three_is_no_back_door(self) -> None:
+        """`voice` and `tools` are session properties too, but they have their
+        own homes (s2s.voice, the agent's tools); extra cannot override them."""
+        service, said = _built_with_warnings(
+            _agent(extra={"voice": "rex", "tools": []})
+        )
+        assert _session(service).voice == "eve"
+        assert _session(service).tools is None
+        assert any("tools" in m and "voice" in m for m in said), said
+
+    def test_an_unknown_key_is_accepted_at_save(self) -> None:
+        """Logged at build and dropped, never a 422: a typo must not block a
+        save any more than it kills a call (the stt.extra rule)."""
+        assert _schema({"extra": {"speed": 1.2}}).s2s.extra == {"speed": 1.2}
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("reasoning", {"effort": "low"}),
+            ("replace", {"word": 3}),
+            ("resumption", "yes please"),
+        ],
+    )
+    def test_a_bad_value_is_a_422_naming_the_key(self, key, value) -> None:
+        with pytest.raises(ValidationError, match=rf"s2s\.extra\.{key}"):
+            _schema({"extra": {key: value}})
+
+    def test_a_bad_value_on_a_call_init_agent_fails_at_build(self) -> None:
+        with pytest.raises(ValueError, match=r"s2s\.extra\.reasoning"):
+            _service(_agent(extra={"reasoning": {"effort": "low"}}))
+
+
+class TestTurnDetection:
+    def test_server_vad_is_groks_own(self) -> None:
+        service = _service()
+        assert _session(service).turn_detection.type == "server_vad"
+        # pipecat then recommends Grok's turn frames to the aggregator.
+        assert service.service_metadata_frame().user_turn_strategies is not None
+
+    def test_pipecat_vad_turns_server_detection_off(self) -> None:
+        """pipecat's manual mode: the pipeline's VAD ends the turn, and the
+        service commits the buffer and asks for a response itself."""
+        service = _service(_agent(turn_detection="pipecat_vad"))
+        assert _session(service).turn_detection is None
+        assert service.service_metadata_frame().user_turn_strategies is None
+
+
+class TestTheS2SRulesHold:
+    @pytest.mark.parametrize(
+        ("block", "entry"),
+        [
+            ("stt", {"provider": "openai"}),
+            ("tts", {"provider": "openai", "voice": "alloy"}),
+            ("llm", {"provider": "anthropic"}),
+        ],
+    )
+    def test_failover_is_refused(self, block, entry) -> None:
+        with pytest.raises(ValidationError, match=rf"{block}\.failover"):
+            _schema({}, **{block: {"failover": [entry]}})
+
+    def test_delegation_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match=r"s2s\.delegation"):
+            _schema({"delegation": {"mode": "client"}})
+
+    def test_pronunciations_and_barge_in_settings_are_warned_about(self) -> None:
+        from unittest.mock import MagicMock
+
+        from tests.unit.test_tts_pronunciations import METFORMIN
+        from turncall.domain.models import TTSConfig
+        from turncall.orchestrator.pipeline_factory import _create_s2s_pipeline
+
+        config = _agent().model_copy(
+            update={
+                "tts": TTSConfig(pronunciations=METFORMIN),
+                "interruption_enabled": False,
+                "greeting_interruptible": False,
+            }
+        )
+        said = _warnings(
+            lambda: _create_s2s_pipeline(
+                config=config,
+                transport=MagicMock(),
+                call_context=MagicMock(),
+                pipecat_settings=MagicMock(),
+                credentials=creds(xai="xai-key"),
+            )
+        )
+        assert any("tts.pronunciations is ignored on S2S" in m for m in said), said
+        assert any("interruption_enabled=false is not applied" in m for m in said)
+        assert any("greeting_interruptible=false is not applied" in m for m in said)

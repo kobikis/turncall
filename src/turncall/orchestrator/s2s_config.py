@@ -17,6 +17,7 @@ from turncall.domain.models import (
     ToolDefinition,
     resolve_delegation,
 )
+from turncall.orchestrator import grok_voice
 from turncall.services.credentials import Credentials
 
 # S2SConfig's defaults are OpenAI Realtime's. Nova Sonic needs its own, applied
@@ -242,8 +243,10 @@ def _create_grok_realtime(config: AgentConfig, api_key: str) -> Any:
     pipecat's `xai` module, not its deprecated `grok` re-export. The audio
     format is left unset: pipecat fills PCM at the pipeline's input and output
     rates in `setup()`, so a phone call runs at 8 kHz and WebRTC at its own.
+    What the session takes from `s2s.extra`, and what is refused, is
+    `grok_voice`'s.
     """
-    from pipecat.services.xai.realtime.events import SessionProperties
+    from pipecat.services.xai.realtime.events import SessionProperties, TurnDetection
     from pipecat.services.xai.realtime.llm import GrokRealtimeLLMService
     from pipecat.utils.errors import ErrorCategory, extract_http_status_code
 
@@ -267,18 +270,35 @@ def _create_grok_realtime(config: AgentConfig, api_key: str) -> Any:
             return super()._classify_error(exception)
 
     s2s = config.s2s
+    # The API schema refuses these at save; a call-init inline agent reaches
+    # here unchecked, and dropping what it asked for would be silent (#387).
+    problem = grok_voice.refusal(s2s)
+    if problem:
+        raise ValueError(problem)
 
     # The Gemini rule: S2SConfig's OpenAI sentinels become Grok's own, and an
     # explicitly chosen model or voice reaches xAI untouched (ADR-0016).
     model = _GROK_VOICE_MODEL if s2s.model == _OPENAI_DEFAULT_MODEL else s2s.model
     voice = _GROK_VOICE_VOICE if s2s.voice == _OPENAI_DEFAULT_VOICE else s2s.voice
 
+    # pipecat_vad is pipecat's manual mode: no server VAD, so the pipeline's
+    # VAD ends the turn and the service commits the buffer itself.
+    turn_detection = (
+        None
+        if s2s.turn_detection == "pipecat_vad"
+        else TurnDetection(type="server_vad")
+    )
+
     service = _KeyAwareGrokRealtime(
         api_key=api_key,
         settings=GrokRealtimeLLMService.Settings(
             model=model,
             system_instruction=_build_s2s_system_prompt(config) or None,
-            session_properties=SessionProperties(voice=voice),
+            session_properties=SessionProperties(
+                voice=voice,
+                turn_detection=turn_detection,
+                **grok_voice.session_extras(s2s.extra),
+            ),
         ),
     )
 

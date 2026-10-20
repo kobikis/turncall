@@ -78,7 +78,7 @@ Set `pipeline_mode: "s2s"` in the agent config. The `stt`, `llm`, and `tts` fiel
 | `voice` | No | Voice name (default: `alloy` / `Charon` / `matthew` / `eve`) |
 | `turn_detection` | No | `server_vad` (default) or `pipecat_vad` |
 | `base_url` | No | `wss://` endpoint of an OpenAI-Realtime-compatible gateway (`openai` provider only — **rejected** on every other). See [Gateways](#gateways-and-third-party-models) |
-| `extra` | No | Provider passthrough. On `aws`: `endpointing_sensitivity` (`LOW`/`MEDIUM`/`HIGH`) |
+| `extra` | No | Provider passthrough. On `aws`: `endpointing_sensitivity` (`LOW`/`MEDIUM`/`HIGH`). On `xai`: `reasoning`, `replace`, `resumption` (see [Grok Voice](#grok-voice)) |
 
 ### Voices
 
@@ -236,6 +236,42 @@ one) is sent as written, for xAI to accept or refuse.
 ```json
 "s2s": {"provider": "xai"}
 ```
+
+`turn_detection: "server_vad"` (the default) leaves turn-taking to Grok's own
+voice activity detection. `pipecat_vad` turns it off: TurnCall's VAD decides
+when the caller has finished, and the turn is handed to Grok then.
+
+Three of Grok's session settings have no field of their own and go in
+`s2s.extra`, in xAI's shape:
+
+```json
+"s2s": {
+  "provider": "xai",
+  "extra": {
+    "reasoning": {"effort": "none"},
+    "replace": {"TurnCall": "Turn Call"},
+    "resumption": {"enabled": true}
+  }
+}
+```
+
+| Key | What it does |
+|---|---|
+| `reasoning` | `{"effort": "high"}` (xAI's default) or `{"effort": "none"}`, which answers faster |
+| `replace` | Words to say differently: each key is spoken as its value. The transcript keeps the original |
+| `resumption` | `{"enabled": true}` keeps the conversation's context across a reconnect |
+
+A value Grok would not take (`{"effort": "low"}`) is a 422 naming the key. Any
+other key in `extra` is logged as a warning and ignored, so a typo never stops
+a call.
+
+Refused with a 422, because Grok's session has no such setting:
+`s2s.temperature`, `s2s.max_tokens`, and `s2s.base_url` — the `xai` provider
+always connects to xAI with the `xai` account's key. To reach Grok through a
+gateway, use the `openai` provider with a `base_url` (see
+[Gateways](#gateways-and-third-party-models)). An inline agent from call-init
+is not validated on save, so one with any of these fails when its call is
+built, ending as `pipeline_error` with the reason in `error.raised`.
 
 ## Gateways and third-party models
 
