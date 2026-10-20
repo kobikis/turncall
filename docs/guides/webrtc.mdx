@@ -110,10 +110,13 @@ Pass `server_url` in `requestData` for pre-call initialization:
 }
 ```
 
-See [Pre-Call Init](/guides/call-init) for response format. In production
-`server_url` must be HTTPS, or a Kubernetes Service in the same cluster
+See [Pre-Call Init](/guides/call-init) for response format. Outside
+development (`TURNCALL_ENV` other than `development`, staging included)
+`server_url` must be `https://`, or a Kubernetes Service in the same cluster
 (`http://<name>.<namespace>.svc.cluster.local/...`), whose traffic never leaves
-it.
+it; any other `http://` URL is refused with a `400`. `ALLOW_PLAIN_HTTP_URLS`
+overrides the default: `true` allows plain http everywhere, `false` refuses it
+in development too.
 
 ## Template Variables
 

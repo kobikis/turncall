@@ -17,6 +17,19 @@ taking a call or a text whose call-init answers with one needs the key too. Set
 it once and never rotate it. Backups taken before the upgrade still hold the secrets in
 plaintext. See [Compliance](/guides/compliance#the-controls).
 
+**Move outbound URLs to `https://`, or set `ALLOW_PLAIN_HTTP_URLS`, on any
+deployment that is not a development one.** Outside `TURNCALL_ENV=development`,
+a plain `http://` URL is now refused with a `422` when a webhook subscription is
+created, a number is bound or updated, or an agent is created or replaced,
+unless its host ends in `.svc` or `.svc.cluster.local` (a Kubernetes Service in
+the same cluster). Rows that already hold one keep being delivered to, and each
+delivery logs `plain_http_delivery`. Agent and number `PUT` replace the whole
+row, so editing one that still holds an `http://` URL is a `422` until the URL
+is fixed. A WebRTC `server_url` over plain http is now refused in staging too,
+not only in production. `ALLOW_PLAIN_HTTP_URLS=true` allows plain http
+everywhere; `false` refuses it in development too. See
+[Compliance](/guides/compliance#the-controls).
+
 ## Added
 
 **Search and buy numbers.** An admin key can search a Twilio account for
@@ -285,8 +298,8 @@ See [Kubernetes](/guides/kubernetes#everything-in-the-cluster-development).
 
 **A production WebRTC `server_url` may be a Kubernetes Service.**
 `http://<name>.<namespace>.svc.cluster.local` is accepted beside HTTPS, so a
-call-init server in the same cluster works; any other `http://` URL is still
-refused in production. See [WebRTC](/guides/webrtc#dynamic-routing).
+call-init server in the same cluster works; any other `http://` URL is
+refused outside development. See [WebRTC](/guides/webrtc#dynamic-routing).
 
 **A phone number's carrier is `carrier`.** Phone-number reads carry
 `carrier`; `provider` keeps the same value and is still accepted on a write,
@@ -512,6 +525,17 @@ Signatures, call-init, tools and MCP servers work as before. Without the key,
 saving one is a `503` (`credential_key_unavailable`) rather than a plaintext
 write. A dump together with the key still reads them, and call data is stored
 as it was. See [Compliance](/guides/compliance).
+
+**Outbound URLs must be `https://` outside development.** Webhook
+subscriptions, a number's call-init `server_url`, and an agent's
+`server_url.url`, tool `webhook_url`s and MCP server `url`s took `http://` in
+every environment, so call data could cross the network in cleartext. Plain
+http is now accepted only when `TURNCALL_ENV` is `development`, or anywhere
+with `ALLOW_PLAIN_HTTP_URLS=true`; elsewhere, staging included, it is a `422`.
+In-cluster `*.svc` hosts are allowed. Loopback and private addresses are not.
+An inline agent from a call-init answer is not refused, but its plain-http
+deliveries are logged, as are those to URLs stored before the upgrade. See
+[Compliance](/guides/compliance).
 
 </Update>
 
