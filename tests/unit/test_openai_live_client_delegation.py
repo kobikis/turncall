@@ -30,6 +30,13 @@ _BOOK = {
 }
 
 
+def _paired(prompt: str) -> str:
+    """The delegate's prompt, with pipecat's pairing instruction after it (1.13)."""
+    from pipecat.workers.llm.backend_llm_worker import BACKEND_PAIRING_INSTRUCTION
+
+    return f"{prompt}\n\n{BACKEND_PAIRING_INSTRUCTION}"
+
+
 def _builtin(name: str) -> dict[str, Any]:
     return {"name": name, "description": f"{name}.", "parameters_schema": _EMPTY}
 
@@ -160,7 +167,9 @@ class TestBuild:
         )
         delegate_llm = live._delegation.backend.llm
         assert isinstance(delegate_llm, AnthropicLLMService)
-        assert delegate_llm._settings.system_instruction == "You are a receptionist."
+        assert delegate_llm._settings.system_instruction == _paired(
+            "You are a receptionist."
+        )
 
     def test_delegation_instructions_replace_the_delegates_prompt(self) -> None:
         live, _ = _build(
@@ -170,7 +179,7 @@ class TestBuild:
             )
         )
         delegate_llm = live._delegation.backend.llm
-        assert delegate_llm._settings.system_instruction == "Weekdays only."
+        assert delegate_llm._settings.system_instruction == _paired("Weekdays only.")
         assert live._settings.system_instruction.startswith("You are a receptionist.")
 
 

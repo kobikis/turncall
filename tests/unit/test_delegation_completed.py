@@ -1,8 +1,9 @@
 """`delegation.completed`: one stored call event per gpt-live-1 delegation (#247).
 
 Driven at the built live service: a real `create_pipeline`, then the server
-events gpt-live-1 would send. The backend job is pipecat's private
-`_delegate_to_backend`, faked per outcome; the write is the call-event store.
+events gpt-live-1 would send. In client mode the delegate's side is what
+pipecat 1.13's backend session reports — outputs, idle, an error — fed to the
+service as the session would; the write is the call-event store.
 """
 
 import asyncio
@@ -13,8 +14,12 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pipecat.pipeline.job_context import JobError
 from pipecat.services.openai.live import events
+from pipecat.workers.llm.backend_llm_worker import (
+    BackendError,
+    BackendIdle,
+    BackendOutput,
+)
 
 from tests.conftest import creds
 from turncall.domain.enums import CallEventType
@@ -29,7 +34,6 @@ _BOOK = {
     "parameters_schema": _EMPTY,
     "webhook_url": "https://example.com/book",
 }
-_LLM_MODULE = "pipecat.services.openai.live.llm"
 
 
 def _call_context(**overrides: Any) -> CallContext:
@@ -63,47 +67,54 @@ def _live(s2s: dict[str, Any], call_context: CallContext, **config: Any) -> Any:
     live.send_client_event = AsyncMock()
     live.push_frame = AsyncMock()
     live._setup = MagicMock()
+    # The delegate's session, attached: what each delegation is sent over.
+    live._backend_session = SimpleNamespace(send=AsyncMock(return_value="idle"))
+    live._backend_attached.set()
+    live._attach_backend = AsyncMock()
+    live._detach_backend = AsyncMock()
+    # No task manager outside a running pipeline: plain asyncio tasks.
+    live.tasks = []
+
+    def _create_task(coro: Any, name: str | None = None, *_: Any) -> Any:
+        live.tasks.append(asyncio.ensure_future(coro))
+        return live.tasks[-1]
+
+    async def _cancel_task(task: Any, *_: Any) -> None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    live.create_task = _create_task
+    live.cancel_task = _cancel_task
     return live
 
 
-async def _delegate(live: Any, target: str = "client", id: str = "d1") -> None:
-    tasks: list[asyncio.Task[Any]] = []
-
-    def _create_task(coro: Any, name: str | None = None) -> asyncio.Task[Any]:
-        tasks.append(asyncio.ensure_future(coro))
-        return tasks[-1]
-
-    with patch.object(live, "create_task", new=_create_task):
-        await live._handle_server_event(
-            events.SessionDelegationCreatedEvent(
-                type="session.delegation.created",
-                delegation=events.DelegationMetadata(id=id, target=target),
-            )
+async def _created(live: Any, target: str = "client", id: str = "d1") -> None:
+    await live._handle_server_event(
+        events.SessionDelegationCreatedEvent(
+            type="session.delegation.created",
+            delegation=events.DelegationMetadata(id=id, target=target),
         )
-    await asyncio.gather(*tasks)
+    )
+
+
+async def _settle(live: Any) -> None:
+    # A timeout task fires, or is cancelled by the delegation ending first.
+    await asyncio.gather(*live.tasks, return_exceptions=True)
     # Event handlers run as tasks of their own.
     await asyncio.sleep(0)
 
 
-def _answers(text: str) -> Any:
-    async def _backend(*_: Any, on_update: Any, **__: Any) -> str:
-        from pipecat.workers.llm.backend_llm_worker import BackendOutput
-
-        await on_update(BackendOutput(text=text))
-        return text
-
-    return _backend
-
-
-def _raises(error: Exception) -> Any:
-    async def _backend(*_: Any, **__: Any) -> str:
-        raise error
-
-    return _backend
+async def _delegate(
+    live: Any, *reported: Any, target: str = "client", id: str = "d1"
+) -> None:
+    """gpt-live-1 hands work over; the delegate's session reports `reported`."""
+    await _created(live, target, id)
+    for event in reported:
+        await live._on_backend_event(event)
+    await _settle(live)
 
 
-async def _silent(*_: Any, **__: Any) -> str:
-    return ""
+_ANSWERS = (BackendOutput(text="Booked for 8pm."), BackendIdle())
 
 
 @pytest.fixture
@@ -119,25 +130,50 @@ def _payloads(store: AsyncMock) -> list[dict[str, Any]]:
     return [c.args[2] for c in store.await_args_list]
 
 
+async def _times_out(live: Any) -> None:
+    live._delegation.timeout_secs = 0
+    await _delegate(live)
+
+
+async def _send_fails(live: Any) -> None:
+    live._backend_session.send.side_effect = RuntimeError("boom")
+    await _delegate(live)
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("backend", "outcome"),
+    ("drive", "outcome"),
     [
-        (_answers("Booked for 8pm."), "answered"),
-        (_raises(JobError("timeout")), "timed_out"),
-        (_raises(JobError("worker 'delegate' errored")), "failed"),
-        (_raises(RuntimeError("boom")), "failed"),
-        (_silent, "failed"),
+        (lambda live: _delegate(live, *_ANSWERS), "answered"),
+        (_times_out, "timed_out"),
+        (lambda live: _delegate(live, BackendError(error="boom")), "failed"),
+        (_send_fails, "failed"),
+        # Nothing for the caller: idle with no output, or with notes only.
+        (lambda live: _delegate(live, BackendIdle()), "failed"),
+        (
+            lambda live: _delegate(
+                live,
+                BackendOutput(text="Table 4 is free.", prefers_spoken=False),
+                BackendIdle(),
+            ),
+            "failed",
+        ),
+        # An error after it answered still reads as one.
+        (
+            lambda live: _delegate(
+                live, BackendOutput(text="Booking now."), BackendError(error="boom")
+            ),
+            "failed",
+        ),
     ],
 )
 async def test_client_mode_records_each_outcome(
-    stored: AsyncMock, backend: Any, outcome: str
+    stored: AsyncMock, drive: Any, outcome: str
 ) -> None:
     call_context = _call_context()
     live = _live({}, call_context, tools=[_BOOK])
-    with patch(f"{_LLM_MODULE}._delegate_to_backend", new=backend):
-        await _delegate(live)
+    await drive(live)
 
     [payload] = _payloads(stored)
     assert payload["mode"] == "client"
@@ -150,10 +186,47 @@ async def test_client_mode_records_each_outcome(
 @pytest.mark.asyncio
 async def test_one_event_per_delegation(stored: AsyncMock) -> None:
     live = _live({}, _call_context(), tools=[_BOOK])
-    with patch(f"{_LLM_MODULE}._delegate_to_backend", new=_answers("ok")):
-        await _delegate(live, id="d1")
-        await _delegate(live, id="d2")
+    await _delegate(live, *_ANSWERS, id="d1")
+    await _delegate(live, *_ANSWERS, id="d2")
     assert [p["outcome"] for p in _payloads(stored)] == ["answered", "answered"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_waiting_delegation_counts_its_wait(stored: AsyncMock) -> None:
+    """pipecat runs one at a time; the second waits for the delegate to go
+    idle, and the caller waited all along: its duration runs from creation."""
+    live = _live({}, _call_context(), tools=[_BOOK])
+    clock = iter([0.0, 1.0, 5.0, 8.0])  # d1 and d2 created, d1 ends, d2 ends
+    with patch.object(
+        delegation_events, "time", SimpleNamespace(monotonic=lambda: next(clock))
+    ):
+        await _created(live, id="d1")
+        await _created(live, id="d2")
+        assert live._backend_session.send.await_count == 1
+        await live._on_backend_event(BackendOutput(text="Booked."))
+        await live._on_backend_event(BackendIdle())
+        assert live._backend_session.send.await_count == 2
+        await live._on_backend_event(BackendOutput(text="And the cake."))
+        await live._on_backend_event(BackendIdle())
+        await _settle(live)
+
+    assert [p["duration_ms"] for p in _payloads(stored)] == [5000, 7000]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_delegation_the_call_drops_has_no_outcome(stored: AsyncMock) -> None:
+    """The session ending takes the running and the waiting with it: neither
+    ended, the call did."""
+    live = _live({}, _call_context(), tools=[_BOOK])
+    await _created(live, id="d1")
+    await _created(live, id="d2")
+    await live._abandon_delegations()
+    await _settle(live)
+
+    stored.assert_not_awaited()
+    assert not live.delegating
 
 
 @pytest.mark.unit
@@ -278,30 +351,15 @@ async def test_a_call_pipecat_skips_does_not_hold_the_delegation_open(
 @pytest.mark.asyncio
 async def test_delegating_while_a_client_delegate_works(stored: AsyncMock) -> None:
     """The idle guard holds off while it is true (#257): the caller is waiting
-    on the delegate, not gone."""
+    on the delegate, not gone — the delegation running and the one waiting."""
     live = _live({}, _call_context(), tools=[_BOOK])
-    release = asyncio.Event()
-
-    async def _working(*_: Any, **__: Any) -> str:
-        await release.wait()
-        return ""
-
-    with (
-        patch(f"{_LLM_MODULE}._delegate_to_backend", new=_working),
-        patch.object(
-            live, "create_task", new=lambda coro, name=None: asyncio.ensure_future(coro)
-        ),
-    ):
-        await live._handle_server_event(
-            events.SessionDelegationCreatedEvent(
-                type="session.delegation.created",
-                delegation=events.DelegationMetadata(id="d1", target="client"),
-            )
-        )
-        assert live.delegating
-        release.set()
-        await live._delegation_tasks["d1"]
-    await asyncio.sleep(0)
+    await _created(live, id="d1")
+    await _created(live, id="d2")
+    assert live.delegating
+    await live._on_backend_event(BackendIdle())
+    assert live.delegating
+    await live._on_backend_event(BackendIdle())
+    await _settle(live)
     assert not live.delegating
 
 
@@ -320,8 +378,7 @@ async def test_delegating_until_the_final_response(stored: AsyncMock) -> None:
 @pytest.mark.asyncio
 async def test_none_in_an_eval(stored: AsyncMock) -> None:
     live = _live({}, _call_context(eval_run_id=uuid.uuid4()), tools=[_BOOK])
-    with patch(f"{_LLM_MODULE}._delegate_to_backend", new=_answers("ok")):
-        await _delegate(live)
+    await _delegate(live, *_ANSWERS)
     stored.assert_not_awaited()
 
 
@@ -338,7 +395,6 @@ async def test_never_dispatched_as_a_webhook() -> None:
     call_context.session_factory.return_value.__aexit__ = AsyncMock(return_value=False)
     live = _live({}, call_context, tools=[_BOOK])
     with (
-        patch(f"{_LLM_MODULE}._delegate_to_backend", new=_answers("ok")),
         patch(
             "turncall.storage.repositories.call_repo.get_next_sequence_number",
             new=AsyncMock(return_value=1),
@@ -349,7 +405,7 @@ async def test_never_dispatched_as_a_webhook() -> None:
         ) as create,
         patch("turncall.events.dispatcher.dispatch_event", new=AsyncMock()) as dispatch,
     ):
-        await _delegate(live)
+        await _delegate(live, *_ANSWERS)
         await asyncio.sleep(0)
     assert create.await_args.kwargs["event_type"] == CallEventType.DELEGATION_COMPLETED
     assert create.await_args.kwargs["payload"]["outcome"] == "answered"
@@ -363,14 +419,26 @@ def test_pipecats_private_delegation_surface_is_still_there() -> None:
     from pipecat.services.openai.live import llm
 
     for name in (
-        "_run_client_delegation",
+        "_finish_delegation",
+        "_abandon_delegations",
+        "_on_backend_event",
         "_handle_evt_delegation_created",
         "_handle_evt_response",
         "_send_context_append",
     ):
         assert hasattr(llm.OpenAILiveLLMService, name), name
-    assert callable(llm._delegate_to_backend)
+    assert {"id", "answered", "timeout_task"} <= set(
+        llm._LiveDelegation.__dataclass_fields__
+    )
     assert "call_ids" in llm._PendingResponse.__dataclass_fields__
-    source = inspect.getsource(llm.OpenAILiveLLMService._run_client_delegation)
+    source = inspect.getsource(llm.OpenAILiveLLMService)
     assert delegation_events.NO_OUTPUT in source
     assert delegation_events.NOT_COMPLETED in source  # #262
+    # How a timeout is told apart, and how an error is tied to its delegation.
+    timeout = inspect.getsource(llm.OpenAILiveLLMService._delegation_timeout)
+    assert timeout.index("current.timeout_task = None") < timeout.index(
+        "self._finish_delegation()"
+    )
+    assert 'f"Delegation {current.id} failed' in inspect.getsource(
+        llm.OpenAILiveLLMService._on_backend_event
+    )

@@ -34,7 +34,9 @@ from turncall.domain.enums import EvalKind, EvalModality
 # of which parser accepted them. 1.12 changed no field of either scenario
 # dataclass (tests/unit/test_pipecat_parser_contract.py), so a 1.11 row is
 # still valid; the version says when it was checked, not whether it works.
-SCHEMA_VERSION = "pipecat-1.12"
+# 1.13 only added to them (an expectation's `check_from`, a user turn of text
+# and `pause_ms` parts), so 1.11 and 1.12 rows stay valid too.
+SCHEMA_VERSION = "pipecat-1.13"
 
 # Stands in for the file path pipecat's parsers name in their errors.
 _STORED = Path("<stored scenario>")

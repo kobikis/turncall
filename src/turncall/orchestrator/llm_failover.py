@@ -54,9 +54,51 @@ class FailoverLLM(FailoverGroup, LLMSwitcher[ServiceSwitcherStrategyFailover]):
             self._last_context = frame
         await super().process_frame(frame, direction)
 
+    # --- What pipecat's backend worker asks of its LLM (1.13, #367) ---
+    # An `openai_live` client delegate is the agent's own llm, so with backups
+    # it is this group. `BackendLLMWorker` takes an `LLMService` and, since
+    # 1.13, asks it whether it can be a backend, sets its reasoning default,
+    # appends the pairing instruction and cancels its calls when let go of.
+    # Each is a member's to answer, and every member must hear it: a backup
+    # the call fails over to is the same delegate.
+
+    def llm_with_backend_role_objection(self, role: Any) -> str | None:
+        objections = (llm.llm_with_backend_role_objection(role) for llm in self.llms)
+        return next((o for o in objections if o), None)
+
+    @property
+    def settings(self) -> _MemberSettings:
+        return _MemberSettings(self)
+
+    def append_system_instruction(self, instruction: str) -> None:
+        for llm in self.llms:
+            llm.append_system_instruction(instruction)
+
+    async def cancel_function_calls(self, *, reason: str = "cancelled") -> list[Any]:
+        cancelled: list[Any] = []
+        for llm in self.llms:
+            cancelled += await llm.cancel_function_calls(reason=reason)
+        return cancelled
+
     async def _replay(self, service: Any) -> None:
         if self._last_context is not None:
             # ponytail: a provider that streamed half a reply before dying gets
             # it said again in full; the failures this is for (401, unknown
             # model, outage) die before the first token.
             await self.queue_frame(replace(self._last_context))
+
+
+class _MemberSettings:
+    """A group's settings: read from the member answering now, updated on all."""
+
+    def __init__(self, group: FailoverLLM) -> None:
+        self._group = group
+
+    def apply_update(self, delta: Any) -> dict[str, Any]:
+        changed: dict[str, Any] = {}
+        for llm in self._group.llms:
+            changed |= llm.settings.apply_update(delta)
+        return changed
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._group.active_llm.settings, name)
