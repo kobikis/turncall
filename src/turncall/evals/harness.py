@@ -58,8 +58,8 @@ class PipelineFailed(RuntimeError):
     `ProcessorUnusablePolicy.END` ends such a pipeline gracefully rather than
     raising, the harness times out with nothing to match, and the run scores
     `failed`. That is exactly right and is the feature's headline use case:
-    evals-design.md section 1 justifies the whole thing on #63, #64 and #65,
-    all of which are provider-rejects-at-connect. Scoring those `errored` would
+    evals exist because of #63, #64 and #65, all of which are
+    provider-rejects-at-connect (ADR-0018). Scoring those `errored` would
     render them grey as "couldn't run", keep them out of every rate, and let
     the regression through — the opposite of what this is for.
     """
