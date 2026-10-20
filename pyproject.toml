@@ -78,6 +78,12 @@ dependencies = [
     # rewrites internals TurnCall reaches into — 1.13 broke S2S delegation
     # (#367) and ended a call cancelled mid-setup without a recording status.
     "pipecat-ai[openai,deepgram,elevenlabs,silero,webrtc,webrtc-video,local-smart-turn,google,anthropic,cartesia,assemblyai,heygen,tavus,aws-nova-sonic,tracing,mcp]>=1.13.0,<1.14.0",
+    # Both arrive through pipecat's local-smart-turn (same ranges). Declared
+    # here only so [tool.uv.sources] below can take them from PyTorch's CPU
+    # index: PyPI's Linux torch pulls ~2.5GB of CUDA libraries nothing here
+    # runs, and uv's sources apply to direct dependencies alone (#377).
+    "torch>=2.5.0,<3",
+    "torchaudio>=2.5.0,<3",
     # OTLP span exporter (pipecat[tracing] ships otel api/sdk but not an exporter).
     # See ADR-0010.
     "opentelemetry-exporter-otlp>=1.43.0",
@@ -160,6 +166,19 @@ dev = [
 # direct references would otherwise apply.
 [tool.hatch.metadata]
 allow-direct-references = true
+
+# CPU-only torch everywhere uv.lock is installed: the image, CI and `uv sync`.
+# `explicit`: nothing else is ever taken from this index. It carries macOS
+# wheels too, so the lock needs no platform marker. pip ignores this table,
+# so a plain `pip install -e .` on Linux still gets PyPI's CUDA build.
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/turncall"]
