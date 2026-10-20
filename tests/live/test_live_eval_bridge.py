@@ -298,7 +298,7 @@ async def test_a_provider_that_refuses_the_model_fails_the_run(
 ) -> None:
     """The regression class the whole feature is justified on.
 
-    evals-design.md section 1 rests the case for evals on #63, #64 and #65 --
+    The case for evals rests on #63, #64 and #65 (ADR-0018) --
     each a provider name or model name reaching the wrong service and being
     rejected at connect. For an eval to catch those, such a run must score
     **failed**, loudly, in the pass rate.

@@ -740,6 +740,10 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **pipecat is held below 1.13** (#367). The requirement allowed any 1.x,
+  so installs and images built from 2026-10-19 got pipecat 1.13.0, whose
+  backend-LLM worker no longer has what an S2S agent's delegation to its own
+  LLM relies on. It is now `>=1.12.0,<1.13.0` until the delegation is ported.
 - **`call.ended` is sent once** (#328). A call's pipeline finishing, the
   carrier's status callback and `POST /v1/calls/{id}/end` each ended the call
   after reading it as in progress, so two arriving together each sent

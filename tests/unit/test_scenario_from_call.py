@@ -120,7 +120,7 @@ class TestTurns:
     def test_the_expectation_asserts_content_not_merely_the_event(self) -> None:
         """After a provider 404 pipecat still emits an empty `llm_response`, so
         a bare `{"event": "llm_response"}` can pass with the LLM entirely
-        broken (evals-design §1). A draft that asserts nothing is worse than no
+        broken (#63-#65). A draft that asserts nothing is worse than no
         draft."""
         draft = convert.build_scenario(
             transcript=[

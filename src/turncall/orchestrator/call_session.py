@@ -195,7 +195,7 @@ class CallSession:
         # event-loop stalls behind transient mid-word audio cut-outs, and to feed
         # the trace spans' TTFB/token attributes.
         observers, span_attrs = await self._build_telemetry()
-        # The other half of the eval RTVI bridge (evals-design §9.7). Appended
+        # The other half of the eval RTVI bridge (ADR-0018). Appended
         # after the telemetry observers and outside PIPECAT_ENABLE_OBSERVERS:
         # this one is the protocol, not instrumentation, and the harness's
         # handshake configures it. Empty on every live call.

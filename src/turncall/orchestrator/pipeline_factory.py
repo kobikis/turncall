@@ -1319,7 +1319,7 @@ def _create_avatar_service(avatar: Any, credentials: Credentials) -> Any:
     return None
 
 
-# --- The RTVI server half, eval path only (evals-design §9.7) ---
+# --- The RTVI server half, eval path only (ADR-0018) ---
 #
 # Pipecat's eval harness is an RTVI *client*. The server half is not the
 # transport: it is an `RTVIProcessor` in the bot's pipeline plus an
