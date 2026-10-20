@@ -526,6 +526,15 @@ class Settings(BaseSettings):
     )
     debug: bool = Field(default=False, alias="DEBUG")
 
+    # Plain http:// outbound URLs (#340): webhook subscriptions, call-init,
+    # tool webhooks and MCP servers. Unset (the default) allows them in
+    # development only, so staging and production need https:// (or an
+    # in-cluster *.svc host). True allows them everywhere; false refuses them
+    # in development too. See services/outbound_url.py.
+    allow_plain_http_urls: bool | None = Field(
+        default=None, alias="ALLOW_PLAIN_HTTP_URLS"
+    )
+
     # Soft-deleted projects (ADR-0011) are hard-deleted by the purge job this
     # many days after deletion. 0 disables the purge (soft-deletes kept forever).
     project_purge_retention_days: int = Field(
@@ -541,11 +550,12 @@ class Settings(BaseSettings):
         default=None, ge=1, le=36500, alias="AUDIT_LOG_RETENTION_DAYS"
     )
 
-    @field_validator("audit_log_retention_days", mode="before")
+    @field_validator("audit_log_retention_days", "allow_plain_http_urls", mode="before")
     @classmethod
     def _blank_is_unset(cls, value: object) -> object:
-        """`AUDIT_LOG_RETENTION_DAYS=""`, as a template renders a value left
-        out, is unset (kept for good), not a failed boot."""
+        """`AUDIT_LOG_RETENTION_DAYS=""` or `ALLOW_PLAIN_HTTP_URLS=""`, as a
+        template renders a value left out, is unset (the default), not a
+        failed boot."""
         if isinstance(value, str) and not value.strip():
             return None
         return value

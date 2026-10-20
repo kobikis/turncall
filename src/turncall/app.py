@@ -80,6 +80,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await _ensure_credentials_readable(settings)
     await _warn_unverifiable_webhooks(settings)
 
+    # Whether plain http:// webhook, call-init, tool and MCP URLs are allowed
+    # (#340), in plain words when only because TURNCALL_ENV defaults.
+    from turncall.services.outbound_url import log_plain_http_policy
+
+    log_plain_http_policy(settings)
+
     # Log all agent configs on startup
     try:
         from turncall.storage.database import create_session_factory, get_engine
