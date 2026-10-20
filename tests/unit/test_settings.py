@@ -66,3 +66,26 @@ class TestWebhookSecrets:
 
         monkeypatch.setenv("TURNCALL_ENV", "development")
         assert not Settings(_env_file=None).environment_is_default
+
+
+@pytest.mark.unit
+class TestAllowPlainHttpUrls:
+    """ALLOW_PLAIN_HTTP_URLS (#340): unset by default, and blank is unset, so
+    the development-only rule decides; true or false decide by themselves."""
+
+    def test_unset_by_default(self, monkeypatch) -> None:
+        monkeypatch.delenv("ALLOW_PLAIN_HTTP_URLS", raising=False)
+        assert Settings(_env_file=None).allow_plain_http_urls is None
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("", None), ("  ", None), ("true", True), ("1", True), ("false", False)],
+    )
+    def test_parsed_from_the_environment(self, monkeypatch, value, expected) -> None:
+        monkeypatch.setenv("ALLOW_PLAIN_HTTP_URLS", value)
+        assert Settings(_env_file=None).allow_plain_http_urls is expected
+
+    def test_anything_else_fails_the_boot(self, monkeypatch) -> None:
+        monkeypatch.setenv("ALLOW_PLAIN_HTTP_URLS", "sometimes")
+        with pytest.raises(ValueError):
+            Settings(_env_file=None)
