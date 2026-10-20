@@ -43,10 +43,15 @@ _Avoid_: "fallback" (taken by [[fallback models]]), "backup provider", "retry".
 **S2S gateway mode**:
 Running the `openai` S2S [[provider]] with an `s2s.base_url` that routes the
 OpenAI-Realtime WebSocket protocol to a compatible gateway (Vercel AI Gateway,
-LiteLLM) or xAI direct — how third-party realtime models like Grok voice run
-without their own provider. The platform `OPENAI_API_KEY` is the bearer sent to
-the gateway. _Avoid_: "xai provider" — no such provider exists; the example's
-`--provider xai` flag is a preset for this mode.
+LiteLLM) — how third-party realtime models without a provider of their own run.
+The platform `OPENAI_API_KEY` is the bearer sent to the gateway. Not how Grok
+voice runs: that is [[Grok Voice]].
+
+**Grok Voice**:
+xAI's native speech-to-speech model, run as the `xai` S2S [[provider]]
+(`grok-voice-3.0` by default) on the project's or platform's xAI account. The
+provider is named for the vendor, the models for the product.
+_Avoid_: "grok provider" — the provider is `xai`.
 
 **Bedrock**:
 The AWS-hosted gateway [[provider]] (`bedrock`) reaching Anthropic, Meta, Mistral and
