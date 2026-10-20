@@ -511,12 +511,18 @@ def _create_llm_service(
         anthropic_extra = _anthropic_extra_body(
             _overflow(config.llm.extra, "model", "max_tokens", "system_instruction")
         )
+        # Prompt caching (#374): a breakpoint on the system prompt caches it
+        # and the tools ahead of it, so a turn reads them back instead of
+        # paying full price and full time-to-first-token for them again.
+        # Anthropic's default TTL (5 minutes) — a call's turns come seconds
+        # apart and each read refreshes it. ADR-0028's addendum says why not 1h.
         return AnthropicLLMService(
             api_key=resolved_key,
             settings=AnthropicLLMService.Settings(
                 model=model,
                 **si,
                 max_tokens=max_tokens,
+                enable_prompt_caching=True,
                 **({"extra": anthropic_extra} if anthropic_extra else {}),
             ),
         )
