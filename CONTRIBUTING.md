@@ -56,6 +56,25 @@ does; point `DATABASE_URL` at a freshly migrated database to run it.
 For a hot-reload server use `make run`, but stop the `turncall` container first
 — both bind `:8090`.
 
+## Bumping a dependency
+
+`uv.lock` pins every package the image and CI install; `pyproject.toml` only
+says what is allowed. Nothing changes version until a commit changes the lock.
+
+```bash
+uv lock --upgrade-package pipecat-ai   # one package, within pyproject's range
+uv lock                                # after editing a range in pyproject.toml
+uv sync --extra dev                    # install exactly the lock locally
+```
+
+Commit `uv.lock` with the change. CI's `uv sync --locked` fails when the lock
+does not match `pyproject.toml`, and `uv lock --check` tells you the same
+locally. (uv 0.12 words a stale lock oddly here, as a missing hash for
+`en-core-web-sm`; the fix is still `uv lock`.) pipecat is capped at the next minor on purpose (ADR-0028): raising
+the cap means reading its changelog first. torch and torchaudio come from
+PyTorch's CPU-only index (`[tool.uv.sources]`); a lock that lists `nvidia-*`
+packages has lost that.
+
 ## What CI enforces
 
 Honest accounting, because a contract you can't verify is worse than none:
@@ -68,6 +87,7 @@ Honest accounting, because a contract you can't verify is worse than none:
 | `docs/openapi.json` current (`make check-openapi`) | **yes** |
 | API Reference nav matches the spec (`make check-docs-nav`) | **yes** |
 | DCO sign-off | **yes** |
+| `uv.lock` matches `pyproject.toml` (`uv sync --locked`) | **yes** |
 | `docker build` | **yes** |
 | `mypy` | **no** — see below |
 | `ruff format` | **no** — see below |

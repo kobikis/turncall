@@ -1,12 +1,15 @@
 # syntax=docker/dockerfile:1
 # Three build stages, so a change reaches only the layers it has to:
-#   requirements  pyproject.toml's production dependencies, as a requirements
-#                 file; dev tools and tool settings leave it unchanged
-#   deps          a venv holding those dependencies, rebuilt only when the
-#                 requirements file changes
+#   requirements  uv.lock's production dependencies, exported as a lock file;
+#                 dev tools and tool settings leave it unchanged
+#   deps          a venv holding exactly those, rebuilt only when the export
+#                 changes
 #   wheel         TurnCall itself, built from src/, installed last in runtime
 # CI keeps every layer in the GitHub Actions cache (cache-to mode=max), so a
 # code change rebuilds the wheel and one small layer, not the 2GB venv.
+
+# uv, pinned: it reads uv.lock and installs the export. A bump is deliberate.
+FROM ghcr.io/astral-sh/uv:0.12.13 AS uv
 
 # ---- requirements ----
 FROM python:3.12-slim AS requirements
@@ -16,18 +19,28 @@ FROM python:3.12-slim AS requirements
 # API image takes none, since nothing on the call path ever loads them.
 ARG INSTALL_EXTRAS=""
 
-COPY pyproject.toml ./
-RUN python -c 'import sys, tomllib; \
-p = tomllib.load(open("pyproject.toml", "rb"))["project"]; \
-extras = [e for e in sys.argv[1].split(",") if e]; \
-print("\n".join(p["dependencies"] + [d for e in extras for d in p["optional-dependencies"][e]]))' \
-        "$INSTALL_EXTRAS" > /requirements.txt
+# The versions are uv.lock's, never a fresh resolve (#377): a release published
+# upstream reaches the image only through a commit that changes the lock.
+# --frozen reads the lock as it is; CI's `uv sync --locked` is what fails a
+# lock that no longer matches pyproject.toml. The export is a pylock.toml
+# (PEP 751), which names each wheel by URL and hash, so torch comes from the
+# PyTorch CPU index uv.lock chose and the deps stage resolves nothing.
+COPY --from=uv /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-dev --no-emit-project --no-header \
+        --format pylock.toml \
+        $(echo "$INSTALL_EXTRAS" | tr ',' '\n' | sed '/^$/d; s/^/--extra /') \
+        > /pylock.toml
 
-# ---- deps: compile the dependencies into a venv, kept out of the final image ----
+# ---- deps: install the dependencies into a venv, kept out of the final image ----
 FROM python:3.12-slim AS deps
 
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PYTHONDONTWRITEBYTECODE=1
+# UV_COMPILE_BYTECODE: write .pyc at install, as pip did, so a container does
+# not compile the tree on every start. UV_LINK_MODE=copy: the cache is a mount,
+# which a hardlink cannot cross.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
 
 # gcc only: build any deps without a manylinux wheel. asyncpg speaks the PG wire
 # protocol directly, so no libpq needed; audio/webrtc wheels bundle their libs.
@@ -35,24 +48,21 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc \
     && rm -rf /var/lib/apt/lists/*
 
+# A stdlib venv, so it carries the pip the runtime stage installs the wheel with.
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install CPU-only torch FIRST so the project resolve doesn't drag in the default
-# Linux CUDA build (torch + nvidia-* cu* wheels ≈ 2.5GB of GPU libs this CPU
-# voice/ONNX workload never runs). pipecat's silero/smart-turn extras need torch;
-# the >= ranges are satisfied by the pre-installed CPU wheels, so pip won't
-# replace them. If a version conflict ever appears, pin to match pipecat here.
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio
-
-# Keyed on the requirements file's content, not pyproject.toml's: a new dev
-# dependency or a ruff setting no longer reinstalls the stack. The BuildKit pip
-# cache mount doesn't survive between CI runners; this layer does. Prod deps
-# only — no [dev].
-COPY --from=requirements /requirements.txt /tmp/requirements.txt
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r /tmp/requirements.txt
+# Keyed on the export's content, not pyproject.toml's: a new dev dependency or a
+# ruff setting no longer reinstalls the stack. Torch is the CPU-only build
+# ([tool.uv.sources] in pyproject.toml): PyPI's Linux torch would add ~2.5GB of
+# CUDA libraries this CPU voice/ONNX workload never runs. The BuildKit cache
+# mount doesn't survive between CI runners; this layer does. Prod deps only.
+# pylock.toml installs are a uv preview feature, hence the flag; uv is pinned.
+COPY --from=uv /uv /usr/local/bin/uv
+COPY --from=requirements /pylock.toml /tmp/pylock.toml
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --preview-features pylock --python /opt/venv/bin/python \
+        -r /tmp/pylock.toml
 
 # ---- wheel: TurnCall itself ----
 FROM python:3.12-slim AS wheel

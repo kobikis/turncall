@@ -315,6 +315,15 @@ and is not part of this repository's history.
 
 ### Changed
 
+- **The image and CI install from a committed `uv.lock`** (#377). Every
+  dependency is pinned, not just pipecat's minor: an upstream release reaches
+  an image only through a commit that changes the lock. The Dockerfile now
+  exports the lock (`uv export --frozen`, with `INSTALL_EXTRAS` as before)
+  and installs that; CI runs `uv sync --locked`, which fails a lock that no
+  longer matches `pyproject.toml`. torch and torchaudio are declared directly
+  and taken from PyTorch's CPU-only index, as the image already did, so it
+  carries no CUDA libraries. Building the image needs `uv.lock` in the build
+  context. CONTRIBUTING, "Bumping a dependency", has the steps.
 - **pipecat 1.13** (#367, ADR-0028). The requirement is now
   `>=1.13.0,<1.14.0`: capped at the next minor, so each pipecat minor is
   adopted on purpose rather than picked up by a fresh install (1.13.0 reached

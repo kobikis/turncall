@@ -112,18 +112,18 @@ jobs:
         with:
           python-version: "3.12"
       # uv installs the tree in a fraction of pip's time, from a cache keyed on
-      # pyproject.toml. setup-uv publishes no moving major tag (`@v10` does not
+      # uv.lock. setup-uv publishes no moving major tag (`@v10` does not
       # resolve), so it is pinned to the release's commit.
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with:
           enable-cache: true
-          cache-dependency-glob: pyproject.toml
-      # CPU-only torch first, as the Dockerfile does: otherwise the resolve pulls
-      # the Linux CUDA build (torch + nvidia-* wheels, ~2.5GB of GPU libraries
-      # nothing here runs). That build is what used to fill the runner's disk
-      # and need a "free disk space" step; without it there is room to spare.
-      - run: uv pip install --system --index-url https://download.pytorch.org/whl/cpu torch torchaudio
-      - run: uv pip install --system -e ".[dev]"
+          cache-dependency-glob: uv.lock
+      # Exactly uv.lock's versions (#377), and --locked fails the job when the
+      # lock no longer matches pyproject.toml: a dependency changed without
+      # `uv lock`. Torch is the CPU-only build ([tool.uv.sources]); PyPI's
+      # Linux build is ~2.5GB of CUDA libraries nothing here runs.
+      - run: uv sync --locked --extra dev
+      - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       # docs/openapi.json is generated from the app and copied into the
       # turncall-skill repo by `make sync-skill`, so a stale spec silently
       # misdocuments the API for everyone downstream. Runs here rather than in
