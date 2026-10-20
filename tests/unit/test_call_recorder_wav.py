@@ -123,3 +123,30 @@ async def test_a_call_with_no_audio_still_ends_its_recording() -> None:
 
     statuses = [c.args[0] for c in set_status.await_args_list]
     assert statuses == [RecordingStatus.IN_PROGRESS, RecordingStatus.FAILED]
+
+
+async def test_a_recording_still_running_at_cleanup_is_ended() -> None:
+    """A pipeline cancelled before it finished starting sends the recorder no
+    CancelFrame, and the caller's disconnect flushed before it started: the
+    recording is still on at cleanup, which has to end it (#367)."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+    from uuid import uuid4
+
+    from turncall.domain.enums import RecordingStatus
+    from turncall.orchestrator.call_recorder import CallRecorder
+
+    ctx = SimpleNamespace(
+        is_eval=False,
+        records=True,
+        has_database=True,
+        call_id=uuid4(),
+        project_id=uuid4(),
+    )
+    recorder = CallRecorder(ctx, sample_rate=8000)
+    with patch.object(CallRecorder, "_set_status", AsyncMock()) as set_status:
+        await recorder.stop_recording()  # the disconnect flush: not yet on
+        await recorder.start_recording()  # then the StartFrame reaches it
+        await recorder.cleanup()
+
+    assert [c.args[0] for c in set_status.await_args_list] == [RecordingStatus.FAILED]
