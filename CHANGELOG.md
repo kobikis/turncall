@@ -751,7 +751,8 @@ and is not part of this repository's history.
   Service in the same cluster, judged by the URL's hostname alone) may still
   be `http://` anywhere; loopback and private addresses are not exempt. The
   check runs on creating a webhook subscription, binding or updating a
-  number, creating or replacing an agent, and `POST /v1/tools`. WebRTC's
+  number, creating or replacing an agent, an eval run's `inline` target, and
+  `POST /v1/tools`. WebRTC's
   `requestData.server_url`, refused with a `400` in production only, now
   follows the same rule, so staging refuses it too. New setting
   `ALLOW_PLAIN_HTTP_URLS`: `true` allows plain http everywhere, `false`
