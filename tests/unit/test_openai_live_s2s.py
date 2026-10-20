@@ -177,16 +177,14 @@ class TestSpeaksFirst:
     async def test_without_a_first_message_it_still_greets(self) -> None:
         assert len(await _commentary_at_session_start(_config())) == 1
 
-    @pytest.mark.parametrize("provider", ["openai", "google"])
-    async def test_realtime_and_gemini_start_on_an_empty_context(
-        self, provider: str
-    ) -> None:
-        """They greet from the empty run today, unmeasured with a developer
-        message — so they get none."""
+    async def test_realtime_starts_on_an_empty_context(self) -> None:
+        """Realtime greets from the empty run, unmeasured with a developer
+        message — so it gets none. Gemini Live and Nova Sonic did not, and
+        get a user message (#381, test_s2s_greeting.py)."""
         config = AgentConfig(
             first_message="Hi!",
             pipeline_mode="s2s",
-            s2s=S2SConfig(provider=provider),  # type: ignore[arg-type]
+            s2s=S2SConfig(provider="openai"),
         )
         context, _ = await _session_context(config)
         assert context.get_messages() == []

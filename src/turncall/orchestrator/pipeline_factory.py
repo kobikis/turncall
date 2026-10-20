@@ -1928,7 +1928,8 @@ def _create_s2s_pipeline(
 
     # Build context — system prompt + first_message are handled by the S2S
     # service directly (SessionProperties.instructions for OpenAI,
-    # system_instruction for Gemini), plus gpt-live-1's opening (#248). Only
+    # system_instruction for Gemini), plus the opening gpt-live-1, Gemini Live
+    # and Nova Sonic need before they speak first (#248, #381). Only
     # pass tools via context — except to a client delegation, whose tools live
     # on the delegate (#244).
     tools_schema = (

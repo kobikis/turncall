@@ -390,6 +390,13 @@ call's start). Gemini Live and Nova Sonic agents hear the caller from about
 0.5 s and at once, where they used to drop the first two seconds of what the
 caller said. `openai_live` agents already started at once and are unchanged.
 
+**Gemini Live and Nova Sonic agents speak first.** They used to wait for the
+caller to say something before saying anything. They now open the call with
+the agent's `first_message`, or a greeting when it has none, as OpenAI Realtime
+and `openai_live` agents do. Measured from the call's start, the first audio
+leaves the model at about 1.2 s on Gemini Live and 1.6 s on Nova Sonic (p50).
+They still hear the caller as soon as before.
+
 **`call.ended` is prompt when the caller hangs up while the call connects.** It
 used to arrive about 15 seconds late, waiting for a recording that was never
 started. It now arrives at once, with `recording_status: "none"`.
