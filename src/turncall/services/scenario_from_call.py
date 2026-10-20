@@ -147,7 +147,7 @@ def build_scenario(
             # bare `{"event": "llm_response"}`: after a provider 404 pipecat
             # still emits an empty response, so an expectation that asserts
             # only the event can pass with the LLM entirely broken
-            # (evals-design §1). Content, then, even though the human will trim
+            # (#63-#65). Content, then, even though the human will trim
             # it to the phrase that matters.
             turns[-1]["expect"].append(
                 {"event": _REPLY_EVENT, "text_contains": entry.text}

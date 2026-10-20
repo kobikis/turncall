@@ -73,7 +73,10 @@ dependencies = [
     # pins aiobotocore==2.25.1 and has no 3.x-compatible release — declaring it
     # makes the project uninstallable. AWSBedrockLLMService works fine on
     # aiobotocore 2.25.1, which aioboto3 already provides. See adr/0016.
-    "pipecat-ai[openai,deepgram,elevenlabs,silero,webrtc,webrtc-video,local-smart-turn,google,anthropic,cartesia,assemblyai,heygen,tavus,aws-nova-sonic,tracing,mcp]>=1.12.0,<2.0.0",
+    # Below 1.13 until #367: 1.13.0 (2026-10-19) changed the backend-LLM
+    # worker internals the S2S delegation leans on (`_delegate_to_backend`,
+    # `llm_with_backend_role_objection`), and 21 delegation tests fail on it.
+    "pipecat-ai[openai,deepgram,elevenlabs,silero,webrtc,webrtc-video,local-smart-turn,google,anthropic,cartesia,assemblyai,heygen,tavus,aws-nova-sonic,tracing,mcp]>=1.12.0,<1.13.0",
     # OTLP span exporter (pipecat[tracing] ships otel api/sdk but not an exporter).
     # See ADR-0010.
     "opentelemetry-exporter-otlp>=1.43.0",
@@ -129,14 +132,14 @@ turncall = "turncall.cli.main:run"
 # only the eval worker ever needs them — the call path uses the agent's own
 # configured providers.
 evals-audio = [
-    "pipecat-ai[kokoro,moonshine]>=1.12.0,<2.0.0",
+    "pipecat-ai[kokoro,moonshine]>=1.12.0,<1.13.0",
 ]
 # A `jev` judge (#141). TypeSafe is a vendor no live call ever contacts, so the
 # base install does not carry it — only the eval worker (and a `jev` live test)
 # ever builds one. Needs TYPESAFE_API_KEY; a run naming `jev` without either
 # fails saying which of the two is missing.
 evals-jev = [
-    "pipecat-ai[jev]>=1.12.0,<2.0.0",
+    "pipecat-ai[jev]>=1.12.0,<1.13.0",
 ]
 dev = [
     "pytest>=8.0.0",

@@ -1581,7 +1581,8 @@ Two shapes that are easy to get wrong. A `function_call` expectation takes a
 **`calls:` list** (`[{name, args}]`), not top-level `name`/`args`: the parser
 ignores keys it does not know, so the wrong shape parses cleanly and asserts
 nothing. And the reply expectation must carry **content**, never a bare
-`{"event": "llm_response"}`, for the reason evals-design §1 records. A call
+`{"event": "llm_response"}`: after a provider 404 pipecat still emits an
+empty response, so a bare event assertion passes with the LLM broken. A call
 that ran an inline agent takes its `default_target` from the call record, not
 an agent row (ADR-0017); one still in progress, or with no caller speech, is
 rejected.
@@ -1662,10 +1663,9 @@ The vocabulary is wider than this file's examples: `definition` is stored
 verbatim, so every pipecat 1.11 field is already reachable — `send_after`
 barge-in, `absent`, `within_ms`, `stop_on_failure`, `function_call_stopped`,
 simulation `measure:` metrics, `context:` (which **replaces** the agent's
-prompt). `evals-design.md` §3 has each one as a JSON example, the five that
-parse and do nothing here, and `tests/unit/test_scenario_vocabulary.py` keeping
-it honest. §9.7 there records the bridge outage that kept any of it from
-reporting a verdict — the eval pipeline built no `RTVIProcessor`/`RTVIObserver`,
+prompt). `tests/unit/test_scenario_vocabulary.py` parses each one and reads the
+value back, so a pipecat rename fails there. None of it reported a verdict
+until the RTVI bridge was wired (2.0.0) — the eval pipeline built no `RTVIProcessor`/`RTVIObserver`,
 so every run died at pipecat's `bot-ready` handshake and scored `errored`. Both
 halves are wired now, eval path only; `tests/unit/test_eval_rtvi_bridge.py`
 fails if either is dropped again.

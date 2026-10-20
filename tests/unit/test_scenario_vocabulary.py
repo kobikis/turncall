@@ -1,4 +1,4 @@
-"""The scenario vocabulary `evals-design.md` §3 documents, asserted field by field.
+"""The scenario vocabulary, asserted field by field.
 
 A definition is stored verbatim and parsed by pipecat, so every field pipecat's
 schema has is reachable from the API for free. The failure mode of documenting
@@ -15,7 +15,7 @@ documented feature into a no-op.
 
 This is about the vocabulary reaching the parser.
 `tests/unit/test_pipecat_parser_contract.py` guards the parser surface itself,
-and §9.7 is why none of it reports a verdict yet.
+and ADR-0018 records the bridge it reports its verdicts through.
 """
 
 import pytest

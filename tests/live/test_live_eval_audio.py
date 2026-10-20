@@ -129,8 +129,8 @@ async def test_a_latency_budget_fails_a_run_that_exceeds_it(
 async def test_the_turn_timing_claim_is_measured_not_assumed(
     openai_key: str, deepgram_key: str, session_factory
 ) -> None:
-    """evals-design §1 records the #67 claim as *unverified*: that a latency
-    budget catches two silence timers running in series.
+    """The #67 claim, unverified until measured: that a latency budget
+    catches two silence timers running in series.
 
     Measured here rather than argued: the same scenario against the same agent
     twice, once with the silence window at its default and once at two seconds
@@ -168,7 +168,7 @@ async def test_the_turn_timing_claim_is_measured_not_assumed(
     assert gap_ms > 800, (
         "the silence window did not show up in the measured turn: "
         f"fast={fast_ms}ms slow={slow_ms}ms. "
-        "A latency budget does NOT catch the #67 class — update evals-design §1."
+        "A latency budget does NOT catch the #67 class — update docs/guides/evals.mdx."
     )
 
 
