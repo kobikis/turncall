@@ -38,6 +38,8 @@ curl -X POST http://localhost:8090/v1/webhooks \
 
 `events` is a list of event types, or `["*"]` for all of them. The response carries the signing secret, once. To change the list later without changing the secret, use `PATCH /v1/webhooks/{id}` with a new `events`.
 
+A subscription's `url` and a number's `server_url` must be `https://` outside development, or the request is a `422`. A Kubernetes Service in the same cluster (a host ending in `.svc` or `.svc.cluster.local`) may be `http://`; loopback and private addresses may not. See [Compliance](/guides/compliance#the-controls) for `ALLOW_PLAIN_HTTP_URLS`.
+
 Every delivery is one envelope:
 
 ```json

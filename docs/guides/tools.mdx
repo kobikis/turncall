@@ -149,6 +149,11 @@ Define tools with a `webhook_url` — TurnCall POSTs to your server when the LLM
 }
 ```
 
+Outside development `webhook_url` must be `https://`, or saving the agent is a
+`422`, except a Kubernetes Service in the same cluster, whose host ends in
+`.svc` or `.svc.cluster.local`. Loopback and private addresses are not exempt.
+See [Compliance](/guides/compliance#the-controls).
+
 ### Sync and async tools
 
 `execution_mode` decides what happens when the caller interrupts while a tool

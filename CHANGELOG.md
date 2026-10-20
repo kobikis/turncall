@@ -738,6 +738,31 @@ and is not part of this repository's history.
   transaction, and refuses to run without the key when any exist. See the
   upgrade notes.
 
+- **Outbound URLs must be `https://` outside development** (#340). A webhook
+  subscription's `url`, a number's call-init `server_url`, and in an agent's
+  config `server_url.url`, a tool's `webhook_url` and an MCP server's `url`
+  took an `http://` URL in every environment (a webhook subscription took any
+  scheme at all), so events, call-init requests, tool arguments and MCP
+  headers could cross the network in cleartext. Each is now checked when it is
+  written: a scheme other than `https` or `http` is a `422`, and so is
+  `http://` unless plain http is allowed, which by default it is only when
+  `TURNCALL_ENV` is `development`; every other environment, staging included,
+  refuses it. A host ending in `.svc` or `.svc.cluster.local` (a Kubernetes
+  Service in the same cluster, judged by the URL's hostname alone) may still
+  be `http://` anywhere; loopback and private addresses are not exempt. The
+  check runs on creating a webhook subscription, binding or updating a
+  number, creating or replacing an agent, and `POST /v1/tools`. WebRTC's
+  `requestData.server_url`, refused with a `400` in production only, now
+  follows the same rule, so staging refuses it too. New setting
+  `ALLOW_PLAIN_HTTP_URLS`: `true` allows plain http everywhere, `false`
+  refuses it in development too, unset or blank leaves it to `TURNCALL_ENV`.
+  An inline agent from a call-init answer is not refused, and URLs stored
+  before the upgrade keep being delivered to; each delivery to a plain-http
+  URL the check would now refuse is logged as `plain_http_delivery` (once a
+  minute per kind, `webhook`, `call_init`, `tool` or `mcp`, with how many it
+  left out), naming the host and never the full URL. The delivery still
+  happens. See the upgrade notes.
+
 ### Fixed
 
 - **`call.ended` is sent once** (#328). A call's pipeline finishing, the
@@ -1128,6 +1153,21 @@ and is not part of this repository's history.
   `Authorization` in `webrtcRequestParams.headers` (as
   `examples/webrtc-client` does) needs nothing. A proxy that forwards the
   `PATCH` must add the key as it does for the `POST`.
+- **Move outbound URLs to `https://`, or set `ALLOW_PLAIN_HTTP_URLS`, on any
+  deployment that is not a development one** (#340). Outside
+  `TURNCALL_ENV=development`, a plain `http://` URL whose host does not end
+  in `.svc` or `.svc.cluster.local` is now a `422` when a webhook
+  subscription is created, a number is bound or updated, or an agent is
+  created or replaced. Rows that already hold one keep being delivered to,
+  and each delivery logs `plain_http_delivery`, so search for that event to
+  find them. Agent and number `PUT` replace the whole row, so editing one
+  that still holds an `http://` URL is a `422` until the URL is fixed, even
+  when the edit is to something else. A WebRTC `requestData.server_url` over
+  plain http is now refused (`400`) in staging too, not only in production.
+  `ALLOW_PLAIN_HTTP_URLS=true` allows plain http everywhere, for a receiver
+  that cannot move to TLS yet; `false` refuses it in development too. The
+  TurnCall builder's agent backends on Kubernetes are in-cluster Services and
+  need nothing.
 - **Viewer keys lose four routes** (#335): linking and unlinking an agent's
   knowledge base, `POST /v1/calls/{call_id}/analysis/rerun` and
   `POST /v1/webrtc/connect` now need an admin or developer key. Replace a
