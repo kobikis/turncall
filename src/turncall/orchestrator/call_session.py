@@ -104,6 +104,10 @@ class CallSession:
         self._task: PipelineWorker | None = None
         self._runner: WorkerRunner | None = None
         self._duration_guard: asyncio.Task | None = None
+        self._greeting_task: asyncio.Task | None = None
+        # Set once every processor is set up and has handled the StartFrame —
+        # for a realtime service, once it has connected (#373).
+        self._pipeline_started = asyncio.Event()
         self._running = False
         # An exception that escaped into start(), kept rather than only logged.
         # start() swallows it on purpose — a live call must still finalize —
@@ -225,6 +229,7 @@ class CallSession:
             additional_span_attributes=span_attrs,
         )
         self._running = True
+        self._watch_pipeline_start(self._task)
 
         # A hangup (Twilio 'stop' + WS close, or a WebRTC peer disconnect) closes
         # the transport but pushes NO EndFrame into the pipeline, so the runner
@@ -290,6 +295,9 @@ class CallSession:
             await self._record_error("pipeline", exc)
         finally:
             self._running = False
+            # A pipeline that never started leaves its greeting waiting.
+            if self._greeting_task is not None:
+                self._greeting_task.cancel()
             # Before finalizing: a call that ended on its own must not have the
             # guard fire minutes later against a worker that is already gone.
             if self._duration_guard is not None:
@@ -322,6 +330,11 @@ class CallSession:
             raise ControlRefused("The call is not running")
         await self._task.queue_frame(frame)
 
+    def _watch_pipeline_start(self, task: PipelineWorker) -> None:
+        @task.event_handler("on_pipeline_started")
+        async def _started(*_args: object) -> None:
+            self._pipeline_started.set()
+
     async def _trigger_first_response(self, task: PipelineWorker) -> None:
         """Queue what makes the agent speak first."""
         if self._pipeline_mode == "s2s":
@@ -332,10 +345,12 @@ class CallSession:
                 await task.queue_frame(s2s_greeting_frame())
                 return
 
-            # Realtime, Gemini Live, Nova Sonic: a wait for the WebSocket to
-            # connect, never measured without it.
+            # Realtime, Gemini Live, Nova Sonic connect in setup(), and pipecat
+            # 1.13 starts the pipeline once every processor is set up — so the
+            # greeting goes then, not after a fixed wait (#373). A WebRTC call
+            # also waits for its peer, which can connect before or after.
             async def _trigger_s2s_greeting() -> None:
-                await asyncio.sleep(2)
+                await self._pipeline_started.wait()
                 logger.info("S2S: triggering initial greeting")
                 await task.queue_frame(s2s_greeting_frame())
 
