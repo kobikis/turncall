@@ -692,9 +692,17 @@ _S2S_CHECK_IN = "The caller has gone quiet. Briefly check whether they are still
 
 def provider_of(processor: object) -> str | None:
     """The vendor a pipecat service belongs to, read off its module
-    (`pipecat.services.deepgram.stt` -> `deepgram`); None for anything else."""
-    parts = type(processor).__module__.split(".")
-    return parts[2] if parts[:2] == ["pipecat", "services"] and len(parts) > 2 else None
+    (`pipecat.services.deepgram.stt` -> `deepgram`); None for anything else.
+
+    The nearest pipecat vendor class in its MRO, so a TurnCall subclass of a
+    vendor's service (Grok's key-aware one) still names the vendor; a subclass
+    of a vendor-neutral base (`pipecat.services.llm_service`) names none.
+    """
+    for cls in type(processor).__mro__:
+        parts = cls.__module__.split(".")
+        if parts[:2] == ["pipecat", "services"] and len(parts) > 3:
+            return parts[2]
+    return None
 
 
 def readable_error(error: object) -> str:

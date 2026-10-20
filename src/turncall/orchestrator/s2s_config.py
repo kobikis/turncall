@@ -1,8 +1,8 @@
 """S2S (speech-to-speech) service factory.
 
 Maps S2SConfig to Pipecat's OpenAIRealtimeLLMService, OpenAILiveLLMService,
-GeminiLiveLLMService or AWSNovaSonicLLMService with appropriate session
-properties, voice, and turn detection settings.
+GeminiLiveLLMService, AWSNovaSonicLLMService or GrokRealtimeLLMService with
+appropriate session properties, voice, and turn detection settings.
 """
 
 from collections.abc import Sequence
@@ -29,6 +29,10 @@ _NOVA_SONIC_VOICE = "matthew"
 _OPENAI_LIVE_MODEL = "gpt-live-1"
 _GEMINI_LIVE_MODEL = "gemini-3.8-live"
 _GEMINI_LIVE_VOICE = "Charon"
+# Pinned, not pipecat's `grok-voice-latest`: an alias would move a live agent's
+# model underneath it when xAI moves the alias (#384).
+_GROK_VOICE_MODEL = "grok-voice-3.0"
+_GROK_VOICE_VOICE = "eve"
 
 
 # The role of the opening message per provider; one without an entry opens on
@@ -102,6 +106,8 @@ def create_s2s_service(
         )
     if provider == "aws":
         return _create_nova_sonic(config, credentials.aws(config.aws))
+    if provider == "xai":
+        return _create_grok_realtime(config, credentials.api_key("xai"))
     raise ValueError(f"Unsupported S2S provider: {provider}")
 
 
@@ -148,8 +154,9 @@ def _create_openai_realtime(config: AgentConfig, api_key: str) -> Any:
     )
 
     # A base_url points the realtime WebSocket at a gateway (Vercel AI Gateway,
-    # LiteLLM) or xAI direct instead of api.openai.com — same protocol, so the
-    # model string (e.g. "xai/grok-voice-think-fast-1.0") just routes upstream.
+    # LiteLLM) instead of api.openai.com — same protocol, so the model string
+    # (e.g. "openai/gpt-realtime-2") just routes upstream. A stored agent on
+    # api.x.ai still works this way; new ones use the xai provider.
     service_kwargs: dict[str, Any] = {}
     if s2s.base_url:
         service_kwargs["base_url"] = s2s.base_url
@@ -222,6 +229,61 @@ def _create_gemini_live(config: AgentConfig, api_key: str) -> Any:
 
     logger.info(
         "S2S service created: provider=google model={model} voice={voice} turn={turn}",
+        model=model,
+        voice=voice,
+        turn=s2s.turn_detection,
+    )
+    return service
+
+
+def _create_grok_realtime(config: AgentConfig, api_key: str) -> Any:
+    """Create a GrokRealtimeLLMService (Grok Voice) from S2SConfig.
+
+    pipecat's `xai` module, not its deprecated `grok` re-export. The audio
+    format is left unset: pipecat fills PCM at the pipeline's input and output
+    rates in `setup()`, so a phone call runs at 8 kHz and WebRTC at its own.
+    """
+    from pipecat.services.xai.realtime.events import SessionProperties
+    from pipecat.services.xai.realtime.llm import GrokRealtimeLLMService
+    from pipecat.utils.errors import ErrorCategory, extract_http_status_code
+
+    class _KeyAwareGrokRealtime(GrokRealtimeLLMService):
+        """Reads xAI's refusal of a key as one.
+
+        xAI answers a wrong key's handshake with HTTP 400 and "Incorrect API
+        key provided" (measured), which pipecat files as a bad request, so the
+        call's `error.raised` would not say which key to fix. A 401 or 403 is
+        already classified by pipecat.
+        """
+
+        def _classify_error(self, exception: Exception) -> ErrorCategory | None:
+            body = getattr(getattr(exception, "response", None), "body", None)
+            if (
+                extract_http_status_code(exception) == 400
+                and isinstance(body, bytes)
+                and b"API key" in body
+            ):
+                return ErrorCategory.AUTHENTICATION
+            return super()._classify_error(exception)
+
+    s2s = config.s2s
+
+    # The Gemini rule: S2SConfig's OpenAI sentinels become Grok's own, and an
+    # explicitly chosen model or voice reaches xAI untouched (ADR-0016).
+    model = _GROK_VOICE_MODEL if s2s.model == _OPENAI_DEFAULT_MODEL else s2s.model
+    voice = _GROK_VOICE_VOICE if s2s.voice == _OPENAI_DEFAULT_VOICE else s2s.voice
+
+    service = _KeyAwareGrokRealtime(
+        api_key=api_key,
+        settings=GrokRealtimeLLMService.Settings(
+            model=model,
+            system_instruction=_build_s2s_system_prompt(config) or None,
+            session_properties=SessionProperties(voice=voice),
+        ),
+    )
+
+    logger.info(
+        "S2S service created: provider=xai model={model} voice={voice} turn={turn}",
         model=model,
         voice=voice,
         turn=s2s.turn_detection,

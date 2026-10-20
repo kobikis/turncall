@@ -47,6 +47,7 @@ def platform_keys(settings: Settings) -> dict[str, str]:
         "elevenlabs": settings.elevenlabs.api_key,
         "cartesia": settings.cartesia.api_key,
         "assemblyai": settings.assemblyai.api_key,
+        "xai": settings.xai.api_key,
         "heygen": settings.heygen.api_key,
         "tavus": settings.tavus.api_key,
         "typesafe": settings.typesafe.api_key,

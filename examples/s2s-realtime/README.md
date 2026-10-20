@@ -5,7 +5,7 @@ No separate STT or TTS — the model handles everything in a single WebSocket.
 
 ## What it does
 
-- Runs a voice agent using **OpenAI Realtime**, **Gemini Live**, or **Grok voice** (`--provider xai`, via an OpenAI-Realtime-compatible gateway) S2S models
+- Runs a voice agent using **OpenAI Realtime**, **Gemini Live**, or **Grok Voice** (`--provider xai`) S2S models
 - ~300ms time-to-first-byte (vs ~800ms+ for cascade STT->LLM->TTS)
 - Natural intonation and emotion in speech output
 - Tool/function calling works the same as cascade
@@ -16,7 +16,7 @@ No separate STT or TTS — the model handles everything in a single WebSocket.
 2. **One of these API keys:**
    - OpenAI API key (for OpenAI Realtime) — same key as GPT-4o
    - Google API key (for Gemini Live) — get at [aistudio.google.com](https://aistudio.google.com)
-   - Vercel AI Gateway key (for Grok voice) — set as `OPENAI_API_KEY` (see [Grok section](#grok-voice-and-other-gateways))
+   - xAI API key (for Grok Voice) — get at [console.x.ai](https://console.x.ai)
 3. **ngrok** (to expose local server to Twilio, if using phone calls)
 
 ## Quick Start
@@ -28,6 +28,7 @@ cp env.example .env
 # Edit .env:
 #   OPENAI_API_KEY=sk-xxxxxxxx     (for OpenAI Realtime)
 #   GOOGLE_API_KEY=AIxxxxxxxx      (for Gemini Live)
+#   XAI_API_KEY=xai-xxxxxxxx       (for Grok Voice)
 #   DEEPGRAM_API_KEY=xxxxxxxx      (still needed for cascade fallback)
 ```
 
@@ -49,7 +50,7 @@ python3 examples/s2s-realtime/setup.py \
   --provider google \
   --voice Kore
 
-# Grok voice (presets the Vercel AI Gateway — see the Grok section below)
+# Grok Voice (grok-voice-3.0, voice eve)
 python3 examples/s2s-realtime/setup.py \
   --server-url "http://localhost:8090" \
   --provider xai
@@ -78,17 +79,35 @@ python3 examples/s2s-realtime/setup.py \
 | **Tool calling** | Full support | Full support |
 | **Model** | `gpt-realtime-2.1` | `models/gemini-3.1-flash-live-preview` |
 
-## Grok voice and other gateways
+## Grok Voice
 
-`--provider xai` is a shorthand: the backend has no xai S2S provider — Grok
-speaks the **OpenAI-Realtime WebSocket protocol**, so the agent is created with
-`s2s.provider: "openai"` plus these presets (each overridable by flag):
+`--provider xai` creates an agent on the native `xai` S2S provider:
 
-| Preset | Value | Override |
-|---|---|---|
-| `base_url` | `wss://ai-gateway.vercel.sh/v1/realtime` | `--base-url` |
-| `model` | `xai/grok-voice-think-fast-1.0` | `--model` |
-| `voice` | `cosmo` | `--voice` |
+```jsonc
+"s2s": {
+  "provider": "xai",
+  "model": "grok-voice-3.0",   // the default when no model is named
+  "voice": "eve"               // the default when no voice is named
+}
+```
+
+The key is the project's `xai` credential (`PUT /v1/credentials/xai`), else
+the platform's `XAI_API_KEY`.
+
+## S2S gateway mode
+
+Any OpenAI-Realtime-compatible gateway (Vercel AI Gateway, LiteLLM) runs on
+the `openai` provider with a `base_url`. Pass `--base-url` with `--model` and
+`--voice`, since the gateway routes to models (and voices) we can't guess:
+
+```jsonc
+"s2s": {
+  "provider": "openai",
+  "base_url": "wss://ai-gateway.vercel.sh/v1/realtime",
+  "model": "openai/gpt-realtime-2",
+  "voice": "alloy"
+}
+```
 
 **Two env prerequisites** (setup.py checks your `.env` and warns, but the
 server enforces them — the allowlist at *call start*, not agent creation):
@@ -100,21 +119,8 @@ server enforces them — the allowlist at *call start*, not agent creation):
    `Authorization: Bearer …` on the WebSocket). While it holds the gateway key,
    plain-openai S2S agents can't run — the backend has one `OPENAI_API_KEY`.
 
-Any other OpenAI-Realtime-compatible endpoint (LiteLLM, xAI direct) works the
-same way — pass `--base-url` explicitly (with `--model`, since the gateway
-routes to models we can't guess):
-
-```jsonc
-"s2s": {
-  "provider": "openai",
-  "base_url": "wss://ai-gateway.vercel.sh/v1/realtime",
-  "model": "xai/grok-voice-think-fast-1.0",   // openai/gpt-realtime-2 also works
-  "voice": "cosmo"                             // the gateway validates its own voices
-}
-```
-
-When `base_url` is set the OpenAI voice allowlist is bypassed (the gateway
-routes to models with their own voice sets), so pass the model's own voice name.
+When `base_url` is set the OpenAI voice allowlist is bypassed, so pass the
+model's own voice name.
 
 ## How it differs from cascade
 

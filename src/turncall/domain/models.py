@@ -197,9 +197,10 @@ class S2SConfig(DomainModel):
     voice: str = "alloy"
     turn_detection: str = "server_vad"  # "server_vad" | "pipecat_vad"
     # Optional OpenAI-Realtime-compatible WebSocket endpoint (wss://). Lets the
-    # "openai" provider target a gateway (Vercel AI Gateway, LiteLLM) or xAI
-    # direct, so models like "xai/grok-voice-think-fast-1.0" work over the same
-    # protocol. None → first-party OpenAI. SSRF-gated by the BYOM allowlist.
+    # "openai" provider target a gateway (Vercel AI Gateway, LiteLLM), so
+    # models like "openai/gpt-realtime-2" work over the same protocol. Grok
+    # Voice is the "xai" provider. None → first-party OpenAI. SSRF-gated by the
+    # BYOM allowlist.
     base_url: str | None = None
     # None = provider default. temperature is google-only (OpenAI Realtime GA
     # dropped it); max_tokens maps to max_output_tokens on openai.

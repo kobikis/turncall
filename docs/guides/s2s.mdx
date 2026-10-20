@@ -1,6 +1,6 @@
 ---
 title: Speech-to-Speech
-description: "Ultra-low latency with OpenAI Realtime, Gemini Live and Amazon Nova Sonic"
+description: "Ultra-low latency with OpenAI Realtime, Gemini Live, Amazon Nova Sonic and Grok Voice"
 icon: "bolt"
 ---
 
@@ -45,14 +45,25 @@ Set `pipeline_mode: "s2s"` in the agent config. The `stt`, `llm`, and `tts` fiel
 }
 ```
 
-```json Gateway (Grok, etc.)
+```json Grok Voice
+{
+  "pipeline_mode": "s2s",
+  "s2s": {
+    "provider": "xai",
+    "model": "grok-voice-3.0",
+    "voice": "eve"
+  }
+}
+```
+
+```json Gateway
 {
   "pipeline_mode": "s2s",
   "s2s": {
     "provider": "openai",
     "base_url": "wss://ai-gateway.vercel.sh/v1/realtime",
-    "model": "xai/grok-voice-think-fast-1.0",
-    "voice": "cosmo"
+    "model": "openai/gpt-realtime-2",
+    "voice": "alloy"
   }
 }
 ```
@@ -62,11 +73,11 @@ Set `pipeline_mode: "s2s"` in the agent config. The `stt`, `llm`, and `tts` fiel
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | Yes | `openai`, `google`, or `aws` |
-| `model` | No | Model name. Defaults per provider: `gpt-realtime-2.1` (openai), `gpt-live-1` (openai_live), `gemini-3.8-live` (google), `amazon.nova-2-sonic-v1:0` (aws) |
-| `voice` | No | Voice name (default: `alloy` / `Charon` / `matthew`) |
+| `provider` | Yes | `openai`, `openai_live`, `google`, `aws`, or `xai` |
+| `model` | No | Model name. Defaults per provider: `gpt-realtime-2.1` (openai), `gpt-live-1` (openai_live), `gemini-3.8-live` (google), `amazon.nova-2-sonic-v1:0` (aws), `grok-voice-3.0` (xai) |
+| `voice` | No | Voice name (default: `alloy` / `Charon` / `matthew` / `eve`) |
 | `turn_detection` | No | `server_vad` (default) or `pipecat_vad` |
-| `base_url` | No | `wss://` endpoint of an OpenAI-Realtime-compatible gateway (`openai` provider only — **rejected** on `aws`). See [Gateways](#gateways-and-third-party-models) |
+| `base_url` | No | `wss://` endpoint of an OpenAI-Realtime-compatible gateway (`openai` provider only — **rejected** on every other). See [Gateways](#gateways-and-third-party-models) |
 | `extra` | No | Provider passthrough. On `aws`: `endpointing_sensitivity` (`LOW`/`MEDIUM`/`HIGH`) |
 
 ### Voices
@@ -74,6 +85,7 @@ Set `pipeline_mode: "s2s"` in the agent config. The `stt`, `llm`, and `tts` fiel
 - **OpenAI Realtime** — one of a fixed set: `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`. An unknown voice is rejected on create.
 - **Gemini Live** — any [Gemini-supported voice](https://ai.google.dev/gemini-api/docs/live) (e.g. `Aoede`, `Charon`, `Kore`, `Puck`, `Zephyr`, and more). The set grows per model, so TurnCall doesn't allowlist it — Gemini validates the voice when the session connects.
 - **Nova Sonic** — `matthew` (default), `tiffany`, `amy`, `lupe`, `carlos`. AWS validates on connect.
+- **Grok Voice** — `eve` (default), any other built-in Grok voice, or a custom voice id from your xAI account. xAI validates on connect.
 
 ## OpenAI GPT-Live-1
 
@@ -211,9 +223,23 @@ Nova Sonic **2** (`amazon.nova-2-sonic-v1:0`) is the default; the older `amazon.
   **Sessions roll over about every 6 minutes.** Nova Sonic caps session length and TurnCall transparently continues the conversation in a new one — ordinary phone calls hit this routinely. AWS credentials are re-resolved at each rollover, so calls outlasting a temporary credential's lifetime (assume-role and IRSA are typically ~1 hour) keep working instead of dying mid-sentence.
 </Note>
 
+## Grok Voice
+
+`provider: "xai"` runs xAI's Grok Voice on its own `xai` account: the project's
+`xai` credential (`PUT /v1/credentials/xai`), else the platform's `XAI_API_KEY`.
+
+With no model named it runs `grok-voice-3.0`, pinned rather than xAI's
+`grok-voice-latest` alias, so a live agent's model does not change when the
+alias moves. A model you name (`grok-voice-2.0`, deprecated by xAI, or a later
+one) is sent as written, for xAI to accept or refuse.
+
+```json
+"s2s": {"provider": "xai"}
+```
+
 ## Gateways and third-party models
 
-The `openai` provider speaks the OpenAI-Realtime WebSocket protocol — and so do OpenAI-Realtime-compatible gateways ([Vercel AI Gateway](https://vercel.com/docs/ai-gateway), [LiteLLM](https://docs.litellm.ai/)) and xAI direct. Set `s2s.base_url` to route the realtime connection through one; provider-prefixed models like `xai/grok-voice-think-fast-1.0` or `openai/gpt-realtime-2` then flow over the same protocol — no new provider, same pipeline.
+The `openai` provider speaks the OpenAI-Realtime WebSocket protocol — and so do OpenAI-Realtime-compatible gateways ([Vercel AI Gateway](https://vercel.com/docs/ai-gateway), [LiteLLM](https://docs.litellm.ai/)). Set `s2s.base_url` to route the realtime connection through one; provider-prefixed models like `openai/gpt-realtime-2` then flow over the same protocol — no new provider, same pipeline.
 
 Two requirements:
 
@@ -227,7 +253,7 @@ Two requirements:
 </Steps>
 
 <Note>
-  When `base_url` is set, the OpenAI voice allowlist is bypassed — the gateway routes to models with their own voice sets (e.g. Grok), which it validates upstream. Pass the target model's own voice name.
+  When `base_url` is set, the OpenAI voice allowlist is bypassed — the gateway routes to models with their own voice sets, which it validates upstream. Pass the target model's own voice name.
 </Note>
 
 ## Knowledge bases
@@ -254,7 +280,7 @@ entry in `warnings` naming the mode and provider. Link it in `tool` mode instead
 
 ```
 transport.input → user_agg (VAD)
-  → S2S_LLM (OpenAI Realtime / Gemini Live / Nova Sonic)
+  → S2S_LLM (OpenAI Realtime / Gemini Live / Nova Sonic / Grok Voice)
   → transport.output
   → context_aggregator.assistant → observability
 ```
@@ -265,7 +291,8 @@ transport.input → user_agg (VAD)
 |----------|---------------------|
 | OpenAI Realtime | `OPENAI_API_KEY` |
 | Gemini Live | `GOOGLE_API_KEY` |
-| Gateway (Vercel AI Gateway / LiteLLM / xAI) | `OPENAI_API_KEY` set to the gateway key |
+| Grok Voice | `XAI_API_KEY` |
+| Gateway (Vercel AI Gateway / LiteLLM) | `OPENAI_API_KEY` set to the gateway key |
 | Amazon Nova Sonic | *No key* — see [AWS credentials](/guides/providers#credentials) |
 
 <Warning>
