@@ -32,6 +32,11 @@ not only in production. `ALLOW_PLAIN_HTTP_URLS=true` allows plain http
 everywhere; `false` refuses it in development too. See
 [Compliance](/guides/compliance#the-controls).
 
+**Rebuild an image built on or after 2026-10-19.** TurnCall's pipecat requirement
+allowed any 1.x, so an install or image made from that day on got pipecat
+1.13.0, on which an S2S agent's handoff to its own LLM (delegation) breaks.
+pipecat is now held at `>=1.12.0,<1.13.0`; rebuilding picks up 1.12.
+
 ## Added
 
 **Search and buy numbers.** An admin key can search a Twilio account for
@@ -356,6 +361,10 @@ the caller heard it. The docs said it was left out, but it has always been in
 the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
+
+**pipecat is held below 1.13.** pipecat 1.13.0 (2026-10-19) changed the
+backend-LLM worker an S2S agent delegates to its own LLM through, and the
+requirement allowed it. See the upgrade note above.
 
 **`call.ended` arrives once, as `completed`.** When the agent hung up just as
 the carrier reported the call over, a subscriber could get `call.ended` twice,
