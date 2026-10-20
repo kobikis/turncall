@@ -13,6 +13,7 @@ from pydantic import (
     ValidationError,
     computed_field,
     field_serializer,
+    field_validator,
     model_validator,
 )
 
@@ -216,6 +217,16 @@ class TTSConfigSchema(BaseModel):
         return self
 
 
+def _https_url(value: str | None, label: str) -> str | None:
+    """An outbound URL sent call data must be https:// outside development
+    (#340). Imported here: schemas load before services."""
+    from turncall.services.outbound_url import check_outbound_url
+
+    if not value:
+        return value
+    return check_outbound_url(value, label=label)
+
+
 class ToolDefinitionSchema(BaseModel):
     name: str = Field(..., min_length=1, max_length=128, pattern=r"^[a-z_][a-z0-9_]*$")
     description: str = Field(..., min_length=1, max_length=1024)
@@ -227,6 +238,11 @@ class ToolDefinitionSchema(BaseModel):
     webhook_secret: str | None = Field(default=None, min_length=16, max_length=256)
     timeout_seconds: int = Field(default=10, ge=1, le=300)
     max_retries: int = Field(default=1, ge=0, le=5)
+
+    @field_validator("webhook_url")
+    @classmethod
+    def https_webhook_url(cls, value: str | None) -> str | None:
+        return _https_url(value, "webhook_url")
 
     @model_validator(mode="after")
     def validate_webhook_required_for_non_builtin(self) -> "ToolDefinitionSchema":
@@ -314,6 +330,11 @@ class ServerUrlConfigSchema(BaseModel):
     secret: str | None = Field(default=None, max_length=128)
     timeout_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
     events: list[str] = Field(default_factory=lambda: ["*"])
+
+    @field_validator("url")
+    @classmethod
+    def https_url(cls, value: str | None) -> str | None:
+        return _https_url(value, "server_url.url")
 
 
 class VoicemailBackoffSchema(BaseModel):
@@ -524,6 +545,12 @@ class MCPServerSchema(BaseModel):
         description="Only expose these tools (None = all tools)",
     )
 
+    @field_validator("url")
+    @classmethod
+    def https_url(cls, value: str | None) -> str | None:
+        # Also the scheme check: anything but http(s) is refused here.
+        return _https_url(value, "url")
+
     @model_validator(mode="after")
     def validate_transport_fields(self) -> "MCPServerSchema":
         if self.transport in ("http", "sse") and not self.url:
@@ -531,9 +558,6 @@ class MCPServerSchema(BaseModel):
             raise ValueError(msg)
         if self.transport == "stdio" and not self.command:
             msg = "command is required for stdio transport"
-            raise ValueError(msg)
-        if self.url and not self.url.startswith(("http://", "https://")):
-            msg = "url must start with http:// or https://"
             raise ValueError(msg)
         return self
 

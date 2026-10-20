@@ -4,7 +4,14 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from turncall.api.v1.schemas import E164_PATTERN
 from turncall.domain.carriers import (
@@ -81,6 +88,16 @@ def only_on_twilio(body: TwilioAccountFields, carrier: str) -> None:
         raise ValueError(msg)
 
 
+def _https_server_url(value: str | None) -> str | None:
+    """Call-init is sent the caller's number and the call's variables: https://
+    outside development (#340). Imported here: schemas load before services."""
+    from turncall.services.outbound_url import check_outbound_url
+
+    if not value:
+        return value
+    return check_outbound_url(value, label="server_url")
+
+
 class BindPhoneNumberRequest(TwilioAccountFields, CarrierField):
     carrier: Carrier = Field(
         default=DEFAULT_CARRIER,
@@ -97,6 +114,11 @@ class BindPhoneNumberRequest(TwilioAccountFields, CarrierField):
     server_url: str | None = Field(default=None, max_length=2048)
     sms_enabled: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("server_url")
+    @classmethod
+    def https_server_url(cls, value: str | None) -> str | None:
+        return _https_server_url(value)
 
     @model_validator(mode="after")
     def validate_routing(self) -> "BindPhoneNumberRequest":
@@ -138,6 +160,11 @@ class UpdatePhoneNumberRequest(TwilioAccountFields, CarrierField):
     server_url: str | None = Field(default=None, max_length=2048)
     sms_enabled: bool = False
     metadata: dict[str, Any] | None = None
+
+    @field_validator("server_url")
+    @classmethod
+    def https_server_url(cls, value: str | None) -> str | None:
+        return _https_server_url(value)
 
     @model_validator(mode="after")
     def validate_routing(self) -> "UpdatePhoneNumberRequest":

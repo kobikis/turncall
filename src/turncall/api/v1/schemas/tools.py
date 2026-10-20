@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class RegisterToolRequest(BaseModel):
@@ -15,6 +15,16 @@ class RegisterToolRequest(BaseModel):
     webhook_url: str | None = None
     timeout_seconds: int = Field(default=10, ge=1, le=300)
     max_retries: int = Field(default=1, ge=0, le=5)
+
+    @field_validator("webhook_url")
+    @classmethod
+    def https_webhook_url(cls, value: str | None) -> str | None:
+        # Checked as an agent's tool is, though nothing is stored (#340).
+        from turncall.services.outbound_url import check_outbound_url
+
+        if not value:
+            return value
+        return check_outbound_url(value, label="webhook_url")
 
 
 class ToolResponse(BaseModel):
