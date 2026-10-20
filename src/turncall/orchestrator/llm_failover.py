@@ -89,10 +89,11 @@ class FailoverLLM(FailoverGroup, LLMSwitcher[ServiceSwitcherStrategyFailover]):
 
 
 class _MemberSettings:
-    """A group's settings: read from the member answering now, updated on all."""
+    """A group's settings: read from the member answering now; an update or a
+    field set reaches every member."""
 
     def __init__(self, group: FailoverLLM) -> None:
-        self._group = group
+        object.__setattr__(self, "_group", group)
 
     def apply_update(self, delta: Any) -> dict[str, Any]:
         changed: dict[str, Any] = {}
@@ -101,4 +102,12 @@ class _MemberSettings:
         return changed
 
     def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            # Only this proxy's own, never a member's: and no recursion when
+            # it is copied without `__init__`.
+            raise AttributeError(name)
         return getattr(self._group.active_llm.settings, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        for llm in self._group.llms:
+            setattr(llm.settings, name, value)

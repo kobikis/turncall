@@ -420,6 +420,7 @@ def test_pipecats_private_delegation_surface_is_still_there() -> None:
 
     for name in (
         "_finish_delegation",
+        "_start_delegation",
         "_abandon_delegations",
         "_on_backend_event",
         "_handle_evt_delegation_created",
@@ -434,11 +435,75 @@ def test_pipecats_private_delegation_surface_is_still_there() -> None:
     source = inspect.getsource(llm.OpenAILiveLLMService)
     assert delegation_events.NO_OUTPUT in source
     assert delegation_events.NOT_COMPLETED in source  # #262
-    # How a timeout is told apart, and how an error is tied to its delegation.
+    # How a timeout is told apart from every other end.
     timeout = inspect.getsource(llm.OpenAILiveLLMService._delegation_timeout)
     assert timeout.index("current.timeout_task = None") < timeout.index(
         "self._finish_delegation()"
     )
-    assert 'f"Delegation {current.id} failed' in inspect.getsource(
-        llm.OpenAILiveLLMService._on_backend_event
+    # A failed start is reported from within `_start_delegation` itself.
+    start = inspect.getsource(llm.OpenAILiveLLMService._start_delegation)
+    assert start.index("await self.push_error(") < start.index(
+        "await self._finish_delegation()"
     )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_start_failing_after_its_timeout_leaves_the_next_one_alone(
+    stored: AsyncMock,
+) -> None:
+    """d1 waits for the delegate to attach; its timeout fires first, records it
+    and starts d2. d1's start then fails: pipecat would finish d2 with it,
+    though the delegate is working on d2."""
+    live = _live({}, _call_context(), tools=[_BOOK])
+    live._backend_attached.clear()
+    live._attach_backend = AsyncMock(side_effect=lambda: live._backend_attached.set())
+    live._backend_session.send.side_effect = [
+        "idle",  # d2's, sent first
+        RuntimeError("detached"),  # d1's, late
+    ]
+    live._delegation.timeout_secs = 0.01
+
+    first = asyncio.ensure_future(_created(live, id="d1"))
+    await asyncio.sleep(0)
+    await _created(live, id="d2")  # waits behind d1
+    await first
+
+    assert [p["outcome"] for p in _payloads(stored)] == ["timed_out"]
+    assert live._current_delegation.id == "d2"
+    await live._on_backend_event(BackendOutput(text="Done."))
+    await live._on_backend_event(BackendIdle())
+    await _settle(live)
+    assert [p["outcome"] for p in _payloads(stored)] == ["timed_out", "answered"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_wait_for_quiet_is_not_the_delegations(stored: AsyncMock) -> None:
+    """A delegation that ends the call waits for gpt-live-1 to be quiet before
+    its goodbye; that wait is not part of how long the delegation took."""
+    from unittest.mock import PropertyMock
+
+    from turncall.orchestrator.hangup import HangupAfterReply
+
+    live = _live({}, _call_context(), tools=[_BOOK])
+    clock = iter([0.0, 2.0, 9.0])  # created, ended, after the wait for quiet
+    state = {"ending": False}
+    with (
+        patch.object(
+            delegation_events, "time", SimpleNamespace(monotonic=lambda: next(clock))
+        ),
+        patch.object(
+            HangupAfterReply,
+            "ending",
+            new=PropertyMock(side_effect=lambda: state["ending"]),
+        ),
+        patch.object(HangupAfterReply, "arm_when_quiet", new=AsyncMock()),
+    ):
+        await _created(live)
+        state["ending"] = True
+        await live._on_backend_event(BackendOutput(text="Goodbye!"))
+        await live._on_backend_event(BackendIdle())
+        await _settle(live)
+
+    assert [p["duration_ms"] for p in _payloads(stored)] == [2000]

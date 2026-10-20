@@ -15,6 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 from tests.conftest import creds
+from tests.unit.test_openai_live_delegate_failover import _paired
 from turncall.api.v1.schemas.agents import AgentConfigSchema
 from turncall.domain.models import AgentConfig, ToolDefinition
 from turncall.orchestrator.pipeline_factory import CallContext, create_pipeline
@@ -28,13 +29,6 @@ _BOOK = {
     "parameters_schema": _EMPTY,
     "webhook_url": "https://example.com/book",
 }
-
-
-def _paired(prompt: str) -> str:
-    """The delegate's prompt, with pipecat's pairing instruction after it (1.13)."""
-    from pipecat.workers.llm.backend_llm_worker import BACKEND_PAIRING_INSTRUCTION
-
-    return f"{prompt}\n\n{BACKEND_PAIRING_INSTRUCTION}"
 
 
 def _builtin(name: str) -> dict[str, Any]:

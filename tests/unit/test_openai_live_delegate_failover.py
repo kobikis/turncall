@@ -232,6 +232,7 @@ async def test_an_unusable_delegate_fails_over_and_the_delegation_is_answered() 
         # What gpt-live-1's client delegation does: attach, send the request,
         # read the delegate's outputs until it goes idle.
         outputs: list[str] = []
+        idle = False
         try:
             async with _BackendSession(front, "delegate", timeout_secs=5) as session:
                 await session.send("book a table")
@@ -239,9 +240,12 @@ async def test_an_unusable_delegate_fails_over_and_the_delegation_is_answered() 
                     if isinstance(event, BackendOutput):
                         outputs.append(event.text)
                     elif isinstance(event, BackendIdle):
+                        idle = True
                         break
         finally:
             await front.cancel()
+        # The replayed context is one run, not two: the delegate goes idle.
+        assert idle, "the delegate never went idle after failing over"
         return " ".join(outputs)
 
     answer = asyncio.create_task(_delegate())
@@ -270,6 +274,8 @@ async def test_every_member_hears_what_the_backend_worker_asks_of_its_llm() -> N
         assert member._settings.use_provider_thinking_default is True
         assert member._settings.system_instruction.endswith(BACKEND_PAIRING_INSTRUCTION)
     assert group.settings.use_provider_thinking_default is True
+    group.settings.temperature = 0.2
+    assert [m._settings.temperature for m in group.llms] == [0.2, 0.2]
     assert await group.cancel_function_calls(reason="detached") == []
 
     refusing = _Fake("c")

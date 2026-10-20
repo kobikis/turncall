@@ -9,6 +9,7 @@ armed once gpt-live-1 is quiet, so the goodbye is a reply of its own and the
 one the call ends after. Driven at the built live service, as #247's tests are.
 """
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, PropertyMock, patch
 
@@ -23,9 +24,10 @@ from pipecat.workers.llm.backend_llm_worker import (
 from tests.unit.test_delegation_completed import (
     _BOOK,
     _call_context,
-    _delegate,
+    _created,
     _live,
     _payloads,
+    _settle,
 )
 from turncall.orchestrator import delegation_events
 from turncall.orchestrator.delegation_events import NO_OUTPUT, NOT_COMPLETED
@@ -43,9 +45,14 @@ def stored() -> Any:
         yield store
 
 
-async def _run(*reported: Any, ending: bool = True) -> list[Any]:
-    """What reached the gate and gpt-live-1, in order."""
+async def _run(
+    *reported: Any, ending: bool = True, ended_before: bool = False
+) -> list[Any]:
+    """What reached the gate and gpt-live-1, in order. The delegate's tool
+    marks the call as ending once the delegation is under way (`ending`), or
+    the call was ending before it started (`ended_before`)."""
     seen: list[Any] = []
+    state = {"ending": ended_before}
 
     async def _arm_when_quiet(*_: Any) -> None:
         seen.append("arm when quiet")
@@ -58,11 +65,23 @@ async def _run(*reported: Any, ending: bool = True) -> list[Any]:
         (type(event), event.content)
     )
     with (
-        patch.object(HangupAfterReply, "ending", new=PropertyMock(return_value=ending)),
+        patch.object(
+            HangupAfterReply,
+            "ending",
+            new=PropertyMock(side_effect=lambda: state["ending"]),
+        ),
         patch.object(HangupAfterReply, "arm_when_quiet", new=_arm_when_quiet),
         patch.object(HangupAfterReply, "queue_frame", new=_queue),
     ):
-        await _delegate(live, *reported)
+        await _created(live)
+        state["ending"] = state["ending"] or ending
+        for event in reported:
+            if event == "wait":
+                for _ in range(5):
+                    await asyncio.sleep(0)
+            else:
+                await live._on_backend_event(event)
+        await _settle(live)
     return seen
 
 
@@ -122,3 +141,38 @@ async def test_a_call_not_ending_is_relayed_as_ever(stored: AsyncMock) -> None:
 
     assert seen == [(_COMMENTARY, NO_OUTPUT)]
     assert [p["outcome"] for p in _payloads(stored)] == ["failed"]
+
+
+async def test_a_goodbye_the_delegate_does_not_finish_is_said_anyway(
+    stored: AsyncMock,
+) -> None:
+    """Still working after its goodbye — a slow run, a stuck tool — the
+    delegate does not hold the caller in silence: the goodbye is said once the
+    hold is up, and what it says after that is kept from the caller."""
+    with patch.object(delegation_events, "_GOODBYE_HOLD_SECS", 0):
+        seen = await _run(
+            BackendOutput(text="Goodbye!"),
+            "wait",
+            BackendOutput(text="The booking is confirmed."),
+            BackendIdle(),
+        )
+
+    assert seen == [
+        "arm when quiet",
+        (_COMMENTARY, "Goodbye!"),
+        (_THINKING, "The booking is confirmed."),
+    ]
+    assert [p["outcome"] for p in _payloads(stored)] == ["answered"]
+
+
+async def test_a_delegation_that_started_after_the_end_did_not_end_the_call(
+    stored: AsyncMock,
+) -> None:
+    """Waiting behind the one that ended the call, it is relayed as any other
+    and answered only if it said something: no second goodbye, no second arm."""
+    silent = await _run(BackendIdle(), ended_before=True)
+    assert silent == [(_COMMENTARY, NO_OUTPUT)]
+
+    spoke = await _run(BackendOutput(text="Noted."), BackendIdle(), ended_before=True)
+    assert spoke == [(_COMMENTARY, "Noted.")]
+    assert [p["outcome"] for p in _payloads(stored)] == ["failed", "answered"]
