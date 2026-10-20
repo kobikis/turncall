@@ -119,14 +119,19 @@ def _analysis_transcript(
 # signal. Cap the wait and fire regardless of the recording outcome.
 RECORDING_WAIT_TIMEOUT_S = 15.0
 RECORDING_POLL_INTERVAL_S = 0.5
-_TERMINAL_RECORDING = {"completed", "failed", "expired"}
+# Post-call runs once the call's pipeline has finished (#356), or for a call no
+# pipeline ran, so `none` — capture never started — can no longer change: a
+# pipeline that failed to build, or one cancelled before it started (a caller
+# who hung up while its services connected: pipecat 1.13 sends no frame to a
+# processor not yet started, #367).
+_TERMINAL_RECORDING = {"none", "completed", "failed", "expired"}
 
 
 async def _wait_for_recording(
     session_factory: async_sessionmaker[AsyncSession],
     call_id: UUID,
 ) -> tuple[str | None, str]:
-    """Poll recording_status until terminal (completed/failed) or timeout.
+    """Poll recording_status until terminal (none/completed/failed) or timeout.
 
     The recording is flushed by a separate task on WebSocket disconnect, so its
     status/url land asynchronously. Returns (recording_url, recording_status).
@@ -143,9 +148,6 @@ async def _wait_for_recording(
                 status = call.recording_status
                 url = call.recording_url
         if status in _TERMINAL_RECORDING:
-            return url, status
-        if call and call.started_at is None:
-            # Its pipeline never ran (a build failure), so nothing is recording.
             return url, status
         if waited >= RECORDING_WAIT_TIMEOUT_S:
             logger.warning(
