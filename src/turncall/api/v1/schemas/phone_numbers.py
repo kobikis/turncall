@@ -9,11 +9,12 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
 
-from turncall.api.v1.schemas import E164_PATTERN
+from turncall.api.v1.schemas import E164_PATTERN, outbound_url
 from turncall.domain.carriers import (
     ASTERISK,
     CARRIERS,
@@ -88,16 +89,6 @@ def only_on_twilio(body: TwilioAccountFields, carrier: str) -> None:
         raise ValueError(msg)
 
 
-def _https_server_url(value: str | None) -> str | None:
-    """Call-init is sent the caller's number and the call's variables: https://
-    outside development (#340). Imported here: schemas load before services."""
-    from turncall.services.outbound_url import check_outbound_url
-
-    if not value:
-        return value
-    return check_outbound_url(value, label="server_url")
-
-
 class BindPhoneNumberRequest(TwilioAccountFields, CarrierField):
     carrier: Carrier = Field(
         default=DEFAULT_CARRIER,
@@ -117,8 +108,9 @@ class BindPhoneNumberRequest(TwilioAccountFields, CarrierField):
 
     @field_validator("server_url")
     @classmethod
-    def https_server_url(cls, value: str | None) -> str | None:
-        return _https_server_url(value)
+    def https_server_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+        # Call-init is sent the caller's number and the call's variables.
+        return outbound_url(value, info, "server_url")
 
     @model_validator(mode="after")
     def validate_routing(self) -> "BindPhoneNumberRequest":
@@ -163,8 +155,9 @@ class UpdatePhoneNumberRequest(TwilioAccountFields, CarrierField):
 
     @field_validator("server_url")
     @classmethod
-    def https_server_url(cls, value: str | None) -> str | None:
-        return _https_server_url(value)
+    def https_server_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+        # Call-init is sent the caller's number and the call's variables.
+        return outbound_url(value, info, "server_url")
 
     @model_validator(mode="after")
     def validate_routing(self) -> "UpdatePhoneNumberRequest":

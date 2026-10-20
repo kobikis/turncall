@@ -1,11 +1,12 @@
 """A delivery to a plain http:// URL the write gate would now refuse is
 logged, not stopped (#340).
 
-Four sites send call data out: webhook subscriptions, call-init, tool
-webhooks and MCP servers. A URL stored before the gate, or an inline config
-from call-init, can still be plain http where it is no longer allowed. Each
-such delivery logs `plain_http_delivery` (once a minute per kind, the host
-only) and still goes out, and nothing about the warning can stop it.
+Five kinds of delivery send call data out: webhook subscriptions, call-init,
+the other server events, tool webhooks and MCP servers. A URL stored before
+the gate, or an inline config, can still be plain http where it is no longer
+allowed. Each such delivery logs `plain_http_delivery` (once a minute per
+kind, the host only) and still goes out, and nothing about the warning can
+stop it.
 """
 
 import uuid
@@ -16,7 +17,7 @@ import pytest
 from loguru import logger
 
 from tests.conftest import mcp_settings
-from turncall.config.settings import Settings
+from turncall.config.settings import Settings, get_settings
 from turncall.domain.models import MCPServerConfig, ToolDefinition
 from turncall.events import server_events, webhook_delivery
 from turncall.events.server_events import (
@@ -34,7 +35,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
 PLAIN = "http://crm.example.com/hook/s3cret-path?token=s3cret-query"
 IN_CLUSTER = "http://turncall-agent-9001.turncall.svc.cluster.local:8000/events"
-KINDS = ["webhook", "call_init", "tool", "mcp"]
+KINDS = ["webhook", "call_init", "server_event", "tool", "mcp"]
 
 Deliver = Callable[[str], Awaitable[None]]
 
@@ -52,7 +53,9 @@ class _Client:
 
 @pytest.fixture
 def env(monkeypatch):
-    """The process settings the delivery sites read, and nothing from `.env`."""
+    """The process settings the delivery sites read, and nothing from `.env`.
+    A site that reads `get_settings()` itself caches it under this test's
+    environment, so the cache is cleared after, before the next test."""
 
     def _set(turncall_env: str | None, allow: str | None = None) -> None:
         for name, value in (
@@ -66,7 +69,8 @@ def env(monkeypatch):
         settings = Settings(_env_file=None)
         monkeypatch.setattr(outbound_url, "get_settings", lambda: settings)
 
-    return _set
+    yield _set
+    get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -129,6 +133,13 @@ def deliver(sent) -> Callable[[str], Deliver]:
         response = await send_server_event(url, event, secret="s" * 32)
         assert response.success
 
+    async def server_event(url: str) -> None:
+        event = ServerEventRequest(
+            event_type=ServerEventType.CALL_END, call_id="c1", payload={}
+        )
+        response = await send_server_event(url, event, secret="s" * 32)
+        assert response.success
+
     async def tool(url: str) -> None:
         tool_def = ToolDefinition(
             name="book",
@@ -149,9 +160,21 @@ def deliver(sent) -> Callable[[str], Deliver]:
 
         manager._create_http_session = connect  # type: ignore[method-assign]
         server = MCPServerConfig(name="crm", transport="http", url=url)
-        assert await manager._create_session(server, mcp_settings()) is session
+        # The settings the manager is handed, as the process's are here.
+        process = outbound_url.get_settings()
+        settings = mcp_settings(
+            environment=process.environment.value,
+            allow_plain_http_urls=process.allow_plain_http_urls,
+        )
+        assert await manager._create_session(server, settings) is session
 
-    sites = {"webhook": webhook, "call_init": call_init, "tool": tool, "mcp": mcp}
+    sites = {
+        "webhook": webhook,
+        "call_init": call_init,
+        "server_event": server_event,
+        "tool": tool,
+        "mcp": mcp,
+    }
     return sites.__getitem__
 
 
@@ -267,3 +290,20 @@ async def test_a_failing_warning_never_stops_the_delivery(
     assert sent == [PLAIN]
     (failed,) = [r for r in records if r["message"] == "plain_http_warning_failed"]
     assert failed["extra"]["error"] == "RuntimeError"
+
+
+async def test_mcp_reads_the_settings_it_is_handed(env, clock, records) -> None:
+    # The process allows plain http; the settings the session is built with
+    # do not, and they are the ones that decide.
+    env("development")
+    manager = MCPSessionManager(call_id=uuid.uuid4(), project_id=uuid.uuid4())
+
+    async def connect(server: MCPServerConfig) -> object:
+        return object()
+
+    manager._create_http_session = connect  # type: ignore[method-assign]
+    server = MCPServerConfig(name="crm", transport="http", url=PLAIN)
+    await manager._create_session(server, mcp_settings(environment="production"))
+
+    (warning,) = _warnings(records)
+    assert warning["extra"]["route"] == "mcp"

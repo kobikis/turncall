@@ -4,7 +4,9 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+
+from turncall.api.v1.schemas import outbound_url
 
 
 class CreateWebhookRequest(BaseModel):
@@ -16,12 +18,9 @@ class CreateWebhookRequest(BaseModel):
 
     @field_validator("url")
     @classmethod
-    def https_url(cls, value: str) -> str:
-        # Events carry transcripts and caller numbers: https:// outside
-        # development (#340). Imported here: schemas load before services.
-        from turncall.services.outbound_url import check_outbound_url
-
-        return check_outbound_url(value, label="url")
+    def https_url(cls, value: str, info: ValidationInfo) -> str | None:
+        # Events carry transcripts and caller numbers (#340).
+        return outbound_url(value, info, "url")
 
 
 class UpdateWebhookRequest(BaseModel):

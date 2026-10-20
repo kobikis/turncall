@@ -48,6 +48,25 @@ async def _warn_unverifiable_webhooks(settings: Settings) -> None:
         logger.exception("twilio_numbers_check_failed")
 
 
+async def _warn_plain_http_urls(settings: Settings) -> None:
+    """Whether plain http:// webhook, call-init, tool and MCP URLs are allowed
+    (#340), in plain words when only because TURNCALL_ENV defaults; where they
+    are not, the stored ones that writing now would refuse. Only warnings: a
+    failed check never stops the server starting."""
+    from turncall.services.outbound_url import (
+        log_plain_http_policy,
+        warn_stored_plain_http,
+    )
+    from turncall.storage.database import get_session_factory
+
+    log_plain_http_policy(settings)
+    try:
+        async with get_session_factory()() as session:
+            await warn_stored_plain_http(session, settings)
+    except Exception:
+        logger.exception("plain_http_stored_check_failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: startup and shutdown."""
@@ -79,12 +98,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_redis(settings.redis)
     await _ensure_credentials_readable(settings)
     await _warn_unverifiable_webhooks(settings)
-
-    # Whether plain http:// webhook, call-init, tool and MCP URLs are allowed
-    # (#340), in plain words when only because TURNCALL_ENV defaults.
-    from turncall.services.outbound_url import log_plain_http_policy
-
-    log_plain_http_policy(settings)
+    await _warn_plain_http_urls(settings)
 
     # Log all agent configs on startup
     try:

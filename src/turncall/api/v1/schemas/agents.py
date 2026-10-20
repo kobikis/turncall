@@ -11,12 +11,14 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
+    ValidationInfo,
     computed_field,
     field_serializer,
     field_validator,
     model_validator,
 )
 
+from turncall.api.v1.schemas import outbound_url
 from turncall.api.v1.schemas.knowledge import LinkKnowledgeBaseRequest
 from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
@@ -217,16 +219,6 @@ class TTSConfigSchema(BaseModel):
         return self
 
 
-def _https_url(value: str | None, label: str) -> str | None:
-    """An outbound URL sent call data must be https:// outside development
-    (#340). Imported here: schemas load before services."""
-    from turncall.services.outbound_url import check_outbound_url
-
-    if not value:
-        return value
-    return check_outbound_url(value, label=label)
-
-
 class ToolDefinitionSchema(BaseModel):
     name: str = Field(..., min_length=1, max_length=128, pattern=r"^[a-z_][a-z0-9_]*$")
     description: str = Field(..., min_length=1, max_length=1024)
@@ -241,8 +233,8 @@ class ToolDefinitionSchema(BaseModel):
 
     @field_validator("webhook_url")
     @classmethod
-    def https_webhook_url(cls, value: str | None) -> str | None:
-        return _https_url(value, "webhook_url")
+    def https_webhook_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+        return outbound_url(value, info, "webhook_url")
 
     @model_validator(mode="after")
     def validate_webhook_required_for_non_builtin(self) -> "ToolDefinitionSchema":
@@ -333,8 +325,8 @@ class ServerUrlConfigSchema(BaseModel):
 
     @field_validator("url")
     @classmethod
-    def https_url(cls, value: str | None) -> str | None:
-        return _https_url(value, "server_url.url")
+    def https_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+        return outbound_url(value, info, "server_url.url")
 
 
 class VoicemailBackoffSchema(BaseModel):
@@ -547,9 +539,9 @@ class MCPServerSchema(BaseModel):
 
     @field_validator("url")
     @classmethod
-    def https_url(cls, value: str | None) -> str | None:
+    def https_url(cls, value: str | None, info: ValidationInfo) -> str | None:
         # Also the scheme check: anything but http(s) is refused here.
-        return _https_url(value, "url")
+        return outbound_url(value, info, "url")
 
     @model_validator(mode="after")
     def validate_transport_fields(self) -> "MCPServerSchema":

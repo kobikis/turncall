@@ -34,7 +34,7 @@ def test_production_server_url_scheme(url, allowed):
     assert is_https_or_in_cluster(url) is allowed
 
 
-def _connect(app, monkeypatch, environment: str, server_url: object):
+def _connect(app, monkeypatch, environment: str, server_url: object, **request_data):
     monkeypatch.delenv("ALLOW_PLAIN_HTTP_URLS", raising=False)
     monkeypatch.setenv("TURNCALL_ENV", environment)
     settings = Settings(_env_file=None)
@@ -46,7 +46,11 @@ def _connect(app, monkeypatch, environment: str, server_url: object):
     app.app.dependency_overrides[get_session] = lambda: AsyncMock()
     return app.post(
         "/v1/webrtc/connect",
-        json={"sdp": "v=0", "type": "offer", "requestData": {"server_url": server_url}},
+        json={
+            "sdp": "v=0",
+            "type": "offer",
+            "requestData": {"server_url": server_url, **request_data},
+        },
         headers={"Authorization": "Bearer x"},
     )
 
@@ -69,3 +73,32 @@ def test_a_server_url_that_is_not_a_string_is_a_400(app, monkeypatch):
 
     assert r.status_code == 400, r.text
     assert "server_url must be a string" in r.text
+
+
+@pytest.mark.unit
+def test_a_server_url_beside_an_agent_id_is_not_checked(app, monkeypatch):
+    # The agent_id wins, so the server_url is never called and never refused.
+    monkeypatch.setattr(
+        webrtc.agent_repo, "get_agent_by_id", AsyncMock(return_value=None)
+    )
+    agent_id = str(uuid.uuid4())
+
+    r = _connect(
+        app,
+        monkeypatch,
+        "production",
+        "http://crm.example.com/call-init",
+        agent_id=agent_id,
+    )
+
+    assert r.status_code == 404, r.text
+    assert "server_url" not in r.text
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("agent_id", [123, ["x"], {"id": "x"}])
+def test_an_agent_id_that_is_not_a_string_is_a_400(app, monkeypatch, agent_id):
+    r = _connect(app, monkeypatch, "production", None, agent_id=agent_id)
+
+    assert r.status_code == 400, r.text
+    assert "agent_id must be a UUID" in r.text

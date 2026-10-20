@@ -93,12 +93,9 @@ async def deliver_webhook(
     import asyncio
 
     # Once per subscriber per event, not per retry. The delivery goes ahead.
-    try:
-        warn_if_plain_http(
-            "webhook", url, project_id=event.project_id, event=event.event_type
-        )
-    except Exception as exc:  # a log line must never cost the delivery
-        logger.warning("plain_http_warning_failed", error=type(exc).__name__)
+    warn_if_plain_http(
+        "webhook", url, project_id=event.project_id, event=event.event_type
+    )
 
     client = get_http_client()
     for attempt in range(max_retries + 1):

@@ -62,6 +62,18 @@ _request_handler = SmallWebRTCRequestHandler(
 _calls_by_pc: dict[str, tuple[UUID, UUID]] = {}
 
 
+def _is_uuid(value: object) -> bool:
+    """Whether a request's agent_id is a UUID string. Not a string at all
+    (`123`) is no: UUID() raises AttributeError on one, not ValueError."""
+    if not isinstance(value, str):
+        return False
+    try:
+        UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
 async def _json_object(request: Request) -> dict[str, Any]:
     """The request's body as a JSON object; 400 otherwise."""
     try:
@@ -138,21 +150,19 @@ async def webrtc_connect(
         )
 
     # Validate agent_id shape here so a malformed value is a clean 400, not a
-    # ValueError -> 500 when _resolve_agent does UUID(agent_id_str).
-    if agent_id_str:
-        try:
-            UUID(agent_id_str)
-        except (ValueError, TypeError) as exc:
-            raise ApiError(
-                status_code=400,
-                code=ErrorCode.VALIDATION_ERROR,
-                message=f"agent_id must be a UUID, got {agent_id_str!r}",
-            ) from exc
+    # 500 when _resolve_agent does UUID(agent_id_str).
+    if agent_id_str and not _is_uuid(agent_id_str):
+        raise ApiError(
+            status_code=400,
+            code=ErrorCode.VALIDATION_ERROR,
+            message=f"agent_id must be a UUID, got {agent_id_str!r}",
+        )
 
     # server_url must be https:// (or an in-cluster Service) wherever plain
     # http is not allowed (#340). Not a pydantic body, so a 400, not a 422.
+    # Checked only when it is used: an agent_id wins over it.
     settings = get_settings()
-    if server_url:
+    if server_url and not agent_id_str:
         if not isinstance(server_url, str):
             raise ApiError(
                 status_code=400,

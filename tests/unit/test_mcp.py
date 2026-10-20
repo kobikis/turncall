@@ -54,7 +54,9 @@ class TestMCPServerSchema:
             MCPServerSchema(name="bad", transport="stdio")
 
     def test_url_must_be_http(self) -> None:
-        with pytest.raises(ValueError, match="must be an https:// URL, not ftp://"):
+        with pytest.raises(
+            ValueError, match="must be an http:// or https:// URL, not ftp://"
+        ):
             MCPServerSchema(name="bad", transport="http", url="ftp://bad.com")
 
     def test_invalid_transport(self) -> None:

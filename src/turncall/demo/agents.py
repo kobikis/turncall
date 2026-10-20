@@ -45,12 +45,14 @@ def load_demo_agents(
 
 def _demo_agent(name: str, blob: Any, max_call_seconds: int) -> AgentConfig:
     # The API's schema first: it forbids unknown fields, so a typo is an error
-    # here rather than a setting silently ignored on the call.
+    # here rather than a setting silently ignored on the call. An inline
+    # config, so a plain http:// URL is not refused (#340).
+    from turncall.api.v1.schemas import INLINE_CONFIG
     from turncall.api.v1.schemas.agents import AgentConfigSchema
 
     try:
         config = AgentConfig.model_validate(
-            AgentConfigSchema.model_validate(blob).model_dump()
+            AgentConfigSchema.model_validate(blob, context=INLINE_CONFIG).model_dump()
         )
     except ValidationError as exc:
         raise DemoAgentError(f"demo agent {name!r} is invalid: {exc}") from exc

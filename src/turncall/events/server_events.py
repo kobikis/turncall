@@ -92,12 +92,11 @@ async def send_server_event(
         headers["X-TurnCall-Timestamp"] = str(timestamp)
 
     # The server_url may be stored or inline; either way the event is sent.
-    try:
-        warn_if_plain_http(
-            "call_init", server_url, call_id=event.call_id, event=event.event_type
-        )
-    except Exception as exc:  # a log line must never cost the delivery
-        logger.warning("plain_http_warning_failed", error=type(exc).__name__)
+    # Call-init, the request for an agent, is counted apart from the rest.
+    kind = (
+        "call_init" if event.event_type == ServerEventType.CALL_INIT else "server_event"
+    )
+    warn_if_plain_http(kind, server_url, call_id=event.call_id, event=event.event_type)
 
     client = get_http_client()
     try:

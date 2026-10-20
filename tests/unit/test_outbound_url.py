@@ -8,6 +8,8 @@ minute per kind and with its host only; startup says which it is, plainly
 when development is only TURNCALL_ENV's default.
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
 from loguru import logger
 
@@ -20,6 +22,7 @@ from turncall.services.outbound_url import (
     log_plain_http_policy,
     plain_http_allowed,
     warn_if_plain_http,
+    warn_stored_plain_http,
 )
 from turncall.services.webhook_verification import RefusalLog
 
@@ -191,13 +194,72 @@ class TestCheckOutboundUrl:
         assert check_outbound_url(url, label="url", settings=settings) == url
 
     @pytest.mark.parametrize(
-        "url", ["ftp://crm.example.com/hook", "ws://crm.example.com", "crm.example.com"]
+        "url", ["ftp://crm.example.com/hook", "ws://crm.example.com"]
     )
     def test_another_scheme_is_refused_even_where_http_is_allowed(
         self, make, url
     ) -> None:
-        with pytest.raises(ValueError, match=r"^url must be an https:// URL"):
+        scheme = url.split(":")[0]
+        with pytest.raises(ValueError) as raised:
             check_outbound_url(url, label="url", settings=make("development", "true"))
+
+        # It names what this deployment takes, http:// included.
+        assert str(raised.value) == (
+            f"url must be an http:// or https:// URL, not {scheme}://"
+        )
+
+    def test_another_scheme_names_only_https_where_http_is_refused(self, make) -> None:
+        with pytest.raises(ValueError) as raised:
+            check_outbound_url(
+                "ftp://x.example/", label="url", settings=make("staging")
+            )
+
+        assert str(raised.value) == "url must be an https:// URL, not ftp://"
+
+    @pytest.mark.parametrize("url", ["localhost:8080/hook", "crm.example.com/hook"])
+    @pytest.mark.parametrize(
+        ("env", "start"),
+        [("development", "https:// or http://"), ("production", "https://")],
+    )
+    def test_a_url_without_a_scheme_is_told_to_add_one(
+        self, make, url, env, start
+    ) -> None:
+        with pytest.raises(ValueError) as raised:
+            check_outbound_url(url, label="server_url", settings=make(env))
+
+        message = str(raised.value)
+        assert message.endswith(f"it has no scheme, so start it with {start}")
+        # `localhost:` is not taken for a scheme.
+        assert "localhost://" not in message
+
+    @pytest.mark.parametrize(
+        "url", ["https://", "https:///hook", "https://:443/hook", "http://"]
+    )
+    @pytest.mark.parametrize("allow", [None, "true"])
+    def test_a_url_without_a_host_is_refused(self, make, url, allow) -> None:
+        with pytest.raises(ValueError, match=r"^url must name a host"):
+            check_outbound_url(url, label="url", settings=make("development", allow))
+
+    def test_an_unparseable_url_is_refused(self, make) -> None:
+        with pytest.raises(ValueError, match=r"^url is not a URL"):
+            check_outbound_url("https://[::1/hook", label="url", settings=make())
+
+    def test_an_inline_config_takes_plain_http_whatever_the_settings(
+        self, make
+    ) -> None:
+        url = "http://crm.example.com/hook"
+        settings = make("production", "false")
+
+        assert (
+            check_outbound_url(
+                url, label="url", settings=settings, allow_plain_http=True
+            )
+            == url
+        )
+        with pytest.raises(ValueError, match="http:// or https://"):
+            check_outbound_url(
+                "ftp://x.example", label="url", settings=settings, allow_plain_http=True
+            )
 
     def test_a_smuggled_service_suffix_is_refused(self, make) -> None:
         with pytest.raises(ValueError):
@@ -265,9 +327,33 @@ class TestWarnIfPlainHttp:
         assert not warn_if_plain_http("webhook", "http://x.example", settings=settings)
         assert logs == []
 
-    def test_an_unknown_kind_is_a_bug(self, make) -> None:
-        with pytest.raises(ValueError):
-            warn_if_plain_http("sms", "http://x.example", settings=make("production"))
+    def test_an_unknown_kind_is_logged_never_raised(self, make, now, logs) -> None:
+        assert not warn_if_plain_http(
+            "sms", "http://x.example", settings=make("production")
+        )
+        assert [line for _, line in logs if "plain_http_warning_unknown_kind" in line]
+        assert not any("plain_http_delivery" in line for _, line in logs)
+
+    def test_nothing_it_meets_is_raised_into_the_delivery(
+        self, make, logs, monkeypatch
+    ) -> None:
+        class Broken:
+            def warn(self, *_: object, **__: object) -> bool:
+                raise RuntimeError("the log is broken")
+
+        monkeypatch.setattr(outbound_url, "plain_http_deliveries", Broken())
+
+        assert not warn_if_plain_http(
+            "tool", "http://x.example", settings=make("production")
+        )
+        assert [line for _, line in logs if "plain_http_warning_failed" in line]
+
+    def test_each_server_event_kind_is_counted_apart(self, make, now) -> None:
+        settings = make("production")
+        url = "http://crm.example.com/events"
+
+        assert warn_if_plain_http("call_init", url, settings=settings)
+        assert warn_if_plain_http("server_event", url, settings=settings)
 
 
 class TestStartupLine:
@@ -308,3 +394,14 @@ class TestStartupLine:
         assert message.startswith("plain_http_urls | ")
         assert said in message
         assert [lvl for lvl, line in logs if message in line] == [level]
+
+
+class TestStoredUrls:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("env", "allow"), [(None, None), ("production", "true")])
+    async def test_nothing_is_read_where_plain_http_is_allowed(
+        self, make, env, allow
+    ) -> None:
+        session = AsyncMock(execute=AsyncMock(side_effect=AssertionError("read")))
+
+        assert await warn_stored_plain_http(session, make(env, allow)) == {}
