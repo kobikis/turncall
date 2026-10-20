@@ -6,8 +6,11 @@ in an agent's config `server_url.url`, a tool's `webhook_url` and an MCP
 server's `url`, plus `POST /v1/tools`. Plain http is refused in staging and
 production, allowed in development (the default) or with
 ALLOW_PLAIN_HTTP_URLS=true, and allowed everywhere to an in-cluster Service.
+Inline configs (an eval run's `inline` target, a demo agents file) are not
+refused for it.
 """
 
+import json
 import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -198,16 +201,38 @@ def test_an_absent_optional_url_is_not_checked(env) -> None:
     assert RegisterToolRequest(name="x", description="d").webhook_url is None
 
 
-def test_an_eval_inline_target_is_checked_as_an_agent_is(env) -> None:
+def _inline_agent(url: str) -> dict[str, Any]:
+    return {
+        "server_url": {"url": url},
+        "tools": [_tool(url)],
+        "mcp_servers": [_mcp(url)],
+    }
+
+
+def test_an_eval_inline_target_is_not_refused_for_plain_http(env) -> None:
+    # An inline config is never refused for it: a mocked tool is never called.
     env("production")
+    target = EvalTarget(type="inline", agent=_inline_agent(PLAIN))
+    assert target.agent is not None
+
+    # It is still a URL check: another scheme is refused, as for an agent.
+    with pytest.raises(ValidationError, match="must be an http:// or https:// URL"):
+        EvalTarget(type="inline", agent={"tools": [_tool("ftp://receiver.example")]})
+    # And the same config, stored, is refused.
     with pytest.raises(ValidationError, match="must use https://"):
-        EvalTarget(type="inline", agent={"tools": [_tool(PLAIN)]})
+        AgentConfigSchema.model_validate(_inline_agent(PLAIN))
+
+
+def test_a_demo_agents_file_is_not_refused_for_plain_http(env, tmp_path) -> None:
+    from turncall.demo.agents import load_demo_agents
 
     env("production")
-    target = EvalTarget(
-        type="inline", agent={"tools": [_tool("https://receiver.example.com/hook")]}
-    )
-    assert target.agent is not None
+    path = tmp_path / "agents.json"
+    path.write_text(json.dumps({"front-desk": {"server_url": {"url": PLAIN}}}))
+
+    agents = load_demo_agents(path, max_call_seconds=60)
+
+    assert agents["front-desk"].server_url.url == PLAIN
 
 
 # Through the routes: each refusal is a 422 in the API's error shape, raised
@@ -296,15 +321,25 @@ def test_each_route_refuses_plain_http_with_a_422(app, admin, env, route) -> Non
     assert "must use https://" in errors[0]["msg"]
 
 
-def test_an_eval_runs_inline_target_is_a_422(app, admin, env) -> None:
+def test_an_eval_runs_inline_target_is_not_a_422_for_plain_http(
+    app, admin, env, monkeypatch
+) -> None:
+    from turncall.api.errors import NotFoundError
+    from turncall.api.v1 import evals
+
     env("production")
+    # Past validation, the route looks its scenario up: a 404 here.
+    monkeypatch.setattr(
+        evals,
+        "_scenarios_to_run",
+        AsyncMock(side_effect=NotFoundError("Scenario", "x")),
+    )
     r = app.post(
         "/v1/eval-runs",
         headers=H,
         json={
             "scenario_id": str(uuid.uuid4()),
-            "target": {"type": "inline", "agent": {"tools": [_tool(PLAIN)]}},
+            "target": {"type": "inline", "agent": _inline_agent(PLAIN)},
         },
     )
-    assert r.status_code == 422, r.text
-    assert "must use https://" in r.text
+    assert r.status_code == 404, r.text

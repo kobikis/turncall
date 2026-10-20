@@ -14,9 +14,11 @@ everywhere. Loopback and private addresses are not: in production they are far
 more likely a misconfiguration or a probe than a receiver.
 
 `check_outbound_url` is the write-time gate (a 422 from the API schemas, a 400
-from WebRTC). A URL already stored, or an inline config from call-init, is
-never refused; `warn_if_plain_http` logs each delivery to one that the gate
-would now refuse, at most once a minute per kind, naming only the host.
+from WebRTC). A URL already stored, or an inline config (a call-init answer,
+an eval run's `inline` target, a `turncall-demo` agents file), is never
+refused for plain http; `warn_if_plain_http` logs each delivery to one that
+the gate would now refuse, at most once a minute per kind, naming only the
+host.
 """
 
 from __future__ import annotations
@@ -93,9 +95,14 @@ def check_outbound_url(
     *,
     label: str,
     settings: Settings | None = None,
+    allow_plain_http: bool = False,
 ) -> str:
     """The URL, stripped, when it may be written; otherwise a ValueError that
-    names the field, what it needs and the settings that decide it."""
+    names the field, what it needs and the settings that decide it.
+
+    `allow_plain_http` takes plain http whatever the settings say, for an
+    inline config, which is never refused for it; the URL must still be an
+    http(s) one with a host."""
     url = url.strip()
     parts = _split(url)
     if parts is None:
@@ -106,14 +113,14 @@ def check_outbound_url(
             raise ValueError(
                 f"{label} must name a host, as in {scheme}://receiver.example.com/hook"
             )
-        if _allowed_anywhere(scheme, host):
+        if allow_plain_http or _allowed_anywhere(scheme, host):
             return url
         if settings is None:
             settings = get_settings()
         if plain_http_allowed(settings):
             return url
         raise ValueError(f"{label} must use https://: {_refused_because(settings)}")
-    http_too = plain_http_allowed(settings)
+    http_too = allow_plain_http or plain_http_allowed(settings)
     accepted = "an http:// or https:// URL" if http_too else "an https:// URL"
     if scheme and url.lower().startswith(f"{scheme}://"):
         raise ValueError(f"{label} must be {accepted}, not {bounded(scheme, 16)}://")

@@ -305,11 +305,14 @@ class EvalTarget(BaseModel):
         # Validated exactly as an agent create is — same schema, same
         # `extra="forbid"`, so a mis-nested section is a 422 here rather than a
         # silently dropped field discovered when the run behaves oddly. The
-        # worker checks again, but by then nobody is watching.
+        # worker checks again, but by then nobody is watching. An inline
+        # config is not refused for a plain http:// URL (#340): a tool the
+        # scenario mocks is never called.
+        from turncall.api.v1.schemas import INLINE_CONFIG
         from turncall.api.v1.schemas.agents import AgentConfigSchema
 
         try:
-            AgentConfigSchema.model_validate(self.agent)
+            AgentConfigSchema.model_validate(self.agent, context=INLINE_CONFIG)
         except Exception as exc:
             raise ValueError(f"inline agent configuration is invalid: {exc}") from exc
         return self

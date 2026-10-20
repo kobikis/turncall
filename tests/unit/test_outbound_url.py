@@ -241,6 +241,23 @@ class TestCheckOutboundUrl:
         with pytest.raises(ValueError, match=r"^url is not a URL"):
             check_outbound_url("https://[::1/hook", label="url", settings=make())
 
+    def test_an_inline_config_takes_plain_http_whatever_the_settings(
+        self, make
+    ) -> None:
+        url = "http://crm.example.com/hook"
+        settings = make("production", "false")
+
+        assert (
+            check_outbound_url(
+                url, label="url", settings=settings, allow_plain_http=True
+            )
+            == url
+        )
+        with pytest.raises(ValueError, match="http:// or https://"):
+            check_outbound_url(
+                "ftp://x.example", label="url", settings=settings, allow_plain_http=True
+            )
+
     def test_a_smuggled_service_suffix_is_refused(self, make) -> None:
         with pytest.raises(ValueError):
             check_outbound_url(
