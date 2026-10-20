@@ -8,6 +8,8 @@ minute per kind and with its host only; startup says which it is, plainly
 when development is only TURNCALL_ENV's default.
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
 from loguru import logger
 
@@ -20,6 +22,7 @@ from turncall.services.outbound_url import (
     log_plain_http_policy,
     plain_http_allowed,
     warn_if_plain_http,
+    warn_stored_plain_http,
 )
 from turncall.services.webhook_verification import RefusalLog
 
@@ -391,3 +394,14 @@ class TestStartupLine:
         assert message.startswith("plain_http_urls | ")
         assert said in message
         assert [lvl for lvl, line in logs if message in line] == [level]
+
+
+class TestStoredUrls:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("env", "allow"), [(None, None), ("production", "true")])
+    async def test_nothing_is_read_where_plain_http_is_allowed(
+        self, make, env, allow
+    ) -> None:
+        session = AsyncMock(execute=AsyncMock(side_effect=AssertionError("read")))
+
+        assert await warn_stored_plain_http(session, make(env, allow)) == {}

@@ -18,12 +18,14 @@ from WebRTC). A URL already stored, or an inline config (a call-init answer,
 an eval run's `inline` target, a `turncall-demo` agents file), is never
 refused for plain http; `warn_if_plain_http` logs each delivery to one that
 the gate would now refuse, at most once a minute per kind, naming only the
-host.
+host, and `warn_stored_plain_http` names the stored ones at startup.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections import defaultdict
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any
 from urllib.parse import SplitResult, urlsplit
 
 from loguru import logger
@@ -32,6 +34,8 @@ from turncall.config.settings import Environment, get_settings
 from turncall.services.webhook_verification import RefusalLog, bounded
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from turncall.config.settings import Settings
 
 # A Kubernetes Service name, judged by the URL's hostname only.
@@ -177,6 +181,108 @@ def warn_if_plain_http(
     except Exception as exc:
         logger.warning("plain_http_warning_failed", error=type(exc).__name__)
         return False
+
+
+# Startup names at most this many (project, kind) groups, each with at most
+# this many hosts, and reads at most this many rows from each table, so a
+# large deployment's report stays a few lines and a few queries.
+_STORED_GROUPS_LOGGED = 50
+_STORED_HOSTS_SHOWN = 5
+_STORED_ROWS_READ = 10_000
+
+
+def _agent_urls(blob: Any) -> Iterator[tuple[str, object]]:
+    """An agent config's outbound URLs, by delivery kind."""
+    if not isinstance(blob, dict):
+        return
+    for tool in blob.get("tools") or []:
+        if isinstance(tool, dict):
+            yield "tool", tool.get("webhook_url")
+    for server in blob.get("mcp_servers") or []:
+        if isinstance(server, dict):
+            yield "mcp", server.get("url")
+    server_url = blob.get("server_url")
+    if isinstance(server_url, dict):
+        yield "server_event", server_url.get("url")
+
+
+async def warn_stored_plain_http(
+    session: AsyncSession, settings: Settings
+) -> dict[tuple[str, str], list[str]]:
+    """At startup, name the stored plain http:// URLs that writing now would
+    refuse: webhook subscriptions, numbers' call-init `server_url`, and
+    agents' tool, MCP and `server_url` URLs. They are still delivered to.
+
+    One warning per project and kind, with a count and the hosts, never a
+    path or query (they can hold a token). Only where plain http is not
+    allowed. Returns the hosts found, by (project id, kind)."""
+    if plain_http_allowed(settings):
+        return {}
+    from sqlalchemy import Text, cast, select
+
+    from turncall.storage.models import (
+        AgentRow,
+        PhoneNumberRow,
+        WebhookSubscriptionRow,
+    )
+
+    found: dict[tuple[str, str], list[str]] = defaultdict(list)
+
+    def note(project_id: object, kind: str, url: object) -> None:
+        if not isinstance(url, str):
+            return
+        scheme, host = _parts(url)
+        if scheme == "http" and not _allowed_anywhere(scheme, host):
+            found[(str(project_id), kind)].append(host)
+
+    hooks = await session.execute(
+        select(WebhookSubscriptionRow.project_id, WebhookSubscriptionRow.url)
+        .where(WebhookSubscriptionRow.url.ilike("%http://%"))
+        .limit(_STORED_ROWS_READ)
+    )
+    for project_id, url in hooks:
+        note(project_id, "webhook", url)
+    numbers = await session.execute(
+        select(PhoneNumberRow.project_id, PhoneNumberRow.server_url)
+        .where(PhoneNumberRow.server_url.ilike("%http://%"))
+        .limit(_STORED_ROWS_READ)
+    )
+    for project_id, url in numbers:
+        note(project_id, "call_init", url)
+    # A JSON string that starts http:// is `"http://` in the blob's text; the
+    # walk then keeps only the URL fields.
+    agents = await session.execute(
+        select(AgentRow.project_id, AgentRow.config_blob)
+        .where(cast(AgentRow.config_blob, Text).ilike('%"http://%'))
+        .limit(_STORED_ROWS_READ)
+    )
+    for project_id, blob in agents:
+        for kind, url in _agent_urls(blob):
+            note(project_id, kind, url)
+
+    groups = sorted(found.items())
+    for (project_id, kind), hosts in groups[:_STORED_GROUPS_LOGGED]:
+        distinct = sorted(set(hosts))
+        shown = ", ".join(bounded(h) for h in distinct[:_STORED_HOSTS_SHOWN])
+        if len(distinct) > _STORED_HOSTS_SHOWN:
+            shown += f" and {len(distinct) - _STORED_HOSTS_SHOWN} more"
+        logger.warning(
+            "plain_http_stored | project {project_id} has {count} stored plain "
+            "http:// {kind} URL(s), to {hosts}, that writing now would refuse; "
+            "deliveries to them still go out and log plain_http_delivery, so "
+            "change them to https://",
+            project_id=project_id,
+            kind=kind,
+            count=len(hosts),
+            hosts=shown,
+        )
+    if len(groups) > _STORED_GROUPS_LOGGED:
+        logger.warning(
+            "plain_http_stored | {more} more project and kind groups hold "
+            "stored plain http:// URLs",
+            more=len(groups) - _STORED_GROUPS_LOGGED,
+        )
+    return dict(found)
 
 
 def log_plain_http_policy(settings: Settings) -> str:

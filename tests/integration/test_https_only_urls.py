@@ -119,3 +119,74 @@ async def test_plain_http_urls_are_refused_in_production(monkeypatch) -> None:
     assert written["webhook"].json()["data"]["url"] == IN_CLUSTER
     assert written["update"].json()["data"]["server_url"] == TLS
     assert taken.status_code == 201, taken.text
+
+
+async def test_startup_names_the_stored_plain_http_urls(monkeypatch) -> None:
+    """Rows written while plain http was allowed are named at startup once it
+    is not: per project and kind, with a count and the hosts only."""
+    from loguru import logger
+
+    from turncall.services.outbound_url import warn_stored_plain_http
+    from turncall.storage.database import get_session_factory
+
+    secret_url = "http://receiver.example.com/s3cret-path?token=s3cret"
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        api = app.api
+        e164 = "+1555" + "8675310"
+        number = app.carrier.add_number(e164)
+        written = [
+            await api.post("/v1/webhooks", json={"url": secret_url}),
+            await api.post("/v1/webhooks", json={"url": PLAIN}),
+            await api.post("/v1/webhooks", json={"url": IN_CLUSTER}),
+            await api.post("/v1/webhooks", json={"url": TLS}),
+            await api.post(
+                "/v1/phone-numbers",
+                json={
+                    "e164_number": e164,
+                    "external_number_sid": number.sid,
+                    "routing_target_type": "webhook",
+                    "server_url": PLAIN,
+                },
+            ),
+            await api.post(
+                "/v1/agents", json={"name": "stored-plain", "config": _agent(PLAIN)}
+            ),
+            await api.post(
+                "/v1/agents", json={"name": "stored-tls", "config": _agent(TLS)}
+            ),
+        ]
+        for response in written:
+            assert response.status_code in (200, 201), response.text
+
+        settings = get_settings()
+        async with get_session_factory()() as session:
+            allowed = await warn_stored_plain_http(session, settings)
+
+        monkeypatch.setattr(settings, "environment", Environment.PRODUCTION)
+        lines: list[str] = []
+        sink = logger.add(lambda m: lines.append(str(m)), level="WARNING")
+        try:
+            async with get_session_factory()() as session:
+                found = await warn_stored_plain_http(session, settings)
+        finally:
+            logger.remove(sink)
+
+    assert allowed == {}
+    # The harness's own event sink is a plain http:// subscription too.
+    host = "receiver.example.com"
+    ours = {
+        kind: [h for h in hosts if h == host]
+        for (project_id, kind), hosts in found.items()
+        if project_id == app.project_id
+    }
+    assert ours == {
+        "webhook": [host, host],
+        "call_init": [host],
+        "tool": [host],
+        "mcp": [host],
+        "server_event": [host],
+    }
+    # Hosts only: never a path or a query, which can hold a token.
+    assert not any("s3cret" in line for line in lines)
