@@ -385,3 +385,44 @@ async def test_a_missing_key_is_named_on_the_event() -> None:
     ):
         await mod.fail_unstarted_call(ctx, MissingProviderKeyError(["deepgram"]))
     assert log_event.await_args.args[2]["missing_keys"] == ["deepgram"]
+
+
+class TestProviderOf:
+    """`error.raised` names the vendor whose key was refused off the service's
+    class (#389): the nearest pipecat vendor class in its MRO."""
+
+    def test_a_vendor_service_reports_its_vendor(self) -> None:
+        from pipecat.services.deepgram.stt import DeepgramSTTService
+
+        from turncall.orchestrator.call_session import provider_of
+
+        assert provider_of(DeepgramSTTService.__new__(DeepgramSTTService)) == "deepgram"
+
+    def test_a_turncall_subclass_of_a_vendor_service_reports_the_vendor(self) -> None:
+        from pipecat.services.openai.llm import OpenAILLMService
+
+        from turncall.orchestrator.call_session import provider_of
+
+        class OurOpenAI(OpenAILLMService):
+            pass
+
+        assert OurOpenAI.__module__ == __name__
+        assert provider_of(OurOpenAI.__new__(OurOpenAI)) == "openai"
+
+    def test_a_vendor_neutral_base_reports_none(self) -> None:
+        """`pipecat.services.llm_service` names a module, not a vendor."""
+        from pipecat.services.llm_service import LLMService
+
+        from turncall.orchestrator.call_session import provider_of
+
+        class OurLLM(LLMService):
+            pass
+
+        assert provider_of(LLMService.__new__(LLMService)) is None
+        assert provider_of(OurLLM.__new__(OurLLM)) is None
+
+    def test_anything_outside_pipecat_services_reports_none(self) -> None:
+        from turncall.orchestrator.call_session import provider_of
+
+        assert provider_of(object()) is None
+        assert provider_of(MagicMock()) is None

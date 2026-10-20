@@ -1871,6 +1871,7 @@ def _create_s2s_pipeline(
         )
 
     from turncall.orchestrator.s2s_config import (
+        S2S_SERVICE_SAMPLE_RATE,
         create_s2s_service,
         s2s_opening_messages,
     )
@@ -2011,7 +2012,8 @@ def _create_s2s_pipeline(
     # Each processor can only appear once in a Pipecat pipeline.
     input_resampler = None
     output_resampler = None
-    s2s_sample_rate = 24000
+    # One number with the service's own session format (Grok declares it).
+    s2s_sample_rate = S2S_SERVICE_SAMPLE_RATE
     if audio_sample_rate != s2s_sample_rate:
         from turncall.orchestrator.audio_resampler import AudioResampler
 

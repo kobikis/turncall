@@ -118,15 +118,50 @@ class TestTheServiceIsGrokRealtime:
         config = _agent().model_copy(update={"first_message": "Thanks for calling!"})
         assert "Thanks for calling!" in _session(_service(config)).instructions
 
-    def test_audio_is_left_to_the_transport_rate(self) -> None:
-        """pipecat fills PCM at the pipeline's rates in `setup()`; a format set
-        here would win over the transport's 8 kHz or 16 kHz."""
-        assert _session(_service()).audio is None
-
     def test_the_session_carries_no_server_side_tools(self) -> None:
         """xAI's own web/X/file search and hosted MCP run outside TurnCall's
         tool bridge; the agent's tools reach Grok through the context."""
         assert _session(_service()).tools is None
+
+
+class TestGrokIsToldTheRateItIsSent:
+    """The S2S pipeline resamples the caller to one service rate for every
+    provider; Grok's session must declare that rate, not the pipeline's own
+    (#389: 24 kHz audio declared as 16 kHz is noise to it)."""
+
+    @pytest.mark.parametrize("transport_rate", [8000, 16000])
+    def test_its_session_rates_are_the_resamplers(self, transport_rate) -> None:
+        from types import SimpleNamespace
+
+        from pipecat.services.xai.realtime.llm import GrokRealtimeLLMService
+
+        from turncall.orchestrator.audio_resampler import AudioResampler
+        from turncall.orchestrator.pipeline_factory import create_pipeline
+
+        pipeline = create_pipeline(
+            config=_agent(),
+            transport=MagicMock(),
+            call_context=MagicMock(is_eval=True),
+            pipecat_settings=SimpleNamespace(),
+            credentials=creds(xai="xai-key"),
+            audio_sample_rate=transport_rate,
+        )
+        resamplers = [p for p in pipeline.processors if isinstance(p, AudioResampler)]
+        [grok] = [
+            p
+            for p in pipeline.processors_with_metrics()
+            if isinstance(p, GrokRealtimeLLMService)
+        ]
+        # What pipecat's setup() does with the pipeline's rates: fill only
+        # what the session left unset.
+        grok._ensure_audio_config(transport_rate, transport_rate)
+
+        assert len(resamplers) == 2
+        for resampler in resamplers:
+            assert grok._get_configured_sample_rate("input") == resampler._service_rate
+            assert grok._get_configured_sample_rate("output") == resampler._service_rate
+        assert _session(grok).audio.input.format.type == "audio/pcm"
+        assert _session(grok).audio.output.format.type == "audio/pcm"
 
 
 class TestTheKeyResolves:
@@ -356,6 +391,91 @@ class TestSessionExtras:
     def test_a_bad_value_is_a_422_naming_the_key(self, key, value) -> None:
         with pytest.raises(ValidationError, match=rf"s2s\.extra\.{key}"):
             _schema({"extra": {key: value}})
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("reasoning", {"effort": "high"}),
+            ("reasoning", {"effort": "none"}),
+            ("reasoning", {"effort": "low"}),
+            ("reasoning", {}),
+            ("reasoning", None),
+            ("reasoning", "high"),
+            ("replace", {"Grok": "grock"}),
+            ("replace", {"word": 3}),
+            ("replace", ["Grok"]),
+            ("resumption", {"enabled": True}),
+            ("resumption", {"enabled": "yes please"}),
+            ("resumption", "yes please"),
+        ],
+    )
+    def test_the_api_and_pipecat_agree_on_a_value(self, key, value) -> None:
+        """The API validates on TurnCall's copy of the three fields; the build
+        on pipecat's. One verdict, or a saved agent could fail every call."""
+        from pipecat.services.xai.realtime.events import SessionProperties
+
+        from turncall.orchestrator import grok_voice
+
+        try:
+            SessionProperties.model_validate({key: value})
+            pipecat_accepts = True
+        except ValidationError:
+            pipecat_accepts = False
+        accepted = grok_voice._bad_extra({key: value}) is None
+        assert accepted is pipecat_accepts
+
+    def test_validating_an_agent_with_extras_loads_no_pipecat(self) -> None:
+        """The API process validates agents on every write; pipecat's services
+        are the call path's. A fresh interpreter, as the redaction import test
+        does, measured past what validating any S2S agent already loads (the
+        pronunciation validator's IPA helpers)."""
+        import subprocess
+        import sys
+        import textwrap
+
+        probe = textwrap.dedent(
+            """
+            import sys
+            from turncall.api.v1.schemas.agents import AgentConfigSchema
+            from turncall.domain.models import S2SConfig
+            from turncall.orchestrator import grok_voice
+            AgentConfigSchema.model_validate(
+                {"pipeline_mode": "s2s", "s2s": {"provider": "openai"}}
+            )
+            before = {m for m in sys.modules if m.split(".")[0] == "pipecat"}
+            assert not [m for m in before if m.startswith("pipecat.services")]
+            extra = {
+                "reasoning": {"effort": "none"},
+                "replace": {"Grok": "grock"},
+                "resumption": {"enabled": True},
+            }
+            AgentConfigSchema.model_validate(
+                {"pipeline_mode": "s2s", "s2s": {"provider": "xai", "extra": extra}}
+            )
+            assert grok_voice.refusal(S2SConfig(provider="xai", extra=extra)) is None
+            try:
+                AgentConfigSchema.model_validate({"pipeline_mode": "s2s",
+                    "s2s": {"provider": "xai", "extra": {"reasoning": "low"}}})
+            except ValueError:
+                pass
+            else:
+                raise SystemExit("a bad value was accepted")
+            loaded = sorted(
+                m for m in sys.modules
+                if m.split(".")[0] == "pipecat" and m not in before
+            )
+            print("LOADED=" + ",".join(loaded))
+            """
+        )
+        result = subprocess.run(  # noqa: S603 - our own interpreter and code
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=True,
+        )
+        [loaded] = [x for x in result.stdout.splitlines() if x.startswith("LOADED=")]
+        assert loaded == "LOADED=", loaded
 
     def test_a_bad_value_on_a_call_init_agent_fails_at_build(self) -> None:
         with pytest.raises(ValueError, match=r"s2s\.extra\.reasoning"):

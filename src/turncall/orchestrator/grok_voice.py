@@ -15,13 +15,16 @@ their own.
 
 One rule, applied twice: at the API schema, and at build, since a call-init
 inline agent is validated by the domain model rather than that schema (the
-`deepgram_flux.mixes_flux` precedent). No pipecat import at module level: the
-API schema imports this module.
+`deepgram_flux.mixes_flux` precedent). The API schema imports this module and
+validates with it, so the refusal runs on TurnCall's own copy of the three
+fields (`_SessionExtras`) and never loads pipecat; only `session_extras`, at
+build, reads pipecat's model. `test_xai_s2s.py` holds the two to one verdict.
 """
 
-from typing import Any
+from typing import Any, Literal, Protocol
 
 from loguru import logger
+from pydantic import BaseModel, ValidationError
 
 SESSION_EXTRAS = ("reasoning", "replace", "resumption")
 
@@ -37,7 +40,39 @@ _NO_SUCH_SETTING = (
 )
 
 
-def refusal(s2s: Any) -> str | None:
+class S2SSettings(Protocol):
+    """What `refusal` reads: the API's S2S schema and the domain's S2SConfig."""
+
+    @property
+    def base_url(self) -> str | None: ...
+
+    @property
+    def temperature(self) -> float | None: ...
+
+    @property
+    def max_tokens(self) -> int | None: ...
+
+    @property
+    def extra(self) -> dict[str, Any]: ...
+
+
+class _Reasoning(BaseModel):
+    effort: Literal["high", "none"] | None = None
+
+
+class _Resumption(BaseModel):
+    enabled: bool | None = None
+
+
+class _SessionExtras(BaseModel):
+    """pipecat's `SessionProperties`, the three fields `s2s.extra` may set."""
+
+    reasoning: _Reasoning | None = None
+    replace: dict[str, str] | None = None
+    resumption: _Resumption | None = None
+
+
+def refusal(s2s: S2SSettings) -> str | None:
     """Why an `xai` S2S config cannot run as written, or None."""
     if s2s.base_url:
         return _GATEWAY_MODE
@@ -49,10 +84,13 @@ def refusal(s2s: Any) -> str | None:
 
 
 def session_extras(extra: dict[str, Any]) -> dict[str, Any]:
-    """The `s2s.extra` keys Grok's session takes, as its own field values.
+    """The `s2s.extra` keys Grok's session takes, as pipecat's field values.
 
-    Assumes `refusal` passed. Every other key is warned about and dropped.
+    Build time only: it imports pipecat. Assumes `refusal` passed. Every other
+    key is warned about and dropped.
     """
+    from pipecat.services.xai.realtime.events import SessionProperties
+
     ignored = sorted(set(extra) - set(SESSION_EXTRAS))
     if ignored:
         logger.warning(
@@ -62,27 +100,18 @@ def session_extras(extra: dict[str, Any]) -> dict[str, Any]:
             known=list(SESSION_EXTRAS),
         )
     known = {key: extra[key] for key in SESSION_EXTRAS if key in extra}
-    session = _session_properties().model_validate(known)
+    session = SessionProperties.model_validate(known)
     return {key: getattr(session, key) for key in known}
 
 
 def _bad_extra(extra: dict[str, Any]) -> str | None:
     """A known `s2s.extra` key whose value Grok's session would refuse."""
-    from pydantic import ValidationError
-
-    properties = _session_properties()
     for key in SESSION_EXTRAS:
         if key not in extra:
             continue
         try:
-            properties.model_validate({key: extra[key]})
+            _SessionExtras.model_validate({key: extra[key]})
         except ValidationError as invalid:
             reason = invalid.errors()[0]["msg"]
             return f"s2s.extra.{key} is not a valid Grok Voice {key}: {reason}"
     return None
-
-
-def _session_properties() -> Any:
-    from pipecat.services.xai.realtime.events import SessionProperties
-
-    return SessionProperties
