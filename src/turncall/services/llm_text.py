@@ -109,7 +109,16 @@ async def _complete_text_anthropic(
         "max_tokens": config.max_tokens,
     }
     if system_parts:
-        body["system"] = "\n\n".join(system_parts)
+        # One cached block, as the voice path sends it (#374): the breakpoint
+        # caches the tools and the system prompt for the turn's tool rounds and
+        # the session's next message.
+        body["system"] = [
+            {
+                "type": "text",
+                "text": "\n\n".join(system_parts),
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
     if tools:
         body["tools"] = [
             {
@@ -130,7 +139,16 @@ async def _complete_text_anthropic(
         response.raise_for_status()
         data = response.json()
         usage = data.get("usage", {})
-        total_tokens += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        # input_tokens is net of the cache, so the cached prefix is added back.
+        total_tokens += sum(
+            usage.get(k) or 0
+            for k in (
+                "input_tokens",
+                "output_tokens",
+                "cache_creation_input_tokens",
+                "cache_read_input_tokens",
+            )
+        )
         return data.get("content", [])
 
     for _ in range(_MAX_TOOL_ROUNDS):
