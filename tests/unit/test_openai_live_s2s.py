@@ -220,8 +220,10 @@ class TestTheSessionOpensAtOnce:
         assert isinstance(frame, LLMRunFrame)
 
     @pytest.mark.parametrize("provider", ["openai", "google", "aws"])
-    async def test_other_providers_keep_their_wait(self, provider: str) -> None:
-        """Unmeasured without it, so unchanged."""
+    async def test_other_providers_wait_for_the_pipeline_to_start(
+        self, provider: str
+    ) -> None:
+        """They greet on `on_pipeline_started` (#373, test_s2s_greeting.py)."""
         session = _s2s_call_session(provider)
         worker = MagicMock(queue_frame=AsyncMock())
         await session._trigger_first_response(worker)
