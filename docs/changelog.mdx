@@ -323,6 +323,12 @@ these changes you may notice:
   turn cut mid-word, speech recognition that never failed over after its first
   connection failed, and Anthropic input tokens reported doubled.
 
+**Evals off pipecat's deprecated eval transport.** The eval worker no longer
+uses anything pipecat 1.13 deprecated for evals, so the move to pipecat 2.0
+will not break it. Each run now serves pipecat's harness from a loopback
+server of its own and builds the agent once the harness connects. Scenarios,
+verdicts and the `evals-jev` extra's name are unchanged.
+
 **A production WebRTC `server_url` may be a Kubernetes Service.**
 `http://<name>.<namespace>.svc.cluster.local` is accepted beside HTTPS, so a
 call-init server in the same cluster works; any other `http://` URL is

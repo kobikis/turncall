@@ -17,7 +17,8 @@ and one shared `EvalAssertionFailure` vocabulary across both kinds.
 Its harness is an **RTVI WebSocket client**. The bot hosts `EvalTransport`, a
 single-client WebSocket server, and the harness connects with per-connection
 query flags — `skip_tts` (text mode: silences the bot, greeting included),
-`capture_bot_audio`, `trigger_disconnect`.
+`capture_bot_audio`, `trigger_disconnect`. (Superseded on pipecat 1.13: see
+the addendum.)
 
 That is the entire coupling, and it is cheap here because our pipeline already
 takes its transport injected:
@@ -162,3 +163,44 @@ exactly one winner and the loser finds the run no longer queued.
   *latency* and cannot detect *silence*), and the telephony layer. A green
   suite is narrower than it looks, and that belongs in the user-facing docs on
   day one.
+
+## Addendum (2026-10-21): off pipecat's deprecated eval transport (#375)
+
+pipecat 1.13 deprecated, for removal in 2.0.0, three things this ADR was built
+on: `EvalTransport` (the server the bot hosted), the
+`pipecat.classifiers.jev` module with its `jev` extra, and
+`EvalSessionParams.stop_bot`/`trigger_disconnect`. The bridge is the same
+shape; only who holds the socket changed.
+
+- **The transport is `EvalFastAPIWebsocketTransport`.** It takes a WebSocket
+  somebody else accepted, its first message read: since pipecat#6064 the
+  harness opens with an `eval-connect` message carrying `skip_tts`,
+  `capture_bot_audio` and `capture_bot_images`, in place of the URL's query
+  flags. pipecat's only server for it is its dev runner, so each iteration
+  stands up `evals/bot_server.LoopbackBot`: a one-route Starlette app under
+  uvicorn, on 127.0.0.1, port 0 (the kernel's pick, so the old bind-then-close
+  race is gone), serving exactly one connection — a second is refused at the
+  upgrade, a first message that is not `eval-connect` closed with 1008.
+  uvicorn's signal capture is turned off, since inside the worker it would
+  take SIGTERM from the worker's own shutdown, and its logging config is left
+  alone. The harness's TCP readiness probe logs nothing there, so the worker's
+  filter for the `websockets` server's handshake noise is gone with it.
+- **The pipeline is built after the harness connects**, because the transport
+  is built from the connection. The harness waits `connect_timeout_s` only
+  for the accept and then up to a minute for `bot-ready`, so the build fits.
+  It moves the error path: a build that raises used to leave `run_iteration`
+  before the harness started; now the harness sees the socket close. The
+  server keeps the build's exception and `run_iteration` raises that one, so
+  the iteration is `errored` with its real cause, as before.
+- **`stop_bot` is moot.** The harness now ends the bot's session after every
+  run (`eval-cancel`, then disconnect). A fresh pipeline per iteration is
+  still the rule; it is simply no longer a flag.
+- **Jev** is imported from `pipecat.classifiers.typesafe.jev.classifier`. Our
+  `evals-jev` extra keeps its name, which images and installs already ask for,
+  and installs `pipecat-ai[typesafe]`.
+
+`tests/unit/test_eval_no_pipecat_deprecations.py` and the deprecation test in
+`tests/integration/test_speech_failover_eval.py` (a whole iteration, text and
+audio) fail on a pipecat deprecation warning from the eval path, matched on
+pipecat's own template so third-party warnings its imports raise are not
+counted.

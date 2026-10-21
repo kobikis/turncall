@@ -315,6 +315,18 @@ and is not part of this repository's history.
 
 ### Changed
 
+- **Evals run on pipecat's current eval transport** (#375, ADR-0018). pipecat
+  1.13 deprecated `EvalTransport`, the `pipecat.classifiers.jev` module and
+  the `jev` extra, and `EvalSessionParams`'s `stop_bot`/`trigger_disconnect`,
+  all removed in 2.0.0; the eval worker no longer uses any of them. Each
+  iteration now serves the harness from a one-connection loopback server on
+  127.0.0.1 (a port the kernel picks, so no bind-then-close race) and builds
+  the agent's pipeline on the connection it opens, over
+  `EvalFastAPIWebsocketTransport`; the harness's flags arrive in its
+  `eval-connect` message rather than the URL. A pipeline that fails to build
+  still fails the iteration with its own error, `errored`. The `evals-jev`
+  extra keeps its name and now installs `pipecat-ai[typesafe]`. Verdicts,
+  modalities and budgets are unchanged.
 - **The image and CI install from a committed `uv.lock`** (#377). Every
   dependency is pinned, not just pipecat's minor: an upstream release reaches
   an image only through a commit that changes the lock. The Dockerfile now
