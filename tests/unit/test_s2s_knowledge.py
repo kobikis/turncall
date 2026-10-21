@@ -74,7 +74,7 @@ def _build(
         transport=MagicMock(),
         call_context=MagicMock(is_eval=True, records=False, has_database=True),
         pipecat_settings=SimpleNamespace(),
-        credentials=creds("sk-test", google="g", anthropic="sk-ant"),
+        credentials=creds("sk-test", google="g", anthropic="sk-ant", xai="xai-key"),
         knowledge_base_attachments=attachments,
         knowledge_preamble=preamble,
     )
@@ -89,9 +89,10 @@ def _tool_names(context: Any) -> set[str]:
 
 def _instructions(service: Any) -> str:
     settings = service._settings
-    if hasattr(settings, "session_properties"):  # OpenAI Realtime
-        return settings.session_properties.instructions
-    return settings.system_instruction
+    properties = getattr(settings, "session_properties", None)
+    if properties is not None and properties.instructions:  # OpenAI Realtime
+        return properties.instructions
+    return settings.system_instruction  # Gemini, Nova Sonic, Grok, gpt-live-1
 
 
 # --- Seam 1: the pipeline build ----------------------------------------------
@@ -149,7 +150,7 @@ class TestToolModeOnOpenAILive:
         assert "- query_knowledge:" in live._settings.system_instruction
 
 
-@pytest.mark.parametrize("provider", ["openai", "google", "aws"])
+@pytest.mark.parametrize("provider", ["openai", "google", "aws", "xai"])
 def test_tool_mode_on_a_provider_that_calls_tools_itself(provider: str) -> None:
     service, context = _build(_config(provider, tools=[_BOOK]), [_attachment("tool")])
 
@@ -167,7 +168,7 @@ def test_cascade_tool_mode_is_unchanged() -> None:
     assert _tool_names(context) == {"book_table", "query_knowledge"}
 
 
-@pytest.mark.parametrize("provider", ["openai", "google", "aws", "openai_live"])
+@pytest.mark.parametrize("provider", ["openai", "google", "aws", "openai_live", "xai"])
 def test_prompt_mode_text_leads_the_instructions(provider: str) -> None:
     service, _ = _build(_config(provider), [_attachment("prompt")], preamble=PREAMBLE)
 
@@ -217,7 +218,8 @@ async def _assemble(
 
 
 @pytest.mark.asyncio
-async def test_auto_mode_is_dropped_on_s2s_and_said() -> None:
+@pytest.mark.parametrize("provider", ["google", "xai"])
+async def test_auto_mode_is_dropped_on_s2s_and_said(provider: str) -> None:
     """Dropped before the preamble too: its awareness hint would tell the
     model it can answer from a knowledge base it has no way to read."""
     from loguru import logger
@@ -226,13 +228,13 @@ async def test_auto_mode_is_dropped_on_s2s_and_said() -> None:
     messages: list[str] = []
     sink = logger.add(lambda m: messages.append(m), level="WARNING")
     try:
-        cp, preamble = await _assemble(_config("google"), [auto, tool])
+        cp, preamble = await _assemble(_config(provider), [auto, tool])
     finally:
         logger.remove(sink)
 
     assert cp.call_args.kwargs["knowledge_base_attachments"] == [tool]
     assert preamble.call_args.args[1] == [tool]
-    assert any("'auto'" in m and "google" in m for m in messages), messages
+    assert any("'auto'" in m and provider in m for m in messages), messages
 
 
 @pytest.mark.asyncio
@@ -300,7 +302,9 @@ class TestTheWarning:
 
         return config_warnings(config, kb_modes=modes)
 
-    @pytest.mark.parametrize("provider", ["openai", "google", "aws", "openai_live"])
+    @pytest.mark.parametrize(
+        "provider", ["openai", "google", "aws", "openai_live", "xai"]
+    )
     def test_auto_on_s2s_names_the_mode_and_provider(self, provider: str) -> None:
         [warning] = self._codes(_config(provider), ["auto", "tool", "prompt"])
 

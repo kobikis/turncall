@@ -47,6 +47,11 @@ def typesafe_key() -> str:
 
 
 @pytest.fixture
+def xai_key() -> str:
+    return require("XAI_API_KEY")
+
+
+@pytest.fixture
 def deepgram_key() -> str:
     return require("DEEPGRAM_API_KEY")
 

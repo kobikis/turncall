@@ -515,6 +515,35 @@ class TestSecretMasking:
             "project_credential": False,
         }
 
+    def test_the_xai_account_serves_s2s_with_both_signals(
+        self, app, project_id, monkeypatch
+    ) -> None:
+        """Grok Voice (#386): a plain-key account, listed with no code of its
+        own — the registry derives it from the S2S provider."""
+        monkeypatch.setattr(
+            "turncall.api.v1.credentials.platform_keys",
+            lambda s: {"xai": "xai-env-key"},
+        )
+        monkeypatch.setattr(
+            "turncall.api.v1.credentials.ambient_aws_available", lambda: False
+        )
+        with patch(f"{REPO}.providers_for_project", AsyncMock(return_value={"xai"})):
+            r = app.get("/v1/providers", headers=H)
+        assert r.json()["data"]["accounts"]["xai"] == {
+            "serves": {"s2s": ["xai"]},
+            "platform_key": True,
+            "project_credential": True,
+        }
+        assert "xai-env-key" not in r.text
+
+    def test_an_xai_key_is_stored_as_a_plain_key(self, app, project_id) -> None:
+        upsert = AsyncMock(return_value=_row("xai"))
+        with patch(f"{REPO}.upsert", upsert):
+            r = app.put("/v1/credentials/xai", headers=H, json={"api_key": "xai-k"})
+        assert r.status_code == 200
+        assert upsert.await_args.kwargs["document"] == {"api_key": "xai-k"}
+        assert "xai-k" not in r.text
+
     def test_validator_lists_are_the_endpoints_lists(self) -> None:
         for provider in ROLE_PROVIDERS["stt"]:
             AgentConfigSchema.model_validate({"stt": {"provider": provider}})

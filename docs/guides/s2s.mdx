@@ -1,6 +1,6 @@
 ---
 title: Speech-to-Speech
-description: "Ultra-low latency with OpenAI Realtime, Gemini Live and Amazon Nova Sonic"
+description: "Ultra-low latency with OpenAI Realtime, Gemini Live, Amazon Nova Sonic and Grok Voice"
 icon: "bolt"
 ---
 
@@ -45,14 +45,25 @@ Set `pipeline_mode: "s2s"` in the agent config. The `stt`, `llm`, and `tts` fiel
 }
 ```
 
-```json Gateway (Grok, etc.)
+```json Grok Voice
+{
+  "pipeline_mode": "s2s",
+  "s2s": {
+    "provider": "xai",
+    "model": "grok-voice-3.0",
+    "voice": "eve"
+  }
+}
+```
+
+```json Gateway
 {
   "pipeline_mode": "s2s",
   "s2s": {
     "provider": "openai",
     "base_url": "wss://ai-gateway.vercel.sh/v1/realtime",
-    "model": "xai/grok-voice-think-fast-1.0",
-    "voice": "cosmo"
+    "model": "openai/gpt-realtime-2",
+    "voice": "alloy"
   }
 }
 ```
@@ -62,18 +73,19 @@ Set `pipeline_mode: "s2s"` in the agent config. The `stt`, `llm`, and `tts` fiel
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | Yes | `openai`, `google`, or `aws` |
-| `model` | No | Model name. Defaults per provider: `gpt-realtime-2.1` (openai), `gpt-live-1` (openai_live), `gemini-3.8-live` (google), `amazon.nova-2-sonic-v1:0` (aws) |
-| `voice` | No | Voice name (default: `alloy` / `Charon` / `matthew`) |
+| `provider` | Yes | `openai`, `openai_live`, `google`, `aws`, or `xai` |
+| `model` | No | Model name. Defaults per provider: `gpt-realtime-2.1` (openai), `gpt-live-1` (openai_live), `gemini-3.8-live` (google), `amazon.nova-2-sonic-v1:0` (aws), `grok-voice-3.0` (xai) |
+| `voice` | No | Voice name (default: `alloy` / `Charon` / `matthew` / `eve`) |
 | `turn_detection` | No | `server_vad` (default) or `pipecat_vad` |
-| `base_url` | No | `wss://` endpoint of an OpenAI-Realtime-compatible gateway (`openai` provider only — **rejected** on `aws`). See [Gateways](#gateways-and-third-party-models) |
-| `extra` | No | Provider passthrough. On `aws`: `endpointing_sensitivity` (`LOW`/`MEDIUM`/`HIGH`) |
+| `base_url` | No | `wss://` endpoint of an OpenAI-Realtime-compatible gateway (`openai` provider only — **rejected** on every other). See [Gateways](#gateways-and-third-party-models) |
+| `extra` | No | Provider passthrough. On `aws`: `endpointing_sensitivity` (`LOW`/`MEDIUM`/`HIGH`). On `xai`: `reasoning`, `replace`, `resumption` (see [Grok Voice](#grok-voice)) |
 
 ### Voices
 
 - **OpenAI Realtime** — one of a fixed set: `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`. An unknown voice is rejected on create.
 - **Gemini Live** — any [Gemini-supported voice](https://ai.google.dev/gemini-api/docs/live) (e.g. `Aoede`, `Charon`, `Kore`, `Puck`, `Zephyr`, and more). The set grows per model, so TurnCall doesn't allowlist it — Gemini validates the voice when the session connects.
 - **Nova Sonic** — `matthew` (default), `tiffany`, `amy`, `lupe`, `carlos`. AWS validates on connect.
+- **Grok Voice** — `eve` (default), any other built-in Grok voice, or a custom voice id from your xAI account. xAI validates on connect.
 
 ## OpenAI GPT-Live-1
 
@@ -211,9 +223,67 @@ Nova Sonic **2** (`amazon.nova-2-sonic-v1:0`) is the default; the older `amazon.
   **Sessions roll over about every 6 minutes.** Nova Sonic caps session length and TurnCall transparently continues the conversation in a new one — ordinary phone calls hit this routinely. AWS credentials are re-resolved at each rollover, so calls outlasting a temporary credential's lifetime (assume-role and IRSA are typically ~1 hour) keep working instead of dying mid-sentence.
 </Note>
 
+## Grok Voice
+
+`provider: "xai"` runs xAI's Grok Voice on its own `xai` account: the project's
+`xai` credential (`PUT /v1/credentials/xai`), else the platform's `XAI_API_KEY`.
+
+With no model named it runs `grok-voice-3.0`, pinned rather than xAI's
+`grok-voice-latest` alias, so a live agent's model does not change when the
+alias moves. A model you name (`grok-voice-2.0`, deprecated by xAI, or a later
+one) is sent as written, for xAI to accept or refuse.
+
+```json
+"s2s": {"provider": "xai"}
+```
+
+`turn_detection: "server_vad"` (the default) leaves turn-taking to Grok's own
+voice activity detection. `pipecat_vad` turns it off: TurnCall's VAD decides
+when the caller has finished, and the turn is handed to Grok then.
+
+Three of Grok's session settings have no field of their own and go in
+`s2s.extra`, in xAI's shape:
+
+```json
+"s2s": {
+  "provider": "xai",
+  "extra": {
+    "reasoning": {"effort": "none"},
+    "replace": {"TurnCall": "Turn Call"},
+    "resumption": {"enabled": true}
+  }
+}
+```
+
+| Key | What it does |
+|---|---|
+| `reasoning` | `{"effort": "high"}` (xAI's default) or `{"effort": "none"}`, which answers faster |
+| `replace` | Words to say differently: each key is spoken as its value. The transcript keeps the original |
+| `resumption` | `{"enabled": true}` keeps the conversation's context across a reconnect |
+
+A value Grok would not take (`{"effort": "low"}`) is a 422 naming the key. Any
+other key in `extra` is logged as a warning and ignored, so a typo never stops
+a call.
+
+Refused with a 422, because Grok's session has no such setting:
+`s2s.temperature`, `s2s.max_tokens`, and `s2s.base_url` — the `xai` provider
+always connects to xAI with the `xai` account's key. To reach Grok through a
+gateway, use the `openai` provider with a `base_url` (see
+[Gateways](#gateways-and-third-party-models)). An inline agent from call-init
+is not validated on save, so one with any of these fails when its call is
+built, ending as `pipeline_error` with the reason in `error.raised`.
+
+Tools work as on OpenAI Realtime: the agent's webhook and MCP tools, the
+built-ins and a `tool`-mode knowledge base's `query_knowledge` are offered to
+Grok and run through TurnCall, so they are recorded, mocked in evals and
+redacted. `end_call` ends the call after Grok's goodbye. xAI's own
+server-side tools (web search, X search, file search, hosted MCP) are never
+sent. Knowledge bases work in `prompt` and `tool` mode; `auto` is ignored with
+a warning, as on every S2S provider.
+
 ## Gateways and third-party models
 
-The `openai` provider speaks the OpenAI-Realtime WebSocket protocol — and so do OpenAI-Realtime-compatible gateways ([Vercel AI Gateway](https://vercel.com/docs/ai-gateway), [LiteLLM](https://docs.litellm.ai/)) and xAI direct. Set `s2s.base_url` to route the realtime connection through one; provider-prefixed models like `xai/grok-voice-think-fast-1.0` or `openai/gpt-realtime-2` then flow over the same protocol — no new provider, same pipeline.
+The `openai` provider speaks the OpenAI-Realtime WebSocket protocol — and so do OpenAI-Realtime-compatible gateways ([Vercel AI Gateway](https://vercel.com/docs/ai-gateway), [LiteLLM](https://docs.litellm.ai/)). Set `s2s.base_url` to route the realtime connection through one; provider-prefixed models like `openai/gpt-realtime-2` then flow over the same protocol — no new provider, same pipeline.
 
 Two requirements:
 
@@ -227,7 +297,7 @@ Two requirements:
 </Steps>
 
 <Note>
-  When `base_url` is set, the OpenAI voice allowlist is bypassed — the gateway routes to models with their own voice sets (e.g. Grok), which it validates upstream. Pass the target model's own voice name.
+  When `base_url` is set, the OpenAI voice allowlist is bypassed — the gateway routes to models with their own voice sets, which it validates upstream. Pass the target model's own voice name.
 </Note>
 
 ## Knowledge bases
@@ -254,7 +324,7 @@ entry in `warnings` naming the mode and provider. Link it in `tool` mode instead
 
 ```
 transport.input → user_agg (VAD)
-  → S2S_LLM (OpenAI Realtime / Gemini Live / Nova Sonic)
+  → S2S_LLM (OpenAI Realtime / Gemini Live / Nova Sonic / Grok Voice)
   → transport.output
   → context_aggregator.assistant → observability
 ```
@@ -265,7 +335,8 @@ transport.input → user_agg (VAD)
 |----------|---------------------|
 | OpenAI Realtime | `OPENAI_API_KEY` |
 | Gemini Live | `GOOGLE_API_KEY` |
-| Gateway (Vercel AI Gateway / LiteLLM / xAI) | `OPENAI_API_KEY` set to the gateway key |
+| Grok Voice | `XAI_API_KEY` |
+| Gateway (Vercel AI Gateway / LiteLLM) | `OPENAI_API_KEY` set to the gateway key |
 | Amazon Nova Sonic | *No key* — see [AWS credentials](/guides/providers#credentials) |
 
 <Warning>

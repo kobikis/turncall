@@ -1,11 +1,11 @@
 """Speech-to-Speech (S2S) Example — Setup Script
 
-Creates a voice agent using OpenAI Realtime or Gemini Live for
+Creates a voice agent using OpenAI Realtime, Gemini Live or Grok Voice for
 ultra-low latency audio-in/audio-out conversations.
 
 Prerequisites:
   1. Server running: `make docker-up && make run`
-  2. .env configured with OPENAI_API_KEY or GOOGLE_API_KEY
+  2. .env configured with OPENAI_API_KEY, GOOGLE_API_KEY or XAI_API_KEY
 
 Usage:
   # OpenAI Realtime (default)
@@ -17,19 +17,19 @@ Usage:
     --provider google \\
     --voice Kore
 
-  # Grok voice — presets the Vercel AI Gateway base_url + model + voice.
-  # Requires the gateway's wss:// URL in BYOM_ALLOWED_URL_PATTERNS and the
-  # gateway key as OPENAI_API_KEY (the backend sends it as the WS bearer).
+  # Grok Voice — the native xai provider (grok-voice-3.0), on XAI_API_KEY.
   python examples/s2s-realtime/setup.py \\
     --server-url "http://localhost:8090" \\
     --provider xai
 
-  # Any other OpenAI-Realtime-compatible gateway (LiteLLM, xAI direct, ...)
+  # S2S gateway mode: an OpenAI-Realtime-compatible gateway (Vercel AI
+  # Gateway, LiteLLM). Requires the gateway's wss:// URL in
+  # BYOM_ALLOWED_URL_PATTERNS and the gateway key as OPENAI_API_KEY.
   python examples/s2s-realtime/setup.py \\
     --server-url "http://localhost:8090" \\
     --base-url "wss://my-gateway.example/v1/realtime" \\
-    --model "xai/grok-voice-think-fast-1.0" \\
-    --voice "cosmo"
+    --model "openai/gpt-realtime-2" \\
+    --voice "alloy"
 
   # With Twilio phone number
   python examples/s2s-realtime/setup.py \\
@@ -60,20 +60,20 @@ GEMINI_VOICES = ("Aoede", "Charon", "Fenrir", "Kore", "Leda", "Orus", "Puck", "Z
 DEFAULT_MODELS = {
     "openai": "gpt-realtime-mini-2025-12-15",
     "google": "models/gemini-3.1-flash-live-preview",
-    "xai": "xai/grok-voice-think-fast-1.0",
+    "xai": "grok-voice-3.0",
 }
 
 DEFAULT_VOICES = {
     "openai": "alloy",
     "google": "Charon",
-    "xai": "cosmo",
+    "xai": "eve",
 }
 
-# "xai" is an example-level shorthand: the backend has no xai S2S provider —
-# Grok speaks the OpenAI-Realtime protocol, so it rides provider "openai"
-# with a gateway base_url.
-DEFAULT_BASE_URLS = {
-    "xai": "wss://ai-gateway.vercel.sh/v1/realtime",
+# The platform key each provider's agent runs on when the project holds none.
+PROVIDER_KEYS = {
+    "openai": "OPENAI_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "xai": "XAI_API_KEY",
 }
 
 
@@ -160,11 +160,7 @@ def main() -> None:
         "--provider",
         default="openai",
         choices=["openai", "google", "xai"],
-        help=(
-            "S2S provider (default: openai). xai presets the Vercel AI "
-            "Gateway base_url + Grok model/voice (backend provider stays "
-            "openai — same Realtime protocol)."
-        ),
+        help="S2S provider (default: openai). xai is Grok Voice.",
     )
     parser.add_argument(
         "--model",
@@ -181,9 +177,8 @@ def main() -> None:
         default=None,
         help=(
             "OpenAI-Realtime-compatible gateway WebSocket (wss://) — e.g. Vercel "
-            "AI Gateway or LiteLLM. Enables provider-prefixed models like "
-            "xai/grok-voice-think-fast-1.0. Overrides the xai preset; not "
-            "supported with google."
+            "AI Gateway or LiteLLM (S2S gateway mode). openai provider only; "
+            "needs --model and --voice."
         ),
     )
     parser.add_argument(
@@ -207,21 +202,19 @@ def main() -> None:
     if args.twilio_number and not args.twilio_number_sid:
         parser.error("--twilio-number-sid is required when --twilio-number is set")
 
-    if args.base_url and args.provider == "google":
-        parser.error("--base-url is only supported with --provider openai or xai")
-    if args.base_url and args.provider == "openai" and not args.model:
-        # An explicit gateway routes to models we can't guess; xai has a preset.
-        parser.error(
-            "--model is required with --base-url (e.g. xai/grok-voice-think-fast-1.0)"
-        )
+    if args.base_url and args.provider != "openai":
+        parser.error("--base-url is only supported with --provider openai")
+    if args.base_url and not (args.model and args.voice):
+        # A gateway routes to models (and voices) we can't guess.
+        parser.error("--model and --voice are required with --base-url")
 
-    base_url = args.base_url or DEFAULT_BASE_URLS.get(args.provider)
+    base_url = args.base_url
     model = args.model or DEFAULT_MODELS[args.provider]
 
     if base_url:
         # Gateway mode: the base_url routes to models with their own voice
-        # sets, so the OpenAI voice allowlist is off ("cosmo" is Grok's).
-        voice = args.voice or "cosmo"
+        # sets, so the OpenAI voice allowlist is off.
+        voice = args.voice
     else:
         voice = args.voice or DEFAULT_VOICES[args.provider]
 
@@ -243,6 +236,12 @@ def main() -> None:
     if base_url:
         print(f"  Gateway:  {base_url}")
         warn_gateway_env(base_url)
+    elif not os.environ.get(PROVIDER_KEYS[args.provider]):
+        print(
+            f"\n  !! WARNING: {PROVIDER_KEYS[args.provider]} is not set here — "
+            "calls fail with missing_keys unless the server or the project "
+            "holds one."
+        )
 
     # --- Step 1: Create project ---
     print("\n1. Creating project...")
@@ -279,9 +278,7 @@ def main() -> None:
                 ),
                 "first_message": "Hey! I'm running in speech-to-speech mode. How can I help?",
                 "s2s": {
-                    # The backend's S2S enum is openai|google — xai rides the
-                    # openai Realtime protocol through the gateway base_url.
-                    "provider": "openai" if args.provider == "xai" else args.provider,
+                    "provider": args.provider,
                     "model": model,
                     "voice": voice,
                     "turn_detection": args.turn_detection,
@@ -331,8 +328,6 @@ def main() -> None:
         print("\n5. Configuring Twilio webhooks...")
         voice_url = f"{args.server_url}/webhooks/twilio/voice/inbound"
         status_url = f"{args.server_url}/webhooks/twilio/status"
-
-        import os
 
         from twilio.rest import Client
 

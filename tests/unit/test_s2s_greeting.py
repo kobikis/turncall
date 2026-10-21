@@ -86,7 +86,7 @@ async def _greet(provider: str, connect_delay: float) -> tuple[_SlowToConnect, f
     return service, began
 
 
-@pytest.mark.parametrize("provider", ["openai", "google", "aws"])
+@pytest.mark.parametrize("provider", ["openai", "google", "aws", "xai"])
 async def test_the_greeting_follows_the_connect_without_a_fixed_wait(
     provider: str,
 ) -> None:
@@ -126,7 +126,7 @@ async def _opening_context(config: AgentConfig) -> tuple[Any, Any]:
         transport=MagicMock(),
         call_context=MagicMock(is_eval=True),
         pipecat_settings=SimpleNamespace(),
-        credentials=creds("sk-test", google="g-test"),
+        credentials=creds("sk-test", google="g-test", xai="x-test"),
     )
     aggregator = next(
         p for p in pipeline.processors if isinstance(p, LLMUserAggregator)
@@ -219,3 +219,22 @@ async def test_realtime_still_opens_on_an_empty_context() -> None:
     """Realtime greets from the empty run; nothing is added for it."""
     context, _ = await _opening_context(_agent("openai", "Hi!"))
     assert context.get_messages() == []
+
+
+async def test_grok_answers_the_empty_opening_itself() -> None:
+    """Grok Voice is a Realtime-protocol model: the first context it is handed
+    is answered with a `response.create`, so nothing is added for it (#386;
+    measured greeting in `tests/live/test_live_xai_realtime.py`)."""
+    from pipecat.processors.frame_processor import FrameDirection
+    from pipecat.services.xai.realtime import events
+
+    context, service = await _opening_context(_agent("xai", "Hi!"))
+    assert context.get_messages() == []
+
+    service._api_session_ready = True
+    service.send_client_event = AsyncMock()
+    service.push_frame = AsyncMock()
+    await service._handle_context(context, FrameDirection.DOWNSTREAM)
+
+    sent = [c.args[0] for c in service.send_client_event.await_args_list]
+    assert any(isinstance(e, events.ResponseCreateEvent) for e in sent), sent

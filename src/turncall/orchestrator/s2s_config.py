@@ -1,8 +1,8 @@
 """S2S (speech-to-speech) service factory.
 
 Maps S2SConfig to Pipecat's OpenAIRealtimeLLMService, OpenAILiveLLMService,
-GeminiLiveLLMService or AWSNovaSonicLLMService with appropriate session
-properties, voice, and turn detection settings.
+GeminiLiveLLMService, AWSNovaSonicLLMService or GrokRealtimeLLMService with
+appropriate session properties, voice, and turn detection settings.
 """
 
 from collections.abc import Sequence
@@ -14,9 +14,11 @@ from turncall.domain.models import (
     AgentConfig,
     AWSConfig,
     DelegationConfig,
+    S2SConfig,
     ToolDefinition,
     resolve_delegation,
 )
+from turncall.orchestrator import grok_voice
 from turncall.services.credentials import Credentials
 
 # S2SConfig's defaults are OpenAI Realtime's. Nova Sonic needs its own, applied
@@ -29,11 +31,37 @@ _NOVA_SONIC_VOICE = "matthew"
 _OPENAI_LIVE_MODEL = "gpt-live-1"
 _GEMINI_LIVE_MODEL = "gemini-3.8-live"
 _GEMINI_LIVE_VOICE = "Charon"
+# Pinned, not pipecat's `grok-voice-latest`: an alias would move a live agent's
+# model underneath it when xAI moves the alias (#384).
+_GROK_VOICE_MODEL = "grok-voice-3.0"
+_GROK_VOICE_VOICE = "eve"
+
+# The rate the S2S pipeline sends a service the caller's audio at and takes
+# the agent's at: it resamples the transport's audio to this for every
+# provider. A session that declares its own audio format (Grok's) declares
+# this one, so what the service is told and what it is sent agree.
+S2S_SERVICE_SAMPLE_RATE = 24000
 
 
 # The role of the opening message per provider; one without an entry opens on
 # an empty context.
 _OPENING_ROLE = {"openai_live": "developer", "google": "user", "aws": "user"}
+
+
+def _own_defaults(
+    s2s: S2SConfig, *, model: str, voice: str | None = None
+) -> tuple[str, str]:
+    """The model and voice to send, S2SConfig's OpenAI sentinels swapped for
+    the provider's own `model` and `voice` (ADR-0016).
+
+    An explicitly chosen value passes through untouched, so a wrong one is
+    reported by the provider rather than silently replaced. `voice=None`
+    keeps the agent's voice whatever it is.
+    """
+    own_model = model if s2s.model == _OPENAI_DEFAULT_MODEL else s2s.model
+    if voice is None or s2s.voice != _OPENAI_DEFAULT_VOICE:
+        return own_model, s2s.voice
+    return own_model, voice
 
 
 def _say_first(first_message: str) -> str:
@@ -102,6 +130,8 @@ def create_s2s_service(
         )
     if provider == "aws":
         return _create_nova_sonic(config, credentials.aws(config.aws))
+    if provider == "xai":
+        return _create_grok_realtime(config, credentials.api_key("xai"))
     raise ValueError(f"Unsupported S2S provider: {provider}")
 
 
@@ -148,8 +178,9 @@ def _create_openai_realtime(config: AgentConfig, api_key: str) -> Any:
     )
 
     # A base_url points the realtime WebSocket at a gateway (Vercel AI Gateway,
-    # LiteLLM) or xAI direct instead of api.openai.com — same protocol, so the
-    # model string (e.g. "xai/grok-voice-think-fast-1.0") just routes upstream.
+    # LiteLLM) instead of api.openai.com — same protocol, so the model string
+    # (e.g. "openai/gpt-realtime-2") just routes upstream. A stored agent on
+    # api.x.ai still works this way; new ones use the xai provider.
     service_kwargs: dict[str, Any] = {}
     if s2s.base_url:
         service_kwargs["base_url"] = s2s.base_url
@@ -192,8 +223,9 @@ def _create_gemini_live(config: AgentConfig, api_key: str) -> Any:
     # the call died at connect. The voice is tolerated — Gemini ignores an
     # unknown name and uses its default — but sending `alloy` claims a voice
     # the caller will not hear.
-    model = _GEMINI_LIVE_MODEL if s2s.model == _OPENAI_DEFAULT_MODEL else s2s.model
-    voice = _GEMINI_LIVE_VOICE if s2s.voice == _OPENAI_DEFAULT_VOICE else s2s.voice
+    model, voice = _own_defaults(
+        s2s, model=_GEMINI_LIVE_MODEL, voice=_GEMINI_LIVE_VOICE
+    )
 
     settings_kwargs: dict[str, Any] = {
         "model": model,
@@ -222,6 +254,51 @@ def _create_gemini_live(config: AgentConfig, api_key: str) -> Any:
 
     logger.info(
         "S2S service created: provider=google model={model} voice={voice} turn={turn}",
+        model=model,
+        voice=voice,
+        turn=s2s.turn_detection,
+    )
+    return service
+
+
+def _create_grok_realtime(config: AgentConfig, api_key: str) -> Any:
+    """Create a GrokRealtimeLLMService (Grok Voice) from S2SConfig.
+
+    pipecat's `xai` module, not its deprecated `grok` re-export. The audio is
+    PCM at S2S_SERVICE_SAMPLE_RATE both ways, the rate the pipeline resamples
+    the caller to (#389). What the session takes from `s2s.extra`, and what is
+    refused, is `grok_voice`'s.
+    """
+    from pipecat.services.xai.realtime.events import SessionProperties
+    from pipecat.services.xai.realtime.llm import GrokRealtimeLLMService
+
+    from turncall.orchestrator import grok_realtime
+
+    s2s = config.s2s
+    # The API schema refuses these at save; a call-init inline agent reaches
+    # here unchecked, and dropping what it asked for would be silent (#387).
+    problem = grok_voice.refusal(s2s)
+    if problem:
+        raise ValueError(problem)
+
+    model, voice = _own_defaults(s2s, model=_GROK_VOICE_MODEL, voice=_GROK_VOICE_VOICE)
+
+    service = grok_realtime.KeyAwareGrokRealtime(
+        api_key=api_key,
+        settings=GrokRealtimeLLMService.Settings(
+            model=model,
+            system_instruction=_build_s2s_system_prompt(config) or None,
+            session_properties=SessionProperties(
+                voice=voice,
+                turn_detection=grok_realtime.turn_detection(s2s.turn_detection),
+                audio=grok_realtime.pcm_audio(S2S_SERVICE_SAMPLE_RATE),
+                **grok_voice.session_extras(s2s.extra),
+            ),
+        ),
+    )
+
+    logger.info(
+        "S2S service created: provider=xai model={model} voice={voice} turn={turn}",
         model=model,
         voice=voice,
         turn=s2s.turn_detection,
@@ -263,8 +340,7 @@ def _create_nova_sonic(config: AgentConfig, aws: AWSConfig) -> Any:
     s2s = config.s2s
     credentials = aws_credentials.resolve_aws_credentials(aws)
 
-    model = _NOVA_SONIC_MODEL if s2s.model == _OPENAI_DEFAULT_MODEL else s2s.model
-    voice = _NOVA_SONIC_VOICE if s2s.voice == _OPENAI_DEFAULT_VOICE else s2s.voice
+    model, voice = _own_defaults(s2s, model=_NOVA_SONIC_MODEL, voice=_NOVA_SONIC_VOICE)
 
     settings_kwargs: dict[str, Any] = {"model": model, "voice": voice}
     system_prompt = _build_s2s_system_prompt(config)
@@ -396,9 +472,9 @@ def _create_openai_live(
     # S2SConfig's default model is OpenAI Realtime's. Swap only when the agent
     # left it untouched, so an explicitly wrong model is reported by OpenAI
     # rather than silently replaced. Same rule as Nova Sonic (ADR-0016).
-    model = _OPENAI_LIVE_MODEL if s2s.model == _OPENAI_DEFAULT_MODEL else s2s.model
+    model, voice = _own_defaults(s2s, model=_OPENAI_LIVE_MODEL)
 
-    settings_kwargs: dict[str, Any] = {"model": model, "voice": s2s.voice}
+    settings_kwargs: dict[str, Any] = {"model": model, "voice": voice}
     system_prompt = _build_s2s_system_prompt(config)
     if delegation is not None and tools:
         system_prompt += _delegation_paragraph(

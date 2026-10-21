@@ -1871,6 +1871,7 @@ def _create_s2s_pipeline(
         )
 
     from turncall.orchestrator.s2s_config import (
+        S2S_SERVICE_SAMPLE_RATE,
         create_s2s_service,
         s2s_opening_messages,
     )
@@ -2011,7 +2012,8 @@ def _create_s2s_pipeline(
     # Each processor can only appear once in a Pipecat pipeline.
     input_resampler = None
     output_resampler = None
-    s2s_sample_rate = 24000
+    # One number with the service's own session format (Grok declares it).
+    s2s_sample_rate = S2S_SERVICE_SAMPLE_RATE
     if audio_sample_rate != s2s_sample_rate:
         from turncall.orchestrator.audio_resampler import AudioResampler
 
@@ -2029,13 +2031,21 @@ def _create_s2s_pipeline(
             dst=s2s_sample_rate,
         )
 
+    # An append (the idle check-in, an eval's typed turn) must reach Grok
+    # itself, past the user aggregator (#388).
+    from turncall.orchestrator.realtime_appends import around_the_user_aggregator
+
+    before_user, after_user = around_the_user_aggregator(config.s2s.provider)
+
     # Build processor list based on turn detection mode
     # context_aggregator.user() is always needed — it sends the initial
     # LLMContextFrame that triggers the Realtime WebSocket connection.
     processors: list[Any] = [
         transport.input(),
         *_eval_rtvi(call_context),
+        *before_user,
         context_aggregator.user(),
+        *after_user,
         *([input_resampler] if input_resampler else []),
         customer_tap,
         s2s_llm,
