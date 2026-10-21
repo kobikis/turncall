@@ -13,6 +13,30 @@ and is not part of this repository's history.
 
 ### Added
 
+- **xAI Grok as an LLM** (#393). `llm.provider: "xai"`, on the `xai` account
+  (agent `llm.api_key`, then the project's `xai` credential, then
+  `XAI_API_KEY`), on voice and text (chat, SMS, WhatsApp, post-call analysis),
+  with tools on both, as an `llm.failover` entry and with `warm_up`. An unset
+  model is `grok-4.20-non-reasoning`. `reasoning_effort` is sent on pipecat's
+  own setting; `minimal` and `base_url` are a `422`, and the same rule fails
+  the build of a call-init inline agent. The key needs xAI's chat endpoint: a
+  voice-only key answers `403`. A wrong key (xAI's `400`) reads as
+  `key_rejected`.
+- **xAI speech-to-text** (#394). `stt.provider: "xai"`, model
+  `grok-voice-transcribe-2.0`, streaming. `stt.keyterms` are sent as xAI's
+  `keyterm` (over 100 terms, or a term over 50 characters, is dropped with a
+  warning, since xAI refuses the whole connection for either). TurnCall sends
+  xAI's `finalize` when VAD hears the caller stop, so the final transcript
+  arrives about 0.2 s after speech instead of 0.9 s. `stt.extra` keys xAI
+  reads are sent; any other is warned about and dropped.
+- **xAI voices as TTS** (#395). `tts.provider: "xai"`, voice `eve` by
+  default, over xAI's HTTP endpoint (the WebSocket one stalls after half a
+  second of each reply). xAI TTS has no model. `speed` outside 0.7-1.5 is a
+  `422`, failover entries included, and fails the build of a call-init
+  inline agent. No pronunciation markup, so `tts.pronunciations` warns. A
+  wrong key is not reported as `key_rejected` (pipecat reports xAI's refusal
+  with no exception); a `tts.failover` backup keeps the call speaking.
+
 - **Release numbers** (#321, ADR-0025). `POST /v1/phone-numbers/release`
   gives a number on the carrier account back to the carrier, on Twilio and
   Telnyx, admin-only (a developer or viewer key gets `403`). Releasing is

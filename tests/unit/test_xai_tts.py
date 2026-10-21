@@ -133,3 +133,25 @@ class TestPronunciations:
             "xai (eve)" in m and "Metformin" in m and "spoken as written" in m
             for m in said
         ), said
+
+
+class TestTheBuildHoldsTheSameRules:
+    """A call-init inline agent skips the API schema; the build refuses the
+    speed xAI would answer 400 to rather than lose every reply's audio."""
+
+    @pytest.mark.parametrize("speed", [0.5, 1.6])
+    def test_a_speed_out_of_range_fails_the_build(self, speed) -> None:
+        with pytest.raises(ValueError, match=r"xai.*0\.7.*1\.5"):
+            _service(speed=speed)
+
+    def test_a_failover_member_fails_the_build_too(self) -> None:
+        from turncall.orchestrator.pipeline_factory import _create_tts_stage
+
+        backup = TTSConfig(provider="xai", speed=2.0)
+        config = AgentConfig(system_prompt="hi", tts=TTSConfig(failover=[backup]))
+        with pytest.raises(ValueError, match=r"xai.*0\.7.*1\.5"):
+            _create_tts_stage(config, creds(xai="xai-key"))
+
+    @pytest.mark.parametrize("speed", [0.7, 1.5])
+    def test_the_edges_of_the_range_build(self, speed) -> None:
+        assert _service(speed=speed)._settings.speed == speed

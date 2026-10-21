@@ -19,8 +19,8 @@ class XAIKeyRefusal:
     def _classify_error(self, exception: Exception) -> ErrorCategory | None:
         if extract_http_status_code(exception) == 400 and _names_a_key(exception):
             return ErrorCategory.AUTHENTICATION
-        pipecats: ErrorCategory | None = super()._classify_error(exception)  # type: ignore[misc]
-        return pipecats
+        pipecat_verdict: ErrorCategory | None = super()._classify_error(exception)  # type: ignore[misc]
+        return pipecat_verdict
 
 
 def _names_a_key(exception: Exception) -> bool:

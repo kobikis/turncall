@@ -114,14 +114,14 @@ Two pipeline modes, selected per agent via `pipeline_mode`.
 
 ```mermaid
 flowchart LR
-    IN["transport.input"] --> STT["STT<br/>Deepgram · OpenAI<br/>ElevenLabs · Cartesia<br/>AssemblyAI"]
+    IN["transport.input"] --> STT["STT<br/>Deepgram · OpenAI<br/>ElevenLabs · Cartesia<br/>AssemblyAI · xAI"]
     STT -.-> VM["Voicemail<br/>detector"]
     VM -.-> TURN
     STT --> TURN["user_agg<br/>VAD + SmartTurn V3"]
     TURN -.-> KB["Knowledge<br/>retrieval"]
     KB -.-> LLM
-    TURN --> LLM["LLM<br/>OpenAI · Anthropic · Ollama<br/>OpenRouter · Bedrock"]
-    LLM --> TTS["TTS<br/>Deepgram · OpenAI<br/>ElevenLabs · Cartesia"]
+    TURN --> LLM["LLM<br/>OpenAI · Anthropic · Ollama<br/>OpenRouter · Bedrock · xAI"]
+    LLM --> TTS["TTS<br/>Deepgram · OpenAI<br/>ElevenLabs · Cartesia · xAI"]
     TTS -.-> AV["Video<br/>avatar"]
     AV -.-> OUT
     TTS --> OUT["transport.output"]

@@ -515,7 +515,8 @@ async def _complete_text_openai(
         "max_tokens": config.max_tokens,
     }
     if config.reasoning_effort:
-        # OpenAI reasoning models (o-series/gpt-5); ignored when unset.
+        # OpenAI reasoning models (o-series/gpt-5) and Grok's (xai, which
+        # the API refuses `minimal` for); ignored when unset.
         body["reasoning_effort"] = config.reasoning_effort
     if config.provider == "openrouter" and config.fallback_models:
         # OpenRouter's `models` array — tried in order, primary first.

@@ -40,6 +40,22 @@ pipecat minor only arrives with a TurnCall release. See *pipecat 1.13* below.
 
 ## Added
 
+**xAI Grok as an LLM.** Set `llm.provider` to `xai` to run Grok on voice calls
+and text conversations, with tools, as a failover backup, and with warm-up. It
+uses the same xAI account as Grok Voice; the key needs xAI's chat endpoint, and
+a voice-only key is refused. An unset model is `grok-4.20-non-reasoning`. See
+[Providers](/guides/providers).
+
+**xAI speech-to-text.** Set `stt.provider` to `xai` for xAI's streaming
+transcription, with keyterms. TurnCall asks xAI for the final transcript as soon
+as the caller stops speaking, so it arrives about 0.2 s after speech. See
+[Providers](/guides/providers).
+
+**xAI voices.** Set `tts.provider` to `xai` for xAI's voices (`eve` by default).
+`speed` must be between 0.7 and 1.5. xAI reads no pronunciation markup. A wrong
+key is not reported as refused, so give an xAI voice a `tts.failover` backup.
+See [Providers](/guides/providers).
+
 **Search and buy numbers.** An admin key can search a Twilio account for
 available numbers by country, area code and digits, buy one, and bind it with
 the usual call; the purchase answers with what binding needs, and is recorded

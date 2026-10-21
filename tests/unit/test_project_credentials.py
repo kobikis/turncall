@@ -521,8 +521,9 @@ class TestSecretMasking:
     def test_the_xai_account_is_listed_with_both_signals(
         self, app, project_id, monkeypatch
     ) -> None:
-        """Grok Voice (#386): a plain-key account, listed with no code of its
-        own — the registry derives it from the S2S provider."""
+        """xAI (#386, #393-#395): a plain-key account, listed with no code of
+        its own — the registry derives every role it serves (STT, LLM, TTS,
+        S2S) from the providers that name it."""
         monkeypatch.setattr(
             "turncall.api.v1.credentials.platform_keys",
             lambda s: {"xai": "xai-env-key"},

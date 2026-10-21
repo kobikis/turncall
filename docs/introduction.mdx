@@ -29,7 +29,7 @@ Define an agent via API, bind it to a phone number, and callers talk to your AI.
     Text-based conversations with agents via Twilio SMS or the Chat API.
   </Card>
   <Card title="Multi-Provider" icon="shuffle">
-    Mix and match STT, LLM, and TTS providers per agent — Deepgram, OpenAI, Anthropic, Google Gemini, ElevenLabs, Cartesia, AssemblyAI, Ollama — with backups that take over when one stops working.
+    Mix and match STT, LLM, and TTS providers per agent — Deepgram, OpenAI, Anthropic, Google Gemini, xAI, ElevenLabs, Cartesia, AssemblyAI, Ollama — with backups that take over when one stops working.
   </Card>
   <Card title="Speech-to-Speech" icon="bolt">
     ~300ms processing (vs ~800ms cascade) via OpenAI Realtime, Gemini Live or Amazon Nova Sonic.
@@ -108,9 +108,9 @@ See [Architecture](/architecture) for the full pipeline, call flows, and data mo
 | Telephony | Twilio Voice + Media Streams · Telnyx Call Control · Asterisk ARI |
 | Browser | WebRTC (SmallWebRTCTransport) |
 | Video Avatar | HeyGen / Tavus (Pipecat avatar services) |
-| STT | Deepgram / OpenAI / ElevenLabs / Cartesia / AssemblyAI |
-| LLM | OpenAI / Anthropic Claude / Google Gemini / Ollama / OpenRouter / AWS Bedrock / Any OpenAI-compatible |
-| TTS | Deepgram / OpenAI / ElevenLabs / Cartesia |
+| STT | Deepgram / OpenAI / ElevenLabs / Cartesia / AssemblyAI / xAI |
+| LLM | OpenAI / Anthropic Claude / Google Gemini / xAI Grok / Ollama / OpenRouter / AWS Bedrock / Any OpenAI-compatible |
+| TTS | Deepgram / OpenAI / ElevenLabs / Cartesia / xAI |
 | S2S | OpenAI Realtime / Gemini Live / Amazon Nova Sonic 2 |
 | Knowledge Base | pgvector + OpenAI embeddings |
 | VAD | Silero |

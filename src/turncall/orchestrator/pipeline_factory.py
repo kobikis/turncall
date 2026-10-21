@@ -591,20 +591,16 @@ def _create_llm_service(
         )
 
     if provider == "xai":
-        from turncall.orchestrator.grok_llm import KeyAwareGrokLLM
+        from turncall.orchestrator.grok_llm import create_grok_llm
 
-        # pipecat's own setting, never `extra_body`, so the two cannot
-        # compete. None sends nothing: Grok's non-reasoning models reject
-        # the parameter outright. No base_url: the key is the xAI account's.
-        return KeyAwareGrokLLM(
+        return create_grok_llm(
+            config.llm,
             api_key=credentials.api_key("xai", config.llm.api_key),
-            settings=KeyAwareGrokLLM.Settings(
-                model=model,
-                **si,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                reasoning_effort=effort or None,
-            ),
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning_effort=effort,
+            system_instruction=system_instruction,
         )
 
     if provider == "ollama":
@@ -981,6 +977,14 @@ def _create_xai_tts(
     this service opens its own at start and closes it at stop, unlike the
     borrowers `adapters/aiohttp_client` exists for."""
     from pipecat.services.xai.tts import XAIHttpTTSService
+
+    from turncall.orchestrator.xai_config import tts_refusal
+
+    # The API schema refuses it at save; a call-init inline agent reaches here
+    # unchecked, and xAI would answer every reply with a 400.
+    problem = tts_refusal(config.tts)
+    if problem:
+        raise ValueError(problem)
 
     extra = config.tts.extra
     promoted = {k: extra[k] for k in _XAI_TTS_SETTINGS if k in extra}

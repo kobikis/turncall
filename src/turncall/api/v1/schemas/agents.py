@@ -34,7 +34,7 @@ from turncall.domain.providers import (
     STT_PROVIDERS,
     TTS_PROVIDERS,
 )
-from turncall.orchestrator import grok_voice
+from turncall.orchestrator import grok_voice, xai_config
 from turncall.orchestrator.deepgram_flux import MIXED_FLUX_GROUP, mixes_flux
 
 
@@ -134,15 +134,14 @@ class LLMConfigSchema(BaseModel):
                 "(see adr/0016). Set config.aws.region instead."
             )
             raise ValueError(msg)
-        if self.provider in ("google", "xai") and self.base_url:
-            # Same reason: both routes call the vendor's own endpoint, and
-            # one elsewhere would be sent the project's key for it.
-            msg = f"base_url is not supported for the {self.provider} provider"
+        if self.provider == "google" and self.base_url:
+            # Same reason: the route calls Google's own endpoint, and one
+            # elsewhere would be sent the project's key for it.
+            msg = "base_url is not supported for the google provider"
             raise ValueError(msg)
-        if self.provider == "xai" and self.reasoning_effort == "minimal":
-            # OpenAI's lowest effort; xAI's are none|low|medium|high|xhigh.
-            msg = "reasoning_effort 'minimal' is not an xAI value (low|medium|high)"
-            raise ValueError(msg)
+        if self.provider == "xai" and (problem := xai_config.llm_refusal(self)):
+            # The build applies the same rule to a call-init inline agent.
+            raise ValueError(problem)
         return self
 
     @model_validator(mode="after")
@@ -178,9 +177,6 @@ class LLMConfigSchema(BaseModel):
             msg = "fallback_models requires provider 'openrouter'"
             raise ValueError(msg)
         return self
-
-
-XAI_TTS_SPEED_RANGE = (0.7, 1.5)
 
 
 class TTSConfigSchema(BaseModel):
@@ -222,12 +218,9 @@ class TTSConfigSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_xai_speed(self) -> "TTSConfigSchema":
-        # xAI answers 400 to a speed outside its range (measured, #395), which
-        # would cost every reply its audio.
-        low, high = XAI_TTS_SPEED_RANGE
-        if self.provider == "xai" and not low <= self.speed <= high:
-            msg = f"tts.speed on xai must be between {low} and {high}"
-            raise ValueError(msg)
+        # The build applies the same rule to a call-init inline agent.
+        if self.provider == "xai" and (problem := xai_config.tts_refusal(self)):
+            raise ValueError(problem)
         return self
 
     @model_validator(mode="after")

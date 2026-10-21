@@ -309,3 +309,40 @@ class TestTheBoundary:
             AgentConfigSchema.model_validate(
                 {"llm": {"failover": [{"provider": "xai", "base_url": "https://e.x"}]}}
             )
+
+
+@pytest.mark.unit
+class TestTheBuildHoldsTheSameRules:
+    """A call-init inline agent is validated by the domain model, not the API
+    schema, so the build refuses what the schema does (the Flux precedent)."""
+
+    def test_minimal_effort_fails_the_build(self) -> None:
+        with pytest.raises(ValueError, match="minimal"):
+            _voice({"reasoning_effort": "minimal"}, xai="k")
+
+    def test_a_base_url_fails_the_build(self) -> None:
+        with pytest.raises(ValueError, match="base_url is not supported for the xai"):
+            _voice({"base_url": "https://example.com/v1"}, xai="k")
+
+    def test_a_failover_member_fails_the_build_too(self) -> None:
+        from turncall.orchestrator.pipeline_factory import _create_llm_stage
+
+        config = AgentConfig.model_validate(
+            {"llm": {"failover": [{"provider": "xai", "reasoning_effort": "minimal"}]}}
+        )
+        with pytest.raises(ValueError, match="minimal"):
+            _create_llm_stage(config, creds("sk-openai", xai="k"))
+
+    def test_the_schema_and_the_build_give_one_verdict(self) -> None:
+        from pydantic import ValidationError
+
+        from turncall.api.v1.schemas.agents import AgentConfigSchema
+
+        with pytest.raises(ValidationError) as at_the_api:
+            AgentConfigSchema.model_validate(
+                {"llm": {"provider": "xai", "reasoning_effort": "minimal"}}
+            )
+        with pytest.raises(ValueError) as at_build:
+            _voice({"reasoning_effort": "minimal"}, xai="k")
+
+        assert str(at_build.value) in str(at_the_api.value)

@@ -225,7 +225,7 @@ Set `"extra": {"profanity_filter": true}` if you want it on.
 | `provider` | No | `deepgram` (default), `openai`, `elevenlabs`, `cartesia`, `xai` |
 | `model` | No | Provider default when unset: `aura-2-helena-en`, `tts-1`, `eleven_flash_v2_5`, `sonic-3.6`. xAI has no model; on `xai` it is not sent |
 | `voice` | No | Provider default when unset: `aura-2-helena-en`, `alloy`, `Rachel`, `eve` (xAI — `GET https://api.x.ai/v1/tts/voices` lists the rest; custom voice ids work too). Cartesia voice ids are account-specific, so there is no default — set one |
-| `speed` | No | 0.25–4.0 (default 1.0, which sends nothing). Honoured by Deepgram (0.7–1.5), OpenAI, ElevenLabs and xAI. On `xai` it must be 0.7–1.5 (`422` otherwise, since xAI refuses the request) |
+| `speed` | No | 0.25–4.0 (default 1.0, which sends nothing). Honoured by Deepgram (0.7–1.5), OpenAI, ElevenLabs and xAI. On `xai` it must be 0.7–1.5 (`422` otherwise, since xAI refuses the request; a call-init inline agent outside it fails the call) |
 | `pronunciations` | No | Word → IPA map for words the voice says wrong. One spelling, each provider's own markup generated from it. See [Pronunciations](#pronunciations) |
 | `extra` | No | Passthrough to the provider. Keys naming a setting TurnCall already manages — `model`, `voice`, `speed`, and Cartesia's `language` / `emotion` — are ignored so they cannot silently override your config. On `xai`, `optimize_streaming_latency`, `text_normalization` and `language` are sent as xAI's own fields |
 
@@ -524,6 +524,12 @@ A key that exists but is wrong is only found out when the provider refuses it,
 partway into the call. That call ends the same way, with `provider` and
 `key_rejected: true` on the event. See
 [When a call fails](/guides/post-call-analysis#when-a-call-fails).
+
+xAI TTS is the exception: xAI refuses a wrong key on every request, but the
+refusal reaches TurnCall with nothing to classify, so it is not reported as
+`key_rejected` and the call does not end on it. The agent simply goes silent.
+Give an `xai` voice a backup in `tts.failover`: it takes over after one reply
+with no audio.
 
 <Warning>
   `CREDENTIAL_ENCRYPTION_KEY` is set once. Rotating it orphans every stored
