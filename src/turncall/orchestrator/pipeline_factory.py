@@ -695,6 +695,8 @@ _TTS_DEFAULTS: dict[str, tuple[str | None, str | None]] = {
     # Cartesia voices are account-specific ids and Pipecat has no default
     # either, so there is nothing sensible to guess; an unset voice warns.
     "cartesia": ("sonic-3.6", None),
+    # xAI TTS has no model to send (#395); `eve` is pipecat's and xAI's own.
+    "xai": (None, "eve"),
 }
 
 
@@ -792,7 +794,7 @@ def _warn_unusable_pronunciations(config: AgentConfig, tts: Any) -> None:
         "tts.pronunciations: {provider} ({model}) cannot read pronunciation "
         "markup with these settings, so these are spoken as written: {words}",
         provider=config.tts.provider,
-        model=_tts_model_voice(config)[0],
+        model=_tts_runs(config),
         words=", ".join(unusable or pronunciations),
     )
 
@@ -810,7 +812,7 @@ _OPENAI_TTS_TIMEOUT = Timeout(10.0, connect=5.0)
 def _create_tts_service(
     config: AgentConfig, credentials: Credentials, **kwargs: Any
 ) -> Any:
-    """Create TTS service. Supports deepgram, openai, elevenlabs, and cartesia.
+    """Create TTS service: deepgram, openai, elevenlabs, cartesia, xai.
     `kwargs` reach pipecat's `TTSService` as they are, beside the filter that
     keeps the model's stage directions unspoken."""
     from turncall.orchestrator.stage_directions import StageDirectionFilter
@@ -937,7 +939,46 @@ def _create_tts_service(
             **kwargs,
         )
 
+    if provider == "xai":
+        return _create_xai_tts(config, voice, speed, credentials, **kwargs)
+
     raise ValueError(f"Unsupported TTS provider: {provider}")
+
+
+# `tts.extra` keys xAI reads, which pipecat sends only from these fields.
+_XAI_TTS_SETTINGS = ("optimize_streaming_latency", "text_normalization")
+
+
+def _create_xai_tts(
+    config: AgentConfig,
+    voice: str | None,
+    speed: dict[str, float],
+    credentials: Credentials,
+    **kwargs: Any,
+) -> Any:
+    """xAI's voices over HTTP (#395). pipecat's WebSocket `XAITTSService` sends
+    a sentence's text with no `text.done` until the reply ends, and xAI holds
+    its audio for it: measured, half a second of speech then silence until the
+    LLM finishes. No `model` is sent — xAI TTS has none. The rate is left to
+    the transport, which pipecat reads at start. No shared aiohttp session:
+    this service opens its own at start and closes it at stop, unlike the
+    borrowers `adapters/aiohttp_client` exists for."""
+    from pipecat.services.xai.tts import XAIHttpTTSService
+
+    extra = config.tts.extra
+    promoted = {k: extra[k] for k in _XAI_TTS_SETTINGS if k in extra}
+    return XAIHttpTTSService(
+        api_key=credentials.api_key("xai"),
+        settings=XAIHttpTTSService.Settings(
+            voice=voice,
+            language=extra.get("language", config.language),
+            **speed,
+            **promoted,
+            extra=_overflow(extra, "voice", "language", "speed", *_XAI_TTS_SETTINGS),
+        ),
+        text_transforms=_tts_text_transforms(XAIHttpTTSService, config),
+        **kwargs,
+    )
 
 
 def _create_tts_stage(config: AgentConfig, credentials: Credentials) -> Any:
@@ -980,12 +1021,15 @@ def _user_mute_strategies(config: AgentConfig) -> list[Any]:
     return [MuteUntilFirstBotCompleteUserMuteStrategy()]
 
 
-def _tts_label(config: AgentConfig) -> str:
+def _tts_runs(config: AgentConfig) -> str | None:
+    """What a TTS label or warning names: the model, or the voice where that is
+    what runs — Deepgram's voice is its model, and xAI TTS has no model."""
     model, voice = _tts_model_voice(config)
-    # Deepgram's voice is what it runs; its `model` field is never sent.
-    return (
-        f"{config.tts.provider}/{voice if config.tts.provider == 'deepgram' else model}"
-    )
+    return voice if config.tts.provider in ("deepgram", "xai") else model
+
+
+def _tts_label(config: AgentConfig) -> str:
+    return f"{config.tts.provider}/{_tts_runs(config)}"
 
 
 def _build_tools_prompt_section(config: AgentConfig) -> str:

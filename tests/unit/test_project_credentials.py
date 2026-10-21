@@ -132,9 +132,9 @@ PROJECT = {
         "elevenlabs",
         "cartesia",
         "assemblyai",
-        "xai",
         "heygen",
         "tavus",
+        "xai",
     )
 }
 
@@ -173,6 +173,7 @@ class TestCredentialsReachTheServices:
             ("elevenlabs", "pipecat.services.elevenlabs.tts", "ElevenLabsTTSService"),
             ("openai", "pipecat.services.openai.tts", "OpenAITTSService"),
             ("cartesia", "pipecat.services.cartesia.tts", "CartesiaTTSService"),
+            ("xai", "pipecat.services.xai.tts", "XAIHttpTTSService"),
         ],
     )
     def test_tts(self, monkeypatch, provider, module, cls) -> None:
@@ -532,7 +533,7 @@ class TestSecretMasking:
         with patch(f"{REPO}.providers_for_project", AsyncMock(return_value={"xai"})):
             r = app.get("/v1/providers", headers=H)
         assert r.json()["data"]["accounts"]["xai"] == {
-            "serves": {"stt": ["xai"], "s2s": ["xai"]},
+            "serves": {"stt": ["xai"], "tts": ["xai"], "s2s": ["xai"]},
             "platform_key": True,
             "project_credential": True,
         }
