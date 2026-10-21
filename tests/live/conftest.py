@@ -40,7 +40,7 @@ def typesafe_key() -> str:
     extra, which the base install deliberately does not carry."""
     key = require("TYPESAFE_API_KEY")
     pytest.importorskip(
-        "pipecat.classifiers.jev.classifier",
+        "pipecat.classifiers.typesafe.jev.classifier",
         reason="the 'evals-jev' extra is not installed",
     )
     return key

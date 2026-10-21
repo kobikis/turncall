@@ -3551,9 +3551,6 @@ google = [
 heygen = [
     { name = "livekit" },
 ]
-jev = [
-    { name = "httpx", extra = ["http2"] },
-]
 kokoro = [
     { name = "kokoro-onnx" },
     { name = "requests" },
@@ -3582,6 +3579,9 @@ tracing = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-sdk" },
+]
+typesafe = [
+    { name = "httpx", extra = ["http2"] },
 ]
 webrtc = [
     { name = "aiortc" },
@@ -5472,7 +5472,7 @@ evals-audio = [
     { name = "pipecat-ai", extra = ["kokoro", "moonshine"] },
 ]
 evals-jev = [
-    { name = "pipecat-ai", extra = ["jev"] },
+    { name = "pipecat-ai", extra = ["typesafe"] },
 ]
 
 [package.metadata]
@@ -5497,8 +5497,8 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.43.0" },
     { name = "pgvector", specifier = ">=0.3.0" },
     { name = "pipecat-ai", extras = ["anthropic", "assemblyai", "aws-nova-sonic", "cartesia", "deepgram", "elevenlabs", "google", "heygen", "local-smart-turn", "mcp", "openai", "silero", "tavus", "tracing", "webrtc", "webrtc-video"], specifier = ">=1.13.0,<1.14.0" },
-    { name = "pipecat-ai", extras = ["jev"], marker = "extra == 'evals-jev'", specifier = ">=1.13.0,<1.14.0" },
     { name = "pipecat-ai", extras = ["kokoro", "moonshine"], marker = "extra == 'evals-audio'", specifier = ">=1.13.0,<1.14.0" },
+    { name = "pipecat-ai", extras = ["typesafe"], marker = "extra == 'evals-jev'", specifier = ">=1.13.0,<1.14.0" },
     { name = "presidio-analyzer", specifier = ">=2.2.364,<2.3" },
     { name = "presidio-anonymizer", specifier = "==2.2.362" },
     { name = "pydantic", specifier = ">=2.5.0" },

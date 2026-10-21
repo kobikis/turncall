@@ -1478,9 +1478,14 @@ expectations) or a **simulation** (`persona:`, an LLM plays the caller). A
 **run** is one scenario x target x modality over N iterations.
 
 The engine is `pipecat.evals`, already pinned via pipecat 1.11. **Only the
-transport is swapped** — pipecat's harness is an RTVI WebSocket client and the
-bot hosts `EvalTransport`, so an eval exercises the real STT/LLM/TTS
-construction, the real VAD and smart-turn wiring, the real tool bridge and KB
+transport is swapped** — pipecat's harness is an RTVI WebSocket client; each
+iteration serves it from a one-connection loopback server
+(`evals/bot_server.py`, uvicorn on 127.0.0.1, port 0) and builds the pipeline on
+the connection it opens, over `EvalFastAPIWebsocketTransport` with the flags
+from its `eval-connect` message (#375: pipecat 1.13 deprecated `EvalTransport`,
+`pipecat.classifiers.jev` and `EvalSessionParams(stop_bot, trigger_disconnect)`;
+`test_eval_no_pipecat_deprecations.py` fails if the eval path uses one again).
+So an eval exercises the real STT/LLM/TTS construction, the real VAD and smart-turn wiring, the real tool bridge and KB
 retrieval. That construction path is where #63, #64, #65 and #67 all lived.
 
 ### API
@@ -1836,7 +1841,8 @@ platform's judge and persona, all unset by default (#119).
 - `evals/result_mapping.py` — one pipecat result -> one `results` entry, plus `derive_status`; the two mappers stay separate on purpose
 - `evals/worker.py` — `turncall-eval-worker`: queue consumer, concurrency cap, janitor
 - `evals/scenario.py` — parse/validate a stored definition; modality merge
-- `orchestrator/transport_factory.py` — `create_eval_transport()`
+- `evals/bot_server.py` — `LoopbackBot`: the iteration's loopback server; a build that raises is the iteration's error, not the closed socket
+- `orchestrator/transport_factory.py` — `create_eval_transport(websocket, flags)`
 - `api/v1/evals.py`, `storage/repositories/eval_repo.py`
 - See `adr/0018-eval-transport-bridge-and-worker.md`
 

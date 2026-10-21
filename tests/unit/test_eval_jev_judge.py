@@ -245,8 +245,8 @@ class TestTheDeploymentDecidesAtRunTime:
         real_import = builtins.__import__
 
         def _no_jev(name, *args, **kwargs):
-            if name.startswith("pipecat.classifiers.jev"):
-                raise ImportError("No module named 'pipecat.classifiers.jev'")
+            if name.startswith("pipecat.classifiers.typesafe.jev"):
+                raise ImportError("No module named 'pipecat.classifiers.typesafe.jev'")
             return real_import(name, *args, **kwargs)
 
         monkeypatch.setattr(builtins, "__import__", _no_jev)
@@ -257,11 +257,11 @@ class TestTheDeploymentDecidesAtRunTime:
     def test_the_extra_is_http2_and_that_failure_is_caught_too(
         self, monkeypatch
     ) -> None:
-        """`pipecat-ai[jev]` is `httpx[http2]`, and `JevClient` opens its pool
+        """`pipecat-ai[typesafe]` is `httpx[http2]`, and `JevClient` opens its pool
         with `http2=True` — so the extra's real absence is httpx raising from
         *inside* the constructor. Guarding only the import left a raw
         `ImportError: ... the 'h2' package is not installed`."""
-        import pipecat.classifiers.jev.classifier as jev_mod
+        import pipecat.classifiers.typesafe.jev.classifier as jev_mod
 
         def _no_h2(**_kwargs):
             raise ImportError(
@@ -275,7 +275,7 @@ class TestTheDeploymentDecidesAtRunTime:
         assert "h2" in str(caught.value)
 
     def test_the_key_comes_from_the_platform(self, monkeypatch) -> None:
-        import pipecat.classifiers.jev.classifier as jev_mod
+        import pipecat.classifiers.typesafe.jev.classifier as jev_mod
 
         seen: dict = {}
         monkeypatch.setattr(jev_mod, "JevClassifier", lambda **kw: seen.update(kw))
@@ -290,7 +290,7 @@ class TestTheDeploymentDecidesAtRunTime:
 
     def test_jevs_own_defaults_are_left_alone(self, monkeypatch) -> None:
         """Pipecat pins the model so thresholds tuned against it hold."""
-        import pipecat.classifiers.jev.classifier as jev_mod
+        import pipecat.classifiers.typesafe.jev.classifier as jev_mod
 
         seen: dict = {}
         monkeypatch.setattr(jev_mod, "JevClassifier", lambda **kw: seen.update(kw))

@@ -12,18 +12,21 @@ keyterm mapping), the real `_create_llm_service` (with the
 Anthropic-no-temperature rule), the real VAD and smart-turn wiring, the real
 tool bridge and KB retrieval — which is where #63, #64, #65 and #67 all lived.
 
-A fresh pipeline per iteration, deliberately. `EvalSessionParams.stop_bot`
-defaults to False and the transport is built to serve several scenarios in a
-row, which would be faster — but a scripted scenario resets context via its
-`context:` field while a simulation has no equivalent, so cross-scenario
-leakage is a live hazard. Isolation first; optimise when someone measures it.
+A fresh pipeline per iteration, deliberately: a scripted scenario resets
+context via its `context:` field while a simulation has no equivalent, so
+cross-scenario leakage is a live hazard. Since pipecat 1.13 the harness ends
+the bot's session after every run anyway (`eval-cancel`, pipecat#6064), and
+`EvalSessionParams.stop_bot` is a deprecated no-op (#375).
+
+The bot's end of the socket is `bot_server.LoopbackBot`: the pipeline is built
+once the harness has connected, because the transport is built from that
+connection.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import socket
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -65,19 +68,6 @@ class PipelineFailed(RuntimeError):
     """
 
 
-def _free_port() -> int:
-    """A port nothing is listening on, for this run's loopback socket.
-
-    ponytail: bind-then-close races anything else that grabs the port in the
-    gap. The window is microseconds and a lost race fails one iteration as
-    `errored`; swap for a per-worker port range if that ever shows up in
-    practice.
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
 def _tts_cache_dir(settings: Any) -> str | None:
     """The caller-audio cache directory, created if it is not there yet.
 
@@ -100,10 +90,8 @@ def _build_session(
     from pipecat.evals.session import EvalSessionParams
 
     params = EvalSessionParams(
-        # A fresh pipeline per iteration means we do want the bot torn down,
-        # and its `on_client_disconnected` fired, when the scenario ends.
-        stop_bot=True,
-        trigger_disconnect=True,
+        # No `stop_bot`/`trigger_disconnect`: deprecated in 1.13 (#375), and
+        # the harness now always ends the bot's session when a run ends.
         # Where the caller's synthesized turns are kept between runs (#72).
         # Same scenario, same voice, same text: synthesized once. Without a
         # path it lands under $HOME, which a container loses on recreate.
@@ -137,18 +125,16 @@ async def run_iteration(
     `agent_errors`, when given, receives every error the agent's pipeline
     reported, whatever the outcome — the reason behind a reply that never came.
 
-    Builds the agent's real pipeline against an eval transport, starts it, and
-    drives it with pipecat's harness over loopback. Always tears the bot down,
-    including when the harness raises — a leaked pipeline holds provider
-    sockets and its port for the life of the worker.
+    Serves the harness a loopback socket, builds the agent's real pipeline on
+    the connection it opens, and lets the harness drive it. Always tears the
+    bot down, including when the harness raises — a leaked pipeline holds
+    provider sockets and its port for the life of the worker.
     """
+    from turncall.evals.bot_server import LoopbackBot
     from turncall.orchestrator.pipeline_builder import build_call_pipeline
     from turncall.orchestrator.transport_factory import create_eval_transport
 
     audio = modality is EvalModality.AUDIO
-    port = _free_port()
-    transport = create_eval_transport(port, audio=audio)
-
     call_context = CallContext(
         # An eval has no call. The id still has to be unique — it keys the
         # pipeline's own bookkeeping (traces, conversation id) — but nothing
@@ -169,35 +155,48 @@ async def run_iteration(
         tool_mocks=tool_mocks,
     )
 
-    session = await build_call_pipeline(
-        config=target.config,
-        transport=transport,
-        call_context=call_context,
-        settings=settings,
-        session_factory=session_factory,
-        audio_sample_rate=EVAL_SAMPLE_RATE,
-    )
-
-    bot = asyncio.create_task(session.start(), name=f"eval-bot-{run_id}")
-    try:
-        harness = _build_session(
-            parsed,
-            kind,
-            f"ws://127.0.0.1:{port}",
-            tts_cache_dir=_tts_cache_dir(settings),
+    async def build(websocket: Any, flags: Any) -> Any:
+        return await build_call_pipeline(
+            config=target.config,
+            transport=create_eval_transport(websocket, flags, audio=audio),
+            call_context=call_context,
+            settings=settings,
+            session_factory=session_factory,
+            audio_sample_rate=EVAL_SAMPLE_RATE,
         )
-        result = await _run_harness(harness, timeout_s, run_id)
-    finally:
-        await _stop_bot(bot, run_id)
-        if agent_errors is not None:
-            agent_errors.extend(session.pipeline_errors)
 
+    bot = LoopbackBot(build, run_id)
+    try:
+        url = await bot.start()
+        harness = _build_session(
+            parsed, kind, url, tts_cache_dir=_tts_cache_dir(settings)
+        )
+        try:
+            result = await _run_harness(harness, timeout_s, run_id)
+        except Exception:
+            # A pipeline that never got built leaves the harness with a closed
+            # socket; the build's own exception is the one worth reporting.
+            bot.raise_build_error()
+            raise
+        bot.raise_build_error()
+    finally:
+        if bot.pipeline is not None:
+            await _stop_bot(bot.pipeline, run_id)
+        await bot.close()
+        if agent_errors is not None and bot.session is not None:
+            agent_errors.extend(bot.session.pipeline_errors)
+
+    session = bot.session
     # A pipeline that *raised* is a platform fault, so the iteration proves
     # nothing and is errored. A pipeline that a provider refused is not: see
     # PipelineFailed's docstring for why that has to stay `failed`. Checked
     # after the result so a run that completed anyway is scored on its own
     # terms.
-    if session.failure is not None and not getattr(result, "passed", False):
+    if (
+        session is not None
+        and session.failure is not None
+        and not getattr(result, "passed", False)
+    ):
         raise PipelineFailed(
             f"the agent pipeline stopped: {type(session.failure).__name__}: "
             f"{session.failure}"

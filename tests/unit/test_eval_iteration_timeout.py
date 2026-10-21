@@ -93,8 +93,22 @@ class TestTheIterationGivesEverythingBack:
 
         session = SimpleNamespace(start=bot_forever, failure=None)
 
-        async def never():
-            await asyncio.Event().wait()
+        def connects_then_hangs(_parsed, _kind, url, **_kw):
+            """The harness's opening, then nothing: the pipeline is built on
+            the connection it opens (#375), so the fake has to open one."""
+
+            async def run():
+                from pipecat.evals.serializer import (
+                    EvalConnectionFlags,
+                    eval_connect_message,
+                )
+                from websockets.asyncio.client import connect
+
+                async with connect(url) as ws:
+                    await ws.send(eval_connect_message(EvalConnectionFlags()))
+                    await asyncio.Event().wait()
+
+            return _harness(run)
 
         import turncall.evals.harness as harness_mod
 
@@ -110,11 +124,7 @@ class TestTheIterationGivesEverythingBack:
                     "turncall.orchestrator.pipeline_builder.build_call_pipeline",
                     AsyncMock(return_value=session),
                 ),
-                patch.object(
-                    harness_mod,
-                    "_build_session",
-                    MagicMock(return_value=_harness(never)),
-                ),
+                patch.object(harness_mod, "_build_session", connects_then_hangs),
             ):
                 with pytest.raises(IterationTimeout):
                     await run_iteration(
@@ -128,15 +138,17 @@ class TestTheIterationGivesEverythingBack:
                         session_factory=MagicMock(),
                         run_id=uuid4(),
                         tool_mocks=MagicMock(),
-                        timeout_s=0.02,
+                        timeout_s=0.5,
                     )
         finally:
             harness_mod._BOT_STOP_TIMEOUT_S = original
 
         assert bot_started.is_set(), "the bot never started — test proves nothing"
         assert not [
-            t for t in asyncio.all_tasks() if t.get_name().startswith("eval-bot-")
-        ], "the pipeline task outlived the iteration"
+            t
+            for t in asyncio.all_tasks()
+            if t.get_name().startswith(("eval-bot-", "eval-server-"))
+        ], "the pipeline or its server outlived the iteration"
 
     async def test_a_second_run_proceeds_after_the_first_one_hangs(self) -> None:
         """The worker's real loop, with one slot: a bounded run gives it back,
