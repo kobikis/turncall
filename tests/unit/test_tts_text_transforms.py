@@ -18,7 +18,9 @@ from turncall.orchestrator.pipeline_factory import _create_tts_service
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("provider", ["deepgram", "elevenlabs", "openai", "cartesia"])
+@pytest.mark.parametrize(
+    "provider", ["deepgram", "elevenlabs", "openai", "cartesia", "xai"]
+)
 async def test_tts_service_strips_markdown(provider, monkeypatch):
     # cartesia refuses to construct without a key; the others default to "".
     monkeypatch.setenv("CARTESIA_API_KEY", "x")

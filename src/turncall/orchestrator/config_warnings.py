@@ -198,6 +198,10 @@ def _tts_service_class(provider: str) -> Any | None:
         from pipecat.services.cartesia.tts import CartesiaTTSService
 
         return CartesiaTTSService
+    if provider == "xai":
+        from pipecat.services.xai.tts import XAIHttpTTSService
+
+        return XAIHttpTTSService
     return None
 
 
@@ -206,8 +210,8 @@ def _resolved_tts_model(config: AgentConfig) -> str | None:
 
     That field's default is Deepgram's, so an ElevenLabs agent that named no
     model would otherwise be told its voice is `aura-2-helena-en` — a diagnostic
-    pointing at a model nothing is running.
+    pointing at a model nothing is running. xAI has no model, so its voice.
     """
-    from turncall.orchestrator.pipeline_factory import _tts_model_voice
+    from turncall.orchestrator.pipeline_factory import _tts_runs
 
-    return _tts_model_voice(config)[0]
+    return _tts_runs(config)
