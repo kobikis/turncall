@@ -8,27 +8,12 @@ from typing import cast
 
 from pipecat.services.xai.realtime import events
 from pipecat.services.xai.realtime.llm import GrokRealtimeLLMService
-from pipecat.utils.errors import ErrorCategory, extract_http_status_code
+
+from turncall.orchestrator.xai_errors import XAIKeyRefusal
 
 
-class KeyAwareGrokRealtime(GrokRealtimeLLMService):
-    """Reads xAI's refusal of a key as one.
-
-    xAI answers a wrong key's handshake with HTTP 400 and "Incorrect API key
-    provided" (measured), which pipecat files as a bad request, so the call's
-    `error.raised` would not say which key to fix. A 401 or 403 is already
-    classified by pipecat.
-    """
-
-    def _classify_error(self, exception: Exception) -> ErrorCategory | None:
-        body = getattr(getattr(exception, "response", None), "body", None)
-        if (
-            extract_http_status_code(exception) == 400
-            and isinstance(body, bytes)
-            and b"API key" in body
-        ):
-            return ErrorCategory.AUTHENTICATION
-        return super()._classify_error(exception)
+class KeyAwareGrokRealtime(XAIKeyRefusal, GrokRealtimeLLMService):
+    """Grok Voice, reading xAI's refusal of a key as one (`XAIKeyRefusal`)."""
 
 
 def pcm_audio(sample_rate: int) -> events.AudioConfiguration:
