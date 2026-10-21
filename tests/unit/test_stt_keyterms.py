@@ -32,6 +32,7 @@ class TestTheDialectMapping:
             ("openai", "gpt-transcribe", "keywords"),
             ("elevenlabs", "scribe_v1", "keyterms"),
             ("assemblyai", "universal-streaming-english", "keyterms_prompt"),
+            ("xai", "grok-voice-transcribe-2.0", "keyterm"),
         ],
     )
     def test_each_provider_gets_its_own_spelling(

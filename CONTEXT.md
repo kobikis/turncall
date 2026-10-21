@@ -53,6 +53,11 @@ xAI's native speech-to-speech model, run as the `xai` S2S [[provider]]
 provider is named for the vendor, the models for the product.
 _Avoid_: "grok provider" — the provider is `xai`.
 
+**Grok**:
+xAI's text models, run as the `xai` LLM [[provider]]
+(`grok-4.20-non-reasoning` by default) on the same xAI account as
+[[Grok Voice]].
+
 **Bedrock**:
 The AWS-hosted gateway [[provider]] (`bedrock`) reaching Anthropic, Meta, Mistral and
 Amazon foundation models through one API. The only [[provider]] whose name is a gateway

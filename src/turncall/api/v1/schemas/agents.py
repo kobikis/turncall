@@ -34,7 +34,7 @@ from turncall.domain.providers import (
     STT_PROVIDERS,
     TTS_PROVIDERS,
 )
-from turncall.orchestrator import grok_voice
+from turncall.orchestrator import grok_voice, xai_config
 from turncall.orchestrator.deepgram_flux import MIXED_FLUX_GROUP, mixes_flux
 
 
@@ -103,7 +103,8 @@ class LLMConfigSchema(BaseModel):
     base_url: str | None = Field(default=None, max_length=2048)
     api_key: str | None = Field(default=None, max_length=512)
     fallback_models: list[str] = Field(default_factory=list)
-    # OpenAI reasoning effort — reasoning models only (o-series/gpt-5), OpenAI-family.
+    # Reasoning effort — reasoning models only (o-series/gpt-5, Grok), OpenAI-family
+    # and xai.
     reasoning_effort: str | None = Field(
         default=None, pattern="^(minimal|low|medium|high)$"
     )
@@ -134,9 +135,13 @@ class LLMConfigSchema(BaseModel):
             )
             raise ValueError(msg)
         if self.provider == "google" and self.base_url:
-            # Same reason: both routes call Google's own endpoint.
+            # Same reason: the route calls Google's own endpoint, and one
+            # elsewhere would be sent the project's key for it.
             msg = "base_url is not supported for the google provider"
             raise ValueError(msg)
+        if self.provider == "xai" and (problem := xai_config.llm_refusal(self)):
+            # The build applies the same rule to a call-init inline agent.
+            raise ValueError(problem)
         return self
 
     @model_validator(mode="after")
@@ -209,6 +214,13 @@ class TTSConfigSchema(BaseModel):
         if self.provider not in supported:
             msg = f"Unsupported TTS provider: {self.provider}. Supported: {supported}"
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_xai_speed(self) -> "TTSConfigSchema":
+        # The build applies the same rule to a call-init inline agent.
+        if self.provider == "xai" and (problem := xai_config.tts_refusal(self)):
+            raise ValueError(problem)
         return self
 
     @model_validator(mode="after")

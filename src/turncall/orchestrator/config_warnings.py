@@ -143,7 +143,7 @@ def _readability_warning(config: AgentConfig) -> dict[str, Any] | None:
     if service_cls is None:
         return None
 
-    model = _resolved_tts_model(config)
+    model = _tts_that_runs(config)
     if service_cls.format_pronunciation(_PROBE_WORD, _PROBE_IPA) is None:
         reason = "has no pronunciation markup at all"
     elif not _model_reads_markup(provider, model, service_cls):
@@ -198,16 +198,22 @@ def _tts_service_class(provider: str) -> Any | None:
         from pipecat.services.cartesia.tts import CartesiaTTSService
 
         return CartesiaTTSService
+    if provider == "xai":
+        from pipecat.services.xai.tts import XAIHttpTTSService
+
+        return XAIHttpTTSService
     return None
 
 
-def _resolved_tts_model(config: AgentConfig) -> str | None:
-    """The model the pipeline would actually send, not `config.tts.model`.
+def _tts_that_runs(config: AgentConfig) -> str | None:
+    """What the pipeline would actually run, not `config.tts.model`: the
+    model, or the voice where that is what runs (Deepgram's voice is its
+    model; xAI TTS has no model).
 
     That field's default is Deepgram's, so an ElevenLabs agent that named no
     model would otherwise be told its voice is `aura-2-helena-en` — a diagnostic
     pointing at a model nothing is running.
     """
-    from turncall.orchestrator.pipeline_factory import _tts_model_voice
+    from turncall.orchestrator.pipeline_factory import _tts_runs
 
-    return _tts_model_voice(config)[0]
+    return _tts_runs(config)

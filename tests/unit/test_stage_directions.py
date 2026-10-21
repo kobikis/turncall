@@ -67,7 +67,9 @@ def test_ordinary_text_is_left_exactly_as_it_was(sentence):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("provider", ["deepgram", "elevenlabs", "openai", "cartesia"])
+@pytest.mark.parametrize(
+    "provider", ["deepgram", "elevenlabs", "openai", "cartesia", "xai"]
+)
 def test_every_tts_provider_carries_the_filter(provider, monkeypatch):
     monkeypatch.setenv("CARTESIA_API_KEY", "x")
     service = _create_tts_service(
@@ -98,6 +100,7 @@ def test_voice_tags_come_out(text, plain):
         ("deepgram", "Oh wow!"),
         ("elevenlabs", "Oh wow!"),
         ("openai", "Oh wow!"),
+        ("xai", "Oh wow!"),
     ],
 )
 async def test_only_cartesia_hears_its_tags(provider, spoken, monkeypatch):

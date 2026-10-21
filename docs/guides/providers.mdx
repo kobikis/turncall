@@ -10,9 +10,9 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 
 | Role | Providers |
 |------|-----------|
-| **STT** | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming), `assemblyai` (Universal-Streaming) |
-| **LLM** | `openai` (default), `anthropic` (Claude), `google` (Gemini), `ollama` (local), `custom_openai` (any OpenAI-compatible), `openrouter` (multi-model + fallback routing, voice only), `bedrock` (AWS-hosted Anthropic / Meta / Mistral / Amazon models) |
-| **TTS** | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3.6, streaming, 60+ emotions) |
+| **STT** | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming), `assemblyai` (Universal-Streaming), `xai` (streaming) |
+| **LLM** | `openai` (default), `anthropic` (Claude), `google` (Gemini), `xai` (Grok), `ollama` (local), `custom_openai` (any OpenAI-compatible), `openrouter` (multi-model + fallback routing, voice only), `bedrock` (AWS-hosted Anthropic / Meta / Mistral / Amazon models) |
+| **TTS** | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3.6, streaming, 60+ emotions), `xai` (xAI's voices) |
 | **S2S** | `openai` (Realtime API — optional `base_url` targets an OpenAI-Realtime gateway like Vercel AI Gateway / LiteLLM), `openai_live` (GPT-Live-1, full duplex), `google` (Gemini Live), `aws` (Amazon Nova Sonic 2), `xai` (Grok Voice) |
 
 ## STT Configuration
@@ -37,14 +37,18 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 ```json AssemblyAI Universal-Streaming
 "stt": {"provider": "assemblyai"}
 ```
+
+```json xAI
+"stt": {"provider": "xai"}
+```
 </CodeGroup>
 
 ### STT Options
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | No | `deepgram` (default), `openai`, `elevenlabs`, `cartesia`, `assemblyai` |
-| `model` | No | Leave unset for the provider's own default: `nova-3-general` (Deepgram), `gpt-transcribe` (OpenAI — its predecessor `gpt-4o-transcribe` is withdrawn on 2027-02-26), `scribe_v1` (ElevenLabs), `ink-whisper` (Cartesia), `universal-streaming-english` (AssemblyAI — `universal-streaming-multilingual` when `language` is not English) |
+| `provider` | No | `deepgram` (default), `openai`, `elevenlabs`, `cartesia`, `assemblyai`, `xai` |
+| `model` | No | Leave unset for the provider's own default: `nova-3-general` (Deepgram), `gpt-transcribe` (OpenAI — its predecessor `gpt-4o-transcribe` is withdrawn on 2027-02-26), `scribe_v1` (ElevenLabs), `ink-whisper` (Cartesia), `universal-streaming-english` (AssemblyAI — `universal-streaming-multilingual` when `language` is not English), `grok-voice-transcribe-2.0` (xAI) |
 | `language` | No | BCP-47 code (default `en`) |
 | `keyterms` | No | Vocabulary hints — product names, SKUs, surnames. One list, mapped to each provider's own spelling. See [Keyterms](#keyterms) |
 | `extra` | No | Passthrough to the provider. Keys naming a setting TurnCall already manages — `model`, `language`, and Deepgram's `punctuate` / `smart_format` / `interim_results` — are ignored so they cannot silently override your config |
@@ -56,6 +60,16 @@ On AssemblyAI, `extra` reaches its streaming settings by name — `domain`
 (`medical-v1`), `min_turn_silence`, `format_turns`, and on Universal-3 Pro
 models `mode`, `voice_focus`, `language_codes`. A key AssemblyAI has no setting
 for is logged as ignored rather than silently dropped.
+
+On xAI, `extra` takes `endpointing` (ms of silence before a final),
+`interim_results` and `diarize`, plus the URL-only `format` (spoken numbers
+written as digits; needs `language`), `filler_words`, `vad_threshold`,
+`smart_turn` and `smart_turn_timeout`. Any other key is logged as ignored.
+`smart_turn` is xAI's own end-of-turn model, a second opinion on what
+TurnCall's VAD and Smart Turn already decide, so it is not recommended.
+TurnCall sends xAI's `finalize` when VAD hears the caller stop, so the final
+transcript arrives about 0.2 s after speech instead of after xAI's own 400 ms
+endpointing silence.
 
 AssemblyAI splits its streaming models by language rather than taking a
 `language` parameter. With no `model`, an English agent gets
@@ -83,6 +97,7 @@ calls it.
 | ElevenLabs | `keyterms` | |
 | Cartesia | `keyterm` | Honored on `ink-2*` / `ink-preview*` only; capped at 100 terms / 1200 characters per connection, truncated past that with a warning |
 | AssemblyAI | `keyterms_prompt` | AssemblyAI refuses a session with more than 100, so the first 100 are sent, with a warning. Terms over 50 characters are ignored by AssemblyAI |
+| xAI | `keyterm` | xAI refuses the whole connection over 100 terms or for a term over 50 characters, so longer terms are dropped and the list capped at 100, each with a warning |
 
 Blanks and duplicates are dropped when the agent is created.
 
@@ -113,6 +128,10 @@ Set `"extra": {"profanity_filter": true}` if you want it on.
 
 ```json Google Gemini
 "llm": {"provider": "google", "model": "gemini-3.6-flash"}
+```
+
+```json xAI Grok
+"llm": {"provider": "xai", "model": "grok-4.20-non-reasoning"}
 ```
 
 ```json Ollama (local)
@@ -149,18 +168,22 @@ Set `"extra": {"profanity_filter": true}` if you want it on.
   **OpenRouter** routes through [openrouter.ai](https://openrouter.ai) with automatic failover — if the primary model rate-limits or errors mid-call, it falls over to the next model in `fallback_models`. Voice only (WebRTC / Twilio / WhatsApp voice); not supported on the SMS/Chat text path. The model that answered each turn is recorded on `transcript.final` events.
 </Note>
 
+<Note>
+  **xAI (Grok)** runs on the `xai` account, the same one Grok Voice uses, on voice and text, with tools on both. The key needs the chat endpoint: one created for voice only answers `403`, reported as a rejected key. `reasoning_effort` applies to Grok's reasoning models (`grok-4.3` and later); `minimal` is a `422`, and the non-reasoning house model rejects any value, so leave it unset there.
+</Note>
+
 ### LLM Options
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | Yes | `openai`, `anthropic`, `google`, `ollama`, `custom_openai`, `openrouter`, or `bedrock` |
-| `model` | Depends | Optional on `openai` (`gpt-4o-mini`), `anthropic` (`claude-sonnet-5`) and `google` (`gemini-3.6-flash`), which have a house model. **Required** on `ollama`, `custom_openai`, `bedrock` and `openrouter` — see below |
-| `base_url` | For `custom_openai` | OpenAI-compatible API base URL |
+| `provider` | Yes | `openai`, `anthropic`, `google`, `xai`, `ollama`, `custom_openai`, `openrouter`, or `bedrock` |
+| `model` | Depends | Optional on `openai` (`gpt-4o-mini`), `anthropic` (`claude-sonnet-5`), `google` (`gemini-3.6-flash`) and `xai` (`grok-4.20-non-reasoning`), which have a house model. **Required** on `ollama`, `custom_openai`, `bedrock` and `openrouter` — see below |
+| `base_url` | For `custom_openai` | OpenAI-compatible API base URL. Refused (`422`) on `bedrock`, `google` and `xai`, which call their vendor's own endpoint with the project's key |
 | `api_key` | No | API key for `custom_openai` (masked in responses) |
 | `fallback_models` | For `openrouter` | Ordered list of fallback models (voice only) |
 | `temperature` | No | 0.0–2.0 (default: 0.7). **Not sent to `anthropic`** — current Claude models reject it and the call fails; set one via `llm.extra` if your model still accepts it. **Not sent to Gemini 3 models on `google`** — Google warns they loop below their own default of 1.0; older Gemini models still get it, and `llm.extra` sets one anyway |
 | `max_tokens` | No | 1–128000 (default: 1024) |
-| `warm_up` | No | `true` sends a one-token request with the system prompt as the caller's first turn starts, so the first reply does not wait on a cold connection. Voice only, OpenAI-compatible providers only (`openai`, `openrouter`, `custom_openai`, `ollama`); costs the system prompt's tokens once more per call. Default `false` |
+| `warm_up` | No | `true` sends a one-token request with the system prompt as the caller's first turn starts, so the first reply does not wait on a cold connection. Voice only, OpenAI-compatible providers only (`openai`, `openrouter`, `custom_openai`, `ollama`, `xai`); costs the system prompt's tokens once more per call. Default `false` |
 | `extra` | No | Provider passthrough. On `bedrock` it becomes `additionalModelRequestFields` — how Anthropic extended thinking is reached. On `google` it merges into the generation config, e.g. `{"thinkingConfig": {"thinkingLevel": "low"}}` |
 
 <Warning>
@@ -189,18 +212,22 @@ Set `"extra": {"profanity_filter": true}` if you want it on.
 ```json Cartesia Sonic
 "tts": {"provider": "cartesia", "model": "sonic-3.6", "voice": "<cartesia-voice-id>"}
 ```
+
+```json xAI
+"tts": {"provider": "xai", "voice": "eve"}
+```
 </CodeGroup>
 
 ### TTS Options
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | No | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` |
-| `model` | No | Provider default when unset: `aura-2-helena-en`, `tts-1`, `eleven_flash_v2_5`, `sonic-3.6` |
-| `voice` | No | Provider default when unset: `aura-2-helena-en`, `alloy`, `Rachel`. Cartesia voice ids are account-specific, so there is no default — set one |
-| `speed` | No | 0.25–4.0 (default 1.0, which sends nothing). Honoured by Deepgram (0.7–1.5), OpenAI and ElevenLabs |
+| `provider` | No | `deepgram` (default), `openai`, `elevenlabs`, `cartesia`, `xai` |
+| `model` | No | Provider default when unset: `aura-2-helena-en`, `tts-1`, `eleven_flash_v2_5`, `sonic-3.6`. xAI has no model; on `xai` it is not sent |
+| `voice` | No | Provider default when unset: `aura-2-helena-en`, `alloy`, `Rachel`, `eve` (xAI — `GET https://api.x.ai/v1/tts/voices` lists the rest; custom voice ids work too). Cartesia voice ids are account-specific, so there is no default — set one |
+| `speed` | No | 0.25–4.0 (default 1.0, which sends nothing). Honoured by Deepgram (0.7–1.5), OpenAI, ElevenLabs and xAI. On `xai` it must be 0.7–1.5 (`422` otherwise, since xAI refuses the request; a call-init inline agent outside it fails the call) |
 | `pronunciations` | No | Word → IPA map for words the voice says wrong. One spelling, each provider's own markup generated from it. See [Pronunciations](#pronunciations) |
-| `extra` | No | Passthrough to the provider. Keys naming a setting TurnCall already manages — `model`, `voice`, `speed`, and Cartesia's `language` / `emotion` — are ignored so they cannot silently override your config |
+| `extra` | No | Passthrough to the provider. Keys naming a setting TurnCall already manages — `model`, `voice`, `speed`, and Cartesia's `language` / `emotion` — are ignored so they cannot silently override your config. On `xai`, `optimize_streaming_latency`, `text_normalization` and `language` are sent as xAI's own fields |
 
 <Note>
 Each provider falls back to **its own** model and voice. Earlier versions leaked
@@ -229,6 +256,7 @@ mirror of [`stt.keyterms`](#keyterms).
 | ElevenLabs | SSML `<phoneme>` — needs a phoneme-capable model, see below |
 | Deepgram | Inline pronunciation object |
 | OpenAI | None. It has no pronunciation surface, so the map is inert |
+| xAI | None, the same as OpenAI; the agent read carries `pronunciations_unreadable` |
 
 The value must be **real IPA**. `{"Metformin": "met-FOR-min"}` is a `422` naming
 the word: pipecat's IPA helpers normalize and tokenize but never reject, so a
@@ -418,6 +446,7 @@ with no restart.
 | AssemblyAI | `ASSEMBLYAI_API_KEY` |
 | Google (Gemini) | `GOOGLE_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
+| xAI | `XAI_API_KEY` |
 | HeyGen (video avatar) | `HEYGEN_LIVE_AVATAR_API_KEY` |
 | Tavus (video avatar) | `TAVUS_API_KEY` |
 | AWS (Bedrock / Nova Sonic) | *No key* — see [Credentials](#credentials). `AWS_REGION` sets the default region |
@@ -463,6 +492,7 @@ curl -X DELETE http://localhost:8090/v1/credentials/deepgram -H "Authorization: 
 | `assemblyai` | STT |
 | `heygen`, `tavus` | Video avatar |
 | `aws` | Bedrock LLM, Nova Sonic S2S |
+| `xai` | STT, LLM (Grok), TTS, S2S (Grok Voice) |
 | `typesafe` | Eval judge (`jev`) |
 | `telnyx` | Telnyx numbers (`carrier` role) — takes `{"api_key", "public_key"}`, see [Telnyx numbers](/guides/phone-numbers#telnyx-numbers) |
 | `asterisk` | A PBX's Asterisk, over ARI (`carrier` role) — `{ari_url, username, password}`, see [Asterisk numbers](/guides/phone-numbers#asterisk-numbers) |
@@ -494,6 +524,12 @@ A key that exists but is wrong is only found out when the provider refuses it,
 partway into the call. That call ends the same way, with `provider` and
 `key_rejected: true` on the event. See
 [When a call fails](/guides/post-call-analysis#when-a-call-fails).
+
+xAI TTS is the exception: xAI refuses a wrong key on every request, but the
+refusal reaches TurnCall with nothing to classify, so it is not reported as
+`key_rejected` and the call does not end on it. The agent simply goes silent.
+Give an `xai` voice a backup in `tts.failover`: it takes over after one reply
+with no audio.
 
 <Warning>
   `CREDENTIAL_ENCRYPTION_KEY` is set once. Rotating it orphans every stored

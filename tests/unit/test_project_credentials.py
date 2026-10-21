@@ -134,6 +134,7 @@ PROJECT = {
         "assemblyai",
         "heygen",
         "tavus",
+        "xai",
     )
 }
 
@@ -154,6 +155,7 @@ class TestCredentialsReachTheServices:
             ("openai", "pipecat.services.openai.stt", "OpenAISTTService"),
             ("cartesia", "pipecat.services.cartesia.stt", "CartesiaSTTService"),
             ("assemblyai", "pipecat.services.assemblyai.stt", "AssemblyAISTTService"),
+            ("xai", "turncall.orchestrator.xai_stt", "TurnCallXAISTT"),
         ],
     )
     def test_stt(self, monkeypatch, provider, module, cls) -> None:
@@ -171,6 +173,7 @@ class TestCredentialsReachTheServices:
             ("elevenlabs", "pipecat.services.elevenlabs.tts", "ElevenLabsTTSService"),
             ("openai", "pipecat.services.openai.tts", "OpenAITTSService"),
             ("cartesia", "pipecat.services.cartesia.tts", "CartesiaTTSService"),
+            ("xai", "pipecat.services.xai.tts", "XAIHttpTTSService"),
         ],
     )
     def test_tts(self, monkeypatch, provider, module, cls) -> None:
@@ -515,11 +518,12 @@ class TestSecretMasking:
             "project_credential": False,
         }
 
-    def test_the_xai_account_serves_s2s_with_both_signals(
+    def test_the_xai_account_is_listed_with_both_signals(
         self, app, project_id, monkeypatch
     ) -> None:
-        """Grok Voice (#386): a plain-key account, listed with no code of its
-        own — the registry derives it from the S2S provider."""
+        """xAI (#386, #393-#395): a plain-key account, listed with no code of
+        its own — the registry derives every role it serves (STT, LLM, TTS,
+        S2S) from the providers that name it."""
         monkeypatch.setattr(
             "turncall.api.v1.credentials.platform_keys",
             lambda s: {"xai": "xai-env-key"},
@@ -530,7 +534,12 @@ class TestSecretMasking:
         with patch(f"{REPO}.providers_for_project", AsyncMock(return_value={"xai"})):
             r = app.get("/v1/providers", headers=H)
         assert r.json()["data"]["accounts"]["xai"] == {
-            "serves": {"s2s": ["xai"]},
+            "serves": {
+                "stt": ["xai"],
+                "llm": ["xai"],
+                "tts": ["xai"],
+                "s2s": ["xai"],
+            },
             "platform_key": True,
             "project_credential": True,
         }

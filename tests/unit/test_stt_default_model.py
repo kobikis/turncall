@@ -30,6 +30,7 @@ class TestResolvingAnUnsetModel:
             ("elevenlabs", "scribe_v1"),
             ("cartesia", "ink-whisper"),
             ("assemblyai", "universal-streaming-english"),
+            ("xai", "grok-voice-transcribe-2.0"),
         ],
     )
     def test_each_provider_gets_its_own_default(

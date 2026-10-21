@@ -147,7 +147,33 @@ def _keyterm_kwargs(provider: str, model: str, keyterms: list[str]) -> dict[str,
                 kept=_ASSEMBLYAI_MAX_KEYTERMS,
             )
         return {"keyterms_prompt": keyterms[:_ASSEMBLYAI_MAX_KEYTERMS]}
+    if provider == "xai":
+        return {"keyterm": _xai_keyterms(keyterms)}
     return {}
+
+
+# xAI refuses the whole connection (a 400 at handshake, measured) for more
+# than 100 keyterms or for one longer than 50 characters, so each limit is
+# applied here, with a warning, rather than costing the call its STT.
+_XAI_MAX_KEYTERMS = 100
+_XAI_MAX_KEYTERM_CHARS = 50
+
+
+def _xai_keyterms(keyterms: list[str]) -> list[str]:
+    fitting = [t for t in keyterms if len(t) <= _XAI_MAX_KEYTERM_CHARS]
+    if len(fitting) < len(keyterms):
+        logger.warning(
+            "xai_keyterms_dropped count={count} max_chars={max_chars}",
+            count=len(keyterms) - len(fitting),
+            max_chars=_XAI_MAX_KEYTERM_CHARS,
+        )
+    if len(fitting) > _XAI_MAX_KEYTERMS:
+        logger.warning(
+            "xai_keyterms_truncated count={count} kept={kept}",
+            count=len(fitting),
+            kept=_XAI_MAX_KEYTERMS,
+        )
+    return fitting[:_XAI_MAX_KEYTERMS]
 
 
 # The STT mirror of `_AURA_DEFAULT` / `_TTS_DEFAULTS` below: one provider's
@@ -179,6 +205,7 @@ _STT_DEFAULTS: dict[str, str] = {
     # three times the price): the cheaper model is the reason to pick this
     # provider, and Pro stays one `stt.model` away.
     "assemblyai": "universal-streaming-english",
+    "xai": "grok-voice-transcribe-2.0",
 }
 
 # AssemblyAI splits its streaming models by language rather than taking one as
@@ -207,7 +234,7 @@ def _flux_owns_turn(config: AgentConfig) -> bool:
 def _create_stt_service(
     config: AgentConfig, credentials: Credentials, *, sample_rate: int = 8000
 ) -> Any:
-    """Create STT service: deepgram, openai, elevenlabs, cartesia, assemblyai.
+    """Create STT service: deepgram, openai, elevenlabs, cartesia, assemblyai, xai.
 
     `stt.extra` is forwarded to every provider. Pipecat's `ServiceSettings`
     treats it as overflow — `given_fields()` merges its entries at the top
@@ -326,6 +353,18 @@ def _create_stt_service(
             sample_rate=sample_rate,
         )
 
+    if provider == "xai":
+        from turncall.orchestrator.xai_stt import create_xai_stt
+
+        return create_xai_stt(
+            api_key=credentials.api_key("xai"),
+            model=model,
+            language=config.stt.language or "en",
+            keyterms=keyterm_kwargs.get("keyterm", []),
+            extra=_overflow(config.stt.extra, *keyterm_kwargs),
+            sample_rate=sample_rate,
+        )
+
     raise ValueError(f"Unsupported STT provider: {provider}")
 
 
@@ -433,12 +472,12 @@ def _create_llm_service(
     system_instruction: str = "",
 ) -> Any:
     """Create LLM service. Supports openai, ollama, custom_openai, anthropic,
-    openrouter, bedrock, google.
+    openrouter, bedrock, google, xai.
 
     temperature/max_tokens default to the agent's llm config; pass explicit
     values to override (e.g. the voicemail classifier pins a low temperature).
     reasoning_effort defaults to the agent's config; pass explicit None to force
-    it off (e.g. the deterministic voicemail classifier). OpenAI-family only.
+    it off (e.g. the deterministic voicemail classifier). OpenAI-family and xai.
 
     system_instruction is the agent's system prompt. It belongs on the service,
     not as a "system" message at the head of the LLMContext: Pipecat deprecated
@@ -551,6 +590,19 @@ def _create_llm_service(
             settings=GoogleLLMService.Settings(**google_settings),
         )
 
+    if provider == "xai":
+        from turncall.orchestrator.grok_llm import create_grok_llm
+
+        return create_grok_llm(
+            config.llm,
+            api_key=credentials.api_key("xai", config.llm.api_key),
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning_effort=effort,
+            system_instruction=system_instruction,
+        )
+
     if provider == "ollama":
         from pipecat.services.ollama.llm import OLLamaLLMService
 
@@ -656,6 +708,8 @@ _TTS_DEFAULTS: dict[str, tuple[str | None, str | None]] = {
     # Cartesia voices are account-specific ids and Pipecat has no default
     # either, so there is nothing sensible to guess; an unset voice warns.
     "cartesia": ("sonic-3.6", None),
+    # xAI TTS has no model to send (#395); `eve` is pipecat's and xAI's own.
+    "xai": (None, "eve"),
 }
 
 
@@ -753,7 +807,7 @@ def _warn_unusable_pronunciations(config: AgentConfig, tts: Any) -> None:
         "tts.pronunciations: {provider} ({model}) cannot read pronunciation "
         "markup with these settings, so these are spoken as written: {words}",
         provider=config.tts.provider,
-        model=_tts_model_voice(config)[0],
+        model=_tts_runs(config),
         words=", ".join(unusable or pronunciations),
     )
 
@@ -771,7 +825,7 @@ _OPENAI_TTS_TIMEOUT = Timeout(10.0, connect=5.0)
 def _create_tts_service(
     config: AgentConfig, credentials: Credentials, **kwargs: Any
 ) -> Any:
-    """Create TTS service. Supports deepgram, openai, elevenlabs, and cartesia.
+    """Create TTS service: deepgram, openai, elevenlabs, cartesia, xai.
     `kwargs` reach pipecat's `TTSService` as they are, beside the filter that
     keeps the model's stage directions unspoken."""
     from turncall.orchestrator.stage_directions import StageDirectionFilter
@@ -898,7 +952,54 @@ def _create_tts_service(
             **kwargs,
         )
 
+    if provider == "xai":
+        return _create_xai_tts(config, voice, speed, credentials, **kwargs)
+
     raise ValueError(f"Unsupported TTS provider: {provider}")
+
+
+# `tts.extra` keys xAI reads, which pipecat sends only from these fields.
+_XAI_TTS_SETTINGS = ("optimize_streaming_latency", "text_normalization")
+
+
+def _create_xai_tts(
+    config: AgentConfig,
+    voice: str | None,
+    speed: dict[str, float],
+    credentials: Credentials,
+    **kwargs: Any,
+) -> Any:
+    """xAI's voices over HTTP (#395). pipecat's WebSocket `XAITTSService` sends
+    a sentence's text with no `text.done` until the reply ends, and xAI holds
+    its audio for it: measured, half a second of speech then silence until the
+    LLM finishes. No `model` is sent — xAI TTS has none. The rate is left to
+    the transport, which pipecat reads at start. No shared aiohttp session:
+    this service opens its own at start and closes it at stop, unlike the
+    borrowers `adapters/aiohttp_client` exists for."""
+    from pipecat.services.xai.tts import XAIHttpTTSService
+
+    from turncall.orchestrator.xai_config import tts_refusal
+
+    # The API schema refuses it at save; a call-init inline agent reaches here
+    # unchecked, and xAI would answer every reply with a 400.
+    problem = tts_refusal(config.tts)
+    if problem:
+        raise ValueError(problem)
+
+    extra = config.tts.extra
+    promoted = {k: extra[k] for k in _XAI_TTS_SETTINGS if k in extra}
+    return XAIHttpTTSService(
+        api_key=credentials.api_key("xai"),
+        settings=XAIHttpTTSService.Settings(
+            voice=voice,
+            language=extra.get("language", config.language),
+            **speed,
+            **promoted,
+            extra=_overflow(extra, "voice", "language", "speed", *_XAI_TTS_SETTINGS),
+        ),
+        text_transforms=_tts_text_transforms(XAIHttpTTSService, config),
+        **kwargs,
+    )
 
 
 def _create_tts_stage(config: AgentConfig, credentials: Credentials) -> Any:
@@ -941,12 +1042,15 @@ def _user_mute_strategies(config: AgentConfig) -> list[Any]:
     return [MuteUntilFirstBotCompleteUserMuteStrategy()]
 
 
-def _tts_label(config: AgentConfig) -> str:
+def _tts_runs(config: AgentConfig) -> str | None:
+    """What a TTS label or warning names: the model, or the voice where that is
+    what runs — Deepgram's voice is its model, and xAI TTS has no model."""
     model, voice = _tts_model_voice(config)
-    # Deepgram's voice is what it runs; its `model` field is never sent.
-    return (
-        f"{config.tts.provider}/{voice if config.tts.provider == 'deepgram' else model}"
-    )
+    return voice if config.tts.provider in ("deepgram", "xai") else model
+
+
+def _tts_label(config: AgentConfig) -> str:
+    return f"{config.tts.provider}/{_tts_runs(config)}"
 
 
 def _build_tools_prompt_section(config: AgentConfig) -> str:
