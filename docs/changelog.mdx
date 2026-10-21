@@ -404,6 +404,11 @@ the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
 
+**Browser calls connect again.** Since pipecat 1.13, a browser call whose
+offer carries its own candidates never connected when the browser could not
+reach the server's address, as from a container or a pod. The builder's Test
+call was one such call.
+
 **A speech-to-speech call starts as soon as its model is connected.** An
 OpenAI Realtime, Gemini Live or Nova Sonic call used to wait a fixed two seconds
 before the agent could speak or hear. Measured on the same machine, an OpenAI

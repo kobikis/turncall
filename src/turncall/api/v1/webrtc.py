@@ -34,6 +34,7 @@ from turncall.orchestrator.transport_factory import (
     create_whatsapp_transport,
     ice_servers,
 )
+from turncall.orchestrator.webrtc_offer import bundled
 from turncall.services.credentials import MissingProviderKeyError
 from turncall.services.limits import admit_live_call, release_live_call
 from turncall.services.outbound_url import check_outbound_url
@@ -108,7 +109,7 @@ async def webrtc_connect(
 
     try:
         webrtc_request = SmallWebRTCRequest.from_dict(
-            {k: v for k, v in body.items() if k in _SIGNALING_KEYS}
+            bundled({k: v for k, v in body.items() if k in _SIGNALING_KEYS})
         )
     except Exception as exc:
         raise ApiError(

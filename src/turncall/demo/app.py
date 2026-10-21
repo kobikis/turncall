@@ -25,6 +25,7 @@ from loguru import logger
 
 from turncall.config.settings import Settings
 from turncall.domain.models import AgentConfig
+from turncall.orchestrator.webrtc_offer import bundled
 from turncall.services import drain
 
 # A demo call belongs to no project; the zero UUID says so in its logs.
@@ -107,7 +108,7 @@ def create_demo_app(agents: dict[str, AgentConfig], settings: Settings) -> FastA
             return _error(400, "Expected a JSON object.")
         try:
             offer = SmallWebRTCRequest.from_dict(
-                {k: v for k, v in body.items() if k in signaling_keys}
+                bundled({k: v for k, v in body.items() if k in signaling_keys})
             )
         except Exception as exc:
             return _error(400, f"Invalid WebRTC signaling payload: {exc}")

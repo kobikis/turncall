@@ -848,6 +848,15 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **Browser WebRTC calls connect again** (#398). Since pipecat 1.13 bundles
+  every m-line onto one ICE transport, it checked the offer's *last* m-line's
+  candidates, a port the browser closes once the answer bundles on the first.
+  A browser that cannot reach the server's own address (a container behind
+  Docker Desktop, a pod) and sends its candidates in the offer, as the
+  builder's Test call does, never connected. Each bundled m-line now carries
+  the first one's candidates before the offer reaches pipecat, on
+  `/v1/webrtc/connect` and the website demo's `/connect`.
+
 - **`call.ended` is prompt for a caller who hangs up while the call
   connects** (#367, ADR-0028). On pipecat 1.13 a pipeline cancelled before it
   finished starting sends no frame to a processor not yet started, and no
