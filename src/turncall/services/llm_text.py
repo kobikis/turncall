@@ -2,7 +2,8 @@
 
 Reuses the existing LLMConfig from AgentConfig to generate
 text completions. Supports OpenAI, Ollama, BYOM (custom
-OpenAI-compatible endpoints), Anthropic, OpenRouter, Bedrock and Google.
+OpenAI-compatible endpoints), Anthropic, OpenRouter, Bedrock, Google and
+xAI (Grok).
 
 This is a separate dispatch from the voice pipeline: it speaks raw HTTP rather
 than building Pipecat services, so every provider needs an implementation in
@@ -58,6 +59,10 @@ def _resolve_api_key(config: LLMConfig, credentials: Credentials) -> str:
 
 def _resolve_base_url(config: LLMConfig) -> str:
     """Resolve the base URL for the LLM provider."""
+    if config.provider == "xai":
+        # Never the agent's base_url (a 422 at the API, but a stored or inline
+        # config is not re-read through it): the key is the xAI account's.
+        return "https://api.x.ai/v1"
     if config.base_url:
         return config.base_url.rstrip("/")
     if config.provider == "ollama":
@@ -585,7 +590,7 @@ async def complete_text(
     voice call on the same project would. Omitted = the platform's keys.
 
     Supports: openai, ollama, custom_openai (BYOM), anthropic (Claude),
-    openrouter, bedrock, google (Gemini).
+    openrouter, bedrock, google (Gemini), xai (Grok).
 
     `aws` carries the agent's credential block for the bedrock provider. Callers
     that hold an AgentConfig should pass it; omitting it falls back to the

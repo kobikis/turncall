@@ -25,6 +25,7 @@ LLM_PROVIDERS = (
     "google",
     "ollama",
     "custom_openai",
+    "xai",
 )
 TTS_PROVIDERS = ("deepgram", "openai", "elevenlabs", "cartesia")
 S2S_PROVIDERS = ("openai", "openai_live", "google", "aws", "xai")

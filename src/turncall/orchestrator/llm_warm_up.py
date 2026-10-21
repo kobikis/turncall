@@ -12,7 +12,7 @@ and a greeting plus the caller's first sentence is often longer than that.
 
 Opt-in because it is a paid request on every call that speaks: the system
 prompt's tokens once more, and one output token. OpenAI-compatible services
-only (openai, openrouter, custom_openai, ollama); on any other the flag is
+only (openai, openrouter, custom_openai, ollama, xai); on any other the flag is
 logged and ignored.
 """
 

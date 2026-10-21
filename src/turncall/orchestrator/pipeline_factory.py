@@ -433,12 +433,12 @@ def _create_llm_service(
     system_instruction: str = "",
 ) -> Any:
     """Create LLM service. Supports openai, ollama, custom_openai, anthropic,
-    openrouter, bedrock, google.
+    openrouter, bedrock, google, xai.
 
     temperature/max_tokens default to the agent's llm config; pass explicit
     values to override (e.g. the voicemail classifier pins a low temperature).
     reasoning_effort defaults to the agent's config; pass explicit None to force
-    it off (e.g. the deterministic voicemail classifier). OpenAI-family only.
+    it off (e.g. the deterministic voicemail classifier). OpenAI-family and xai.
 
     system_instruction is the agent's system prompt. It belongs on the service,
     not as a "system" message at the head of the LLMContext: Pipecat deprecated
@@ -549,6 +549,23 @@ def _create_llm_service(
         return GoogleLLMService(
             api_key=credentials.api_key("google", config.llm.api_key),
             settings=GoogleLLMService.Settings(**google_settings),
+        )
+
+    if provider == "xai":
+        from turncall.orchestrator.grok_llm import KeyAwareGrokLLM
+
+        # pipecat's own setting, never `extra_body`, so the two cannot
+        # compete. None sends nothing: Grok's non-reasoning models reject
+        # the parameter outright. No base_url: the key is the xAI account's.
+        return KeyAwareGrokLLM(
+            api_key=credentials.api_key("xai", config.llm.api_key),
+            settings=KeyAwareGrokLLM.Settings(
+                model=model,
+                **si,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                reasoning_effort=effort or None,
+            ),
         )
 
     if provider == "ollama":

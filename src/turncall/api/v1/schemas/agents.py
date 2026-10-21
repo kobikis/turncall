@@ -103,7 +103,8 @@ class LLMConfigSchema(BaseModel):
     base_url: str | None = Field(default=None, max_length=2048)
     api_key: str | None = Field(default=None, max_length=512)
     fallback_models: list[str] = Field(default_factory=list)
-    # OpenAI reasoning effort — reasoning models only (o-series/gpt-5), OpenAI-family.
+    # Reasoning effort — reasoning models only (o-series/gpt-5, Grok), OpenAI-family
+    # and xai.
     reasoning_effort: str | None = Field(
         default=None, pattern="^(minimal|low|medium|high)$"
     )
@@ -133,9 +134,14 @@ class LLMConfigSchema(BaseModel):
                 "(see adr/0016). Set config.aws.region instead."
             )
             raise ValueError(msg)
-        if self.provider == "google" and self.base_url:
-            # Same reason: both routes call Google's own endpoint.
-            msg = "base_url is not supported for the google provider"
+        if self.provider in ("google", "xai") and self.base_url:
+            # Same reason: both routes call the vendor's own endpoint, and
+            # one elsewhere would be sent the project's key for it.
+            msg = f"base_url is not supported for the {self.provider} provider"
+            raise ValueError(msg)
+        if self.provider == "xai" and self.reasoning_effort == "minimal":
+            # OpenAI's lowest effort; xAI's are none|low|medium|high|xhigh.
+            msg = "reasoning_effort 'minimal' is not an xAI value (low|medium|high)"
             raise ValueError(msg)
         return self
 

@@ -33,6 +33,9 @@ _LLM_DEFAULTS: dict[str, str] = {
     # Flash that still takes the `minimal` thinking level pipecat sets for a
     # voice turn (3.7 and 3.8 Flash bottom out at `low`).
     "google": "gemini-3.6-flash",
+    # pipecat's own default for Grok: no reasoning delay, and the price of
+    # grok-4.3, which matches its latency only at `reasoning_effort: none`.
+    "xai": "grok-4.20-non-reasoning",
 }
 
 # Providers where the model is the deployment, not a preference.

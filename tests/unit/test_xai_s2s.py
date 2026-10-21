@@ -68,11 +68,14 @@ class TestTheProviderExists:
     def test_it_is_an_s2s_provider(self) -> None:
         assert "xai" in S2S_PROVIDERS
 
-    def test_it_is_its_own_credential_account_serving_s2s_only(self) -> None:
+    def test_it_is_its_own_credential_account(self) -> None:
         """So `PUT /v1/credentials/xai` is accepted and `/v1/providers` lists
         it, both of which read this namespace."""
         assert "xai" in CREDENTIAL_ACCOUNTS
-        assert accounts()["xai"] == {"s2s": ["xai"]}
+        assert accounts()["xai"] == {
+            "llm": ["xai"],
+            "s2s": ["xai"],
+        }
 
     def test_the_platform_key_is_read_from_its_env_var(self, monkeypatch) -> None:
         monkeypatch.setenv("XAI_API_KEY", "from-env")

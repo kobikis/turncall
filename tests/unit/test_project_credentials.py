@@ -515,7 +515,7 @@ class TestSecretMasking:
             "project_credential": False,
         }
 
-    def test_the_xai_account_serves_s2s_with_both_signals(
+    def test_the_xai_account_is_listed_with_both_signals(
         self, app, project_id, monkeypatch
     ) -> None:
         """Grok Voice (#386): a plain-key account, listed with no code of its
@@ -530,7 +530,10 @@ class TestSecretMasking:
         with patch(f"{REPO}.providers_for_project", AsyncMock(return_value={"xai"})):
             r = app.get("/v1/providers", headers=H)
         assert r.json()["data"]["accounts"]["xai"] == {
-            "serves": {"s2s": ["xai"]},
+            "serves": {
+                "llm": ["xai"],
+                "s2s": ["xai"],
+            },
             "platform_key": True,
             "project_credential": True,
         }
