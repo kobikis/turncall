@@ -11,7 +11,7 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 | Role | Providers |
 |------|-----------|
 | **STT** | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming), `assemblyai` (Universal-Streaming), `xai` (streaming) |
-| **LLM** | `openai` (default), `anthropic` (Claude), `google` (Gemini), `ollama` (local), `custom_openai` (any OpenAI-compatible), `openrouter` (multi-model + fallback routing, voice only), `bedrock` (AWS-hosted Anthropic / Meta / Mistral / Amazon models) |
+| **LLM** | `openai` (default), `anthropic` (Claude), `google` (Gemini), `xai` (Grok), `ollama` (local), `custom_openai` (any OpenAI-compatible), `openrouter` (multi-model + fallback routing, voice only), `bedrock` (AWS-hosted Anthropic / Meta / Mistral / Amazon models) |
 | **TTS** | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3.6, streaming, 60+ emotions), `xai` (xAI's voices) |
 | **S2S** | `openai` (Realtime API — optional `base_url` targets an OpenAI-Realtime gateway like Vercel AI Gateway / LiteLLM), `openai_live` (GPT-Live-1, full duplex), `google` (Gemini Live), `aws` (Amazon Nova Sonic 2), `xai` (Grok Voice) |
 
@@ -130,6 +130,10 @@ Set `"extra": {"profanity_filter": true}` if you want it on.
 "llm": {"provider": "google", "model": "gemini-3.6-flash"}
 ```
 
+```json xAI Grok
+"llm": {"provider": "xai", "model": "grok-4.20-non-reasoning"}
+```
+
 ```json Ollama (local)
 "llm": {"provider": "ollama", "model": "gemma3:12b"}
 ```
@@ -164,18 +168,22 @@ Set `"extra": {"profanity_filter": true}` if you want it on.
   **OpenRouter** routes through [openrouter.ai](https://openrouter.ai) with automatic failover — if the primary model rate-limits or errors mid-call, it falls over to the next model in `fallback_models`. Voice only (WebRTC / Twilio / WhatsApp voice); not supported on the SMS/Chat text path. The model that answered each turn is recorded on `transcript.final` events.
 </Note>
 
+<Note>
+  **xAI (Grok)** runs on the `xai` account, the same one Grok Voice uses, on voice and text, with tools on both. The key needs the chat endpoint: one created for voice only answers `403`, reported as a rejected key. `reasoning_effort` applies to Grok's reasoning models (`grok-4.3` and later); `minimal` is a `422`, and the non-reasoning house model rejects any value, so leave it unset there.
+</Note>
+
 ### LLM Options
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | Yes | `openai`, `anthropic`, `google`, `ollama`, `custom_openai`, `openrouter`, or `bedrock` |
-| `model` | Depends | Optional on `openai` (`gpt-4o-mini`), `anthropic` (`claude-sonnet-5`) and `google` (`gemini-3.6-flash`), which have a house model. **Required** on `ollama`, `custom_openai`, `bedrock` and `openrouter` — see below |
-| `base_url` | For `custom_openai` | OpenAI-compatible API base URL |
+| `provider` | Yes | `openai`, `anthropic`, `google`, `xai`, `ollama`, `custom_openai`, `openrouter`, or `bedrock` |
+| `model` | Depends | Optional on `openai` (`gpt-4o-mini`), `anthropic` (`claude-sonnet-5`), `google` (`gemini-3.6-flash`) and `xai` (`grok-4.20-non-reasoning`), which have a house model. **Required** on `ollama`, `custom_openai`, `bedrock` and `openrouter` — see below |
+| `base_url` | For `custom_openai` | OpenAI-compatible API base URL. Refused (`422`) on `bedrock`, `google` and `xai`, which call their vendor's own endpoint with the project's key |
 | `api_key` | No | API key for `custom_openai` (masked in responses) |
 | `fallback_models` | For `openrouter` | Ordered list of fallback models (voice only) |
 | `temperature` | No | 0.0–2.0 (default: 0.7). **Not sent to `anthropic`** — current Claude models reject it and the call fails; set one via `llm.extra` if your model still accepts it. **Not sent to Gemini 3 models on `google`** — Google warns they loop below their own default of 1.0; older Gemini models still get it, and `llm.extra` sets one anyway |
 | `max_tokens` | No | 1–128000 (default: 1024) |
-| `warm_up` | No | `true` sends a one-token request with the system prompt as the caller's first turn starts, so the first reply does not wait on a cold connection. Voice only, OpenAI-compatible providers only (`openai`, `openrouter`, `custom_openai`, `ollama`); costs the system prompt's tokens once more per call. Default `false` |
+| `warm_up` | No | `true` sends a one-token request with the system prompt as the caller's first turn starts, so the first reply does not wait on a cold connection. Voice only, OpenAI-compatible providers only (`openai`, `openrouter`, `custom_openai`, `ollama`, `xai`); costs the system prompt's tokens once more per call. Default `false` |
 | `extra` | No | Provider passthrough. On `bedrock` it becomes `additionalModelRequestFields` — how Anthropic extended thinking is reached. On `google` it merges into the generation config, e.g. `{"thinkingConfig": {"thinkingLevel": "low"}}` |
 
 <Warning>
@@ -484,7 +492,7 @@ curl -X DELETE http://localhost:8090/v1/credentials/deepgram -H "Authorization: 
 | `assemblyai` | STT |
 | `heygen`, `tavus` | Video avatar |
 | `aws` | Bedrock LLM, Nova Sonic S2S |
-| `xai` | TTS, S2S (Grok Voice) |
+| `xai` | STT, LLM (Grok), TTS, S2S (Grok Voice) |
 | `typesafe` | Eval judge (`jev`) |
 | `telnyx` | Telnyx numbers (`carrier` role) — takes `{"api_key", "public_key"}`, see [Telnyx numbers](/guides/phone-numbers#telnyx-numbers) |
 | `asterisk` | A PBX's Asterisk, over ARI (`carrier` role) — `{ari_url, username, password}`, see [Asterisk numbers](/guides/phone-numbers#asterisk-numbers) |
