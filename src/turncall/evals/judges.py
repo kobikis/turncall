@@ -180,14 +180,14 @@ def jev(config: dict[str, Any]) -> Any:
     if config.get("endpoint"):
         built["base_url"] = config["endpoint"]
 
-    # The import *and* the construction, in one guard. `pipecat-ai[jev]` is
+    # The import *and* the construction, in one guard. `pipecat-ai[typesafe]` is
     # `httpx[http2]`, and `JevClient` opens its pool with `http2=True` — so the
     # extra's real absence is httpx raising `ImportError: Using http2=True, but
     # the 'h2' package is not installed` from **inside** the constructor, not
     # from the import above it. Guarding only the import left that as a raw
     # ImportError naming h2 and nothing about how to fix it.
     try:
-        from pipecat.classifiers.jev.classifier import JevClassifier
+        from pipecat.classifiers.typesafe.jev.classifier import JevClassifier
 
         return JevClassifier(**built)
     except ImportError as exc:

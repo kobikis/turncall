@@ -24,6 +24,7 @@ FORBIDDEN_IN_API = (
     "build_call_pipeline",
     "create_pipeline",
     "create_eval_transport",
+    "LoopbackBot",
     "EvalScriptSession",
     "EvalSimulationSession",
 )
@@ -196,8 +197,10 @@ def test_the_callers_synthesized_audio_is_cached_somewhere_durable() -> None:
             )
 
     assert captured["cache_dir"] == str(target)
-    # A fresh pipeline per iteration still means the bot is torn down with it.
-    assert captured["stop_bot"] is True
+    # Deprecated in pipecat 1.13 (#375): the harness now ends the bot's session
+    # after every run by itself, so neither flag is set.
+    assert "stop_bot" not in captured
+    assert "trigger_disconnect" not in captured
 
 
 def test_every_harness_caller_passes_the_tool_policy() -> None:

@@ -293,3 +293,43 @@ async def test_a_refused_tts_fails_over_and_the_reply_is_spoken(
         )
         for e in agent_errors
     ), agent_errors
+
+
+def _plain_turn(modality: EvalModality) -> dict:
+    """One turn the stub LLM answers, asserted on what each modality sees."""
+    audio = modality is EvalModality.AUDIO
+    expect = {
+        "event": "tts_response" if audio else "llm_response",
+        "text_contains": "You said: hello",
+        "within_ms": 30000,
+    }
+    definition: dict = {"turns": [{"user": "hello", "expect": [expect]}]}
+    if audio:
+        definition["judge"] = {
+            "modality": "audio",
+            "transcription": {"service": "moonshine"},
+        }
+    return definition
+
+
+@pytest.mark.parametrize("modality", [EvalModality.TEXT, EvalModality.AUDIO])
+async def test_an_iteration_uses_nothing_pipecat_deprecated(
+    stub_providers: None, modality: EvalModality
+) -> None:
+    """#375: the eval transport, the harness session's flags and the loopback
+    server, over a whole iteration in each modality. Matched on pipecat's own
+    deprecation template, so third-party warnings its imports raise are not
+    counted."""
+    import warnings
+
+    from pipecat.utils.deprecation import DEPRECATION_MESSAGE_RE
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result, agent_errors = await _run(_plain_turn(modality), _target(), modality)
+
+    assert result.passed, ([str(f) for f in result.failures], agent_errors)
+    deprecated = [
+        str(w.message) for w in caught if DEPRECATION_MESSAGE_RE.search(str(w.message))
+    ]
+    assert deprecated == []
