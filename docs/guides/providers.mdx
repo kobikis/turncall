@@ -10,7 +10,7 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 
 | Role | Providers |
 |------|-----------|
-| **STT** | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming), `assemblyai` (Universal-Streaming) |
+| **STT** | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming), `assemblyai` (Universal-Streaming), `xai` (streaming) |
 | **LLM** | `openai` (default), `anthropic` (Claude), `google` (Gemini), `ollama` (local), `custom_openai` (any OpenAI-compatible), `openrouter` (multi-model + fallback routing, voice only), `bedrock` (AWS-hosted Anthropic / Meta / Mistral / Amazon models) |
 | **TTS** | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3.6, streaming, 60+ emotions) |
 | **S2S** | `openai` (Realtime API — optional `base_url` targets an OpenAI-Realtime gateway like Vercel AI Gateway / LiteLLM), `openai_live` (GPT-Live-1, full duplex), `google` (Gemini Live), `aws` (Amazon Nova Sonic 2), `xai` (Grok Voice) |
@@ -37,14 +37,18 @@ TurnCall supports multiple providers for each stage of the voice pipeline. Confi
 ```json AssemblyAI Universal-Streaming
 "stt": {"provider": "assemblyai"}
 ```
+
+```json xAI
+"stt": {"provider": "xai"}
+```
 </CodeGroup>
 
 ### STT Options
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | No | `deepgram` (default), `openai`, `elevenlabs`, `cartesia`, `assemblyai` |
-| `model` | No | Leave unset for the provider's own default: `nova-3-general` (Deepgram), `gpt-transcribe` (OpenAI — its predecessor `gpt-4o-transcribe` is withdrawn on 2027-02-26), `scribe_v1` (ElevenLabs), `ink-whisper` (Cartesia), `universal-streaming-english` (AssemblyAI — `universal-streaming-multilingual` when `language` is not English) |
+| `provider` | No | `deepgram` (default), `openai`, `elevenlabs`, `cartesia`, `assemblyai`, `xai` |
+| `model` | No | Leave unset for the provider's own default: `nova-3-general` (Deepgram), `gpt-transcribe` (OpenAI — its predecessor `gpt-4o-transcribe` is withdrawn on 2027-02-26), `scribe_v1` (ElevenLabs), `ink-whisper` (Cartesia), `universal-streaming-english` (AssemblyAI — `universal-streaming-multilingual` when `language` is not English), `grok-voice-transcribe-2.0` (xAI) |
 | `language` | No | BCP-47 code (default `en`) |
 | `keyterms` | No | Vocabulary hints — product names, SKUs, surnames. One list, mapped to each provider's own spelling. See [Keyterms](#keyterms) |
 | `extra` | No | Passthrough to the provider. Keys naming a setting TurnCall already manages — `model`, `language`, and Deepgram's `punctuate` / `smart_format` / `interim_results` — are ignored so they cannot silently override your config |
@@ -56,6 +60,16 @@ On AssemblyAI, `extra` reaches its streaming settings by name — `domain`
 (`medical-v1`), `min_turn_silence`, `format_turns`, and on Universal-3 Pro
 models `mode`, `voice_focus`, `language_codes`. A key AssemblyAI has no setting
 for is logged as ignored rather than silently dropped.
+
+On xAI, `extra` takes `endpointing` (ms of silence before a final),
+`interim_results` and `diarize`, plus the URL-only `format` (spoken numbers
+written as digits; needs `language`), `filler_words`, `vad_threshold`,
+`smart_turn` and `smart_turn_timeout`. Any other key is logged as ignored.
+`smart_turn` is xAI's own end-of-turn model, a second opinion on what
+TurnCall's VAD and Smart Turn already decide, so it is not recommended.
+TurnCall sends xAI's `finalize` when VAD hears the caller stop, so the final
+transcript arrives about 0.2 s after speech instead of after xAI's own 400 ms
+endpointing silence.
 
 AssemblyAI splits its streaming models by language rather than taking a
 `language` parameter. With no `model`, an English agent gets
@@ -83,6 +97,7 @@ calls it.
 | ElevenLabs | `keyterms` | |
 | Cartesia | `keyterm` | Honored on `ink-2*` / `ink-preview*` only; capped at 100 terms / 1200 characters per connection, truncated past that with a warning |
 | AssemblyAI | `keyterms_prompt` | AssemblyAI refuses a session with more than 100, so the first 100 are sent, with a warning. Terms over 50 characters are ignored by AssemblyAI |
+| xAI | `keyterm` | xAI refuses the whole connection over 100 terms or for a term over 50 characters, so longer terms are dropped and the list capped at 100, each with a warning |
 
 Blanks and duplicates are dropped when the agent is created.
 

@@ -16,7 +16,7 @@ TWILIO_* (`services/twilio_accounts.py`).
 
 from turncall.domain.carriers import CARRIERS, TWILIO
 
-STT_PROVIDERS = ("deepgram", "openai", "elevenlabs", "cartesia", "assemblyai")
+STT_PROVIDERS = ("deepgram", "openai", "elevenlabs", "cartesia", "assemblyai", "xai")
 LLM_PROVIDERS = (
     "openai",
     "anthropic",

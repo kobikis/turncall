@@ -147,7 +147,33 @@ def _keyterm_kwargs(provider: str, model: str, keyterms: list[str]) -> dict[str,
                 kept=_ASSEMBLYAI_MAX_KEYTERMS,
             )
         return {"keyterms_prompt": keyterms[:_ASSEMBLYAI_MAX_KEYTERMS]}
+    if provider == "xai":
+        return {"keyterm": _xai_keyterms(keyterms)}
     return {}
+
+
+# xAI refuses the whole connection (a 400 at handshake, measured) for more
+# than 100 keyterms or for one longer than 50 characters, so each limit is
+# applied here, with a warning, rather than costing the call its STT.
+_XAI_MAX_KEYTERMS = 100
+_XAI_MAX_KEYTERM_CHARS = 50
+
+
+def _xai_keyterms(keyterms: list[str]) -> list[str]:
+    fitting = [t for t in keyterms if len(t) <= _XAI_MAX_KEYTERM_CHARS]
+    if len(fitting) < len(keyterms):
+        logger.warning(
+            "xai_keyterms_dropped count={count} max_chars={max_chars}",
+            count=len(keyterms) - len(fitting),
+            max_chars=_XAI_MAX_KEYTERM_CHARS,
+        )
+    if len(fitting) > _XAI_MAX_KEYTERMS:
+        logger.warning(
+            "xai_keyterms_truncated count={count} kept={kept}",
+            count=len(fitting),
+            kept=_XAI_MAX_KEYTERMS,
+        )
+    return fitting[:_XAI_MAX_KEYTERMS]
 
 
 # The STT mirror of `_AURA_DEFAULT` / `_TTS_DEFAULTS` below: one provider's
@@ -179,6 +205,7 @@ _STT_DEFAULTS: dict[str, str] = {
     # three times the price): the cheaper model is the reason to pick this
     # provider, and Pro stays one `stt.model` away.
     "assemblyai": "universal-streaming-english",
+    "xai": "grok-voice-transcribe-2.0",
 }
 
 # AssemblyAI splits its streaming models by language rather than taking one as
@@ -207,7 +234,7 @@ def _flux_owns_turn(config: AgentConfig) -> bool:
 def _create_stt_service(
     config: AgentConfig, credentials: Credentials, *, sample_rate: int = 8000
 ) -> Any:
-    """Create STT service: deepgram, openai, elevenlabs, cartesia, assemblyai.
+    """Create STT service: deepgram, openai, elevenlabs, cartesia, assemblyai, xai.
 
     `stt.extra` is forwarded to every provider. Pipecat's `ServiceSettings`
     treats it as overflow — `given_fields()` merges its entries at the top
@@ -323,6 +350,18 @@ def _create_stt_service(
             model=model,
             keyterm_kwargs=keyterm_kwargs,
             api_key=credentials.api_key("assemblyai"),
+            sample_rate=sample_rate,
+        )
+
+    if provider == "xai":
+        from turncall.orchestrator.xai_stt import create_xai_stt
+
+        return create_xai_stt(
+            api_key=credentials.api_key("xai"),
+            model=model,
+            language=config.stt.language or "en",
+            keyterms=keyterm_kwargs.get("keyterm", []),
+            extra=_overflow(config.stt.extra, *keyterm_kwargs),
             sample_rate=sample_rate,
         )
 

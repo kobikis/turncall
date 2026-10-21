@@ -72,7 +72,7 @@ class TestTheProviderExists:
         """So `PUT /v1/credentials/xai` is accepted and `/v1/providers` lists
         it, both of which read this namespace."""
         assert "xai" in CREDENTIAL_ACCOUNTS
-        assert accounts()["xai"] == {"s2s": ["xai"]}
+        assert accounts()["xai"] == {"stt": ["xai"], "s2s": ["xai"]}
 
     def test_the_platform_key_is_read_from_its_env_var(self, monkeypatch) -> None:
         monkeypatch.setenv("XAI_API_KEY", "from-env")
