@@ -74,6 +74,7 @@ class TestTheProviderExists:
         assert "xai" in CREDENTIAL_ACCOUNTS
         assert accounts()["xai"] == {
             "llm": ["xai"],
+            "tts": ["xai"],
             "s2s": ["xai"],
         }
 

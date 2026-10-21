@@ -180,6 +180,9 @@ class LLMConfigSchema(BaseModel):
         return self
 
 
+XAI_TTS_SPEED_RANGE = (0.7, 1.5)
+
+
 class TTSConfigSchema(BaseModel):
     provider: str = "deepgram"
     model: str = "aura-2-helena-en"
@@ -214,6 +217,16 @@ class TTSConfigSchema(BaseModel):
         supported = set(TTS_PROVIDERS)
         if self.provider not in supported:
             msg = f"Unsupported TTS provider: {self.provider}. Supported: {supported}"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_xai_speed(self) -> "TTSConfigSchema":
+        # xAI answers 400 to a speed outside its range (measured, #395), which
+        # would cost every reply its audio.
+        low, high = XAI_TTS_SPEED_RANGE
+        if self.provider == "xai" and not low <= self.speed <= high:
+            msg = f"tts.speed on xai must be between {low} and {high}"
             raise ValueError(msg)
         return self
 

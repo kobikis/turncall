@@ -27,7 +27,7 @@ LLM_PROVIDERS = (
     "custom_openai",
     "xai",
 )
-TTS_PROVIDERS = ("deepgram", "openai", "elevenlabs", "cartesia")
+TTS_PROVIDERS = ("deepgram", "openai", "elevenlabs", "cartesia", "xai")
 S2S_PROVIDERS = ("openai", "openai_live", "google", "aws", "xai")
 AVATAR_PROVIDERS = ("heygen", "tavus")
 # What grades an eval run (EVAL_JUDGE_PROVIDER or a scenario's judge block).
