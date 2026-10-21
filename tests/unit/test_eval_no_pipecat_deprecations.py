@@ -28,6 +28,15 @@ from turncall.evals import harness, scenario
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _every_deprecation_warns_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pipecat warns once per call site per process: a deprecation an earlier
+    test already set off would otherwise pass these tests unseen."""
+    from pipecat.utils import deprecation
+
+    monkeypatch.setattr(deprecation, "_warned_sites", set())
+
+
 def pipecat_deprecations(caught: list[warnings.WarningMessage]) -> list[str]:
     return [
         str(w.message) for w in caught if DEPRECATION_MESSAGE_RE.search(str(w.message))

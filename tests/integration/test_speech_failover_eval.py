@@ -130,7 +130,7 @@ class _StubTTS(FrameProcessor):
                 audio=silence, sample_rate=EVAL_SAMPLE_RATE, num_channels=1
             )
         )
-        await self.push_frame(TTSTextFrame(text, aggregated_by="sentence"))
+        await self.push_frame(TTSTextFrame(text, text_type="sentence"))
         await self.push_frame(TTSStoppedFrame())
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
@@ -314,7 +314,7 @@ def _plain_turn(modality: EvalModality) -> dict:
 
 @pytest.mark.parametrize("modality", [EvalModality.TEXT, EvalModality.AUDIO])
 async def test_an_iteration_uses_nothing_pipecat_deprecated(
-    stub_providers: None, modality: EvalModality
+    stub_providers: None, modality: EvalModality, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """#375: the eval transport, the harness session's flags and the loopback
     server, over a whole iteration in each modality. Matched on pipecat's own
@@ -322,8 +322,12 @@ async def test_an_iteration_uses_nothing_pipecat_deprecated(
     counted."""
     import warnings
 
+    from pipecat.utils import deprecation
     from pipecat.utils.deprecation import DEPRECATION_MESSAGE_RE
 
+    # pipecat warns once per call site per process: a deprecation an earlier
+    # test already set off would otherwise pass here unseen.
+    monkeypatch.setattr(deprecation, "_warned_sites", set())
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         result, agent_errors = await _run(_plain_turn(modality), _target(), modality)

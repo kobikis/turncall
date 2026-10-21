@@ -70,6 +70,7 @@ class LoopbackBot:
         self._build = build
         self._run_id = run_id
         self._claimed = False
+        self._closing = False
         self._server: _Server | None = None
         self._serving: asyncio.Task | None = None
         self.session: Any = None
@@ -77,8 +78,20 @@ class LoopbackBot:
         self.build_error: BaseException | None = None
 
     async def start(self) -> str:
-        """Start listening; the harness's URL."""
+        """Start listening; the harness's URL.
+
+        A server that does not come up is stopped and its socket closed before
+        the error leaves: nothing else holds them to clean up.
+        """
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            return await self._start_on(sock)
+        except BaseException:
+            await self.close()
+            sock.close()
+            raise
+
+    async def _start_on(self, sock: socket.socket) -> str:
         sock.bind((_HOST, 0))
         port = int(sock.getsockname()[1])
         app = Starlette(routes=[WebSocketRoute("/", self._serve_harness)])
@@ -130,6 +143,12 @@ class LoopbackBot:
             self.build_error = exc
             await _close_quietly(websocket, _INTERNAL_ERROR)
             return
+        if self._closing:
+            # The harness gave up while this was being built, and the caller
+            # has already wound down whatever pipeline it saw: one started now
+            # would run with nobody to stop it.
+            await _close_quietly(websocket, _POLICY_VIOLATION)
+            return
         self.pipeline = asyncio.create_task(
             self.session.start(), name=f"eval-bot-{self._run_id}"
         )
@@ -143,7 +162,11 @@ class LoopbackBot:
             raise self.build_error
 
     async def close(self) -> None:
-        """Stop serving. The pipeline is the caller's to wind down first."""
+        """Stop serving. The pipeline is the caller's to wind down first.
+
+        From here on a build that finishes starts no pipeline.
+        """
+        self._closing = True
         if self._server is None or self._serving is None:
             return
         self._server.should_exit = True

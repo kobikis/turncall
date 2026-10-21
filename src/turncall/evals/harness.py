@@ -166,8 +166,8 @@ async def run_iteration(
         )
 
     bot = LoopbackBot(build, run_id)
-    url = await bot.start()
     try:
+        url = await bot.start()
         harness = _build_session(
             parsed, kind, url, tts_cache_dir=_tts_cache_dir(settings)
         )

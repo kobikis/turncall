@@ -214,3 +214,121 @@ async def test_run_iteration_reports_the_build_failure_not_the_closed_socket() -
                 timeout_s=10,
             )
     assert caught.value is boom
+
+
+def _eval_server_tasks() -> list[asyncio.Task]:
+    return [
+        t
+        for t in asyncio.all_tasks()
+        if t.get_name().startswith("eval-server-") and not t.done()
+    ]
+
+
+class _Sockets:
+    """Records every socket the bot server opens."""
+
+    def __init__(self) -> None:
+        import socket as socket_mod
+
+        self._real = socket_mod.socket
+        self.opened: list[Any] = []
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        sock = self._real(*args, **kwargs)
+        self.opened.append(sock)
+        return sock
+
+
+async def test_a_server_that_never_comes_up_leaves_no_task_or_socket() -> None:
+    """`_until_started` timing out used to leave the server task running and
+    its 127.0.0.1 socket bound for the life of the worker."""
+    from turncall.evals import bot_server
+
+    async def serve_without_starting(self, sockets=None):
+        while not self.should_exit:
+            await asyncio.sleep(0.01)
+
+    sockets = _Sockets()
+    bot = LoopbackBot(MagicMock(), uuid4())
+    with (
+        patch.object(bot_server, "_START_TIMEOUT_S", 0.2),
+        patch.object(bot_server._Server, "serve", serve_without_starting),
+        patch.object(bot_server.socket, "socket", sockets),
+    ):
+        with pytest.raises(TimeoutError):
+            await bot.start()
+    await asyncio.sleep(0)
+    assert _eval_server_tasks() == []
+    assert [s.fileno() for s in sockets.opened] == [-1]
+
+
+async def test_a_server_that_cannot_be_constructed_closes_its_socket() -> None:
+    from turncall.evals import bot_server
+
+    sockets = _Sockets()
+    bot = LoopbackBot(MagicMock(), uuid4())
+    with (
+        patch.object(bot_server.uvicorn, "Config", side_effect=RuntimeError("bad")),
+        patch.object(bot_server.socket, "socket", sockets),
+    ):
+        with pytest.raises(RuntimeError, match="bad"):
+            await bot.start()
+    assert [s.fileno() for s in sockets.opened] == [-1]
+
+
+async def test_run_iteration_cleans_up_a_bot_that_did_not_start() -> None:
+    from turncall.evals import bot_server
+    from turncall.evals import harness as harness_mod
+
+    async def serve_without_starting(self, sockets=None):
+        while not self.should_exit:
+            await asyncio.sleep(0.01)
+
+    with (
+        patch.object(bot_server, "_START_TIMEOUT_S", 0.2),
+        patch.object(bot_server._Server, "serve", serve_without_starting),
+    ):
+        with pytest.raises(TimeoutError):
+            await harness_mod.run_iteration(
+                parsed=MagicMock(),
+                kind=MagicMock(),
+                target=SimpleNamespace(
+                    project_id=uuid4(), config=AgentConfig(), agent_id=uuid4()
+                ),
+                modality=MagicMock(),
+                settings=SimpleNamespace(),
+                session_factory=MagicMock(),
+                run_id=uuid4(),
+                tool_mocks=MagicMock(),
+                timeout_s=10,
+            )
+    await asyncio.sleep(0)
+    assert _eval_server_tasks() == []
+
+
+async def test_a_build_that_finishes_while_closing_starts_no_pipeline() -> None:
+    """The harness gave up while the pipeline was still being built: a build
+    that finishes during `close()` must not leave a pipeline nobody stops."""
+    session = _Session()
+    building = asyncio.Event()
+    release = asyncio.Event()
+
+    async def build(_websocket, _flags):
+        building.set()
+        await release.wait()
+        return session
+
+    bot = LoopbackBot(build, uuid4())
+    url = await bot.start()
+    try:
+        async with connect(url) as ws:
+            await ws.send(eval_connect_message(EvalConnectionFlags()))
+            await asyncio.wait_for(building.wait(), 5)
+            closing = asyncio.create_task(bot.close())
+            await asyncio.sleep(0.05)
+            release.set()
+            await asyncio.wait_for(closing, 15)
+        assert not session.started.is_set()
+        assert bot.pipeline is None
+    finally:
+        await _stop(bot)
