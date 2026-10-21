@@ -13,6 +13,20 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Grok Voice as an S2S provider** (#386, #387, #388). `pipeline_mode: "s2s"`
+  with `s2s.provider: "xai"`, on its own `xai` account (the project's `xai`
+  credential, then `XAI_API_KEY`). The model is pinned to `grok-voice-3.0`
+  rather than xAI's `grok-voice-latest` alias, and the voice defaults to
+  `eve`. Grok greets first with no opening message. A wrong key (xAI answers
+  its handshake with a `400`) reads as `key_rejected`. Grok's session has no
+  temperature, token limit or base URL, so `s2s.temperature`,
+  `s2s.max_tokens` and `s2s.base_url` are a `422`, and the same rule fails the
+  build of a call-init inline agent. `s2s.extra`'s `reasoning`, `replace` and
+  `resumption` are set on the session in xAI's shape (a bad value is a `422`
+  naming the key); any other key is warned about and dropped. Tools and `prompt`
+  and `tool` knowledge bases work; an `auto` one is warned about and skipped,
+  as on every S2S provider. Grok Voice 2.0 is deprecated by xAI and still runs.
+  The `examples/s2s-realtime` preset moved from the gateway path to `xai`.
 - **xAI Grok as an LLM** (#393). `llm.provider: "xai"`, on the `xai` account
   (agent `llm.api_key`, then the project's `xai` credential, then
   `XAI_API_KEY`), on voice and text (chat, SMS, WhatsApp, post-call analysis),
@@ -847,6 +861,16 @@ and is not part of this repository's history.
   happens. See the upgrade notes.
 
 ### Fixed
+
+- **The S2S idle check-in and an eval's typed turns reach OpenAI Realtime**
+  (#390). Both are messages appended at the pipeline's source, and the user
+  aggregator took them, so pipecat's Realtime service sent nothing. A quiet
+  caller was never asked "Are you still there?", and since the timer restarts
+  only when the agent speaks, the call stayed silent until
+  `max_call_duration_seconds` instead of ending as `customer_silent`. An eval
+  typing a caller's turn to a Realtime agent got no answer. Appends are now carried around
+  the user aggregator for `openai` as they are for `xai`
+  (`orchestrator/realtime_appends.py`).
 
 - **Browser WebRTC calls connect again** (#398). Since pipecat 1.13 bundles
   every m-line onto one ICE transport, it checked the offer's *last* m-line's

@@ -40,6 +40,13 @@ pipecat minor only arrives with a TurnCall release. See *pipecat 1.13* below.
 
 ## Added
 
+**Grok Voice.** Set `pipeline_mode` to `s2s` and `s2s.provider` to `xai` to run
+xAI's Grok Voice (`grok-voice-3.0`, voice `eve` by default) on its own xAI
+account: a project's `xai` credential, or `XAI_API_KEY`. Grok greets first, calls
+the agent's tools, and reads its `prompt` and `tool` knowledge bases. Its session
+has no temperature, token limit or base URL, so setting one is refused. See
+[Speech-to-Speech](/guides/s2s).
+
 **xAI Grok as an LLM.** Set `llm.provider` to `xai` to run Grok on voice calls
 and text conversations, with tools, as a failover backup, and with warm-up. It
 uses the same xAI account as Grok Voice; the key needs xAI's chat endpoint, and
@@ -403,6 +410,12 @@ the caller heard it. The docs said it was left out, but it has always been in
 the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
+
+**An OpenAI Realtime agent checks in on a quiet caller.** The "Are you still
+there?" check-in never reached an OpenAI Realtime session, so a caller who went
+quiet heard nothing, and the call stayed open until its maximum duration instead
+of ending after the second silence. An eval that types a caller's turn to a
+Realtime agent now gets an answer too.
 
 **Browser calls connect again.** Since pipecat 1.13, a browser call whose
 offer carries its own candidates never connected when the browser could not

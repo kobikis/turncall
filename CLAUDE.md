@@ -1973,6 +1973,8 @@ All Pipecat imports isolated in `orchestrator/`. No other module imports Pipecat
 - `turn_metrics.py` — one `metrics.turn` call event per turn (STT/LLM/TTS TTFB + user-to-bot latency, and `turn_end_ms` — the caller's silence to the turn's release, which Smart Turn or Flux decides; absent when unmeasured, #204), from pipecat's latency observer; stored, never dispatched, none in an eval (#176). Read them with `GET /v1/calls/{id}/events?event_type=metrics.turn`
 - `delegation_events.py` — one `delegation.completed` call event per gpt-live-1 delegation (#247), `{mode, duration_ms, outcome}`, outcome `answered`\|`timed_out`\|`failed`\|`declined`. Stored, never dispatched, none in an eval — like `metrics.turn`. A request gpt-live-1 acknowledged with no event beside it is the one it never delegated. `timed_out` is client mode only (responses mode has no delegation timeout; #243 bounds each function call and the delegate answers past it); a client delegate that said nothing for the caller (no output, or only notes — output not marked `>>`) is `failed` — unless it had just ended the call, which is what it was asked, and reads `answered` (#262). `declined` (no delegate configured, e.g. no tools) is recorded with `mode: client`, the target gpt-live-1 asked for. pipecat 1.13 runs client delegations one at a time; `duration_ms` runs from creation, so a wait behind an earlier one counts. Reads pipecat's private `_finish_delegation` (and `_start_delegation`, `_on_backend_event`), pinned by `test_delegation_completed.py` (ADR-0028). The same subclass holds what the delegate says after ending the call and relays it as one goodbye the hangup gate is armed for — at the delegation's end, or `_GOODBYE_HOLD_SECS` after the first message (#262, see the S2S row) — and voices the idle check-in and reports a delegation running or waiting to the idle guard (#257)
 - `telemetry.py` — OpenTelemetry tracing setup + Pipecat observers (latency/turn/LLM/transcription/startup). See ADR-0010
+- `realtime_appends.py` — carries an appended message (`LLMMessagesAppendFrame`) around the user aggregator on `xai` and `openai` S2S, where pipecat's service answers only the frame itself (#388, #390). `test_pipecat_still_needs_it` fails once pipecat handles it
+- `webrtc_offer.py` — gives every m-line in a browser offer's BUNDLE group the first one's candidates before pipecat reads it (#398): pipecat 1.13's max-bundle peer read the *last* m-line's, a port the browser closes, so a browser that cannot reach the server (a container, a pod) and sends its candidates in the offer never connected. Applied at `/v1/webrtc/connect` and the demo's `/connect`; `test_pipecat_still_needs_it` there too
 - `live_control.py` — the call's half of the control channel (#215): the request kinds a live call answers (`message`, `handoff`) and what each does to its pipeline; `CallSession.start()` holds the channel for the call's lifetime
 
 ## Webhook Events
@@ -2062,7 +2064,11 @@ hears `idle_message` ("Are you still there?"), and a second consecutive silence
 ends the call. Speaking again resets the count. Cascade speaks the line through
 TTS; S2S has no TTS stage, so the model is asked to check in and words it
 itself — gpt-live-1 as spoken commentary, since it reads no context after its
-first (#257). The timer restarts only when the agent stops speaking, so a
+first (#257). On OpenAI Realtime and Grok Voice the check-in is an appended
+message, which pipecat's service answers only when the frame itself reaches it,
+so `orchestrator/realtime_appends.py` carries it around the user aggregator
+(#388, #390); an eval's typed caller turn takes the same path. The timer
+restarts only when the agent stops speaking, so a
 check-in the model never voices leaves the line silent with no second strike,
 until `max_call_duration_seconds`. A silence while gpt-live-1's delegate is
 still working is not a strike: the caller is waiting on an answer, and pipecat
