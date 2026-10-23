@@ -20,6 +20,7 @@ from loguru import logger
 
 from turncall.config.settings import Settings
 from turncall.domain.models import AgentConfig
+from turncall.orchestrator.avatar import avatar_gate
 from turncall.orchestrator.call_session import CallSession, fail_unstarted_call
 from turncall.orchestrator.config_warnings import knowledge_mode_warning
 from turncall.orchestrator.pipeline_factory import (
@@ -112,11 +113,12 @@ async def _assemble(
     session_factory: Any,
     audio_sample_rate: int = 8000,
     mcp_tools: list[Any] | None = None,
-    avatar_enabled: bool = False,
+    carries_video: bool = False,
 ) -> CallSession:
     """Assemble the pipeline (KB retrieval + tools wired in). audio_sample_rate
-    defaults to 8000 (Twilio mulaw); WebRTC/WhatsApp pass 16000. mcp_tools/avatar
-    are transport-specific."""
+    defaults to 8000 (Twilio mulaw); WebRTC/WhatsApp pass 16000. mcp_tools are
+    transport-specific; carries_video is a browser call's, the only one that
+    can show an Avatar."""
     from turncall.services.retrieval import build_knowledge_preamble
 
     kb_attachments = await _kb_attachments(config, call_context, session_factory)
@@ -148,6 +150,11 @@ async def _assemble(
     )
     if missing and not call_context.is_eval:
         raise MissingProviderKeyError(missing)
+
+    # After the key check: a call that fails there never shows anything.
+    avatar_enabled = await avatar_gate(
+        config, call_context, carries_video=carries_video
+    )
 
     pipeline = create_pipeline(
         config=config,

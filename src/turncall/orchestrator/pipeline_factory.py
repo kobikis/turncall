@@ -25,6 +25,7 @@ from turncall.domain.models import (
     LLMConfig,
     resolve_delegation,
 )
+from turncall.orchestrator.avatar_stage import avatar_stage, s2s_avatar_stage
 from turncall.orchestrator.deepgram_flux import (
     MIXED_FLUX_GROUP,
     create_flux_stt,
@@ -1367,68 +1368,6 @@ def _build_tools_schema(
     return ToolsSchema(standard_tools=functions)
 
 
-def _create_avatar_service(avatar: Any, credentials: Credentials) -> Any:
-    """Create the video avatar service (HeyGen or Tavus).
-
-    Both are Pipecat AIServices that consume TTS audio and emit avatar video
-    frames into the pipeline (their provider-specific WebRTC leg — LiveKit for
-    HeyGen, Daily for Tavus — is internal). Returns None if the required key /
-    field is missing (logged), so the call still runs without the avatar.
-
-    Uses the shared process-wide aiohttp session (closed on app shutdown) —
-    pipecat borrows it and never closes it, so a per-call session would leak.
-    """
-    from turncall.adapters.aiohttp_client import get_aiohttp_session
-
-    provider = avatar.provider
-    if provider == "heygen":
-        from pipecat.services.heygen.api_liveavatar import LiveAvatarNewSessionRequest
-        from pipecat.services.heygen.client import ServiceType
-        from pipecat.services.heygen.video import HeyGenVideoService
-
-        key = credentials.api_key("heygen")
-        if not key:
-            logger.warning(
-                "Avatar enabled but no HeyGen key (project credential or "
-                "HEYGEN_LIVE_AVATAR_API_KEY); skipping"
-            )
-            return None
-        logger.info("Avatar enabled: HeyGen {aid}", aid=avatar.avatar_id)
-        return HeyGenVideoService(
-            api_key=key,
-            service_type=ServiceType.LIVE_AVATAR,
-            session=get_aiohttp_session(),
-            session_request=LiveAvatarNewSessionRequest(
-                is_sandbox=avatar.is_sandbox,
-                avatar_id=avatar.avatar_id,
-            ),
-        )
-
-    if provider == "tavus":
-        from pipecat.services.tavus.video import TavusVideoService
-
-        key = credentials.api_key("tavus")
-        if not key:
-            logger.warning(
-                "Avatar enabled but no Tavus key (project credential or "
-                "TAVUS_API_KEY); skipping"
-            )
-            return None
-        if not avatar.replica_id:
-            logger.warning("Tavus avatar requires replica_id; skipping")
-            return None
-        logger.info("Avatar enabled: Tavus {rid}", rid=avatar.replica_id)
-        return TavusVideoService(
-            api_key=key,
-            replica_id=avatar.replica_id,
-            persona_id=avatar.persona_id,
-            session=get_aiohttp_session(),
-        )
-
-    logger.warning("Unknown avatar provider '{p}'; skipping", p=provider)
-    return None
-
-
 # --- The RTVI server half, eval path only (ADR-0018) ---
 #
 # Pipecat's eval harness is an RTVI *client*. The server half is not the
@@ -1528,7 +1467,8 @@ def create_pipeline(
 ) -> Pipeline:
     """Build a Pipecat pipeline from an AgentConfig.
 
-    avatar_enabled is set by the WebRTC caller (avatar is WebRTC + cascade only).
+    avatar_enabled is the build's decision (`avatar_gate`): a browser call
+    whose Agent's Avatar has its id, cascade or speech-to-speech.
     """
     if config.pipeline_mode == "s2s":
         return _create_s2s_pipeline(
@@ -1542,6 +1482,7 @@ def create_pipeline(
             knowledge_base_attachments=knowledge_base_attachments,
             knowledge_preamble=knowledge_preamble,
             mcp_tools=mcp_tools,
+            avatar_enabled=avatar_enabled,
         )
 
     # --- Cascade pipeline (STT → LLM → TTS) ---
@@ -1780,12 +1721,9 @@ def create_pipeline(
             )
             logger.info("KB auto-retrieval enabled for {n} KBs", n=len(auto_kb_ids))
 
-    # Video avatar: consumes TTS audio, emits avatar video. Sits right before
-    # transport.output(). WebRTC + cascade only — gated by the avatar_enabled
-    # flag from the caller.
-    avatar = None
-    if avatar_enabled and config.avatar.enabled:
-        avatar = _create_avatar_service(config.avatar, credentials)
+    avatar = avatar_stage(
+        config, credentials, call_context, avatar_enabled=avatar_enabled
+    )
 
     # App-side recording: captures merged user+bot audio just BEFORE
     # transport.output() (which consumes audio frames and doesn't push them
@@ -1813,7 +1751,7 @@ def create_pipeline(
             assistant_tap,
             tts,
             voicemail_detector.gate(),
-            *([avatar] if avatar else []),
+            *avatar,
             *_speech_before_ambience(config, call_context),
             transport.output(),
             # After the output: audio arrives here as it is played (see
@@ -1834,7 +1772,7 @@ def create_pipeline(
             *_hangup_gate(call_context),
             assistant_tap,
             tts,
-            *([avatar] if avatar else []),
+            *avatar,
             *_speech_before_ambience(config, call_context),
             transport.output(),
             # After the output: audio arrives here as it is played (see
@@ -1932,12 +1870,13 @@ def _create_s2s_pipeline(
     knowledge_base_attachments: list[dict[str, Any]] | None = None,
     knowledge_preamble: str = "",
     mcp_tools: list[Any] | None = None,
+    avatar_enabled: bool = False,
 ) -> Pipeline:
     """Build a speech-to-speech pipeline using OpenAI Realtime or Gemini Live.
 
     The S2S model handles STT + LLM + TTS in a single WebSocket connection.
     Pipeline is much simpler than cascade:
-      transport.input → [VAD] → S2S_LLM → transport.output → context_agg → observability
+      transport.input → [VAD] → S2S_LLM → [Avatar] → transport.output → context_agg → observability
 
     Knowledge bases (#254): the preamble leads the instructions, and
     `query_knowledge` is one more tool. `auto` mode has no per-turn point ahead
@@ -2156,6 +2095,9 @@ def _create_s2s_pipeline(
         *hangup_gate,
         assistant_tap,
         *([output_resampler] if output_resampler else []),
+        *s2s_avatar_stage(
+            config, credentials, call_context, avatar_enabled=avatar_enabled
+        ),
         *_speech_before_ambience(config, call_context),
         transport.output(),
         # After the output: audio arrives here as it is played (see

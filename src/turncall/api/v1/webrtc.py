@@ -27,6 +27,7 @@ from turncall.auth import Auth, WriteAuth
 from turncall.config import get_settings
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.ambience import build_ambience_mixer
+from turncall.orchestrator.avatar import skip_reason
 from turncall.orchestrator.pipeline_builder import start_call_pipeline
 from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
 from turncall.orchestrator.transport_factory import (
@@ -292,10 +293,12 @@ async def webrtc_connect(
     # Use SmallWebRTCRequestHandler — it creates/reuses the connection
     async def on_connection(connection: SmallWebRTCConnection) -> None:
         """Callback invoked when a new WebRTC connection is established."""
-        # Avatar is WebRTC + cascade only. Skip-with-warning on s2s.
-        avatar_on = config.avatar.enabled and config.pipeline_mode == "cascade"
-        if config.avatar.enabled and config.pipeline_mode != "cascade":
-            logger.warning("Avatar requested on non-cascade pipeline; skipping")
+        # A browser call is the one that can show an Avatar. Whether this one
+        # will is the build's decision (`avatar_gate`, which records why not);
+        # the transport only needs to know whether to send video.
+        avatar_on = (
+            config.avatar.enabled and skip_reason(config, carries_video=True) is None
+        )
 
         mixer = await build_ambience_mixer(
             config,
@@ -318,7 +321,7 @@ async def webrtc_connect(
                 settings=settings,
                 session_factory=session_factory,
                 audio_sample_rate=WEBRTC_SAMPLE_RATE,
-                avatar_enabled=avatar_on,
+                carries_video=True,
             )
         except Exception as exc:
             # The call is already failed with its reason (build_call_pipeline).

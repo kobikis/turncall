@@ -11,7 +11,7 @@ Production voice agent platform. API-only backend for real-time AI voice agents 
 - **WhatsApp**: WhatsApp Cloud API + Pipecat WhatsAppClient (voice calls + text messages)
 - **SMS/Chat**: Twilio SMS + Chat API (text conversations with session management)
 - **WebRTC**: Pipecat SmallWebRTCTransport (browser calls)
-- **Video Avatar**: HeyGen LiveAvatar via Pipecat HeyGenVideoService (WebRTC + cascade only)
+- **Video Avatar**: HeyGen LiveAvatar via Pipecat HeyGenVideoService (WebRTC only; cascade and S2S)
 - **STT**: Deepgram Nova-3 (streaming, the `nova-3-general` default) · OpenAI Whisper · ElevenLabs Scribe · Cartesia Ink · AssemblyAI Universal-Streaming · xAI (`grok-voice-transcribe-2.0`)
 - **LLM**: OpenAI GPT-4o-mini · Anthropic Claude (Sonnet, Haiku, Opus) · Ollama (local models) · Google Gemini · OpenRouter (multi-model + fallback routing) · xAI Grok · Any OpenAI-compatible endpoint
 - **S2S**: OpenAI Realtime · Gemini Live · Amazon Nova Sonic · Grok Voice (native audio-in/audio-out)
@@ -644,18 +644,19 @@ Customer calls WhatsApp Business number → Meta POSTs /webhooks/whatsapp (field
 ## Video Avatar (HeyGen / Tavus)
 
 Optional lip-synced video avatar on WebRTC calls. A Pipecat avatar `AIService`
-consumes TTS audio and emits avatar video frames into the pipeline; the provider
+consumes the agent's spoken audio (`TTSAudioRawFrame`) and emits avatar video frames into the pipeline; the provider
 runs its own WebRTC leg to its servers (HeyGen→LiveKit, Tavus→Daily), and
 TurnCall's SmallWebRTC transport carries the video to the browser.
 
 ### Constraints
-- **WebRTC + cascade only.** The avatar taps the `tts` stage, which S2S doesn't have. On a phone (Twilio/WhatsApp) or S2S agent it's skipped with a warning.
+- **WebRTC only, cascade and S2S** (#401). The avatar sits right before `SpeechBeforeAmbience` and `transport.output()`: after `tts` in cascade, after the realtime service (and its output resampler) on S2S, since every realtime service speaks `TTSAudioRawFrame` itself — OpenAI Realtime, Gemini Live, Nova Sonic, Grok Voice. gpt-live-1 (`openai_live`) is the exception: it streams `SpeechOutputAudioRawFrame`, silence included, which the avatar would not read and would pass on beside its own leg's audio. So on S2S the avatar sits behind `orchestrator/avatar_speech.SpeechForTheAvatar`, which cuts its replies out of that stream as TTS audio (pauses inside a reply kept up to pipecat's `BOT_VAD_STOP_SECS`, then a `TTSStoppedFrame`, the rest dropped) and passes TTS audio untouched. Both avatars cut a reply at the call's barge-in, an `InterruptionFrame` — HeyGen too: pipecat's cut whenever the caller started speaking, so `WatchedHeyGenVideoService` moves the cut. gpt-live-1 broadcasts no interruption (it hears the caller and decides itself whether to stop), so there the avatar follows its audio: a reply it stops for the caller ends at its silence, and the avatar plays out what it already took (HeyGen sends up to a second at a time). pipecat has no truncation signal to cut on; only `turn_detection: pipecat_vad` barges in. On a phone (Twilio/WhatsApp) it is skipped, recorded as `transport`.
+- **It never ends the call** (#402). A call whose Avatar did not show carries on as voice and records why: `avatar.unavailable` `{provider, reason}`, stored only (`GET /v1/calls/{id}/events?event_type=avatar.unavailable`), at most one per reason, none in an eval. `reason` is `AvatarUnavailableReason`: `transport` (not a browser call), `missing_id` (no `avatar_id` / `replica_id`), `unknown_provider` (a call-init inline Agent naming a provider with no Avatar: the API refuses one, the inline config skips it; no key is asked for it either) — all decided at build by `orchestrator/avatar.avatar_gate` — and `session_refused` / `session_ended`, from the running service (`orchestrator/avatar_watch.py`). pipecat only logs a refused or dropped session and keeps swallowing the TTS audio, which made the call silent; the watched subclasses pass the spoken frames through instead from then on, and drop what the Avatar's leg still sends. Refused: setup raised or left no session, an Avatar that could not be built, or no video within `JOIN_TIMEOUT_SECS` (20). Ended: the Avatar left its room, or its video stalled for `STALL_TIMEOUT_SECS` (5) — an Avatar streams video while idle too. A reply it had already taken is lost; nothing switches back. A missing key is still the build's `missing_keys` failure (ADR-0020).
 - **HeyGen** needs a **LiveAvatar key** (not a HeyGen key) — `HEYGEN_LIVE_AVATAR_API_KEY` from app.liveavatar.com. Pipecat targets `api.liveavatar.com`; HeyGen's old `/v1/streaming.*` API is sunset. Latency floor ~600ms+.
 - **Tavus** needs `TAVUS_API_KEY` (platform.tavus.io) + a `replica_id`; `persona_id` defaults to `pipecat-stream` (lip-syncs Pipecat TTS). Sub-600ms, 1080p — higher quality/lower latency. Pulls `daily-python` (via the `tavus` extra) for its internal leg only — user transport stays SmallWebRTC.
 
 ### Config (per-agent)
 ```json
-"transport": "webrtc", "pipeline_mode": "cascade",
+"transport": "webrtc", "pipeline_mode": "cascade",   // or "s2s"
 // HeyGen:
 "avatar": {"enabled": true, "provider": "heygen", "avatar_id": "<id>", "is_sandbox": true}
 // Tavus:
@@ -664,9 +665,10 @@ TurnCall's SmallWebRTC transport carries the video to the browser.
 
 ### Key Files
 - `domain/models.py` — `AvatarConfig`; `api/v1/schemas/agents.py` — `AvatarConfigSchema` (required, or the field is dropped on API ingest)
-- `orchestrator/pipeline_factory.py` — `_create_avatar_service()` builds HeyGen/Tavus, inserted between `tts` and `transport.output()`
+- `orchestrator/avatar_stage.py` — `create_avatar_service()` builds HeyGen/Tavus; `avatar_stage` places it before `transport.output()` (after `tts`), `s2s_avatar_stage` after the realtime service behind `SpeechForTheAvatar` (`orchestrator/avatar_speech.py`)
+- `orchestrator/avatar.py` — `avatar_gate` (build or record why not), `AvatarUnavailability` (the event); `orchestrator/avatar_watch.py` — the watched services' fall back to voice
 - `orchestrator/transport_factory.py` — `video_out` enables live video on SmallWebRTC
-- `api/v1/webrtc.py` — gates the avatar to webrtc+cascade
+- `api/v1/webrtc.py` — the one transport that `carries_video`
 - See `adr/0002-heygen-avatar.md`
 
 ## Ambience
@@ -2016,7 +2018,8 @@ provider_call_id}`. Dispatched only — there is no event log to store it on.
 
 Stored-only call events — on the call's event log (`GET /v1/calls/{id}/events`),
 never sent to webhook subscribers, none in an eval: `metrics.turn` (#176),
-`delegation.completed` (#247), `voicemail.detected`, and the log's own
+`delegation.completed` (#247), `avatar.unavailable` (#402, see "Video
+Avatar"), `voicemail.detected`, and the log's own
 `call.ended` rows (the carrier's: Twilio's `completed`/`busy`/`no-answer`
 status callback, Telnyx's hangup; and the agent's hangup marker, source
 `control`). Subscribers get the comprehensive `call.ended` instead, which is

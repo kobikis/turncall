@@ -25,7 +25,7 @@ from loguru import logger
 
 from turncall.domain.errors import PicklableError
 from turncall.domain.models import resolve_delegation
-from turncall.domain.providers import AWS_ACCOUNT, account_for
+from turncall.domain.providers import AVATAR_PROVIDERS, AWS_ACCOUNT, account_for
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -152,8 +152,10 @@ class Credentials:
                 *((e.provider, None) for e in config.stt.failover),
                 *((e.provider, None) for e in config.tts.failover),
             ]
-            if config.avatar.enabled:
-                needed.append((config.avatar.provider, None))
+        # On either pipeline since #401. One TurnCall has no Avatar for needs
+        # no key: the build records `unknown_provider`, the call goes on as voice.
+        if config.avatar.enabled and config.avatar.provider in AVATAR_PROVIDERS:
+            needed.append((config.avatar.provider, None))
         missing: list[str] = []
         for provider, inline in needed:
             account = account_for(provider)

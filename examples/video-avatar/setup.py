@@ -1,7 +1,7 @@
 """Video Avatar (HeyGen / Tavus) Example — Setup Script
 
 Creates a cascade voice agent with a live video avatar, served over WebRTC to
-the browser. Avatar is WebRTC + cascade only.
+the browser. Avatar is WebRTC only (a speech-to-speech agent works too).
 
 Prerequisites:
   1. Server running: `make docker-up && make run`

@@ -29,6 +29,7 @@ from turncall.domain.models import (
 )
 from turncall.domain.providers import ROLE_PROVIDERS, account_for, accounts
 from turncall.orchestrator import pipeline_factory as pf
+from turncall.orchestrator.avatar_stage import create_avatar_service
 from turncall.orchestrator.s2s_config import create_s2s_service
 from turncall.services.credentials import Credentials
 from turncall.storage.repositories import credential_repo
@@ -66,6 +67,17 @@ class TestCredentialResolution:
         s2s = AgentConfig(pipeline_mode="s2s", s2s=S2SConfig(provider="openai_live"))
         assert _creds(deepgram="k").missing_keys(s2s) == ["openai"]
         assert _creds({"openai": {"api_key": "p"}}).missing_keys(s2s) == []
+
+    @pytest.mark.parametrize("pipeline_mode", ["cascade", "s2s"])
+    def test_missing_keys_asks_the_avatars_key(self, pipeline_mode) -> None:
+        # Since #401 a speech-to-speech Agent shows its Avatar too, so its key
+        # fails the call when missing, as on cascade (ADR-0020).
+        config = AgentConfig(
+            pipeline_mode=pipeline_mode,
+            avatar=AvatarConfig(enabled=True, avatar_id="a1"),
+        )
+        keys = _creds(deepgram="k", openai="k")
+        assert keys.missing_keys(config) == ["heygen"]
 
     def test_missing_keys_skips_keyless_and_aws(self) -> None:
         local = AgentConfig(llm=LLMConfig(provider="ollama"))
@@ -272,16 +284,17 @@ class TestCredentialsReachTheServices:
     @pytest.mark.parametrize(
         ("provider", "module", "cls", "extra"),
         [
+            # pipecat's services, watched for a session that goes (#402).
             (
                 "heygen",
-                "pipecat.services.heygen.video",
-                "HeyGenVideoService",
+                "turncall.orchestrator.avatar_watch",
+                "WatchedHeyGenVideoService",
                 {"avatar_id": "a1"},
             ),
             (
                 "tavus",
-                "pipecat.services.tavus.video",
-                "TavusVideoService",
+                "turncall.orchestrator.avatar_watch",
+                "WatchedTavusVideoService",
                 {"replica_id": "r1"},
             ),
         ],
@@ -289,9 +302,9 @@ class TestCredentialsReachTheServices:
     def test_avatar(self, monkeypatch, provider, module, cls, extra) -> None:
         mock = _ctor(monkeypatch, module, cls)
         avatar = AvatarConfig(enabled=True, provider=provider, **extra)
-        pf._create_avatar_service(avatar, _creds(PROJECT, **{provider: "platform"}))
+        create_avatar_service(avatar, _creds(PROJECT, **{provider: "platform"}))
         assert _key(mock) == f"project-{provider}"
-        assert pf._create_avatar_service(avatar, _creds()) is None
+        assert create_avatar_service(avatar, _creds()) is None
 
 
 @pytest.mark.asyncio

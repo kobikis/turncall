@@ -56,14 +56,14 @@ async def test_forwards_kb_and_transport_options():
             session_factory="SF",
             audio_sample_rate=16000,
             mcp_tools=["m1"],
-            avatar_enabled=True,
+            carries_video=True,
         )
 
     kw = cp.call_args.kwargs
     assert kw["knowledge_base_attachments"] == [{"kb": 1}]  # KB stays wired
     assert kw["audio_sample_rate"] == 16000
     assert kw["mcp_tools"] == ["m1"]
-    assert kw["avatar_enabled"] is True
+    assert kw["avatar_enabled"] is False  # no avatar on this agent
     assert kw["credentials"] is CREDS  # resolved per call, ADR-0020
     assert out == "SESSION"
     assert cs.call_args.kwargs["transport"] == "T"

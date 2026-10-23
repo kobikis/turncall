@@ -573,7 +573,7 @@ class MCPServerSchema(BaseModel):
 
 
 class AvatarConfigSchema(BaseModel):
-    """Video avatar config (WebRTC + cascade only). HeyGen or Tavus."""
+    """Video avatar config (WebRTC only, cascade or S2S). HeyGen or Tavus."""
 
     enabled: bool = False
     provider: str = Field(

@@ -232,7 +232,7 @@ def resolve_delegation(s2s: Any, *, has_tools: bool) -> Any:
 
 
 class AvatarConfig(DomainModel):
-    """Video avatar config (WebRTC + cascade only). HeyGen or Tavus."""
+    """Video avatar config (WebRTC only, cascade or S2S). HeyGen or Tavus."""
 
     enabled: bool = False
     provider: str = "heygen"  # "heygen" | "tavus"

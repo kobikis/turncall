@@ -50,6 +50,7 @@ STORED_ONLY = {
     "call.ended",
     "metrics.turn",
     "delegation.completed",
+    "avatar.unavailable",
     "voicemail.detected",
 }
 # What leaves this call, on both sides.
