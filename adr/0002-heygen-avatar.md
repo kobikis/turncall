@@ -67,10 +67,18 @@ barge-in ending the reply. TTS audio passes untouched, so it is in the
 pipeline for every provider rather than chosen per provider. With the Avatar
 fallen back to voice, the caller hears those TTS frames as on cascade.
 
-Barge-in needs nothing new: the Avatar services interrupt on `InterruptionFrame`
-(Tavus) and `UserStartedSpeakingFrame` (HeyGen), which the realtime services
-pass downstream. Verified by unit tests (placement per provider, the stream
-conversion); the live check against a sandbox Avatar is still to do.
+Barge-in is the call's: an Avatar cuts its reply at an `InterruptionFrame`,
+which the realtime services pass downstream. pipecat's Tavus already did;
+pipecat's HeyGen cut at `UserStartedSpeakingFrame` instead, so
+`WatchedHeyGenVideoService` moves its cut to the interruption. gpt-live-1 is
+why: it broadcasts no interruption, it hears the caller and decides itself
+whether to stop, and on a caller it talked through HeyGen's Avatar fell silent
+mid-reply (as it did on a cascade call with barge-in off). When gpt-live-1
+does stop for the caller it only goes quiet — its API has no truncation event
+— so the Avatar plays out what it had already taken, up to a second past
+gpt-live-1 on HeyGen. Verified by unit tests (placement per provider, the
+stream conversion, where each Avatar cuts); the live check against a sandbox
+Avatar is still to do.
 
 ## Known ceiling
 

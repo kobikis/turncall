@@ -38,10 +38,12 @@ from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
     Frame,
+    InterruptionFrame,
     StartFrame,
     TTSAudioRawFrame,
     TTSStartedFrame,
     TTSStoppedFrame,
+    UserStartedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import (
     FrameDirection,
@@ -169,11 +171,28 @@ class AvatarFallback:
 
 
 class WatchedHeyGenVideoService(AvatarFallback, HeyGenVideoService):
-    """HeyGen's LiveAvatar, falling back to voice when it stops showing."""
+    """HeyGen's LiveAvatar, falling back to voice when it stops showing.
+
+    Its reply is cut at the call's barge-in, an `InterruptionFrame`, as Tavus's
+    is. pipecat's cut it whenever the caller started speaking: gpt-live-1
+    broadcasts no interruption (it hears the caller and decides itself whether
+    to stop), nor does a cascade call with barge-in off, so on both the Avatar
+    fell silent mid-reply while the agent spoke on.
+    """
 
     def _session_started(self) -> bool:
         # pipecat's client sets it only once LiveAvatar granted the session.
         return getattr(self._client, "_heyGen_session", None) is not None
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        if isinstance(frame, UserStartedSpeakingFrame):
+            await FrameProcessor.process_frame(self, frame, direction)
+            await self.push_frame(frame, direction)
+            return
+        await super().process_frame(frame, direction)
+        if isinstance(frame, InterruptionFrame) and not self._voice:
+            # pipecat's own cut: drops the queued reply, then listens.
+            await self._handle_user_started_speaking()
 
     async def _on_participant_connected(self, participant_id: str) -> None:
         self._avatar_joined(participant_id)

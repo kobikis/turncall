@@ -12,6 +12,10 @@ on as TTS audio; a longer silence ends the reply with a `TTSStoppedFrame`
 (Tavus's end-of-utterance mark) and is dropped. TTS audio passes untouched, so
 on any other service this does nothing. An Avatar that fell back to voice
 passes the reply on as TTS audio, which the output plays as it plays cascade's.
+
+gpt-live-1 has no event for a reply it cut short, so its silence is the only
+sign: the Avatar plays out what it already took (HeyGen sends it on in chunks
+of up to a second), a little past where gpt-live-1 stopped.
 """
 
 from __future__ import annotations
@@ -39,7 +43,10 @@ class SpeechForTheAvatar(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if isinstance(frame, InterruptionFrame):
-            # The reply it cut is over; what follows is not the rest of it.
+            # Only on `turn_detection: pipecat_vad`, where TurnCall's VAD barges
+            # in: the reply it cut is over; what follows is not the rest of it.
+            # On its own turns gpt-live-1 broadcasts none, and a reply it stops
+            # for the caller ends like any other, at its silence.
             self._speaking, self._silence_secs = False, 0.0
         if not isinstance(frame, SpeechOutputAudioRawFrame):
             await self.push_frame(frame, direction)
