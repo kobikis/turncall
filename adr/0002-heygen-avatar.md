@@ -1,4 +1,4 @@
-# HeyGen video avatar: WebRTC + cascade only, on SmallWebRTC
+# HeyGen video avatar: WebRTC only, on SmallWebRTC
 
 Added an optional HeyGen live video avatar to voice agents. `HeyGenVideoService`
 sits between `tts` and `transport.output()`, consuming TTS audio and emitting
@@ -14,6 +14,7 @@ avatar video frames. Opt-in per agent via a minimal `AvatarConfig`
 - **Cascade only.** The avatar taps the `tts` stage. S2S has no `tts` (the
   realtime model emits audio directly), so wiring it there is a different,
   unverified path. Avatar-on-S2S is skipped with a warning, not built.
+  *Reversed by #401, below.*
 - **SmallWebRTC, not Daily.** SmallWebRTC already sends live video out (just
   enable `video_out_*` on the existing transport), so we avoid adding Daily as a
   paid dependency + new transport. Daily would only earn its place if we later
@@ -43,6 +44,34 @@ line and keep consuming the TTS audio, so the caller heard nothing; TurnCall
 subclasses both to watch the Avatar (a session at setup, its video arriving,
 the Avatar leaving its room) and pass the spoken frames on once it is gone
 (`orchestrator/avatar_watch.py`).
+
+## Update: speech-to-speech too (#401)
+
+The "cascade only" no above was about the `tts` stage, but the services never
+needed the stage, only the agent's audio: they read `TTSAudioRawFrame`, and
+OpenAI Realtime, Gemini Live, Nova Sonic and Grok Voice all speak it
+themselves. So on S2S the Avatar sits after the realtime service (after its
+output resampler; both providers resample to their own rate) and before
+`SpeechBeforeAmbience` and `transport.output()`, where it sits after TTS in
+cascade. The build no longer records `pipeline_mode`; the reason stays in the
+enum for the calls that carry it.
+
+gpt-live-1 (`openai_live`) is the one service that does not: it streams
+`SpeechOutputAudioRawFrame` continuously, silence included, at real-time pace.
+Behind an Avatar that would be no lip-sync and two real-time streams into one
+output (gpt-live-1's and the Avatar leg's). So on S2S the Avatar reads through
+`SpeechForTheAvatar` (`orchestrator/avatar_speech.py`), which turns a streamed
+voice into replies: speech and the pauses inside it (up to pipecat's
+`BOT_VAD_STOP_SECS`) as TTS audio, a `TTSStoppedFrame` after a longer silence
+(Tavus's end-of-utterance mark), the silence between replies dropped, a
+barge-in ending the reply. TTS audio passes untouched, so it is in the
+pipeline for every provider rather than chosen per provider. With the Avatar
+fallen back to voice, the caller hears those TTS frames as on cascade.
+
+Barge-in needs nothing new: the Avatar services interrupt on `InterruptionFrame`
+(Tavus) and `UserStartedSpeakingFrame` (HeyGen), which the realtime services
+pass downstream. Verified by unit tests (placement per provider, the stream
+conversion); the live check against a sandbox Avatar is still to do.
 
 ## Known ceiling
 

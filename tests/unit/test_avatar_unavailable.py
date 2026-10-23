@@ -33,7 +33,10 @@ from turncall.services.credentials import Credentials
 pytestmark = pytest.mark.unit
 
 CREDS = Credentials(
-    platform={"deepgram": "k", "openai": "k", "heygen": "k", "tavus": "k"}
+    platform={
+        **{account: "k" for account in ("deepgram", "openai", "google", "xai")},
+        **{"heygen": "k", "tavus": "k"},
+    }
 )
 HEYGEN = {"enabled": True, "provider": "heygen", "avatar_id": "a1"}
 
@@ -121,13 +124,6 @@ class TestTheBuildSaysWhyItBuiltNoAvatar:
         [
             # A phone or WhatsApp call: nowhere to show a face.
             (HEYGEN, {}, False, "transport"),
-            # Speech-to-speech has no TTS stage for the Avatar to read.
-            (
-                HEYGEN,
-                {"pipeline_mode": "s2s", "s2s": {"provider": "openai"}},
-                True,
-                "pipeline_mode",
-            ),
             ({"enabled": True, "provider": "heygen"}, {}, True, "missing_id"),
             ({"enabled": True, "provider": "tavus"}, {}, True, "missing_id"),
         ],
@@ -148,6 +144,25 @@ class TestTheBuildSaysWhyItBuiltNoAvatar:
             cp = await _build(_agent(HEYGEN), _call_context(), carries_video=True)
         assert log.avatar == []
         assert cp.call_args.kwargs["avatar_enabled"] is True
+
+    @pytest.mark.parametrize(
+        "provider", ["openai", "openai_live", "google", "aws", "xai"]
+    )
+    async def test_a_speech_to_speech_agent_builds_it_too(self, provider) -> None:
+        # The realtime service speaks its own audio, which is what the Avatar
+        # reads (#401): no TTS stage needed.
+        agent = _agent(HEYGEN, pipeline_mode="s2s", s2s={"provider": provider})
+        with _event_log() as log:
+            cp = await _build(agent, _call_context(), carries_video=True)
+        assert log.avatar == []
+        assert cp.call_args.kwargs["avatar_enabled"] is True
+
+    async def test_a_speech_to_speech_phone_call_still_skips_it(self) -> None:
+        agent = _agent(HEYGEN, pipeline_mode="s2s", s2s={"provider": "xai"})
+        with _event_log() as log:
+            cp = await _build(agent, _call_context(), carries_video=False)
+        assert log.avatar == [{"provider": "heygen", "reason": "transport"}]
+        assert cp.call_args.kwargs["avatar_enabled"] is False
 
     async def test_an_agent_with_no_avatar_records_nothing(self) -> None:
         with _event_log() as log:

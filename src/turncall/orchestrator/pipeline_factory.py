@@ -1480,6 +1480,54 @@ def _speech_before_ambience(
     return [SpeechBeforeAmbience()]
 
 
+def _avatar_stage(
+    config: AgentConfig,
+    credentials: Credentials,
+    call_context: CallContext,
+    *,
+    avatar_enabled: bool,
+) -> list[Any]:
+    """The video Avatar, for directly before `_speech_before_ambience`.
+
+    It consumes the agent's spoken audio and emits the Avatar's video and its
+    leg's audio, so it sits after whatever speaks: TTS in cascade, the realtime
+    service on speech-to-speech (#401). Gated by avatar_enabled, the build's
+    decision (`avatar_gate`); once running it falls back to voice
+    (`avatar_watch`). Ahead of the ambience's speech judge, which has to read
+    the Avatar's audio stream, silence included (#265).
+    """
+    if not (avatar_enabled and config.avatar.enabled):
+        return []
+    avatar = _create_avatar_service(
+        config.avatar,
+        credentials,
+        AvatarUnavailability(call_context, config.avatar.provider),
+    )
+    return [avatar] if avatar else []
+
+
+def _s2s_avatar_stage(
+    config: AgentConfig,
+    credentials: Credentials,
+    call_context: CallContext,
+    *,
+    avatar_enabled: bool,
+) -> list[Any]:
+    """`_avatar_stage` after a realtime service, which speaks for itself.
+
+    Behind `SpeechForTheAvatar`: gpt-live-1 streams its voice where the others
+    hand out TTS audio, the only kind the Avatar reads.
+    """
+    avatar = _avatar_stage(
+        config, credentials, call_context, avatar_enabled=avatar_enabled
+    )
+    if not avatar:
+        return []
+    from turncall.orchestrator.avatar_speech import SpeechForTheAvatar
+
+    return [SpeechForTheAvatar(), *avatar]
+
+
 def _eval_rtvi(call_context: CallContext) -> list[Any]:
     """The `RTVIProcessor`, for an eval pipeline's processor list.
 
@@ -1538,7 +1586,7 @@ def create_pipeline(
     """Build a Pipecat pipeline from an AgentConfig.
 
     avatar_enabled is the build's decision (`avatar_gate`): a browser call
-    with a cascade Agent whose Avatar has its id.
+    whose Agent's Avatar has its id, cascade or speech-to-speech.
     """
     if config.pipeline_mode == "s2s":
         return _create_s2s_pipeline(
@@ -1552,6 +1600,7 @@ def create_pipeline(
             knowledge_base_attachments=knowledge_base_attachments,
             knowledge_preamble=knowledge_preamble,
             mcp_tools=mcp_tools,
+            avatar_enabled=avatar_enabled,
         )
 
     # --- Cascade pipeline (STT → LLM → TTS) ---
@@ -1790,16 +1839,9 @@ def create_pipeline(
             )
             logger.info("KB auto-retrieval enabled for {n} KBs", n=len(auto_kb_ids))
 
-    # Video avatar: consumes TTS audio, emits avatar video. Sits right before
-    # transport.output(). WebRTC + cascade only — gated by avatar_enabled, the
-    # build's decision; once running it falls back to voice (`avatar_watch`).
-    avatar = None
-    if avatar_enabled and config.avatar.enabled:
-        avatar = _create_avatar_service(
-            config.avatar,
-            credentials,
-            AvatarUnavailability(call_context, config.avatar.provider),
-        )
+    avatar = _avatar_stage(
+        config, credentials, call_context, avatar_enabled=avatar_enabled
+    )
 
     # App-side recording: captures merged user+bot audio just BEFORE
     # transport.output() (which consumes audio frames and doesn't push them
@@ -1827,7 +1869,7 @@ def create_pipeline(
             assistant_tap,
             tts,
             voicemail_detector.gate(),
-            *([avatar] if avatar else []),
+            *avatar,
             *_speech_before_ambience(config, call_context),
             transport.output(),
             # After the output: audio arrives here as it is played (see
@@ -1848,7 +1890,7 @@ def create_pipeline(
             *_hangup_gate(call_context),
             assistant_tap,
             tts,
-            *([avatar] if avatar else []),
+            *avatar,
             *_speech_before_ambience(config, call_context),
             transport.output(),
             # After the output: audio arrives here as it is played (see
@@ -1946,12 +1988,13 @@ def _create_s2s_pipeline(
     knowledge_base_attachments: list[dict[str, Any]] | None = None,
     knowledge_preamble: str = "",
     mcp_tools: list[Any] | None = None,
+    avatar_enabled: bool = False,
 ) -> Pipeline:
     """Build a speech-to-speech pipeline using OpenAI Realtime or Gemini Live.
 
     The S2S model handles STT + LLM + TTS in a single WebSocket connection.
     Pipeline is much simpler than cascade:
-      transport.input → [VAD] → S2S_LLM → transport.output → context_agg → observability
+      transport.input → [VAD] → S2S_LLM → [Avatar] → transport.output → context_agg → observability
 
     Knowledge bases (#254): the preamble leads the instructions, and
     `query_knowledge` is one more tool. `auto` mode has no per-turn point ahead
@@ -2170,6 +2213,9 @@ def _create_s2s_pipeline(
         *hangup_gate,
         assistant_tap,
         *([output_resampler] if output_resampler else []),
+        *_s2s_avatar_stage(
+            config, credentials, call_context, avatar_enabled=avatar_enabled
+        ),
         *_speech_before_ambience(config, call_context),
         transport.output(),
         # After the output: audio arrives here as it is played (see

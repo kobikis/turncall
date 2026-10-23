@@ -6,7 +6,8 @@ one of `AvatarUnavailableReason`. Stored only, never dispatched to webhook
 subscribers (like `metrics.turn`), none in an eval.
 
 Two places decide. The build (`avatar_gate`): a call that is not a browser
-call, a speech-to-speech Agent, or an Avatar with no id builds none. The
+call, or an Avatar with no id, builds none. Cascade and speech-to-speech alike
+(#401): the Avatar reads the agent's spoken audio, which both produce. The
 running Avatar service (`orchestrator/avatar_watch.py`): a provider that
 refuses the session, or a session that stops mid-call.
 """
@@ -42,8 +43,6 @@ def skip_reason(
     """
     if not carries_video:
         return AvatarUnavailableReason.TRANSPORT
-    if config.pipeline_mode != "cascade":
-        return AvatarUnavailableReason.PIPELINE_MODE
     if missing_id(config.avatar):
         return AvatarUnavailableReason.MISSING_ID
     return None

@@ -137,7 +137,7 @@ flowchart LR
     class VM,KB,AV optional
 ```
 
-Dashed stages are optional: **VoicemailDetector** (outbound), **KnowledgeRetrieval** (auto-mode RAG), **video avatar** (HeyGen/Tavus, WebRTC + cascade only). Transcript taps sit after STT and after the LLM to record both sides.
+Dashed stages are optional: **VoicemailDetector** (outbound), **KnowledgeRetrieval** (auto-mode RAG), **video avatar** (HeyGen/Tavus, WebRTC only; on speech-to-speech it follows the realtime model). Transcript taps sit after STT and after the LLM to record both sides.
 
 ### Speech-to-Speech (~300ms processing)
 
