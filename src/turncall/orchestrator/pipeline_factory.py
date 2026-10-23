@@ -1393,7 +1393,7 @@ def _create_avatar_service(
 
     provider = avatar.provider
     if provider not in AVATAR_PROVIDERS:
-        # The API's schema refuses one; nothing to name in `avatar.unavailable`.
+        # `avatar_gate` records `unknown_provider` and builds none (#402).
         logger.warning("Unknown avatar provider '{p}'; skipping", p=provider)
         return None
     key = credentials.api_key(provider)

@@ -34,7 +34,7 @@ Tavus needs `TAVUS_API_KEY` + a `replica_id`; `persona_id` defaults to
 ## Update: an Avatar never ends the call (#402)
 
 An Avatar that cannot show — the call is not a browser call, the id is
-missing, the provider refused the session or it stopped mid-call —
+missing, a call-init inline Agent names a provider TurnCall has no Avatar for, the provider refused the session or it stopped mid-call —
 leaves the call running as voice, and the call's event log says why in a
 stored-only `avatar.unavailable` `{provider, reason}`. The transport gate
 above now records its reason instead of only logging it

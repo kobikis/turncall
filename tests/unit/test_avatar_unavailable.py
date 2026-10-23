@@ -126,6 +126,7 @@ def test_the_reasons_are_the_closed_set_consoles_read() -> None:
     assert {str(r) for r in AvatarUnavailableReason} == {
         "transport",
         "missing_id",
+        "unknown_provider",
         "session_refused",
         "session_ended",
     }
@@ -139,6 +140,20 @@ class TestTheBuildSaysWhyItBuiltNoAvatar:
             (HEYGEN, {}, False, "transport"),
             ({"enabled": True, "provider": "heygen"}, {}, True, "missing_id"),
             ({"enabled": True, "provider": "tavus"}, {}, True, "missing_id"),
+            # The API's schema refuses one; a call-init inline Agent reaches
+            # the build without it.
+            (
+                {"enabled": True, "provider": "d-id", "avatar_id": "a1"},
+                {},
+                True,
+                "unknown_provider",
+            ),
+            (
+                {"enabled": True, "provider": "d-id", "avatar_id": "a1"},
+                {"pipeline_mode": "s2s", "s2s": {"provider": "openai"}},
+                True,
+                "unknown_provider",
+            ),
         ],
     )
     async def test_records_the_reason_once(

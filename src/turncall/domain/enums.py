@@ -160,6 +160,9 @@ class AvatarUnavailableReason(StrEnum):
     TRANSPORT = "transport"
     # HeyGen with no avatar_id, Tavus with no replica_id.
     MISSING_ID = "missing_id"
+    # A provider TurnCall has no Avatar for. The API refuses one; a call-init
+    # inline Agent is not checked by it.
+    UNKNOWN_PROVIDER = "unknown_provider"
     # The provider refused the session, or never put the Avatar in it.
     SESSION_REFUSED = "session_refused"
     # The session stopped mid-call (a sandbox cutoff, a dropped connection).

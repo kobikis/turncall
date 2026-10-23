@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from turncall.domain.enums import AvatarUnavailableReason, CallEventType
+from turncall.domain.providers import AVATAR_PROVIDERS
 from turncall.orchestrator.turn_metrics import store_call_event
 
 if TYPE_CHECKING:
@@ -43,6 +44,8 @@ def skip_reason(
     """
     if not carries_video:
         return AvatarUnavailableReason.TRANSPORT
+    if config.avatar.provider not in AVATAR_PROVIDERS:
+        return AvatarUnavailableReason.UNKNOWN_PROVIDER
     if missing_id(config.avatar):
         return AvatarUnavailableReason.MISSING_ID
     return None
