@@ -24,10 +24,7 @@ def _sessions_built(mocker) -> list:
 
     def counting(*args, **kwargs):
         session = real(*args, **kwargs)
-        # Smart Turn's only: an S2S call also builds Silero, one per call as on
-        # cascade, to time its turns (`CallerSpeechTimer`).
-        if "silero" not in str(args[0] if args else kwargs).lower():
-            built.append(session)
+        built.append(session)
         return session
 
     mocker.patch.object(onnxruntime, "InferenceSession", counting)
@@ -95,6 +92,9 @@ def test_s2s_calls_on_server_vad_share_the_model_too(mocker) -> None:
     from turncall.orchestrator import pipeline_factory
 
     mocker.patch.object(pipeline_factory, "Pipeline", mocker.MagicMock())
+    # The call's own Silero, which times its turns (#405), is one per call as on
+    # cascade; only Smart Turn is counted here.
+    mocker.patch("pipecat.audio.vad.silero.SileroVADAnalyzer")
     built = _sessions_built(mocker)
 
     for _ in range(3):

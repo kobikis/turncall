@@ -18,10 +18,18 @@ from pipecat.audio.vad.vad_analyzer import VADParams, VADState
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     InputAudioRawFrame,
+    InterruptionFrame,
+    UserStartedSpeakingFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
-from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregator
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregator,
+    LLMUserAggregatorParams,
+)
 from pipecat.services.llm_service import LLMService
 from pipecat.tests.utils import SleepFrame, run_test
 
@@ -76,6 +84,42 @@ async def test_it_reports_the_caller_starting_and_stopping_downstream_only() -> 
     )
     stopped = next(f for f in down if isinstance(f, VADUserStoppedSpeakingFrame))
     assert stopped.stop_secs == 0.2
+
+
+async def test_a_caller_who_mutes_mid_word_has_stopped() -> None:
+    # No audio while speaking (a muted mic): pipecat's VAD controller forces
+    # the stop once it is armed, so the turn is not left open until audio
+    # comes back.
+    timer = CallerSpeechTimer(_ScriptedVAD([VADState.SPEAKING]), audio_idle_timeout=0.1)
+    await run_test(
+        timer,
+        frames_to_send=[_audio(), SleepFrame(0.4)],
+        expected_down_frames=[
+            VADUserStartedSpeakingFrame,
+            InputAudioRawFrame,
+            VADUserStoppedSpeakingFrame,
+        ],
+    )
+
+
+async def test_the_user_aggregator_never_acts_on_the_timers_frames() -> None:
+    # As in the S2S pipeline: the aggregator, then the timer. The aggregator is
+    # where a turn starts and an interruption is broadcast; the caller's speech
+    # reaching it as VAD frames would do both.
+    pair = LLMContextAggregatorPair(
+        context=LLMContext(),
+        user_params=LLMUserAggregatorParams(user_idle_timeout=10),
+        realtime_service_mode=True,
+    )
+    timer = CallerSpeechTimer(_ScriptedVAD([VADState.SPEAKING, VADState.QUIET]))
+    down, up = await run_test(
+        Pipeline([pair.user(), timer]),
+        frames_to_send=[_audio(), _audio(), SleepFrame(0.1)],
+    )
+    seen = [type(f) for f in [*down, *up]]
+    assert VADUserStoppedSpeakingFrame in seen
+    assert UserStartedSpeakingFrame not in seen
+    assert InterruptionFrame not in seen
 
 
 async def test_an_s2s_turn_is_measured() -> None:
