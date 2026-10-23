@@ -879,6 +879,14 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **One goodbye when gpt-live-1 says its own** (#262). A client delegate that
+  ends the call still had its goodbye voiced after gpt-live-1 had already
+  answered the caller's "bye" itself, which it does at times despite being told
+  to leave the goodbye to the delegate. When what gpt-live-1 said since the
+  caller last spoke reads as a goodbye, the delegate's is dropped and the call
+  ends after gpt-live-1's. English phrases only: a goodbye in another language
+  is still said twice.
+
 - **Speech-to-speech calls record turn latency** (#405). A realtime service on
   `server_vad` (the default) decides turns on its own servers, so TurnCall
   built no VAD on those calls, and pipecat's latency observer — which starts a

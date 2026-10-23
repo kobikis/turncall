@@ -38,12 +38,16 @@ voices is a reply of its own and the one the call ends after. With nothing of
 the delegate's to relay, the call ends after the reply playing: pipecat's
 stand-in sentences go as thinking, not as the call's last words. A delegation
 that started with the call already ending did not end it, and is relayed as
-any other. `test_client_delegate_one_goodbye.py`.
+any other. gpt-live-1 still answers a caller's "bye" itself at times, against
+its instructions (call f10f0cc0): when what it said since the caller last spoke
+reads as a goodbye, the delegate's is dropped and the call ends after its own.
+`test_client_delegate_one_goodbye.py`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -69,6 +73,14 @@ _TERMINAL = ("response.completed", "response.failed", "response.incomplete")
 # How long the delegate's goodbye waits for it to finish before it is said
 # anyway: past this the delegate is stuck, and the caller is in silence.
 _GOODBYE_HOLD_SECS = 5.0
+# gpt-live-1 saying goodbye in its own words. ponytail: English phrases only; a
+# goodbye in another language is missed and the delegate's is said too, as
+# before. Upgrade path: ask gpt-live-1 to mark it, or classify the turn.
+_FAREWELL = re.compile(
+    r"\b(?:good)?bye\b|\bfarewell\b|\btake care\b"
+    r"|\bhave a (?:\w+ )?(?:day|evening|night|weekend)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -112,6 +124,8 @@ class DelegationTrackingLiveService(OpenAILiveLLMService):
         self._starting: dict[asyncio.Task[Any] | None, str] = {}
         # Responses delegations in flight, by id: when each started.
         self._responses_started: dict[str, float] = {}
+        # What gpt-live-1 has said since the caller last started speaking.
+        self._said_since_caller = ""
 
     @property
     def delegate_llm(self) -> Any:
@@ -273,11 +287,27 @@ class DelegationTrackingLiveService(OpenAILiveLLMService):
         gate = self._ending_gate()
         if gate is None or not tracked.goodbye:
             return
+        if _FAREWELL.search(self._said_since_caller):
+            # gpt-live-1 answered the caller's goodbye itself: a second one is
+            # the double goodbye, so the call ends after its own.
+            tracked.goodbye.clear()
+            tracked.goodbye_said = True
+            await gate.queue_frame(HangupArmFrame(current_reply=True))
+            return
         text = "\n\n".join(tracked.goodbye)
         tracked.goodbye.clear()
         tracked.goodbye_said = True
         await gate.arm_when_quiet()
         await super()._send_context_append(delegation_id, text, spoken=True)
+
+    async def _open_turn(self, role: str) -> None:
+        if role == "user":
+            self._said_since_caller = ""
+        await super()._open_turn(role)
+
+    async def _push_assistant_text(self, text: str) -> None:
+        self._said_since_caller += text
+        await super()._push_assistant_text(text)
 
     async def push_error(
         self,
