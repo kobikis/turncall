@@ -22,9 +22,10 @@ rule `redact_json` applies), except
 - at the top level, TurnCall's own structural and identifier fields: ids,
   timestamps, URLs, enum-valued fields, provider and tool names
   (`_structural`), plus a few event-specific ones (`_IDENTIFIERS_BY_EVENT`:
-  `provider.failover`'s `from`/`to`, `call.ended`'s `reason`). They carry no
-  caller text, and a detector could mangle them (a digit run in a UUID read
-  as a phone number, a provider name read as an ORGANIZATION);
+  `provider.failover`'s `from`/`to`, `call.ended`'s and `avatar.unavailable`'s
+  `reason`). They carry no caller text, and a detector could mangle them (a
+  digit run in a UUID read as a phone number, a provider name read as an
+  ORGANIZATION);
 - at the top level, a number: TurnCall's own measure (`duration_ms`, a
   count), never what the caller said;
 - anywhere, a value that is a UUID or an ISO-8601 timestamp.
@@ -191,6 +192,7 @@ _IDENTIFIERS_BY_EVENT: dict[str, frozenset[str]] = {
     "provider.failover": frozenset({"from", "to"}),
     "call.failed": frozenset({"reason"}),
     "call.rejected": frozenset({"reason"}),
+    "avatar.unavailable": frozenset({"reason"}),
 }
 _UUID = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"

@@ -30,6 +30,20 @@ back as frames into our pipeline. The **user-facing** transport stays SmallWebRT
 Tavus needs `TAVUS_API_KEY` + a `replica_id`; `persona_id` defaults to
 `pipecat-stream` (lip-syncs Pipecat TTS).
 
+## Update: an Avatar never ends the call (#402)
+
+An Avatar that cannot show — the call is not a browser call, the Agent is S2S,
+the id is missing, the provider refused the session or it stopped mid-call —
+leaves the call running as voice, and the call's event log says why in a
+stored-only `avatar.unavailable` `{provider, reason}`. The transport and S2S
+gates above now record their reason instead of only logging it
+(`orchestrator/avatar.avatar_gate`, given `carries_video` by the WebRTC entry
+point alone). pipecat's services treat a refused or dropped session as a log
+line and keep consuming the TTS audio, so the caller heard nothing; TurnCall
+subclasses both to watch the Avatar (a session at setup, its video arriving,
+the Avatar leaving its room) and pass the spoken frames on once it is gone
+(`orchestrator/avatar_watch.py`).
+
 ## Known ceiling
 
 The HeyGen `aiohttp.ClientSession` is created in `pipeline_factory` and not

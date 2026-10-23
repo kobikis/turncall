@@ -187,6 +187,23 @@ async def test_a_payload_with_no_text_never_reaches_the_detector(
     assert redaction.ENGINE._pool is None
 
 
+async def test_why_an_avatar_did_not_show_never_reaches_the_detector(
+    monkeypatch,
+) -> None:
+    """`avatar.unavailable` is TurnCall's own vocabulary, provider and reason
+    alike (#402): nothing in it for a detector to read."""
+    built: list[str] = []
+    _use(monkeypatch, lambda: built.append("built") or _Marks())
+    payload = {"provider": "heygen", "reason": "session_refused"}
+
+    out = await redaction.redact_payload(
+        payload, POLICY, event_type="avatar.unavailable"
+    )
+
+    assert out == payload
+    assert built == []
+
+
 async def test_identifiers_read_back_as_data_are_not_analysed(detector) -> None:
     """A provider or tool name is no ORGANIZATION: `provider.failover`'s
     `from`/`to` and `tool_name` are TurnCall's own vocabulary, while a reason

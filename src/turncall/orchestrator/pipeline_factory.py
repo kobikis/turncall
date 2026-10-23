@@ -20,11 +20,14 @@ from pipecat.services.openai.llm import OpenAILLMService
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.config.settings import BYOMSettings, PipecatSettings
+from turncall.domain.enums import AvatarUnavailableReason
 from turncall.domain.models import (
     AgentConfig,
     LLMConfig,
     resolve_delegation,
 )
+from turncall.domain.providers import AVATAR_PROVIDERS
+from turncall.orchestrator.avatar import AvatarUnavailability
 from turncall.orchestrator.deepgram_flux import (
     MIXED_FLUX_GROUP,
     create_flux_stt,
@@ -34,7 +37,7 @@ from turncall.orchestrator.deepgram_flux import (
     mixes_flux,
 )
 from turncall.orchestrator.knowledge_processor import KnowledgeTool, knowledge_tool
-from turncall.orchestrator.observability import ObservabilityProcessor
+from turncall.orchestrator.observability import ObservabilityProcessor, _spawn
 from turncall.services.credentials import Credentials
 from turncall.services.llm_models import resolve_llm_model
 from turncall.services.tool_mocks import ToolMocks
@@ -1367,13 +1370,21 @@ def _build_tools_schema(
     return ToolsSchema(standard_tools=functions)
 
 
-def _create_avatar_service(avatar: Any, credentials: Credentials) -> Any:
+def _create_avatar_service(
+    avatar: Any,
+    credentials: Credentials,
+    unavailable: AvatarUnavailability | None = None,
+    **watch: float,
+) -> Any:
     """Create the video avatar service (HeyGen or Tavus).
 
     Both are Pipecat AIServices that consume TTS audio and emit avatar video
     frames into the pipeline (their provider-specific WebRTC leg — LiveKit for
-    HeyGen, Daily for Tavus — is internal). Returns None if the required key /
-    field is missing (logged), so the call still runs without the avatar.
+    HeyGen, Daily for Tavus — is internal). Each is watched, and falls back to
+    voice when its provider refuses or drops the session (`avatar_watch`), so
+    an Avatar never ends the call; nor does one that could not be built at all,
+    which is recorded as refused. Returns None when there is no Avatar to put
+    in the pipeline. The build has already checked the id (`avatar_gate`).
 
     Uses the shared process-wide aiohttp session (closed on app shutdown) —
     pipecat borrows it and never closes it, so a per-call session would leak.
@@ -1381,52 +1392,50 @@ def _create_avatar_service(avatar: Any, credentials: Credentials) -> Any:
     from turncall.adapters.aiohttp_client import get_aiohttp_session
 
     provider = avatar.provider
-    if provider == "heygen":
-        from pipecat.services.heygen.api_liveavatar import LiveAvatarNewSessionRequest
-        from pipecat.services.heygen.client import ServiceType
-        from pipecat.services.heygen.video import HeyGenVideoService
+    if provider not in AVATAR_PROVIDERS:
+        # The API's schema refuses one; nothing to name in `avatar.unavailable`.
+        logger.warning("Unknown avatar provider '{p}'; skipping", p=provider)
+        return None
+    key = credentials.api_key(provider)
+    if not key:
+        # The key check fails a call before this (missing_keys); an eval skips it.
+        logger.warning("Avatar enabled but no {p} key; skipping", p=provider)
+        return None
+    try:
+        from turncall.orchestrator import avatar_watch
 
-        key = credentials.api_key("heygen")
-        if not key:
-            logger.warning(
-                "Avatar enabled but no HeyGen key (project credential or "
-                "HEYGEN_LIVE_AVATAR_API_KEY); skipping"
+        if provider == "heygen":
+            from pipecat.services.heygen.api_liveavatar import (
+                LiveAvatarNewSessionRequest,
             )
-            return None
-        logger.info("Avatar enabled: HeyGen {aid}", aid=avatar.avatar_id)
-        return HeyGenVideoService(
-            api_key=key,
-            service_type=ServiceType.LIVE_AVATAR,
-            session=get_aiohttp_session(),
-            session_request=LiveAvatarNewSessionRequest(
-                is_sandbox=avatar.is_sandbox,
-                avatar_id=avatar.avatar_id,
-            ),
-        )
+            from pipecat.services.heygen.client import ServiceType
 
-    if provider == "tavus":
-        from pipecat.services.tavus.video import TavusVideoService
-
-        key = credentials.api_key("tavus")
-        if not key:
-            logger.warning(
-                "Avatar enabled but no Tavus key (project credential or "
-                "TAVUS_API_KEY); skipping"
+            logger.info("Avatar enabled: HeyGen {aid}", aid=avatar.avatar_id)
+            return avatar_watch.WatchedHeyGenVideoService(
+                api_key=key,
+                service_type=ServiceType.LIVE_AVATAR,
+                session=get_aiohttp_session(),
+                session_request=LiveAvatarNewSessionRequest(
+                    is_sandbox=avatar.is_sandbox,
+                    avatar_id=avatar.avatar_id,
+                ),
+                unavailable=unavailable,
+                **watch,
             )
-            return None
-        if not avatar.replica_id:
-            logger.warning("Tavus avatar requires replica_id; skipping")
-            return None
         logger.info("Avatar enabled: Tavus {rid}", rid=avatar.replica_id)
-        return TavusVideoService(
+        return avatar_watch.WatchedTavusVideoService(
             api_key=key,
             replica_id=avatar.replica_id,
             persona_id=avatar.persona_id,
             session=get_aiohttp_session(),
+            unavailable=unavailable,
+            **watch,
         )
-
-    logger.warning("Unknown avatar provider '{p}'; skipping", p=provider)
-    return None
+    except Exception:
+        logger.exception("avatar_build_failed", provider=provider)
+        if unavailable is not None:
+            _spawn(unavailable.record(AvatarUnavailableReason.SESSION_REFUSED))
+        return None
 
 
 # --- The RTVI server half, eval path only (ADR-0018) ---
@@ -1528,7 +1537,8 @@ def create_pipeline(
 ) -> Pipeline:
     """Build a Pipecat pipeline from an AgentConfig.
 
-    avatar_enabled is set by the WebRTC caller (avatar is WebRTC + cascade only).
+    avatar_enabled is the build's decision (`avatar_gate`): a browser call
+    with a cascade Agent whose Avatar has its id.
     """
     if config.pipeline_mode == "s2s":
         return _create_s2s_pipeline(
@@ -1781,11 +1791,15 @@ def create_pipeline(
             logger.info("KB auto-retrieval enabled for {n} KBs", n=len(auto_kb_ids))
 
     # Video avatar: consumes TTS audio, emits avatar video. Sits right before
-    # transport.output(). WebRTC + cascade only — gated by the avatar_enabled
-    # flag from the caller.
+    # transport.output(). WebRTC + cascade only — gated by avatar_enabled, the
+    # build's decision; once running it falls back to voice (`avatar_watch`).
     avatar = None
     if avatar_enabled and config.avatar.enabled:
-        avatar = _create_avatar_service(config.avatar, credentials)
+        avatar = _create_avatar_service(
+            config.avatar,
+            credentials,
+            AvatarUnavailability(call_context, config.avatar.provider),
+        )
 
     # App-side recording: captures merged user+bot audio just BEFORE
     # transport.output() (which consumes audio frames and doesn't push them

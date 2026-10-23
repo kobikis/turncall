@@ -272,16 +272,17 @@ class TestCredentialsReachTheServices:
     @pytest.mark.parametrize(
         ("provider", "module", "cls", "extra"),
         [
+            # pipecat's services, watched for a session that goes (#402).
             (
                 "heygen",
-                "pipecat.services.heygen.video",
-                "HeyGenVideoService",
+                "turncall.orchestrator.avatar_watch",
+                "WatchedHeyGenVideoService",
                 {"avatar_id": "a1"},
             ),
             (
                 "tavus",
-                "pipecat.services.tavus.video",
-                "TavusVideoService",
+                "turncall.orchestrator.avatar_watch",
+                "WatchedTavusVideoService",
                 {"replica_id": "r1"},
             ),
         ],

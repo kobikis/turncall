@@ -102,6 +102,8 @@ class CallEventType(StrEnum):
     METRICS_TURN = "metrics.turn"
     # One per gpt-live-1 delegation (#247). Stored, never dispatched.
     DELEGATION_COMPLETED = "delegation.completed"
+    # Why a call's Avatar did not show (#402). Stored, never dispatched.
+    AVATAR_UNAVAILABLE = "avatar.unavailable"
 
     # Tools
     TOOL_CALLED = "tool.called"
@@ -148,6 +150,22 @@ class CallEventType(StrEnum):
     PLAYBACK_UNMUTED = "playback.unmuted"
     RECORDING_PAUSED = "recording.paused"
     RECORDING_RESUMED = "recording.resumed"
+
+
+class AvatarUnavailableReason(StrEnum):
+    """Why a call's Avatar did not show: `avatar.unavailable`'s `reason` (#402).
+    A closed set, read by consoles."""
+
+    # The call cannot carry video: not a browser (WebRTC) call.
+    TRANSPORT = "transport"
+    # A speech-to-speech Agent, which has no TTS stage for the Avatar to read.
+    PIPELINE_MODE = "pipeline_mode"
+    # HeyGen with no avatar_id, Tavus with no replica_id.
+    MISSING_ID = "missing_id"
+    # The provider refused the session, or never put the Avatar in it.
+    SESSION_REFUSED = "session_refused"
+    # The session stopped mid-call (a sandbox cutoff, a dropped connection).
+    SESSION_ENDED = "session_ended"
 
 
 class PipelineMode(StrEnum):
