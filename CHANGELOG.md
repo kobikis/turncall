@@ -13,6 +13,23 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Avatars on speech-to-speech Agents** (#401). A HeyGen or Tavus Avatar now
+  runs on an S2S Agent's browser call — OpenAI Realtime, gpt-live-1, Gemini
+  Live, Nova Sonic and Grok Voice — instead of being skipped. It sits after the
+  realtime service and before the output, so ambience still mixes under it.
+  gpt-live-1 streams its audio continuously, silence included, so
+  `SpeechForTheAvatar` turns its speech into replies the Avatar lip-syncs (a
+  reply ends at a 0.35 s silence). gpt-live-1 has no signal for a reply it
+  stops for the caller: the Avatar plays out what it already took (HeyGen: up
+  to about a second). Still browser calls only.
+- **Why a call has no Avatar** (#402). A stored-only call event,
+  `avatar.unavailable` `{provider, reason}` (never sent to webhook
+  subscribers, none in an eval), read with `GET
+  /v1/calls/{id}/events?event_type=avatar.unavailable`. Reasons: `transport`
+  (not a browser call), `missing_id`, `unknown_provider`, `session_refused`
+  (the session did not start, or no video within 20 s), `session_ended` (the
+  Avatar left its room, or its video stalled for 5 s — the LiveAvatar
+  sandbox's one-minute cutoff).
 - **Grok Voice as an S2S provider** (#386, #387, #388). `pipeline_mode: "s2s"`
   with `s2s.provider: "xai"`, on its own `xai` account (the project's `xai`
   credential, then `XAI_API_KEY`). The model is pinned to `grok-voice-3.0`
@@ -862,6 +879,20 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **An Avatar that fails no longer silences the call** (#402). pipecat's
+  HeyGen and Tavus services only logged a refused or dropped session and kept
+  taking the agent's audio, so the caller heard nothing. The call now carries
+  on as voice: the agent's speech goes straight to the output and anything
+  the Avatar still sends is dropped, so nothing is heard twice.
+- **A HeyGen Avatar stops on a barge-in, not on any caller sound** (#401). It
+  cut its reply on `UserStartedSpeakingFrame`, so a backchannel the agent
+  talks through ("mm-hmm") silenced the face on gpt-live-1 and on cascade with
+  `interruption_enabled: false`. It now stops on `InterruptionFrame`, as Tavus
+  does.
+- **An inline Agent's unknown Avatar provider** (#402). A call-init inline
+  config can name any provider; a cascade call used to fail asking for its
+  key, and an S2S one sent a video track that never showed. It is skipped and
+  recorded as `unknown_provider`.
 - **The S2S idle check-in and an eval's typed turns reach OpenAI Realtime**
   (#390). Both are messages appended at the pipeline's source, and the user
   aggregator took them, so pipecat's Realtime service sent nothing. A quiet
