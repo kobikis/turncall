@@ -1178,19 +1178,17 @@ def _build_vad_analyzer(
     Flux, which decides the turn itself (#204): VAD stays at 0.2 then, deciding
     nothing, as the point the latency observer measures from.
     """
-    from pipecat.audio.vad.silero import SileroVADAnalyzer
-    from pipecat.audio.vad.vad_analyzer import VAD_STOP_SECS, VADParams
+    from pipecat.audio.vad.vad_analyzer import VAD_STOP_SECS
+
+    from turncall.orchestrator.turn_detection import silero_vad
 
     decided_elsewhere = smart_turn and (
         config.smart_turn_detection or _flux_owns_turn(config)
     )
     stop_secs = VAD_STOP_SECS if decided_elsewhere else config.silence_timeout_ms / 1000
-    params: dict[str, Any] = {"stop_secs": stop_secs}
-    confidence = getattr(pipecat_settings, "vad_confidence_threshold", None)
-    if confidence is not None:
-        params["confidence"] = confidence
-
-    return SileroVADAnalyzer(sample_rate=sample_rate, params=VADParams(**params))
+    return silero_vad(
+        sample_rate=sample_rate, stop_secs=stop_secs, pipecat_settings=pipecat_settings
+    )
 
 
 def _build_turn_strategies(config: AgentConfig, *, smart_turn: bool) -> Any | None:
@@ -2080,6 +2078,9 @@ def _create_s2s_pipeline(
 
     before_user, after_user = around_the_user_aggregator(config.s2s.provider)
 
+    # When the caller stops, for the latency observer (#405).
+    from turncall.orchestrator.caller_speech_timer import caller_speech_timers
+
     # Build processor list based on turn detection mode
     # context_aggregator.user() is always needed — it sends the initial
     # LLMContextFrame that triggers the Realtime WebSocket connection.
@@ -2089,6 +2090,14 @@ def _create_s2s_pipeline(
         *before_user,
         context_aggregator.user(),
         *after_user,
+        # The caller's stop, for the latency observer: the service decides the
+        # turn, so nothing else on `server_vad` reports it.
+        *caller_speech_timers(
+            config,
+            call_context,
+            sample_rate=audio_sample_rate,
+            pipecat_settings=pipecat_settings,
+        ),
         *([input_resampler] if input_resampler else []),
         customer_tap,
         s2s_llm,

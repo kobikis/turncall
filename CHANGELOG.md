@@ -879,6 +879,14 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **Speech-to-speech calls record turn latency** (#405). A realtime service on
+  `server_vad` (the default) decides turns on its own servers, so TurnCall
+  built no VAD on those calls, and pipecat's latency observer — which starts a
+  turn when VAD hears the caller stop — never measured one: no `metrics.turn`,
+  a null `latency_summary` on `call.ended`, and "no latency measured" in a
+  console. Silero now runs on those calls for the observer alone, past the
+  user aggregator with its frames sent downstream only, so it times each turn
+  (the caller's silence to the agent's first audio) and decides nothing.
 - **An Avatar that fails no longer silences the call** (#402). pipecat's
   HeyGen and Tavus services only logged a refused or dropped session and kept
   taking the agent's audio, so the caller heard nothing. The call now carries
