@@ -45,6 +45,14 @@ def stored() -> Any:
         yield store
 
 
+def _said(who: str, text: str) -> events.TranscriptDeltaEvent:
+    """A fragment of what the caller or gpt-live-1 said."""
+    kind = "input" if who == "caller" else "output"
+    return events.TranscriptDeltaEvent(
+        type=f"session.{kind}_transcript.delta", delta=text, start_ms=0, end_ms=0
+    )
+
+
 async def _run(
     *reported: Any, ending: bool = True, ended_before: bool = False
 ) -> list[Any]:
@@ -79,6 +87,8 @@ async def _run(
             if event == "wait":
                 for _ in range(5):
                     await asyncio.sleep(0)
+            elif isinstance(event, tuple):
+                await live._handle_evt_transcript_delta(_said(*event))
             else:
                 await live._on_backend_event(event)
         await _settle(live)
@@ -176,3 +186,35 @@ async def test_a_delegation_that_started_after_the_end_did_not_end_the_call(
     spoke = await _run(BackendOutput(text="Noted."), BackendIdle(), ended_before=True)
     assert spoke == [(_COMMENTARY, "Noted.")]
     assert [p["outcome"] for p in _payloads(stored)] == ["failed", "answered"]
+
+
+_GOODBYE = BackendOutput(text="Thank you! Have a wonderful evening, goodbye!")
+
+
+async def test_a_goodbye_gpt_live_1_already_said_is_not_said_twice(
+    stored: AsyncMock,
+) -> None:
+    """It answers the caller's "bye" itself at times, against its instructions
+    (call f10f0cc0): the delegate's goodbye is dropped, and the call ends after
+    the one gpt-live-1 said."""
+    seen = await _run(("gpt-live-1", "Tsk. Bye!"), _GOODBYE, BackendIdle())
+
+    assert seen == [("arm", True)]
+    assert [p["outcome"] for p in _payloads(stored)] == ["answered"]
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        # A filler is not a goodbye.
+        [("gpt-live-1", "One moment.")],
+        # A goodbye the caller spoke after was not the answer to theirs.
+        [("gpt-live-1", "Have a lovely evening!"), ("caller", "Oh, one more thing")],
+    ],
+)
+async def test_otherwise_the_delegates_goodbye_is_said(
+    stored: AsyncMock, said: list[tuple[str, str]]
+) -> None:
+    seen = await _run(*said, _GOODBYE, BackendIdle())
+
+    assert seen == ["arm when quiet", (_COMMENTARY, _GOODBYE.text)]
