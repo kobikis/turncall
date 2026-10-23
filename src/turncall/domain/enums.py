@@ -158,10 +158,6 @@ class AvatarUnavailableReason(StrEnum):
 
     # The call cannot carry video: not a browser (WebRTC) call.
     TRANSPORT = "transport"
-    # A speech-to-speech Agent. No longer recorded: since #401 the Avatar reads
-    # the realtime service's audio. Kept so a console reading an older call's
-    # event log can still name it.
-    PIPELINE_MODE = "pipeline_mode"
     # HeyGen with no avatar_id, Tavus with no replica_id.
     MISSING_ID = "missing_id"
     # The provider refused the session, or never put the Avatar in it.

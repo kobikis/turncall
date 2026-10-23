@@ -33,11 +33,11 @@ Tavus needs `TAVUS_API_KEY` + a `replica_id`; `persona_id` defaults to
 
 ## Update: an Avatar never ends the call (#402)
 
-An Avatar that cannot show — the call is not a browser call, the Agent is S2S,
-the id is missing, the provider refused the session or it stopped mid-call —
+An Avatar that cannot show — the call is not a browser call, the id is
+missing, the provider refused the session or it stopped mid-call —
 leaves the call running as voice, and the call's event log says why in a
-stored-only `avatar.unavailable` `{provider, reason}`. The transport and S2S
-gates above now record their reason instead of only logging it
+stored-only `avatar.unavailable` `{provider, reason}`. The transport gate
+above now records its reason instead of only logging it
 (`orchestrator/avatar.avatar_gate`, given `carries_video` by the WebRTC entry
 point alone). pipecat's services treat a refused or dropped session as a log
 line and keep consuming the TTS audio, so the caller heard nothing; TurnCall
@@ -53,8 +53,7 @@ OpenAI Realtime, Gemini Live, Nova Sonic and Grok Voice all speak it
 themselves. So on S2S the Avatar sits after the realtime service (after its
 output resampler; both providers resample to their own rate) and before
 `SpeechBeforeAmbience` and `transport.output()`, where it sits after TTS in
-cascade. The build no longer records `pipeline_mode`; the reason stays in the
-enum for the calls that carry it.
+cascade. So the build skips no S2S Avatar, and records no reason for one.
 
 gpt-live-1 (`openai_live`) is the one service that does not: it streams
 `SpeechOutputAudioRawFrame` continuously, silence included, at real-time pace.

@@ -118,6 +118,19 @@ def _agent(avatar: dict[str, Any], **config: Any) -> AgentConfig:
     return AgentConfig.model_validate({"avatar": avatar, **config})
 
 
+def test_the_reasons_are_the_closed_set_consoles_read() -> None:
+    # builder-web names each one; a reason added or dropped here is one a
+    # console cannot name, so the set changes with the console's.
+    from turncall.domain.enums import AvatarUnavailableReason
+
+    assert {str(r) for r in AvatarUnavailableReason} == {
+        "transport",
+        "missing_id",
+        "session_refused",
+        "session_ended",
+    }
+
+
 class TestTheBuildSaysWhyItBuiltNoAvatar:
     @pytest.mark.parametrize(
         ("avatar", "config", "carries_video", "reason"),
