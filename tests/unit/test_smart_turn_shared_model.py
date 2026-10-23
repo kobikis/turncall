@@ -24,7 +24,10 @@ def _sessions_built(mocker) -> list:
 
     def counting(*args, **kwargs):
         session = real(*args, **kwargs)
-        built.append(session)
+        # Smart Turn's only: an S2S call also builds Silero, one per call as on
+        # cascade, to time its turns (`CallerSpeechTimer`).
+        if "silero" not in str(args[0] if args else kwargs).lower():
+            built.append(session)
         return session
 
     mocker.patch.object(onnxruntime, "InferenceSession", counting)

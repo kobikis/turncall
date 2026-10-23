@@ -2079,6 +2079,7 @@ def _create_s2s_pipeline(
     from turncall.orchestrator.realtime_appends import around_the_user_aggregator
 
     before_user, after_user = around_the_user_aggregator(config.s2s.provider)
+    from turncall.orchestrator.caller_speech_timer import caller_speech_timer
 
     # Build processor list based on turn detection mode
     # context_aggregator.user() is always needed — it sends the initial
@@ -2089,6 +2090,14 @@ def _create_s2s_pipeline(
         *before_user,
         context_aggregator.user(),
         *after_user,
+        # The caller's stop, for the latency observer: the service decides the
+        # turn, so nothing else on `server_vad` reports it.
+        *caller_speech_timer(
+            config,
+            call_context,
+            sample_rate=audio_sample_rate,
+            pipecat_settings=pipecat_settings,
+        ),
         *([input_resampler] if input_resampler else []),
         customer_tap,
         s2s_llm,

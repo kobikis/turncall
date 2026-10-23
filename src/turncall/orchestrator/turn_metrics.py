@@ -5,7 +5,9 @@ TTFB every service reported and the user-to-bot latency — until now only a log
 line. The recorder turns each cycle into one `metrics.turn` call event.
 
 An observer rather than a processor: it attaches to the task, so one
-implementation sees cascade and S2S alike (ADR-0010). The write goes off the
+implementation sees cascade and S2S alike (ADR-0010). It starts a turn on VAD's
+report that the caller stopped, which an S2S call on `server_vad` has only
+because `CallerSpeechTimer` runs VAD for it. The write goes off the
 audio path; losing a record on teardown is acceptable, stalling audio is not
 (ADR-0004). `metrics.turn` is never dispatched to webhook subscribers — the
 latency summary on `call.ended` is the subscriber's view.
