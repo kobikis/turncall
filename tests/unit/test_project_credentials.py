@@ -67,6 +67,17 @@ class TestCredentialResolution:
         assert _creds(deepgram="k").missing_keys(s2s) == ["openai"]
         assert _creds({"openai": {"api_key": "p"}}).missing_keys(s2s) == []
 
+    @pytest.mark.parametrize("pipeline_mode", ["cascade", "s2s"])
+    def test_missing_keys_asks_the_avatars_key(self, pipeline_mode) -> None:
+        # Since #401 a speech-to-speech Agent shows its Avatar too, so its key
+        # fails the call when missing, as on cascade (ADR-0020).
+        config = AgentConfig(
+            pipeline_mode=pipeline_mode,
+            avatar=AvatarConfig(enabled=True, avatar_id="a1"),
+        )
+        keys = _creds(deepgram="k", openai="k")
+        assert keys.missing_keys(config) == ["heygen"]
+
     def test_missing_keys_skips_keyless_and_aws(self) -> None:
         local = AgentConfig(llm=LLMConfig(provider="ollama"))
         assert _creds(deepgram="k").missing_keys(local) == []
