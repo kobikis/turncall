@@ -76,7 +76,7 @@ Every delivery is one envelope:
 | `eval.run.started` / `eval.run.completed` | Eval runs |
 | `campaign.started` / `campaign.completed` / `campaign.cancelled` | Campaigns |
 
-`metrics.turn` and `delegation.completed` are stored on the call's event log (`GET /v1/calls/{id}/events`) and never delivered.
+`metrics.turn`, `delegation.completed` and `avatar.unavailable` (why a call's video Avatar did not show; see [Video Avatar](/guides/video-avatar)) are stored on the call's event log (`GET /v1/calls/{id}/events`) and never delivered.
 
 Tool calls go to each tool's own `webhook_url` — see [Tools](/guides/tools).
 
