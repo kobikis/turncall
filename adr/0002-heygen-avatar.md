@@ -22,8 +22,8 @@ avatar video frames. Opt-in per agent via a minimal `AvatarConfig`
 
 ## Update: Tavus as a second provider
 
-`AvatarConfig.provider` now accepts `heygen` | `tavus` (`_create_avatar_service()`
-in `pipeline_factory`). Tavus is the higher-quality / lower-latency option
+`AvatarConfig.provider` now accepts `heygen` | `tavus` (`create_avatar_service()`
+in `orchestrator/avatar_stage.py`). Tavus is the higher-quality / lower-latency option
 (sub-600ms, 1080p). Note the `tavus` extra pulls `daily-python` — this does **not**
 contradict the "no Daily" decision above: Daily is Tavus's *internal* leg to its
 avatar servers (like HeyGen's internal LiveKit), and the avatar video still comes

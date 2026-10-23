@@ -665,7 +665,7 @@ TurnCall's SmallWebRTC transport carries the video to the browser.
 
 ### Key Files
 - `domain/models.py` — `AvatarConfig`; `api/v1/schemas/agents.py` — `AvatarConfigSchema` (required, or the field is dropped on API ingest)
-- `orchestrator/pipeline_factory.py` — `_create_avatar_service()` builds HeyGen/Tavus; `_avatar_stage` places it before `transport.output()` (after `tts`), `_s2s_avatar_stage` after the realtime service behind `SpeechForTheAvatar` (`orchestrator/avatar_speech.py`)
+- `orchestrator/avatar_stage.py` — `create_avatar_service()` builds HeyGen/Tavus; `avatar_stage` places it before `transport.output()` (after `tts`), `s2s_avatar_stage` after the realtime service behind `SpeechForTheAvatar` (`orchestrator/avatar_speech.py`)
 - `orchestrator/avatar.py` — `avatar_gate` (build or record why not), `AvatarUnavailability` (the event); `orchestrator/avatar_watch.py` — the watched services' fall back to voice
 - `orchestrator/transport_factory.py` — `video_out` enables live video on SmallWebRTC
 - `api/v1/webrtc.py` — the one transport that `carries_video`

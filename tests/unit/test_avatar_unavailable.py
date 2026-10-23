@@ -223,13 +223,13 @@ SPOKEN_TYPES = [TTSStartedFrame, TTSAudioRawFrame, TTSStoppedFrame]
 def _avatar(provider: str = "heygen", **timeouts: float) -> tuple[Any, CallContext]:
     """The call's Avatar service, as the build makes it."""
     from turncall.orchestrator.avatar import AvatarUnavailability
-    from turncall.orchestrator.pipeline_factory import _create_avatar_service
+    from turncall.orchestrator.avatar_stage import create_avatar_service
 
     ctx = _call_context()
     config = AvatarConfig(
         enabled=True, provider=provider, avatar_id="a1", replica_id="r1"
     )
-    service = _create_avatar_service(
+    service = create_avatar_service(
         config, CREDS, AvatarUnavailability(ctx, provider), **timeouts
     )
     return service, ctx
@@ -428,10 +428,10 @@ class TestAnAvatarThatStops:
 class TestNoneInAnEval:
     async def test_a_refused_session_records_nothing(self, heygen_refuses) -> None:
         from turncall.orchestrator.avatar import AvatarUnavailability
-        from turncall.orchestrator.pipeline_factory import _create_avatar_service
+        from turncall.orchestrator.avatar_stage import create_avatar_service
 
         ctx = _call_context(eval_run_id=uuid.uuid4())
-        service = _create_avatar_service(
+        service = create_avatar_service(
             AvatarConfig(enabled=True, avatar_id="a1"),
             CREDS,
             AvatarUnavailability(ctx, "heygen"),

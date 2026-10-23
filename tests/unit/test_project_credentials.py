@@ -29,6 +29,7 @@ from turncall.domain.models import (
 )
 from turncall.domain.providers import ROLE_PROVIDERS, account_for, accounts
 from turncall.orchestrator import pipeline_factory as pf
+from turncall.orchestrator.avatar_stage import create_avatar_service
 from turncall.orchestrator.s2s_config import create_s2s_service
 from turncall.services.credentials import Credentials
 from turncall.storage.repositories import credential_repo
@@ -301,9 +302,9 @@ class TestCredentialsReachTheServices:
     def test_avatar(self, monkeypatch, provider, module, cls, extra) -> None:
         mock = _ctor(monkeypatch, module, cls)
         avatar = AvatarConfig(enabled=True, provider=provider, **extra)
-        pf._create_avatar_service(avatar, _creds(PROJECT, **{provider: "platform"}))
+        create_avatar_service(avatar, _creds(PROJECT, **{provider: "platform"}))
         assert _key(mock) == f"project-{provider}"
-        assert pf._create_avatar_service(avatar, _creds()) is None
+        assert create_avatar_service(avatar, _creds()) is None
 
 
 @pytest.mark.asyncio
