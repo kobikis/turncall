@@ -517,7 +517,18 @@ audio, measured in the call's stereo [[call recording]] over a real carrier. Inc
 endpointing and the carrier leg, which [[turn metrics]] and the latency summary do
 not. The number TurnCall publishes. See ADR-0023.
 _Avoid_: "latency" unqualified when comparing with other platforms; "TTFB" (one
-stage's time to first byte).
+stage's time to first byte); a [[third-party benchmark]]'s "response time".
+
+**Third-party benchmark**:
+A comparison of voice-agent platforms that someone other than TurnCall designs,
+runs and scores: today Cekura's v1 agent benchmark. Its figures are its own:
+Cekura's **response time** is a mean it measures on the calls it scores, and
+**pass³** is the share of scenarios whose three runs all passed. A run of one on
+TurnCall's own account is a **self-run**: it finds problems to fix before the
+third party runs TurnCall, and it is never published. Only the third party's own
+run of TurnCall is. See ADR-0023.
+_Avoid_: calling its response time [[caller-ear latency]]; setting its figures
+beside TurnCall's own p50/p95.
 
 **Usage**:
 What one call consumed, per [[provider]] and role: STT seconds, LLM input and output
