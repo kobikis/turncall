@@ -52,3 +52,6 @@ Thumbs.db
 /examples/claude_patterns/
 
 docs/research
+.env.strix
+strix_runs/
+scan.sh
