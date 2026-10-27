@@ -77,7 +77,7 @@ dependencies = [
     # purpose, its changelog read, never picked up by a fresh install. A minor
     # rewrites internals TurnCall reaches into — 1.13 broke S2S delegation
     # (#367) and ended a call cancelled mid-setup without a recording status.
-    "pipecat-ai[openai,deepgram,elevenlabs,silero,webrtc,webrtc-video,local-smart-turn,google,anthropic,cartesia,assemblyai,heygen,tavus,aws-nova-sonic,tracing,mcp]>=1.13.0,<1.14.0",
+    "pipecat-ai[openai,deepgram,elevenlabs,silero,webrtc,webrtc-video,local-smart-turn,google,anthropic,cartesia,assemblyai,heygen,tavus,aws-nova-sonic,tracing,mcp]>=1.14.0,<1.15.0",
     # Both arrive through pipecat's local-smart-turn (same ranges). Declared
     # here only so [tool.uv.sources] below can take them from PyTorch's CPU
     # index: PyPI's Linux torch pulls ~2.5GB of CUDA libraries nothing here
@@ -139,7 +139,7 @@ turncall = "turncall.cli.main:run"
 # only the eval worker ever needs them — the call path uses the agent's own
 # configured providers.
 evals-audio = [
-    "pipecat-ai[kokoro,moonshine]>=1.13.0,<1.14.0",
+    "pipecat-ai[kokoro,moonshine]>=1.14.0,<1.15.0",
 ]
 # A `jev` judge (#141). TypeSafe is a vendor no live call ever contacts, so the
 # base install does not carry it — only the eval worker (and a `jev` live test)
@@ -148,7 +148,7 @@ evals-audio = [
 # since 1.13 (`jev` is its deprecated alias, #375); ours keeps its name, since
 # images and installs already ask for it.
 evals-jev = [
-    "pipecat-ai[typesafe]>=1.13.0,<1.14.0",
+    "pipecat-ai[typesafe]>=1.14.0,<1.15.0",
 ]
 dev = [
     "pytest>=8.0.0",

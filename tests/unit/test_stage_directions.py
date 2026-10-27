@@ -2,7 +2,7 @@
 
 Told the call ends after its next reply, gpt-4o-mini wrote
 "Goodbye! [Ending the call...]" and "*Ending the call now.*" on the website
-demo, and the voice read both aloud. Each provider's TTS carries a filter
+demo, and the voice read both aloud. Each provider's TTS carries a transform
 that drops them, judged sentence by sentence as pipecat's aggregator hands
 them over — so the cases below go through that aggregator too.
 """
@@ -14,7 +14,7 @@ from tests.conftest import creds
 from turncall.domain.models import AgentConfig, TTSConfig
 from turncall.orchestrator.pipeline_factory import _create_tts_service
 from turncall.orchestrator.stage_directions import (
-    StageDirectionFilter,
+    stage_direction_transform,
     strip_stage_directions,
     strip_voice_tags,
 )
@@ -22,7 +22,7 @@ from turncall.orchestrator.stage_directions import (
 
 async def _spoken(reply: str) -> list[str]:
     """What reaches the voice: the reply streamed a few characters at a time,
-    aggregated into sentences, filtered, empties dropped (as pipecat does)."""
+    aggregated into sentences, transformed, empties dropped (as pipecat does)."""
     aggregator, sentences = SimpleTextAggregator(), []
     for i in range(0, len(reply), 3):
         async for aggregation in aggregator.aggregate(reply[i : i + 3]):
@@ -30,7 +30,8 @@ async def _spoken(reply: str) -> list[str]:
     rest = await aggregator.flush()
     if rest:
         sentences.append(rest.text)
-    spoken = [await StageDirectionFilter().filter(s) for s in sentences]
+    transform = stage_direction_transform()
+    spoken = [await transform(s, "sentence") for s in sentences]
     return [s for s in spoken if s.strip()]
 
 
@@ -70,12 +71,17 @@ def test_ordinary_text_is_left_exactly_as_it_was(sentence):
 @pytest.mark.parametrize(
     "provider", ["deepgram", "elevenlabs", "openai", "cartesia", "xai"]
 )
-def test_every_tts_provider_carries_the_filter(provider, monkeypatch):
+async def test_every_tts_provider_leaves_a_narration_unspoken(provider, monkeypatch):
+    """Through the service's own text path: the narration emptied, pipecat
+    sends nothing (1.14), and `strip_markdown` after it never saw the stars."""
     monkeypatch.setenv("CARTESIA_API_KEY", "x")
     service = _create_tts_service(
         AgentConfig(tts=TTSConfig(provider=provider)), credentials=creds("x")
     )
-    assert any(isinstance(f, StageDirectionFilter) for f in service._text_filters)
+    assert await service._transform_text("*Ending the call now.*", "sentence") is None
+    assert await service._transform_text("[Call ended.]", "sentence") is None
+    said = await service._transform_text("I *really* can.", "sentence")
+    assert said.strip() == "I really can."
 
 
 @pytest.mark.unit
@@ -110,14 +116,16 @@ async def test_only_cartesia_hears_its_tags(provider, spoken, monkeypatch):
     service = _create_tts_service(
         AgentConfig(tts=TTSConfig(provider=provider)), credentials=creds("x")
     )
-    [text_filter] = service._text_filters
-    assert await text_filter.filter('<emotion value="excited"/>Oh wow!') == spoken
+    said = await service._transform_text(
+        '<emotion value="excited"/>Oh wow!', "sentence"
+    )
+    assert said.strip() == spoken
 
 
 @pytest.mark.unit
 async def test_strip_markdown_leaves_the_tags_for_the_voice():
     """The markdown transform runs on Cartesia's text too; it must not eat the
-    tag the filter kept."""
+    tag the stage-direction transform kept."""
     from pipecat.utils.text.transforms import strip_markdown
 
     tagged = '<emotion value="excited"/>That is **great**!'

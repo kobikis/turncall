@@ -9,8 +9,10 @@ A narration is bracketed text, or a whole sentence in asterisks. Emphasis
 (`I *really* can`) has no sentence ending inside its asterisks and is left for
 `strip_markdown`, which drops the asterisks and keeps the word.
 
-A filter, not a transform: pipecat drops a chunk a filter empties before it
-reaches the TTS, where an emptied transform would still be sent as a request.
+A TTS text transform, registered ahead of every other: pipecat (1.14) leaves
+a chunk a transform empties unspoken, and `strip_markdown` after it would drop
+the asterisks a starred sentence is recognised by. (It was a text filter until
+pipecat 1.14 deprecated those, when an emptied transform was still sent.)
 Stateless, so it judges each sentence the aggregator hands it alone. The
 aggregator ends a sentence inside a starred one, so "*Ending the call now.*"
 arrives as "*Ending the call now." and then "*": an opening star with no
@@ -25,7 +27,8 @@ them. They never reach the transcript.
 
 import re
 
-from pipecat.utils.text.base_text_filter import BaseTextFilter
+from pipecat.utils.text.base_text_aggregator import TextType
+from pipecat.utils.text.transforms.text_transform import TextTransform
 
 _BRACKETED = re.compile(r"\[[^\[\]]*\]")
 # Asterisks around text that ends a sentence: a narration, not emphasis.
@@ -59,23 +62,16 @@ def strip_stage_directions(text: str) -> str:
     return _tidy(text, stripped)
 
 
-class StageDirectionFilter(BaseTextFilter):
-    """`strip_stage_directions` as a pipecat TTS text filter, and
-    `strip_voice_tags` unless the voice reads them (`voice_tags`)."""
+async def _keeping_voice_tags(text: str, text_type: str | TextType) -> str:
+    return strip_stage_directions(text)
 
-    def __init__(self, *, voice_tags: bool = False) -> None:
-        super().__init__()
-        self._voice_tags = voice_tags
 
-    async def update_settings(self, settings) -> None:
-        return None
+async def _stripping_voice_tags(text: str, text_type: str | TextType) -> str:
+    return strip_voice_tags(strip_stage_directions(text))
 
-    async def filter(self, text: str) -> str:
-        text = strip_stage_directions(text)
-        return text if self._voice_tags else strip_voice_tags(text)
 
-    async def handle_interruption(self) -> None:
-        return None
-
-    async def reset_interruption(self) -> None:
-        return None
+def stage_direction_transform(*, voice_tags: bool = False) -> TextTransform:
+    """`strip_stage_directions` as a pipecat TTS text transform, and
+    `strip_voice_tags` unless the voice reads them (`voice_tags`). The same
+    function every time, so two builds of one config compare equal."""
+    return _keeping_voice_tags if voice_tags else _stripping_voice_tags

@@ -52,17 +52,21 @@ def _tts_service_classes() -> list[type]:
 @pytest.mark.parametrize("service_cls", _tts_service_classes())
 def test_every_provider_still_strips_markdown_first(service_cls: type) -> None:
     """LLMs emit markdown that TTS would otherwise read aloud literally
-    ("asterisk asterisk"). No provider may lose that, and it stays first."""
+    ("asterisk asterisk"). No provider may lose that, and only the model's
+    stage directions come before it: stripping markdown first would drop the
+    asterisks a starred narration is recognised by (ADR-0029)."""
     from pipecat.utils.text.transforms import strip_markdown
 
     from turncall.domain.models import AgentConfig
     from turncall.orchestrator.pipeline_factory import _tts_text_transforms
+    from turncall.orchestrator.stage_directions import stage_direction_transform
 
     transforms = _tts_text_transforms(service_cls, AgentConfig())
 
-    assert transforms[0] == ("*", strip_markdown), (
-        f"{service_cls.__name__} no longer strips markdown first: {transforms}"
-    )
+    assert transforms[:2] == [
+        ("*", stage_direction_transform()),
+        ("*", strip_markdown),
+    ], f"{service_cls.__name__} no longer strips markdown second: {transforms}"
 
 
 @pytest.mark.unit

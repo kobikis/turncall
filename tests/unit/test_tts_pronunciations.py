@@ -140,7 +140,7 @@ class TestThePipeline:
         )
 
         assert isinstance(transforms[-1][1], PronunciationTransform)
-        assert len(transforms) == 2, transforms
+        assert len(transforms) == 3, transforms
 
     @pytest.mark.parametrize("service_cls", _tts_service_classes())
     async def test_the_word_reaches_the_service_as_that_providers_markup(
@@ -150,7 +150,7 @@ class TestThePipeline:
         vendor's business; that the word stops being plain text is ours."""
         from turncall.orchestrator.pipeline_factory import _tts_text_transforms
 
-        _, (_, transform) = _tts_text_transforms(
+        *_, (_, transform) = _tts_text_transforms(
             service_cls, AgentConfig(tts=TTSConfig(pronunciations=METFORMIN))
         )
 
@@ -167,7 +167,7 @@ class TestThePipeline:
 
         from turncall.orchestrator.pipeline_factory import _tts_text_transforms
 
-        _, (_, transform) = _tts_text_transforms(
+        *_, (_, transform) = _tts_text_transforms(
             OpenAITTSService, AgentConfig(tts=TTSConfig(pronunciations=METFORMIN))
         )
 
@@ -179,7 +179,7 @@ class TestThePipeline:
 
         from turncall.orchestrator.pipeline_factory import _tts_text_transforms
 
-        assert len(_tts_text_transforms(CartesiaTTSService, AgentConfig())) == 1
+        assert len(_tts_text_transforms(CartesiaTTSService, AgentConfig())) == 2
 
 
 @pytest.mark.unit
@@ -340,7 +340,7 @@ class TestElevenLabsSsmlParsing:
 
         from turncall.orchestrator.pipeline_factory import _tts_text_transforms
 
-        _, (_, transform) = _tts_text_transforms(
+        *_, (_, transform) = _tts_text_transforms(
             ElevenLabsTTSService,
             AgentConfig(tts=TTSConfig(pronunciations=METFORMIN)),
         )

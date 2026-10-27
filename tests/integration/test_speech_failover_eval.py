@@ -337,3 +337,24 @@ async def test_an_iteration_uses_nothing_pipecat_deprecated(
         str(w.message) for w in caught if DEPRECATION_MESSAGE_RE.search(str(w.message))
     ]
     assert deprecated == []
+
+
+async def test_a_text_turn_reaches_an_agent_with_a_failover_group(
+    stub_providers: None,
+) -> None:
+    """A text turn is RTVI `send-text` with `run_immediately`, which flushes the
+    pipeline first. Before pipecat 1.14 that flush never drained a
+    `ServiceSwitcher` — every failover group is one — so the turn waited for
+    the pipeline to go quiet before it was put to the agent."""
+    target = _target(
+        tts={
+            "voice": "aura-2-primary-en",
+            "failover": [{"provider": "deepgram", "voice": "aura-2-backup-en"}],
+        },
+    )
+    definition = _plain_turn(EvalModality.TEXT)
+    definition["turns"][0]["expect"][0]["within_ms"] = 5000
+
+    result, agent_errors = await _run(definition, target, EvalModality.TEXT)
+
+    assert result.passed, ([str(f) for f in result.failures], agent_errors)

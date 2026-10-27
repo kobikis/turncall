@@ -148,6 +148,15 @@ every read and never stored (#148, the shape #95 set). They are warnings and not
 refusals because `{"papa": "papa"}` is correct IPA: refusing correct input breaks
 a working agent, where accepting a respelling mispronounces one word.
 
+**Stage direction**:
+Text an agent's model writes as narration rather than speech — a bracketed aside
+("[Ending the call...]", a citation marker "[1]") or a whole sentence in
+asterisks ("*Ending the call now.*"). Never spoken, never in the transcript.
+Emphasis inside a sentence (`I *really* can`) is not one: the word is spoken.
+_Avoid_: calling a **voice tag** a stage direction. A voice tag is markup for
+the voice itself (Cartesia's `<emotion value="excited"/>`, `<break/>`), which a
+voice that reads it acts on and every other voice must never receive.
+
 On ElevenLabs this means the older voice or no pronunciations, and that was
 **decided rather than overlooked** (#153, closed `wontfix`): `eleven_v3` reads
 IPA natively as `/mɛtˈfɔɹmɪn/` — no tags, no `enable_ssml_parsing` — but only off
