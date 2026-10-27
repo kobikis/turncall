@@ -11,6 +11,32 @@ and is not part of this repository's history.
 
 ## [Unreleased]
 
+## [2.1.0]
+
+Avatars on speech-to-speech calls, xAI Grok across every role, Telnyx and
+Asterisk (ARI) as carriers, outbound campaigns, per-project limits, project
+credentials, ambience, failover for every speech role, redaction, retention and
+an audit log, secrets encrypted at rest, buying and releasing numbers, a Helm
+chart, and pipecat 1.14.
+
+Released as a minor version, though it carries the breaking changes below, which
+this file's versioning policy would make a major: read them, and the upgrade
+notes, before upgrading.
+
+### Breaking changes
+
+- **Viewer keys lose four routes** (#335): they get `403` where they used to
+  succeed. See Upgrade notes.
+- **`PATCH /v1/webrtc/connect` needs the API key** (#342): `401` without it.
+- **Plain `http://` outbound URLs are a `422` outside development** (#340):
+  webhook subscriptions, numbers' `server_url`, and an agent's tool, MCP and
+  `server_url` URLs, unless `ALLOW_PLAIN_HTTP_URLS` allows them.
+- **Twilio and WhatsApp webhooks nothing can verify are refused (`403`)
+  outside development** (#337, #339).
+- **Saving a secret needs `CREDENTIAL_ENCRYPTION_KEY`** (#338): a `503`
+  without it, and the `seal_secrets_at_rest` migration refuses to run.
+- **`handoff_to_agent` on an `openai_live` agent is a `422`.**
+
 ### Added
 
 - **Avatars on speech-to-speech Agents** (#401). A HeyGen or Tavus Avatar now
@@ -367,175 +393,6 @@ and is not part of this repository's history.
   `/webhooks/telnyx/voice`, and deletes once no number is left on it. Unbind
   and project deletion take the number off again. Bind and update responses
   carry `webhooks_configured` for any carrier.
-
-### Changed
-
-- **Evals run on pipecat's current eval transport** (#375, ADR-0018). pipecat
-  1.13 deprecated `EvalTransport`, the `pipecat.classifiers.jev` module and
-  the `jev` extra, and `EvalSessionParams`'s `stop_bot`/`trigger_disconnect`,
-  all removed in 2.0.0; the eval worker no longer uses any of them. Each
-  iteration now serves the harness from a one-connection loopback server on
-  127.0.0.1 (a port the kernel picks, so no bind-then-close race) and builds
-  the agent's pipeline on the connection it opens, over
-  `EvalFastAPIWebsocketTransport`; the harness's flags arrive in its
-  `eval-connect` message rather than the URL. A pipeline that fails to build
-  still fails the iteration with its own error, `errored`. The `evals-jev`
-  extra keeps its name and now installs `pipecat-ai[typesafe]`. Verdicts,
-  modalities and budgets are unchanged.
-- **The image and CI install from a committed `uv.lock`** (#377). Every
-  dependency is pinned, not just pipecat's minor: an upstream release reaches
-  an image only through a commit that changes the lock. The Dockerfile now
-  exports the lock (`uv export --frozen`, with `INSTALL_EXTRAS` as before)
-  and installs that; CI runs `uv sync --locked`, which fails a lock that no
-  longer matches `pyproject.toml`. torch and torchaudio are declared directly
-  and taken from PyTorch's CPU-only index, as the image already did, so it
-  carries no CUDA libraries. Building the image needs `uv.lock` in the build
-  context. CONTRIBUTING, "Bumping a dependency", has the steps.
-- **pipecat 1.14** (#412, ADR-0029). The requirement is now
-  `>=1.14.0,<1.15.0`. No API or config change. What changes:
-  - **Stage directions** are stripped by a TTS text transform instead of a
-    text filter (pipecat 1.14 deprecated filters); the caller hears the same
-    text. On a TTS without word timestamps (OpenAI, xAI), the agent's context
-    now keeps the model's reply as written, its stage directions included;
-    the caller still never hears them and the transcript still drops them.
-  - **A Markdown link** is spoken as its label, not its URL.
-  - **A provider that stops reading** a WebSocket no longer stalls the call:
-    a send stuck for 5 seconds drops the connection and the service
-    reconnects.
-  - **Fixes that come with it**, among them: an OpenAI Realtime agent that
-    stopped reacting for the rest of the call after a response with no usage
-    figures; Deepgram Flux reconnecting without losing the caller's turn, and
-    naming why it refused a setting; ElevenLabs word timings running early;
-    Cartesia reducing `es-MX` to `es`; text-mode evals of an agent with a
-    failover group waiting about 6 seconds per turn; and credentials left
-    unmasked in some error messages.
-- **pipecat 1.13** (#367, ADR-0028). The requirement is now
-  `>=1.13.0,<1.14.0`: capped at the next minor, so each pipecat minor is
-  adopted on purpose rather than picked up by a fresh install (1.13.0 reached
-  every image built from 2026-10-19 and broke S2S delegation). What changes:
-  - **`openai_live` client delegation.** pipecat now runs delegations one at a
-    time, a later one waiting for the delegate to finish, and the delegate's
-    output is a stream. The delegate's system prompt gains pipecat's pairing
-    instruction (the caller hears only what it marks with `>>`).
-    `delegation.completed` reads `answered` only when the delegate said
-    something for the caller (its notes do not count; one that ended the call
-    is still `answered`), and `duration_ms` runs from when gpt-live-1 handed
-    the work over, so a wait behind an earlier delegation counts. When the
-    delegate ends the call, everything it says for the caller after that is
-    voiced as one last reply before the hangup, where the call used to end
-    after the first — once the delegation finishes, or 5 seconds after the
-    first message if it is still working. An agent with `llm.failover` on a client delegate, which
-    did not build on 1.13, does.
-  - **Evals.** A delegate's tool calls reach scenarios as `function_call`
-    events, so a scenario expecting none on an `openai_live` client delegate
-    may change its verdict. Scenarios are recorded as validated against
-    `pipecat-1.13`; 1.13 only added fields, so older ones stay valid.
-  - **Reasoning.** Anthropic and Google LLMs now send a listed model its
-    lowest reasoning setting when the agent configures none, where they left
-    it at the provider's default.
-  - **Turn detection.** Silero VAD 6.2: better on quiet voices and phone
-    audio; a stop can be reported slightly later.
-  - **Fixes that come with it**, among them: TTS that went silent for the rest
-    of a call (metrics are on in every call); a Telnyx stream ended by one
-    malformed message; a turn ended mid-word; STT (AssemblyAI, Deepgram Flux)
-    that transcribed nothing and never failed over after a failed first
-    connect; ElevenLabs keepalives and mid-turn reconnects; a hangup while
-    services connect now cancels at once; Bedrock on expiring credentials
-    from the default AWS chain (IRSA, task roles); Anthropic `prompt_tokens`
-    reported doubled, and Gemini and Grok thinking tokens left out;
-    credentials masked in error messages.
-- **Caller numbers are off spans by default** (#315, ADR-0024).
-  `PIPECAT_TRACE_INCLUDE_PII` now defaults to `false`: caller numbers in an
-  external tracing backend are a choice, not a default. The non-PII attributes
-  (`project_id`, `agent_id`, `call_sid`, `direction`, `transport`) are
-  unchanged, and a project with redaction on still never gets the numbers on
-  its spans. See Upgrade notes.
-- **The image carries a PII detector** (#313): Presidio, spaCy and its small
-  English model (`en_core_web_sm`, pinned in `pyproject.toml`), ~255 MB
-  unpacked and ~74 MB of the pull. With it, numpy resolves to 2.4.x
-  (presidio-analyzer caps it below 2.5) and `presidio-anonymizer` is pinned to
-  2.2.362 (2.2.364 caps cryptography below 49). Neither of its runtime
-  downloads runs: a missing model is an error, not a pip install, and the
-  image sets `TLDEXTRACT_PUBLIC_SUFFIX_LIST_URLS=""` so the email recognizer
-  uses its bundled suffix list instead of fetching one.
-- **The warm-transfer briefing and post-call analysis read the conversation
-  from memory** (#313). The process that ran the call keeps what was said for
-  five minutes after it ends, and the briefing summary, analysis and takeaways
-  read that rather than the stored transcript, so redaction never reaches
-  them. For a project that redacts, when another replica handles the
-  carrier's whisper or status callback or the end API, it asks the process
-  holding the conversation (Redis pub/sub, naming only the call) to build the
-  briefing or run post-call processing; the conversation itself is never
-  written to Redis or the database. Only when no process holds it any more (a
-  restart, after five minutes, a re-run) do they read the stored transcript,
-  redacted, and log that they did.
-- **A production WebRTC `server_url` may be a Kubernetes Service**
-  (`http://<name>.<namespace>.svc[.cluster.local]`). It had to be HTTPS, which
-  refused a call-init server in the same cluster — plain HTTP there never
-  leaves it. Any other `http://` URL is still refused in production, and the
-  suffix must be the host's.
-- **A phone number's carrier is `carrier` in the API** (#201, ADR-0022).
-  Reads carry `carrier`; `provider` is still there with the same value and
-  still accepted on a write, both deprecated — "provider" means an STT, LLM or
-  TTS backend everywhere else. Sending both with different values is a 422, as
-  is a `PUT` that would move a number to another carrier. Behind it the
-  carrier boundary is cut for Telnyx and Asterisk: the telephony adapter is
-  REST actions only, and one media entry point picks the serializer from the
-  call's own carrier. Twilio calls behave exactly as before.
-
-- **An `openai_live` agent with tools now delegates to its own `llm`** (#244).
-  With no `s2s.delegation` block its tools were never offered; it now gets
-  client delegation, so the `llm` provider needs a key (`missing_keys`
-  otherwise). `end_call`, `do_not_call` and `transfer_call` work from the
-  client delegate (#245): the call ends after gpt-live-1's goodbye, as on
-  cascade.
-
-- **`handoff_to_agent` on an `openai_live` S2S agent is now refused** (422)
-  (#243). The handoff swapped the delegate's tools but not gpt-live-1's
-  session, so the caller kept the previous agent's voice and prompt.
-
-- **`end_call` and `do_not_call` let the agent finish its goodbye.** The tool
-  used to hang up over the carrier's API the moment it ran, cutting off what
-  the agent was still saying. It now records the end and lets the model answer
-  the tool's result; the call ends once that reply — the goodbye — has played
-  out. Instructions that ask the model to say goodbye *before* calling the tool
-  now work against it: many models then say goodbye and wait for the caller.
-  The goodbye is final: the caller cannot interrupt it, and what they say
-  while it plays is not transcribed or recorded.
-  On WebRTC, where `end_call` used to mark the call ended and leave it
-  running, it now ends it. `POST /v1/calls/{id}/end` still hangs up at once.
-
-- **Two credential failures have their own error codes** (#191). A 503 from
-  storing a credential or binding a number's own Twilio account while
-  `CREDENTIAL_ENCRYPTION_KEY` is unset or wrong is now
-  `credential_key_unavailable`, and an outbound call from a number with no
-  Twilio account anywhere is `no_twilio_account`. Both were `internal_error`.
-
-- **A call that fails reads as failed, and says why.** A provider that stops
-  working mid-call (a refused key, an unknown model) used to end the pipeline
-  gracefully, so the call finished `completed` with an `ended_reason` of
-  `customer_ended_call`. It now ends `failed` / `pipeline_error`, and the call's
-  event log carries an `error.raised` event, `{stage, error}`, also dispatched
-  to webhook subscribers. A key that is present but refused adds `provider` and
-  `key_rejected: true`. If you alert on `customer_ended_call`, calls that broke
-  on a provider no longer land there.
-
-- **A provider with no key at any level is refused before the call starts.**
-  Every provider the agent names is checked (agent inline, project credential,
-  platform environment) before the pipeline is built, on every transport. A
-  missing one fails the call with `error.raised` carrying
-  `missing_keys: [account]`, instead of one SDK's "Missing credentials" or a
-  401 partway into the greeting. `POST /v1/webrtc/connect` answers
-  `500 pipeline_start_failed` with the same list in `details.missing_keys`.
-  Eval runs are exempt: text mode opens no speech provider.
-
-- **`AWS_AGENT_CREDENTIALS_ENABLED` governs agent config only** (#164). With it
-  false, static AWS keys are still refused inside an agent's `aws` block, but an
-  `aws` project credential is accepted — it is encrypted and outside agent
-  config. False no longer means "no static AWS keys on this deployment".
-
-### Added
-
 - **AssemblyAI Universal-Streaming STT** (#203): `"stt": {"provider":
   "assemblyai"}`. The key resolves agent → project `assemblyai` credential →
   `ASSEMBLYAI_API_KEY`, and a missing one is reported in `missing_keys` like
@@ -776,124 +633,171 @@ and is not part of this repository's history.
   `AMBIENCE_CACHE_DIR`. See `adr/0021`. Checked on a real PSTN call: no
   spurious interruptions and no empty turns at the default volume (#171).
 
-### Security
+### Changed
 
-- **A carrier media stream must prove it is the call's.** Every media route —
-  Twilio's `/ws/media-stream`, and Telnyx's and Asterisk's added in this
-  release — built the call's real pipeline on any socket that named its call
-  id, on any carrier's route, as many times as asked. A call id is not a
-  secret (it rides in webhooks, call-init, the API and logs), so whoever held
-  one could talk to the caller's agent, hear its replies and drive its tools.
-  Each call's stream setup now carries a **media token** (an HMAC of the call
-  id keyed by `API_KEY_HASH_SECRET` — set it; the default is public), and a
-  stream without it, on another carrier's route than the call's, or for a call
-  that already has one is refused before anything is built. Telnyx's stream
-  path gains a segment (`/ws/telnyx/media-stream/{call_id}/{token}`) and
-  Asterisk's external-media channel id the token; both are minted by TurnCall,
-  so no carrier configuration changes. Migration `b9f5d3a7e1c2`
-  (`calls.media_attached_at`). A call answered before the upgrade and not yet
-  streaming when it lands has no token and is refused.
-- **Twilio webhooks no token can verify are refused outside development**
-  (#337). With no `TWILIO_AUTH_TOKEN` and no number on its own Twilio account,
-  every `/webhooks/twilio/*` route took a request unverified, so a production
-  deployment whose token was unset or blank accepted forged calls and texts.
-  Such a webhook is now taken only when `TURNCALL_ENV` is `development`;
-  every other environment, staging included, answers `403` before anything
-  is read or created, and logs `twilio_webhook_unverifiable` (once a minute
-  per route, with how many it left out: anyone can cause it). A token that is
-  only whitespace counts as unset. `/webhooks/twilio/stream-status`, the one
-  route that never checked a signature, now does, against the same URL the
-  TwiML gave Twilio: both are built from one origin, and in production that
-  is always `https`, behind a TLS terminator that sends no
-  `X-Forwarded-Proto` too. At startup, Twilio numbers on the platform account
-  while `TWILIO_AUTH_TOKEN` is unset are logged as
-  `twilio_numbers_unverifiable`, with whether their webhooks are refused, and
-  plainly when they are accepted only because `TURNCALL_ENV` was never set.
-  See the upgrade notes.
+- **Evals run on pipecat's current eval transport** (#375, ADR-0018). pipecat
+  1.13 deprecated `EvalTransport`, the `pipecat.classifiers.jev` module and
+  the `jev` extra, and `EvalSessionParams`'s `stop_bot`/`trigger_disconnect`,
+  all removed in 2.0.0; the eval worker no longer uses any of them. Each
+  iteration now serves the harness from a one-connection loopback server on
+  127.0.0.1 (a port the kernel picks, so no bind-then-close race) and builds
+  the agent's pipeline on the connection it opens, over
+  `EvalFastAPIWebsocketTransport`; the harness's flags arrive in its
+  `eval-connect` message rather than the URL. A pipeline that fails to build
+  still fails the iteration with its own error, `errored`. The `evals-jev`
+  extra keeps its name and now installs `pipecat-ai[typesafe]`. Verdicts,
+  modalities and budgets are unchanged.
+- **The image and CI install from a committed `uv.lock`** (#377). Every
+  dependency is pinned, not just pipecat's minor: an upstream release reaches
+  an image only through a commit that changes the lock. The Dockerfile now
+  exports the lock (`uv export --frozen`, with `INSTALL_EXTRAS` as before)
+  and installs that; CI runs `uv sync --locked`, which fails a lock that no
+  longer matches `pyproject.toml`. torch and torchaudio are declared directly
+  and taken from PyTorch's CPU-only index, as the image already did, so it
+  carries no CUDA libraries. Building the image needs `uv.lock` in the build
+  context. CONTRIBUTING, "Bumping a dependency", has the steps.
+- **pipecat 1.14** (#412, ADR-0029). The requirement is now
+  `>=1.14.0,<1.15.0`. No API or config change. What changes:
+  - **Stage directions** are stripped by a TTS text transform instead of a
+    text filter (pipecat 1.14 deprecated filters); the caller hears the same
+    text. On a TTS without word timestamps (OpenAI, xAI), the agent's context
+    now keeps the model's reply as written, its stage directions included;
+    the caller still never hears them and the transcript still drops them.
+  - **A Markdown link** is spoken as its label, not its URL.
+  - **A provider that stops reading** a WebSocket no longer stalls the call:
+    a send stuck for 5 seconds drops the connection and the service
+    reconnects.
+  - **Fixes that come with it**, among them: an OpenAI Realtime agent that
+    stopped reacting for the rest of the call after a response with no usage
+    figures; Deepgram Flux reconnecting without losing the caller's turn, and
+    naming why it refused a setting; ElevenLabs word timings running early;
+    Cartesia reducing `es-MX` to `es`; text-mode evals of an agent with a
+    failover group waiting about 6 seconds per turn; and credentials left
+    unmasked in some error messages.
+- **pipecat 1.13** (#367, ADR-0028). The requirement is now
+  `>=1.13.0,<1.14.0`: capped at the next minor, so each pipecat minor is
+  adopted on purpose rather than picked up by a fresh install (1.13.0 reached
+  every image built from 2026-10-19 and broke S2S delegation). What changes:
+  - **`openai_live` client delegation.** pipecat now runs delegations one at a
+    time, a later one waiting for the delegate to finish, and the delegate's
+    output is a stream. The delegate's system prompt gains pipecat's pairing
+    instruction (the caller hears only what it marks with `>>`).
+    `delegation.completed` reads `answered` only when the delegate said
+    something for the caller (its notes do not count; one that ended the call
+    is still `answered`), and `duration_ms` runs from when gpt-live-1 handed
+    the work over, so a wait behind an earlier delegation counts. When the
+    delegate ends the call, everything it says for the caller after that is
+    voiced as one last reply before the hangup, where the call used to end
+    after the first — once the delegation finishes, or 5 seconds after the
+    first message if it is still working. An agent with `llm.failover` on a client delegate, which
+    did not build on 1.13, does.
+  - **Evals.** A delegate's tool calls reach scenarios as `function_call`
+    events, so a scenario expecting none on an `openai_live` client delegate
+    may change its verdict. Scenarios are recorded as validated against
+    `pipecat-1.13`; 1.13 only added fields, so older ones stay valid.
+  - **Reasoning.** Anthropic and Google LLMs now send a listed model its
+    lowest reasoning setting when the agent configures none, where they left
+    it at the provider's default.
+  - **Turn detection.** Silero VAD 6.2: better on quiet voices and phone
+    audio; a stop can be reported slightly later.
+  - **Fixes that come with it**, among them: TTS that went silent for the rest
+    of a call (metrics are on in every call); a Telnyx stream ended by one
+    malformed message; a turn ended mid-word; STT (AssemblyAI, Deepgram Flux)
+    that transcribed nothing and never failed over after a failed first
+    connect; ElevenLabs keepalives and mid-turn reconnects; a hangup while
+    services connect now cancels at once; Bedrock on expiring credentials
+    from the default AWS chain (IRSA, task roles); Anthropic `prompt_tokens`
+    reported doubled, and Gemini and Grok thinking tokens left out;
+    credentials masked in error messages.
+- **Caller numbers are off spans by default** (#315, ADR-0024).
+  `PIPECAT_TRACE_INCLUDE_PII` now defaults to `false`: caller numbers in an
+  external tracing backend are a choice, not a default. The non-PII attributes
+  (`project_id`, `agent_id`, `call_sid`, `direction`, `transport`) are
+  unchanged, and a project with redaction on still never gets the numbers on
+  its spans. See Upgrade notes.
+- **The image carries a PII detector** (#313): Presidio, spaCy and its small
+  English model (`en_core_web_sm`, pinned in `pyproject.toml`), ~255 MB
+  unpacked and ~74 MB of the pull. With it, numpy resolves to 2.4.x
+  (presidio-analyzer caps it below 2.5) and `presidio-anonymizer` is pinned to
+  2.2.362 (2.2.364 caps cryptography below 49). Neither of its runtime
+  downloads runs: a missing model is an error, not a pip install, and the
+  image sets `TLDEXTRACT_PUBLIC_SUFFIX_LIST_URLS=""` so the email recognizer
+  uses its bundled suffix list instead of fetching one.
+- **The warm-transfer briefing and post-call analysis read the conversation
+  from memory** (#313). The process that ran the call keeps what was said for
+  five minutes after it ends, and the briefing summary, analysis and takeaways
+  read that rather than the stored transcript, so redaction never reaches
+  them. For a project that redacts, when another replica handles the
+  carrier's whisper or status callback or the end API, it asks the process
+  holding the conversation (Redis pub/sub, naming only the call) to build the
+  briefing or run post-call processing; the conversation itself is never
+  written to Redis or the database. Only when no process holds it any more (a
+  restart, after five minutes, a re-run) do they read the stored transcript,
+  redacted, and log that they did.
+- **A production WebRTC `server_url` may be a Kubernetes Service**
+  (`http://<name>.<namespace>.svc[.cluster.local]`). It had to be HTTPS, which
+  refused a call-init server in the same cluster — plain HTTP there never
+  leaves it. Any other `http://` URL is still refused in production, and the
+  suffix must be the host's.
+- **A phone number's carrier is `carrier` in the API** (#201, ADR-0022).
+  Reads carry `carrier`; `provider` is still there with the same value and
+  still accepted on a write, both deprecated — "provider" means an STT, LLM or
+  TTS backend everywhere else. Sending both with different values is a 422, as
+  is a `PUT` that would move a number to another carrier. Behind it the
+  carrier boundary is cut for Telnyx and Asterisk: the telephony adapter is
+  REST actions only, and one media entry point picks the serializer from the
+  call's own carrier. Twilio calls behave exactly as before.
 
-- **A WhatsApp webhook nothing can verify is refused outside development**
-  (#339). Without `WHATSAPP_APP_SECRET`, every WhatsApp webhook (voice calls
-  and text messages) was accepted unverified, in production too. It is now
-  accepted only when `TURNCALL_ENV` is `development`; every other
-  environment, staging included, refuses it with a `403` before anything is
-  read, logged once a minute. A secret that is only whitespace counts as
-  unset. Startup warns when WhatsApp is configured (`WHATSAPP_TOKEN`,
-  `WHATSAPP_PHONE_NUMBER_ID` or `WHATSAPP_WEBHOOK_VERIFY_TOKEN` set, or a
-  `whatsapp_enabled` number) without it. Meta's subscription handshake
-  (`GET`, `hub.challenge`) is unaffected. See the upgrade notes.
+- **An `openai_live` agent with tools now delegates to its own `llm`** (#244).
+  With no `s2s.delegation` block its tools were never offered; it now gets
+  client delegation, so the `llm` provider needs a key (`missing_keys`
+  otherwise). `end_call`, `do_not_call` and `transfer_call` work from the
+  client delegate (#245): the call ends after gpt-live-1's goodbye, as on
+  cascade.
 
-- **ICE trickle needs the key that opened the connection** (#342).
-  `PATCH /v1/webrtc/connect` took no API key and checked nothing but the
-  body's `pc_id`, which is not a secret (it shows in logs, browser
-  extensions, shared screens), so whoever learned a live call's `pc_id` could
-  add ICE candidates to its peer connection, whatever project the call was
-  in. It now takes the same key as the `POST` (admin or developer; a viewer
-  key is a `403`): no key is a `401`, and a `pc_id` no call of the key's
-  project holds is a `404` that does not say whether it exists. Nothing
-  reaches pipecat in either case. A body that is not a JSON object is a
-  `400`, as on the `POST` (it was a `500`). A connection restarted with
-  `restart_pc` is now held under the new `pc_id` pipecat answers with, so its
-  trickle and a later renegotiation reach it; a second renegotiation of a
-  restarted connection used to be a `404`. See the upgrade notes.
+- **`handoff_to_agent` on an `openai_live` S2S agent is now refused** (422)
+  (#243). The handoff swapped the delegate's tools but not gpt-live-1's
+  session, so the caller kept the previous agent's voice and prompt.
 
-- **The secrets TurnCall keeps are encrypted at rest** (#338). Only project
-  credentials and a number's own Twilio auth token were; every other secret
-  sat in Postgres in plaintext, so a database dump or backup gave away
-  webhook subscriptions' signing secrets, a number's call-init
-  `server_url_secret`, and in an agent's config its `llm.api_key` (its
-  failovers' too), static AWS keys in `config.aws` (all three of
-  `access_key_id`, `secret_access_key` and `session_token`),
-  `server_url.secret`, a tool's `webhook_secret` and the values of MCP
-  servers' `headers` and `env`, and with a signing secret the means to sign
-  an event or call-init request your receivers accept. They are now
-  Fernet-encrypted under `CREDENTIAL_ENCRYPTION_KEY`, the key project
-  credentials already use, wherever an agent config is kept: on the agent,
-  as a call-init's inline config on its call or SMS session, and as an
-  inline eval target on a run or scenario. Nothing that uses them changes:
-  signatures, call-init, tools and MCP servers get the plaintext as before,
-  a phone number read still returns its `server_url_secret`, and an agent
-  read, like the audit log's record of an agent change, still shows a static
-  `access_key_id`, which names the key without unlocking it. Saving one
-  without the key is a `503` (`credential_key_unavailable`), never a
-  fall back to plaintext, and a call whose call-init answers with an inline
-  config holding one fails, as does a text that would open such a session
-  (SMS is answered with an apology; nothing is kept); a write that holds none
-  needs no key. Startup
-  warns when the key is unset, and fails, as it does for credentials, when
-  what is stored cannot be read with it. This protects a dump on its own: a
-  dump *and* the key still read every one of them, and call data
-  (recordings, transcripts, events, analysis, the call record) is stored as
-  it was. The `seal_secrets_at_rest` migration (`e6c2a8f4b0d9`) encrypts existing rows in one
-  transaction, and refuses to run without the key when any exist. See the
-  upgrade notes.
+- **`end_call` and `do_not_call` let the agent finish its goodbye.** The tool
+  used to hang up over the carrier's API the moment it ran, cutting off what
+  the agent was still saying. It now records the end and lets the model answer
+  the tool's result; the call ends once that reply — the goodbye — has played
+  out. Instructions that ask the model to say goodbye *before* calling the tool
+  now work against it: many models then say goodbye and wait for the caller.
+  The goodbye is final: the caller cannot interrupt it, and what they say
+  while it plays is not transcribed or recorded.
+  On WebRTC, where `end_call` used to mark the call ended and leave it
+  running, it now ends it. `POST /v1/calls/{id}/end` still hangs up at once.
 
-- **Outbound URLs must be `https://` outside development** (#340). A webhook
-  subscription's `url`, a number's call-init `server_url`, and in an agent's
-  config `server_url.url`, a tool's `webhook_url` and an MCP server's `url`
-  took an `http://` URL in every environment (a webhook subscription took any
-  scheme at all), so events, call-init requests, tool arguments and MCP
-  headers could cross the network in cleartext. Each is now checked when it is
-  written: a scheme other than `https` or `http` is a `422`, and so is
-  `http://` unless plain http is allowed, which by default it is only when
-  `TURNCALL_ENV` is `development`; every other environment, staging included,
-  refuses it. A host ending in `.svc` or `.svc.cluster.local` (a Kubernetes
-  Service in the same cluster, judged by the URL's hostname alone) may still
-  be `http://` anywhere; loopback and private addresses are not exempt. The
-  check runs on creating a webhook subscription, binding or updating a
-  number, creating or replacing an agent, and `POST /v1/tools`. WebRTC's
-  `requestData.server_url`, refused with a `400` in production only, now
-  follows the same rule, so staging refuses it too. New setting
-  `ALLOW_PLAIN_HTTP_URLS`: `true` allows plain http everywhere, `false`
-  refuses it in development too, unset or blank leaves it to `TURNCALL_ENV`.
-  Inline configs are not refused for plain http: an inline agent from a
-  call-init answer, an eval run's `inline` target, and a `turncall-demo`
-  agents file. URLs stored before the upgrade keep being delivered to, and
-  startup names them (`plain_http_stored`, per project and kind, with a count
-  and the hosts). Each delivery to a plain-http URL the check would now
-  refuse is logged as `plain_http_delivery` (once a minute per kind,
-  `webhook`, `call_init`, `server_event`, `tool` or `mcp`, with how many it
-  left out), naming the host and never the full URL. The delivery still
-  happens. See the upgrade notes.
+- **Two credential failures have their own error codes** (#191). A 503 from
+  storing a credential or binding a number's own Twilio account while
+  `CREDENTIAL_ENCRYPTION_KEY` is unset or wrong is now
+  `credential_key_unavailable`, and an outbound call from a number with no
+  Twilio account anywhere is `no_twilio_account`. Both were `internal_error`.
+
+- **A call that fails reads as failed, and says why.** A provider that stops
+  working mid-call (a refused key, an unknown model) used to end the pipeline
+  gracefully, so the call finished `completed` with an `ended_reason` of
+  `customer_ended_call`. It now ends `failed` / `pipeline_error`, and the call's
+  event log carries an `error.raised` event, `{stage, error}`, also dispatched
+  to webhook subscribers. A key that is present but refused adds `provider` and
+  `key_rejected: true`. If you alert on `customer_ended_call`, calls that broke
+  on a provider no longer land there.
+
+- **A provider with no key at any level is refused before the call starts.**
+  Every provider the agent names is checked (agent inline, project credential,
+  platform environment) before the pipeline is built, on every transport. A
+  missing one fails the call with `error.raised` carrying
+  `missing_keys: [account]`, instead of one SDK's "Missing credentials" or a
+  401 partway into the greeting. `POST /v1/webrtc/connect` answers
+  `500 pipeline_start_failed` with the same list in `details.missing_keys`.
+  Eval runs are exempt: text mode opens no speech provider.
+
+- **`AWS_AGENT_CREDENTIALS_ENABLED` governs agent config only** (#164). With it
+  false, static AWS keys are still refused inside an agent's `aws` block, but an
+  `aws` project credential is accepted — it is encrypted and outside agent
+  config. False no longer means "no static AWS keys on this deployment".
 
 ### Fixed
 
@@ -1274,6 +1178,125 @@ and is not part of this repository's history.
   (`recordings/{call_id}/{sid}.wav`); it now sweeps both recording shapes.
   The `ambience_storage_orphan` and `project_delete_storage_orphan` log events
   are now one event, `storage_orphan`. Update any alert on the old names.
+
+### Security
+
+- **A carrier media stream must prove it is the call's.** Every media route —
+  Twilio's `/ws/media-stream`, and Telnyx's and Asterisk's added in this
+  release — built the call's real pipeline on any socket that named its call
+  id, on any carrier's route, as many times as asked. A call id is not a
+  secret (it rides in webhooks, call-init, the API and logs), so whoever held
+  one could talk to the caller's agent, hear its replies and drive its tools.
+  Each call's stream setup now carries a **media token** (an HMAC of the call
+  id keyed by `API_KEY_HASH_SECRET` — set it; the default is public), and a
+  stream without it, on another carrier's route than the call's, or for a call
+  that already has one is refused before anything is built. Telnyx's stream
+  path gains a segment (`/ws/telnyx/media-stream/{call_id}/{token}`) and
+  Asterisk's external-media channel id the token; both are minted by TurnCall,
+  so no carrier configuration changes. Migration `b9f5d3a7e1c2`
+  (`calls.media_attached_at`). A call answered before the upgrade and not yet
+  streaming when it lands has no token and is refused.
+- **Twilio webhooks no token can verify are refused outside development**
+  (#337). With no `TWILIO_AUTH_TOKEN` and no number on its own Twilio account,
+  every `/webhooks/twilio/*` route took a request unverified, so a production
+  deployment whose token was unset or blank accepted forged calls and texts.
+  Such a webhook is now taken only when `TURNCALL_ENV` is `development`;
+  every other environment, staging included, answers `403` before anything
+  is read or created, and logs `twilio_webhook_unverifiable` (once a minute
+  per route, with how many it left out: anyone can cause it). A token that is
+  only whitespace counts as unset. `/webhooks/twilio/stream-status`, the one
+  route that never checked a signature, now does, against the same URL the
+  TwiML gave Twilio: both are built from one origin, and in production that
+  is always `https`, behind a TLS terminator that sends no
+  `X-Forwarded-Proto` too. At startup, Twilio numbers on the platform account
+  while `TWILIO_AUTH_TOKEN` is unset are logged as
+  `twilio_numbers_unverifiable`, with whether their webhooks are refused, and
+  plainly when they are accepted only because `TURNCALL_ENV` was never set.
+  See the upgrade notes.
+
+- **A WhatsApp webhook nothing can verify is refused outside development**
+  (#339). Without `WHATSAPP_APP_SECRET`, every WhatsApp webhook (voice calls
+  and text messages) was accepted unverified, in production too. It is now
+  accepted only when `TURNCALL_ENV` is `development`; every other
+  environment, staging included, refuses it with a `403` before anything is
+  read, logged once a minute. A secret that is only whitespace counts as
+  unset. Startup warns when WhatsApp is configured (`WHATSAPP_TOKEN`,
+  `WHATSAPP_PHONE_NUMBER_ID` or `WHATSAPP_WEBHOOK_VERIFY_TOKEN` set, or a
+  `whatsapp_enabled` number) without it. Meta's subscription handshake
+  (`GET`, `hub.challenge`) is unaffected. See the upgrade notes.
+
+- **ICE trickle needs the key that opened the connection** (#342).
+  `PATCH /v1/webrtc/connect` took no API key and checked nothing but the
+  body's `pc_id`, which is not a secret (it shows in logs, browser
+  extensions, shared screens), so whoever learned a live call's `pc_id` could
+  add ICE candidates to its peer connection, whatever project the call was
+  in. It now takes the same key as the `POST` (admin or developer; a viewer
+  key is a `403`): no key is a `401`, and a `pc_id` no call of the key's
+  project holds is a `404` that does not say whether it exists. Nothing
+  reaches pipecat in either case. A body that is not a JSON object is a
+  `400`, as on the `POST` (it was a `500`). A connection restarted with
+  `restart_pc` is now held under the new `pc_id` pipecat answers with, so its
+  trickle and a later renegotiation reach it; a second renegotiation of a
+  restarted connection used to be a `404`. See the upgrade notes.
+
+- **The secrets TurnCall keeps are encrypted at rest** (#338). Only project
+  credentials and a number's own Twilio auth token were; every other secret
+  sat in Postgres in plaintext, so a database dump or backup gave away
+  webhook subscriptions' signing secrets, a number's call-init
+  `server_url_secret`, and in an agent's config its `llm.api_key` (its
+  failovers' too), static AWS keys in `config.aws` (all three of
+  `access_key_id`, `secret_access_key` and `session_token`),
+  `server_url.secret`, a tool's `webhook_secret` and the values of MCP
+  servers' `headers` and `env`, and with a signing secret the means to sign
+  an event or call-init request your receivers accept. They are now
+  Fernet-encrypted under `CREDENTIAL_ENCRYPTION_KEY`, the key project
+  credentials already use, wherever an agent config is kept: on the agent,
+  as a call-init's inline config on its call or SMS session, and as an
+  inline eval target on a run or scenario. Nothing that uses them changes:
+  signatures, call-init, tools and MCP servers get the plaintext as before,
+  a phone number read still returns its `server_url_secret`, and an agent
+  read, like the audit log's record of an agent change, still shows a static
+  `access_key_id`, which names the key without unlocking it. Saving one
+  without the key is a `503` (`credential_key_unavailable`), never a
+  fall back to plaintext, and a call whose call-init answers with an inline
+  config holding one fails, as does a text that would open such a session
+  (SMS is answered with an apology; nothing is kept); a write that holds none
+  needs no key. Startup
+  warns when the key is unset, and fails, as it does for credentials, when
+  what is stored cannot be read with it. This protects a dump on its own: a
+  dump *and* the key still read every one of them, and call data
+  (recordings, transcripts, events, analysis, the call record) is stored as
+  it was. The `seal_secrets_at_rest` migration (`e6c2a8f4b0d9`) encrypts existing rows in one
+  transaction, and refuses to run without the key when any exist. See the
+  upgrade notes.
+
+- **Outbound URLs must be `https://` outside development** (#340). A webhook
+  subscription's `url`, a number's call-init `server_url`, and in an agent's
+  config `server_url.url`, a tool's `webhook_url` and an MCP server's `url`
+  took an `http://` URL in every environment (a webhook subscription took any
+  scheme at all), so events, call-init requests, tool arguments and MCP
+  headers could cross the network in cleartext. Each is now checked when it is
+  written: a scheme other than `https` or `http` is a `422`, and so is
+  `http://` unless plain http is allowed, which by default it is only when
+  `TURNCALL_ENV` is `development`; every other environment, staging included,
+  refuses it. A host ending in `.svc` or `.svc.cluster.local` (a Kubernetes
+  Service in the same cluster, judged by the URL's hostname alone) may still
+  be `http://` anywhere; loopback and private addresses are not exempt. The
+  check runs on creating a webhook subscription, binding or updating a
+  number, creating or replacing an agent, and `POST /v1/tools`. WebRTC's
+  `requestData.server_url`, refused with a `400` in production only, now
+  follows the same rule, so staging refuses it too. New setting
+  `ALLOW_PLAIN_HTTP_URLS`: `true` allows plain http everywhere, `false`
+  refuses it in development too, unset or blank leaves it to `TURNCALL_ENV`.
+  Inline configs are not refused for plain http: an inline agent from a
+  call-init answer, an eval run's `inline` target, and a `turncall-demo`
+  agents file. URLs stored before the upgrade keep being delivered to, and
+  startup names them (`plain_http_stored`, per project and kind, with a count
+  and the hosts). Each delivery to a plain-http URL the check would now
+  refuse is logged as `plain_http_delivery` (once a minute per kind,
+  `webhook`, `call_init`, `server_event`, `tool` or `mcp`, with how many it
+  left out), naming the host and never the full URL. The delivery still
+  happens. See the upgrade notes.
 
 ### Documentation
 
