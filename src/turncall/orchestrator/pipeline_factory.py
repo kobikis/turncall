@@ -736,9 +736,13 @@ def _tts_text_transforms(
 ) -> list[tuple[str, Any]]:
     """The text transforms for one provider's TTS service class.
 
+    The model's stage directions go first (`stage_directions.py`): stripping
+    markdown before them would drop the asterisks a starred narration is
+    recognised by. Only Cartesia's keeps its voice tags.
+
     LLMs emit markdown (**bold**, `code`) that TTS would otherwise read aloud
     literally ("asterisk asterisk"). Stripping it is provider-independent and
-    comes first for everyone. Pipecat wants
+    comes next for everyone. Pipecat wants
     (aggregation_type | "*", transform) tuples; "*" = all types.
 
     Composed per service class, not once and shared, because the pronunciation
@@ -764,7 +768,13 @@ def _tts_text_transforms(
     """
     from pipecat.utils.text.transforms import strip_markdown
 
-    transforms: list[tuple[str, Any]] = [("*", strip_markdown)]
+    from turncall.orchestrator.stage_directions import stage_direction_transform
+
+    voice_tags = config.tts.provider == "cartesia"
+    transforms: list[tuple[str, Any]] = [
+        ("*", stage_direction_transform(voice_tags=voice_tags)),
+        ("*", strip_markdown),
+    ]
     if pronunciations and config.tts.pronunciations:
         transforms.append(
             ("*", service_cls.pronunciation_transform_ipa(config.tts.pronunciations))
@@ -827,15 +837,8 @@ def _create_tts_service(
     config: AgentConfig, credentials: Credentials, **kwargs: Any
 ) -> Any:
     """Create TTS service: deepgram, openai, elevenlabs, cartesia, xai.
-    `kwargs` reach pipecat's `TTSService` as they are, beside the filter that
-    keeps the model's stage directions unspoken."""
-    from turncall.orchestrator.stage_directions import StageDirectionFilter
-
+    `kwargs` reach pipecat's `TTSService` as they are."""
     provider = config.tts.provider
-    kwargs = {
-        "text_filters": [StageDirectionFilter(voice_tags=provider == "cartesia")],
-        **kwargs,
-    }
 
     speed = {"speed": config.tts.speed} if config.tts.speed != 1.0 else {}
     model, voice = _tts_model_voice(config)
@@ -1349,8 +1352,8 @@ def _build_tools_schema(
     if not all_tools:
         return None
 
-    from pipecat.adapters.schemas.function_schema import FunctionSchema
-    from pipecat.adapters.schemas.tools_schema import ToolsSchema
+    from pipecat.adapters.llm.schemas.function_schema import FunctionSchema
+    from pipecat.adapters.llm.schemas.tools_schema import ToolsSchema
 
     functions = []
     for tool in all_tools:

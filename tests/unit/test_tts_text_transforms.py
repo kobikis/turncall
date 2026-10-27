@@ -10,7 +10,7 @@ both the wiring AND the tuple shape — a bare callable would raise
 """
 
 import pytest
-from pipecat.utils.text.base_text_aggregator import AggregationType
+from pipecat.utils.text.base_text_aggregator import TextType
 
 from tests.conftest import creds
 from turncall.domain.models import AgentConfig, TTSConfig
@@ -31,10 +31,8 @@ async def test_tts_service_strips_markdown(provider, monkeypatch):
     # Mirror pipecat's runtime unpacking exactly — a bad shape fails here.
     applied = None
     for aggregation_type, transform in service._text_transforms:
-        assert aggregation_type == "*" or isinstance(aggregation_type, AggregationType)
-        result = await transform(
-            "You owe **$5** for `item-3`", AggregationType.SENTENCE
-        )
+        assert aggregation_type == "*" or isinstance(aggregation_type, TextType)
+        result = await transform("You owe **$5** for `item-3`", TextType.SENTENCE)
         if result == "You owe $5 for item-3":
             applied = transform
     assert applied is not None, "strip_markdown not wired into the TTS text path"

@@ -35,8 +35,9 @@ everywhere; `false` refuses it in development too. See
 **Rebuild an image built on or after 2026-10-19.** TurnCall's pipecat requirement
 allowed any 1.x, so an install or image made from that day on got pipecat
 1.13.0, on which an S2S agent's handoff to its own LLM (delegation) breaks.
-TurnCall now runs on pipecat 1.13 and holds it at `>=1.13.0,<1.14.0`, so a new
-pipecat minor only arrives with a TurnCall release. See *pipecat 1.13* below.
+TurnCall now runs on pipecat 1.14 and holds it at `>=1.14.0,<1.15.0`, so a new
+pipecat minor only arrives with a TurnCall release. See *pipecat 1.14* and
+*pipecat 1.13* below.
 
 ## Added
 
@@ -326,6 +327,22 @@ chart fills `DATABASE_URL` and `REDIS_URL` and migrates before the API starts.
 See [Kubernetes](/guides/kubernetes#everything-in-the-cluster-development).
 
 ## Changed
+
+**pipecat 1.14.** The speech framework moves on to 1.14. Nothing in the API or
+agent config changes. You may notice:
+
+- A Markdown link in a reply is spoken as its label, not its URL.
+- A speech provider that stops reading no longer leaves the call silent: after
+  5 seconds the connection is dropped and the service reconnects.
+- On an OpenAI or xAI voice, the agent's own history keeps its stage directions
+  ("[Ending the call...]") as it wrote them. The caller still never hears them,
+  and the transcript still leaves them out.
+- Fixes that come with it, among them: an OpenAI Realtime agent that stopped
+  reacting for the rest of the call, Deepgram Flux losing the caller's words
+  when its connection dropped mid-turn, ElevenLabs word timings running early,
+  Cartesia speaking `es-MX` as plain Spanish, text-mode evals of an agent with
+  failover waiting about 6 seconds a turn, and credentials left unmasked in
+  some error messages.
 
 **pipecat 1.13.** The speech framework TurnCall runs on moves to 1.13, with
 these changes you may notice:

@@ -64,8 +64,8 @@ class TestTheService:
     async def test_xais_bracket_tags_are_stripped_for_now(self) -> None:
         """xAI reads `[laugh]`, but the model writes such tags for no voice in
         particular; until there is a per-provider set they stay unspoken."""
-        [text_filter] = _service()._text_filters
-        assert await text_filter.filter("[laugh] That is great!") == "That is great!"
+        said = await _service()._transform_text("[laugh] That is great!", "sentence")
+        assert said.strip() == "That is great!"
 
     def test_the_label_names_the_voice_not_a_missing_model(self) -> None:
         assert _tts_label(_agent()) == "xai/eve"

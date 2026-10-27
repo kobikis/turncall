@@ -92,7 +92,7 @@ class _FakeTTS(FrameProcessor):
             await self.push_error("tts refused", category=self.fail)
             return
         self.spoken.append(text)
-        await self.push_frame(TTSTextFrame(text, aggregated_by="sentence"))
+        await self.push_frame(TTSTextFrame(text, text_type="sentence"))
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)

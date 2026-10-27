@@ -9,9 +9,9 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 from pipecat.frames.frames import (
-    AggregationType,
     LLMFullResponseEndFrame,
     TextFrame,
+    TextType,
     TranscriptionFrame,
     TTSTextFrame,
 )
@@ -46,9 +46,9 @@ async def test_assistant_tap_excludes_user_transcription() -> None:
     # S2S pushes each assistant token as BOTH an LLMTextFrame (a plain TextFrame
     # here) and a TTSTextFrame — the TTSTextFrame must be ignored, else doubling.
     await feed(TextFrame(text="Sure, "))
-    await feed(TTSTextFrame(text="Sure, ", aggregated_by=AggregationType.SENTENCE))
+    await feed(TTSTextFrame(text="Sure, ", text_type=TextType.SENTENCE))
     await feed(TextFrame(text="what dates?"))
-    await feed(TTSTextFrame(text="what dates?", aggregated_by=AggregationType.SENTENCE))
+    await feed(TTSTextFrame(text="what dates?", text_type=TextType.SENTENCE))
     await feed(LLMFullResponseEndFrame())
     await _drain()
 

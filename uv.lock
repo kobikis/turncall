@@ -3501,7 +3501,7 @@ wheels = [
 
 [[package]]
 name = "pipecat-ai"
-version = "1.13.0"
+version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -3528,9 +3528,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fa/19/2e60e240b39d47f45eec79804328078e164236d59452ebabde6bbd1fcccd/pipecat_ai-1.13.0.tar.gz", hash = "sha256:e111a83f215c03e4e239df3ef0ad0e538742025dff9569d0eb5372d801b63ecd", size = 12832770, upload-time = "2026-10-19T06:34:50.487Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b4/88/4fde6c32417a54ef7623739c41d2a2bec5a1f0452d5b1d22cf3635017601/pipecat_ai-1.14.0.tar.gz", hash = "sha256:2535140066a6a540c9f9e11996c79c94c3bdc1304f9303b39298e6e1ecdea34e", size = 12927496, upload-time = "2026-10-24T01:24:19.438Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8b/04/e2845f19dab51b3fd1a418bdad9efa4c3c41a43d0b4f47c88896eaf758d8/pipecat_ai-1.13.0-py3-none-any.whl", hash = "sha256:a8f841d6332a94414ca8a218f4870022f5aae7e03cd55ace3ddbf0fdb58f3939", size = 12056923, upload-time = "2026-10-19T06:34:47.141Z" },
+    { url = "https://files.pythonhosted.org/packages/38/31/29c72ca8d3a16b59fd12580fcb99a7cef641d9ee07fe7b0321c1b65ca3cf/pipecat_ai-1.14.0-py3-none-any.whl", hash = "sha256:0352f504b44e78bdf524e45af4bc759601c835b9b7dc195efe5e03384b974a44", size = 12109725, upload-time = "2026-10-24T01:24:16.112Z" },
 ]
 
 [package.optional-dependencies]
@@ -5496,9 +5496,9 @@ requires-dist = [
     { name = "openai", specifier = ">=1.74.0,<4" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.43.0" },
     { name = "pgvector", specifier = ">=0.3.0" },
-    { name = "pipecat-ai", extras = ["anthropic", "assemblyai", "aws-nova-sonic", "cartesia", "deepgram", "elevenlabs", "google", "heygen", "local-smart-turn", "mcp", "openai", "silero", "tavus", "tracing", "webrtc", "webrtc-video"], specifier = ">=1.13.0,<1.14.0" },
-    { name = "pipecat-ai", extras = ["kokoro", "moonshine"], marker = "extra == 'evals-audio'", specifier = ">=1.13.0,<1.14.0" },
-    { name = "pipecat-ai", extras = ["typesafe"], marker = "extra == 'evals-jev'", specifier = ">=1.13.0,<1.14.0" },
+    { name = "pipecat-ai", extras = ["anthropic", "assemblyai", "aws-nova-sonic", "cartesia", "deepgram", "elevenlabs", "google", "heygen", "local-smart-turn", "mcp", "openai", "silero", "tavus", "tracing", "webrtc", "webrtc-video"], specifier = ">=1.14.0,<1.15.0" },
+    { name = "pipecat-ai", extras = ["kokoro", "moonshine"], marker = "extra == 'evals-audio'", specifier = ">=1.14.0,<1.15.0" },
+    { name = "pipecat-ai", extras = ["typesafe"], marker = "extra == 'evals-jev'", specifier = ">=1.14.0,<1.15.0" },
     { name = "presidio-analyzer", specifier = ">=2.2.364,<2.3" },
     { name = "presidio-anonymizer", specifier = "==2.2.362" },
     { name = "pydantic", specifier = ">=2.5.0" },
