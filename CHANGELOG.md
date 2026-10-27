@@ -897,6 +897,13 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **OpenAI reasoning models (`gpt-5*`, `o1`/`o3`/`o4`) work as an agent's LLM**
+  (#414). TurnCall sent them `max_tokens` and a temperature; OpenAI answers
+  `400` to both, so the call failed on the caller's first turn
+  (`error.raised`) and a chat/SMS message got no reply. `openai` now sends
+  `max_completion_tokens` (every OpenAI chat model takes it) on voice and
+  text, and no temperature to a reasoning model, which takes only its
+  default. OpenRouter and custom endpoints are unchanged.
 - **One goodbye when gpt-live-1 says its own** (#262). A client delegate that
   ends the call still had its goodbye voiced after gpt-live-1 had already
   answered the caller's "bye" itself, which it does at times despite being told

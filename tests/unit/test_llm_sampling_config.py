@@ -16,16 +16,28 @@ def _agent_config(**llm_kwargs: object) -> AgentConfig:
 
 @pytest.mark.unit
 class TestCascadeSamplingSettings:
-    def test_openai_receives_temperature_and_max_tokens(self) -> None:
+    def test_openai_receives_temperature_and_max_completion_tokens(self) -> None:
         config = _agent_config(provider="openai", temperature=1.3, max_tokens=256)
         svc = _create_llm_service(config, creds("sk-test"))
         assert svc._settings.temperature == 1.3
-        assert svc._settings.max_tokens == 256
+        assert svc._settings.max_completion_tokens == 256
 
     def test_defaults_applied_as_stored(self) -> None:
         svc = _create_llm_service(_agent_config(provider="openai"), creds("sk-test"))
         assert svc._settings.temperature == 0.7
-        assert svc._settings.max_tokens == 1024
+        assert svc._settings.max_completion_tokens == 1024
+
+    @pytest.mark.parametrize("model", ["gpt-5-mini", "o4-mini", "o3"])
+    def test_an_openai_reasoning_model_gets_what_it_accepts(self, model: str) -> None:
+        """Measured on gpt-5-mini: `400 Unsupported parameter: 'max_tokens'`, and
+        once that is fixed `400 Unsupported value: 'temperature' does not
+        support 0.7` — the first ended a real call on its first turn."""
+        config = _agent_config(provider="openai", model=model, reasoning_effort="low")
+        svc = _create_llm_service(config, creds("sk-test"))
+        sent = svc.build_chat_completion_params({"messages": []})
+        assert sent["max_completion_tokens"] == 1024
+        assert not isinstance(sent["max_tokens"], int)
+        assert not isinstance(sent["temperature"], float)
 
     def test_anthropic_receives_settings(self) -> None:
         """max_tokens only — see TestAnthropicTemperature for why the
@@ -82,7 +94,7 @@ class TestClassifierOverride:
     def test_max_tokens_override_wins(self) -> None:
         config = _agent_config(provider="openai", max_tokens=4096)
         svc = _create_llm_service(config, creds("sk-test"), max_tokens=16)
-        assert svc._settings.max_tokens == 16
+        assert svc._settings.max_completion_tokens == 16
 
 
 @pytest.mark.unit

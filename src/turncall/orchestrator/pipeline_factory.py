@@ -37,7 +37,7 @@ from turncall.orchestrator.deepgram_flux import (
 from turncall.orchestrator.knowledge_processor import KnowledgeTool, knowledge_tool
 from turncall.orchestrator.observability import ObservabilityProcessor
 from turncall.services.credentials import Credentials
-from turncall.services.llm_models import resolve_llm_model
+from turncall.services.llm_models import is_openai_reasoning_model, resolve_llm_model
 from turncall.services.tool_mocks import ToolMocks
 
 # A call whose agent came from call-init as an inline config (ADR-0008: the
@@ -525,14 +525,18 @@ def _create_llm_service(
         )
 
     if provider == "openai":
+        # `max_completion_tokens`, which every OpenAI chat model takes and its
+        # reasoning families require (they 400 the deprecated `max_tokens`);
+        # and no temperature for those, which take only the default.
+        reasoning = is_openai_reasoning_model(model)
         return OpenAILLMService(
             api_key=credentials.api_key("openai", config.llm.api_key),
             settings=OpenAILLMService.Settings(
                 model=model,
                 **si,
                 extra=_openai_extra_body(effort),
-                temperature=temperature,
-                max_tokens=max_tokens,
+                **({} if reasoning else {"temperature": temperature}),
+                max_completion_tokens=max_tokens,
             ),
         )
 

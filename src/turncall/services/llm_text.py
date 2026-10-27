@@ -24,7 +24,7 @@ from turncall.adapters.http_client import get_http_client
 from turncall.domain.models import AWSConfig, LLMConfig
 from turncall.domain.providers import account_for
 from turncall.services.credentials import Credentials, current
-from turncall.services.llm_models import resolve_llm_model
+from turncall.services.llm_models import is_openai_reasoning_model, resolve_llm_model
 
 # Runs one tool and returns its result as a string. Owns its own errors —
 # a failure comes back as text for the model to react to, never as an
@@ -514,6 +514,11 @@ async def _complete_text_openai(
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
     }
+    if config.provider == "openai":
+        # As on the voice path (`pipeline_factory._create_llm_service`).
+        body["max_completion_tokens"] = body.pop("max_tokens")
+        if is_openai_reasoning_model(config.model):
+            del body["temperature"]
     if config.reasoning_effort:
         # OpenAI reasoning models (o-series/gpt-5) and Grok's (xai, which
         # the API refuses `minimal` for); ignored when unset.

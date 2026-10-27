@@ -88,3 +88,15 @@ def resolve_llm_model(provider: str, configured: str) -> str:
         )
 
     return configured
+
+
+# OpenAI's reasoning families. They take no `temperature` but the default
+# (`400 Unsupported value: 'temperature' does not support 0.7 with this
+# model`), and every OpenAI chat model takes `max_completion_tokens` where
+# these refuse the deprecated `max_tokens`.
+_OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+
+
+def is_openai_reasoning_model(model: str | None) -> bool:
+    """Whether an OpenAI model is one of its reasoning families."""
+    return (model or "").lower().startswith(_OPENAI_REASONING_PREFIXES)

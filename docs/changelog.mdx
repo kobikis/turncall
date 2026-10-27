@@ -428,6 +428,12 @@ the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
 
+**GPT-5 and OpenAI's o-series work as an agent's LLM.** A call on one used to
+fail on the caller's first turn, and a chat or SMS message got no reply:
+OpenAI refused the token limit and temperature TurnCall sent. The limit is now
+sent the way OpenAI asks for it, and a reasoning model gets no temperature,
+since it accepts only its own default.
+
 **An OpenAI Realtime agent checks in on a quiet caller.** The "Are you still
 there?" check-in never reached an OpenAI Realtime session, so a caller who went
 quiet heard nothing, and the call stayed open until its maximum duration instead

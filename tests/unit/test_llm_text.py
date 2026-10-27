@@ -131,6 +131,35 @@ class TestCompleteText:
         assert body["reasoning_effort"] == "high"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "temperature"), [("gpt-4o-mini", 0.7), ("gpt-5-mini", None)]
+    )
+    async def test_openai_gets_max_completion_tokens_and_a_reasoning_model_no_temperature(
+        self, model: str, temperature: float | None
+    ) -> None:
+        """gpt-5-mini answers `400` to `max_tokens` and to any temperature but
+        the default; every OpenAI chat model takes `max_completion_tokens`."""
+        config = LLMConfig(provider="openai", model=model, api_key="k")
+        mock_response = httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"total_tokens": 1},
+            },
+            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+        )
+        with patch("turncall.services.llm_text.get_http_client") as mock_get:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_get.return_value = mock_client
+            await complete_text(config, [{"role": "user", "content": "hi"}])
+
+        body = mock_client.post.call_args.kwargs["json"]
+        assert body["max_completion_tokens"] == 1024
+        assert "max_tokens" not in body
+        assert body.get("temperature") == temperature
+
+    @pytest.mark.asyncio
     async def test_reasoning_effort_omitted_when_unset(self) -> None:
         config = LLMConfig(provider="openai", model="gpt-4o-mini", api_key="k")
         mock_response = httpx.Response(

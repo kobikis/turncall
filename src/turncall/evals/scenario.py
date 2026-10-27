@@ -411,11 +411,6 @@ def compile_model_block(
     return compiled
 
 
-# OpenAI's reasoning families reject `temperature` the way Claude does; the
-# prefixes are the ones `llm.reasoning_effort` already documents.
-_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
-
-
 def _takes_temperature(provider: str, model: str | None) -> bool:
     """Whether this model accepts a temperature at all.
 
@@ -433,8 +428,9 @@ def _takes_temperature(provider: str, model: str | None) -> bool:
     # classifier judge does not have to remember this rule too.
     if provider == "anthropic" or provider in CLASSIFIER_ONLY_JUDGES:
         return False
-    name = (model or "").lower()
-    return not any(name.startswith(prefix) for prefix in _REASONING_PREFIXES)
+    from turncall.services.llm_models import is_openai_reasoning_model
+
+    return not is_openai_reasoning_model(model)
 
 
 def explainer_for(
