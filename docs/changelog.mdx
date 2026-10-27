@@ -428,6 +428,12 @@ the recording. See [Ambience](/guides/ambience).
 
 ## Fixed
 
+**A gpt-live-1 call ends after both sides say goodbye.** gpt-live-1 sometimes
+says goodbye itself and then never ends the call, leaving the caller on an open
+line. Now, once the caller and the agent have both said goodbye and nothing is
+still being worked on, the call ends a few seconds later, after anything still
+being said. It reads as ended by the agent. English goodbyes only.
+
 **An OpenAI Realtime agent checks in on a quiet caller.** The "Are you still
 there?" check-in never reached an OpenAI Realtime session, so a caller who went
 quiet heard nothing, and the call stayed open until its maximum duration instead

@@ -897,6 +897,16 @@ and is not part of this repository's history.
 
 ### Fixed
 
+- **A goodbye gpt-live-1 never ended the call on** (#413). An `openai_live`
+  agent sometimes answers the caller's "bye" itself and never runs `end_call`,
+  which left the line open until the caller hung up (one call: 35 s and four
+  more byes, the first said while a booking was being worked on). Once the
+  caller and gpt-live-1 have both said goodbye and nothing is in flight, the
+  call now waits 4 s for an ending tool and then ends after the reply playing,
+  recorded as the agent's end (`call.ended` reason
+  `goodbye_without_end_call`, so `ended_reason` reads `assistant_ended_call`).
+  Work in flight is relayed first. Only for agents that offer `end_call`;
+  English goodbyes only, like #262's check.
 - **One goodbye when gpt-live-1 says its own** (#262). A client delegate that
   ends the call still had its goodbye voiced after gpt-live-1 had already
   answered the caller's "bye" itself, which it does at times despite being told
