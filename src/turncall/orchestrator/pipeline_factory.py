@@ -1967,9 +1967,13 @@ def _create_s2s_pipeline(
         # Before pipeline_builder registers the agent's tools, so on a name
         # clash theirs wins, as in the advertised schema.
         s2s_llm.register_function(knowledge.definition.name, knowledge.handler)
-    from turncall.orchestrator.delegation_events import record_delegations
+    from turncall.orchestrator.delegation_events import (
+        end_unended_goodbyes,
+        record_delegations,
+    )
 
     record_delegations(s2s_llm, call_context)
+    end_unended_goodbyes(s2s_llm, call_context, {t.name for t in advertised})
 
     # Build context — system prompt + first_message are handled by the S2S
     # service directly (SessionProperties.instructions for OpenAI,
