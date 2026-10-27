@@ -40,7 +40,8 @@ the public release, so the published number is the out-of-the-box number.
 and carrier stated, and the harness in the repo so anyone can rerun it. A poor
 result is fixed before release, not hidden or flattered by choosing
 configurations after the fact. After release, ask Cekura to add TurnCall to its
-fixed-stack benchmark so a third-party number stands next to ours.
+fixed-stack benchmark so a third-party number stands next to ours. (Amended
+below: v1 replaced that benchmark, and we self-run it first.)
 
 ## Considered options
 
@@ -56,3 +57,25 @@ fixed-stack benchmark so a third-party number stands next to ours.
   provider minutes per run, so it runs before releases, not in CI.
 - The result has to be published with the release; the repo being private until
   then means nobody else can check it before.
+
+## Amendment (2026-10-22): Cekura v1, self-run first
+
+Cekura archived the fixed-stack benchmark on 12 Oct and replaced it with v1:
+82 scenarios (59 Appointment, 23 Medicare), each run three times over the phone,
+every vendor on the stack it chose, scored by Cekura on mean response time and
+pass³. Vapi, LiveKit and Pipecat all submitted GPT-4.1 configurations; Pipecat's
+reads 1.97 s and 63.4%.
+
+- **Self-run v1 now, submit at release.** We run the v1 agent benchmark on our
+  own Cekura account with Cekura's open runner, and ask Cekura to run TurnCall
+  itself when the repos are public. The self-run is never published: it is a
+  [[third-party benchmark]] run by the party being measured.
+- **Two configurations.** First Pipecat's submitted stack, matched as closely as
+  TurnCall allows, so a gap is TurnCall's orchestration and not a model choice;
+  then the tuned cascade above. The shipped defaults are not run there:
+  `gpt-4o-mini` against everyone else's `gpt-4.1` would measure the model.
+- **Twilio, on a deployed instance**, as Pipecat ran, with a trial launch of a
+  few named scenarios before each full suite.
+- **It adds to the caller-ear measurement, it does not replace it.** Cekura
+  reports a mean with no p95, measured by Cekura; caller-ear latency is p50/p95
+  from our own stereo recording. The two are never set side by side.
