@@ -391,6 +391,24 @@ and is not part of this repository's history.
   and taken from PyTorch's CPU-only index, as the image already did, so it
   carries no CUDA libraries. Building the image needs `uv.lock` in the build
   context. CONTRIBUTING, "Bumping a dependency", has the steps.
+- **pipecat 1.14** (#412, ADR-0029). The requirement is now
+  `>=1.14.0,<1.15.0`. No API or config change. What changes:
+  - **Stage directions** are stripped by a TTS text transform instead of a
+    text filter (pipecat 1.14 deprecated filters); the caller hears the same
+    text. On a TTS without word timestamps (OpenAI, xAI), the agent's context
+    now keeps the model's reply as written, its stage directions included;
+    the caller still never hears them and the transcript still drops them.
+  - **A Markdown link** is spoken as its label, not its URL.
+  - **A provider that stops reading** a WebSocket no longer stalls the call:
+    a send stuck for 5 seconds drops the connection and the service
+    reconnects.
+  - **Fixes that come with it**, among them: an OpenAI Realtime agent that
+    stopped reacting for the rest of the call after a response with no usage
+    figures; Deepgram Flux reconnecting without losing the caller's turn, and
+    naming why it refused a setting; ElevenLabs word timings running early;
+    Cartesia reducing `es-MX` to `es`; text-mode evals of an agent with a
+    failover group waiting about 6 seconds per turn; and credentials left
+    unmasked in some error messages.
 - **pipecat 1.13** (#367, ADR-0028). The requirement is now
   `>=1.13.0,<1.14.0`: capped at the next minor, so each pipecat minor is
   adopted on purpose rather than picked up by a fresh install (1.13.0 reached
