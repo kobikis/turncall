@@ -3,7 +3,38 @@ title: Changelog
 description: "Latest updates and improvements to TurnCall"
 ---
 
-<Update label="Unreleased" description="Unreleased" tags={["Feature", "Fix"]}>
+<Update label="Unreleased" description="Unreleased" tags={["Feature"]}>
+
+</Update>
+
+<Update label="2026-10-27" description="October 27, 2026" tags={["Release", "Feature", "Update", "Fix"]}>
+
+## 2.1.0
+
+Avatars on speech-to-speech calls, xAI Grok for every role, Telnyx and Asterisk
+as carriers, outbound campaigns, per-project limits, your own provider keys per
+project, ambience, failover for speech recognition and voices, redaction,
+retention and an audit log, secrets encrypted at rest, buying and releasing
+numbers, a Helm chart, and pipecat 1.14.
+
+## ⚠️ Breaking changes
+
+This release changes a few things existing integrations rely on. Check each
+before upgrading; the upgrade notes below say what to do.
+
+- **Viewer keys lose four routes**: linking and unlinking an agent's knowledge
+  base, re-running a call's analysis, and starting a browser call now need an
+  admin or developer key.
+- **The ICE trickle needs the API key**: a `PATCH /v1/webrtc/connect` without
+  `Authorization` is a `401`.
+- **Plain `http://` URLs are refused outside development**: webhook
+  subscriptions, numbers' `server_url`, and agents' tool, MCP and `server_url`
+  URLs are a `422` unless `ALLOW_PLAIN_HTTP_URLS` allows them.
+- **Unverifiable Twilio and WhatsApp webhooks are refused outside development**
+  (`403`): set `TWILIO_AUTH_TOKEN` and `WHATSAPP_APP_SECRET`.
+- **Saving a secret needs `CREDENTIAL_ENCRYPTION_KEY`**: without it a save that
+  holds one is a `503`.
+- **`handoff_to_agent` is refused on an `openai_live` agent** (`422`).
 
 ## ⚠️ Upgrade notes
 
