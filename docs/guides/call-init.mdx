@@ -251,6 +251,10 @@ Each id must be a knowledge base in the phone number's project. One that is
 not, or an entry TurnCall cannot read, is skipped with a warning and the call
 still connects. See [Knowledge Base](/guides/knowledge-base#inline-agents).
 
+An inline agent can name the project's [skills](/guides/skills#call-init-inline-agents)
+in `skills`, as a stored agent does. A name the project has no published version
+of is skipped with a warning, and the call starts without it.
+
 <Tip>
   For persistent, searchable knowledge, use the [Knowledge Base API](/guides/knowledge-base) instead of `knowledge_context`. Use `knowledge_context` for per-call dynamic data like CRM records or open tickets.
 </Tip>

@@ -26,7 +26,7 @@ from turncall.services.template_renderer import (
     prepend_knowledge_context,
     render_agent_config,
 )
-from turncall.services.tool_mocks import EXECUTED, intercept
+from turncall.services.tool_mocks import intercept
 from turncall.services.tool_webhook import invocation_record, post_tool_webhook
 
 if TYPE_CHECKING:
@@ -225,7 +225,7 @@ def recorded_tool(name: str, handler: Any, call_context: CallContext) -> Any:
             text = result if isinstance(result, str) else json.dumps(result)
             if call_context.tool_mocks is not None:
                 # A `live` eval: the search really ran, and the run says so.
-                call_context.tool_mocks.record(name, args, text, outcome=EXECUTED)
+                call_context.tool_mocks.ran(name, args, text)
             if not call_context.records:
                 return  # no `calls` row behind an eval (ADR-0018) or the demo
             latency_ms = int((time.perf_counter() - started) * 1000)
@@ -759,10 +759,9 @@ def _register_single_tool(
         if not delivered:
             await params.result_callback(result)
         if call_context.tool_mocks is not None:
-            # A `live` eval: the tool really ran, and the run's record says so.
-            call_context.tool_mocks.record(
-                function_name, args, result, outcome=EXECUTED
-            )
+            # The tool really ran — a `live` eval, or `load_skill`, which an
+            # eval never mocks (#431) — and the run's record says so.
+            call_context.tool_mocks.ran(function_name, args, result)
         if call_context.records:
             # No `calls` row behind an eval (ADR-0018), so
             # `tool_invocations.call_id` has nothing to point at and the write

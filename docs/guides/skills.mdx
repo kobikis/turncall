@@ -229,6 +229,29 @@ POST /v1/chat {"agent_id": "...", "session_id": "...", "message": "When is it du
 
 A text load is recorded as a `load_skill` row in the session's tool invocations (`GET /v1/chat/sessions/{id}/tool-invocations`), like any text tool. A text session has no event log, so there are no `skill.loaded` events.
 
+## Call-init inline agents
+
+An [inline agent](/guides/call-init#returning-an-inline-agent) returned by call-init has no stored row, so nothing checks its `skills` when it is saved. They resolve against the call's project like a stored agent's: the skills the project has can be loaded on the call, and a name the project does not have (or has no published version of) is logged as a warning and skipped. The call starts either way.
+
+```json
+{"agent": {"system_prompt": "...", "skills": [{"skill": "verify_identity"}, {"skill": "vip_retention"}]}}
+```
+
+## Skills in evals
+
+An [eval run](/guides/evals) resolves its target's skills once, in the run's project, before its first iteration, and every iteration runs those versions. An `inline` target can name skills too. The run's `resolved_config` records them under `resolved_skills`, and a skill that did not resolve is a `skills_skipped` warning on the run.
+
+`load_skill` is never mocked, because it changes the agent under test rather than reaching anything outside the eval. A `function_call` expectation on it checks that the agent loads the skill when it should:
+
+```json
+{"turns": [{"user": "Why did my bill go up?",
+  "expect": [{"event": "function_call",
+              "calls": [{"name": "load_skill", "args": {"name": "explain_bill"}}]}]}],
+ "tool_mocks": {"get_invoices": {"last": 52, "previous": 40}}}
+```
+
+The skill's own tools are mocked like any tool, and a call to one with no mock is refused under `mock_only`. Tag a skill's scenarios (say `skill:explain_bill`) and run them against each agent [`GET /v1/skills/{name}/agents`](#who-uses-a-skill) lists.
+
 ## What a call records
 
 The versions a call resolved are saved on the call when it starts, so the call stays explainable after a skill is published again. A handoff adds the target agent's versions. Each load is a `skill.loaded` event on the call's event log (`GET /v1/calls/{id}/events`), and each unload to stay within `max_loaded_skills` a `skill.unloaded` event with reason `limit`, recorded before the load that made room. Both are also delivered to [webhook subscribers](/guides/server-events#webhook-events):
@@ -247,7 +270,7 @@ The call read (`GET /v1/calls/{id}` and the list) and `call.ended` carry `skills
 ]
 ```
 
-An eval run records neither. Skill names, versions and reasons are identifiers, never [redacted](/guides/redaction). `skill.loaded` and `skill.unloaded` are in the events kind of [retention](/guides/retention); once a call's events expire, `loaded` is `null`, and the versions stay.
+An eval run records neither (its own record is `resolved_config`, above). Skill names, versions and reasons are identifiers, never [redacted](/guides/redaction). `skill.loaded` and `skill.unloaded` are in the events kind of [retention](/guides/retention); once a call's events expire, `loaded` is `null`, and the versions stay.
 
 ## Audit
 

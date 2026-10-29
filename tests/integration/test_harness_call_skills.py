@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 from aiohttp import web
+from loguru import logger
 from redis.asyncio import Redis
 
 from tests.harness import HARNESS_AGENT, Given, Script, ToolCall, run_app
@@ -408,6 +409,79 @@ async def test_a_skill_that_does_not_resolve_is_skipped_and_the_call_goes_on(
     assert first.tools == []
     assert ended["agent_id"] is None  # it ran the inline agent
     assert ended["payload"]["skills"] == []
+
+
+async def test_an_inline_call_init_agent_loads_a_project_skill(monkeypatch):
+    """A call-init inline agent has no row and never passes the API's checks
+    (#431): its skills resolve against the call's project, a name the
+    project does not have is a logged warning and a skipped skill, and the
+    one it does have loads on the call."""
+    before: list[Given] = []
+    after: list[Given] = []
+    script = Script(
+        caller=(SAID,),
+        agent=(
+            _remembering(before, ToolCall("load_skill", {"name": "explain_bill"})),
+            _remembering(after, "It went up by twelve."),
+        ),
+    )
+    inline = {
+        **HARNESS_AGENT,
+        "first_message": "Hello.",
+        "skills": [{"skill": "explain_bill"}, {"skill": "vip_retention"}],
+    }
+    warnings: list[str] = []
+    sink = logger.add(lambda m: warnings.append(str(m)), level="WARNING")
+    try:
+        async with (
+            Backend(variables={"customer_name": "Dana"}, agent=inline) as backend,
+            run_app(
+                script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+            ) as app,
+        ):
+            skill = await _publish_skill(
+                app,
+                {
+                    "name": "explain_bill",
+                    "description": BILL,
+                    "instructions": "Compare the invoices for {{customer_name}}.",
+                    "tools": [_tool("get_invoices", f"{backend.url}/get_invoices")],
+                },
+            )
+            number = await _bind_to_call_init(app, f"{backend.url}/call-init")
+            call = await place_inbound_call(
+                app.carrier, app.api, from_number=CALLER, to_number=number
+            )
+            await call.wait_for_agent_speech(1)  # the greeting
+            await call.say(400)
+            await call.wait_for_agent_speech(2)  # after the load
+            await call.hang_up()
+            ended = await app.sink.wait_for("call.ended")
+    finally:
+        logger.remove(sink)
+
+    assert any(
+        "skill_skipped" in line and "vip_retention" in line for line in warnings
+    ), warnings
+    [first] = before
+    assert f"- explain_bill: {BILL}" in _prompt(first)
+    assert "vip_retention" not in _prompt(first)
+    assert first.tools == ["load_skill"]
+    [second] = after
+    assert "## Skill: explain_bill (v1)\nCompare the invoices for Dana." in (
+        _prompt(second)
+    )
+    assert second.tools == ["load_skill", "get_invoices"]
+
+    assert ended["agent_id"] is None  # the inline agent ran it
+    assert ended["payload"]["skills"] == [
+        {
+            "skill": "explain_bill",
+            "version": skill["version"],
+            "pinned": False,
+            "loaded": True,
+        }
+    ]
 
 
 # --- the limit, the no-op, a handoff (#427) ----------------------------------

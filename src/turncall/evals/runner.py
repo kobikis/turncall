@@ -52,9 +52,11 @@ from turncall.evals.run_warnings import (
     warn_ambience_skipped,
     warn_context_ignored,
     warn_judge_changed,
+    warn_never_mocked,
     warn_unmatched_mocks,
     warn_worker_stale,
 )
+from turncall.evals.skills import resolve_run_skills
 from turncall.evals.snapshots import harness_config
 from turncall.evals.targets import ResolvedTarget, resolve_target
 from turncall.services import telemetry_redaction
@@ -493,6 +495,12 @@ async def _plan_run(
         await _record_unrunnable(session, run, exc)
         return None
 
+    # Once for the whole run (#431): every iteration runs these versions, and
+    # the snapshot names them. The snapshot keeps the target's own config.
+    skills = await resolve_run_skills(session, target)
+    resolved_config = skills.snapshot(sanitize_config(target.config_blob))
+    target = skills.target
+
     tool_mocks, live_tools = tool_policy_of(run.resolved_scenario)
     # Carried into the run, not only the create response (#95): the person who
     # reads a green verdict is not always the one who wrote the scenario, and
@@ -500,7 +508,11 @@ async def _plan_run(
     # say about itself.
     harness = harness_config(parsed)
     warnings = scenario_mod.assertion_warnings(parsed)
-    warnings += warn_unmatched_mocks(tool_mocks, target, run_id=run.id)
+    warnings += skills.warnings
+    warnings += warn_unmatched_mocks(
+        tool_mocks, target, run_id=run.id, skill_tools=skills.tool_names
+    )
+    warnings += warn_never_mocked(tool_mocks)
     warnings += await warn_judge_changed(session, run, harness)
     warnings += warn_worker_stale(harness)
     warnings += warn_ambience_skipped(target)
@@ -534,7 +546,7 @@ async def _plan_run(
         # Stored already masked (#91): nothing reads this back to execute
         # anything — it answers "what config produced this verdict", which a
         # masked key answers as well as a real one.
-        resolved_config=sanitize_config(target.config_blob),
+        resolved_config=resolved_config,
         agent_id=target.agent_id,
         agent_version=target.agent_version,
         harness_config=harness,

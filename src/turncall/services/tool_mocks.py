@@ -11,6 +11,13 @@ short-circuit the call *before* it is dispatched: webhook, MCP and built-in
 alike, since all three act on something outside the eval. Under the default
 `mock_only` an unmocked call is refused instead of executed, and the iteration
 is errored naming the tool.
+
+`load_skill` (#431) is the one exception: it reaches nothing outside the eval,
+it changes the agent under test — the skill's instructions and tools join the
+prompt — so it always runs, and a scenario's mock for it is ignored (the run
+says so, `run_warnings.warn_never_mocked`). Mocking it would test an agent
+that never gets the skill. The skill's own tools are tools like any other:
+mockable, and refused unmocked.
 """
 
 from __future__ import annotations
@@ -28,6 +35,11 @@ from turncall.services.tool_webhook import cap_tool_result
 MOCKED = "mocked"  # the canned response was returned, nothing was dispatched
 EXECUTED = "executed"  # `live`: the real tool ran
 REFUSED = "refused"  # no mock under `mock_only`: nothing ran, the run is errored
+APPLIED = "applied"  # never mocked: it changed the agent under test, nothing else
+
+# Tools that act on the agent under test and nothing else, so an eval runs
+# them whatever its mocks and policy say (#431).
+NEVER_MOCKED = frozenset({"load_skill"})
 
 
 def encode_mock(response: Any) -> str:
@@ -74,6 +86,13 @@ class ToolMocks:
             }
         )
 
+    def ran(self, name: str, args: dict[str, Any], result: str) -> None:
+        """Record a tool that really ran: `applied` for one never mocked,
+        `executed` for one a `live` policy let through."""
+        self.record(
+            name, args, result, outcome=APPLIED if name in NEVER_MOCKED else EXECUTED
+        )
+
 
 def intercept(mocks: ToolMocks | None, name: str, args: dict[str, Any]) -> str | None:
     """The canned result for this call, or None to execute it for real.
@@ -81,7 +100,7 @@ def intercept(mocks: ToolMocks | None, name: str, args: dict[str, Any]) -> str |
     A named mock always wins: it is the explicit intent of the test, and
     `live` only decides what happens to the tools no mock covers.
     """
-    if mocks is None:
+    if mocks is None or name in NEVER_MOCKED:
         return None
 
     if name in mocks.responses:

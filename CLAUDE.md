@@ -1161,12 +1161,30 @@ failed reply stores no load. Recorded: the `load_skill` `tool_invocations` row
 and `loaded_skills`; no `skill.*` events (a session has no event log), no
 session-read field. A new session starts empty.
 
+**Inline agents and evals** (#431): a call-init inline agent's `skills`
+resolve against the call's project exactly like a stored agent's (a name the
+project lacks is a `skill_skipped` warning, the call starts without it). An
+eval run resolves its target's skills **once**, in `_plan_run`
+(`evals/skills.resolve_run_skills`, the run's project, no `{{variables}}`,
+inline targets included): `resolved_config["resolved_skills"]` =
+`[{id, skill, version, pinned}]` (only when the agent lists skills; `[]` when
+none resolved), and every iteration runs those versions pinned
+(`SkillRef.version_id`), what did not resolve dropped. Run warnings:
+`skills_skipped` (names that did not resolve), `skills_ignored_on_s2s`.
+`load_skill` is **never mocked** (`tool_mocks.NEVER_MOCKED`, checked first in
+`intercept`): it changes the agent under test and reaches nothing outside, so
+it runs under `mock_only`, is recorded in `tool_calls` with outcome
+`applied`, and a scenario's mock for it is ignored with a `mock_ignored`
+warning. Skill tools are mocked and fail closed like any tool, and
+`warn_unmatched_mocks` counts resolved skills' tools as callable.
+
 Key files: `api/v1/skills.py`, `api/v1/schemas/skills.py`,
 `storage/repositories/skill_repo.py`, `services/skills.py`,
 `services/skill_knowledge.py`, `services/text_skills.py`,
-`orchestrator/skill_loader.py`. Tests: `tests/integration/test_skills_api.py`,
+`orchestrator/skill_loader.py`, `evals/skills.py`. Tests: `tests/integration/test_skills_api.py`,
 `tests/integration/test_harness_call_skills.py`,
-`tests/integration/test_chat_skills.py`, `tests/unit/test_skills_on_a_call.py`,
+`tests/integration/test_chat_skills.py`, `tests/integration/test_eval_skills.py`,
+`tests/unit/test_skills_on_a_call.py`, `tests/unit/test_eval_skills.py`,
 `tests/unit/test_skill_attachment_rules.py`, `tests/unit/test_text_skills.py`,
 `tests/unit/test_text_turn_refresh.py`.
 
@@ -1859,7 +1877,9 @@ one target.
   nor a fail and never counts toward a rate. No `score` column —
   `passed_count`/`failed_count` out of `iterations`.
 - **Three snapshots per run**: `resolved_config`, `resolved_scenario`,
-  `harness_config`. ADR-0017's rule one level out.
+  `harness_config`. ADR-0017's rule one level out. `resolved_config` carries
+  `resolved_skills` for an agent listing skills (#431), resolved once for the
+  run and run pinned by every iteration.
 - **An eval has no `calls` row.** `CallContext.eval_run_id` / `.is_eval` gates
   every call-scoped side effect — status writes, call_events, transcript taps,
   `tool_invocations` (there is no row to hang them off), and `call.ended`
@@ -1870,7 +1890,9 @@ one target.
   MCP, built-in and `query_knowledge` alike. Under `mock_only` (the default) a tool with no mock is
   refused and the iteration is `errored` naming it; `live` is the typed opt-in
   for read-only tools. What each iteration called lands in its results entry as
-  `tool_calls`, each marked `mocked`. Mocks are the **scenario's**, never the
+  `tool_calls`, each with its `outcome` (`mocked`, `refused`, `executed`, or
+  `applied` for `load_skill`, which is never mocked: it changes the agent under
+  test, #431 — see "Skills"). Mocks are the **scenario's**, never the
   run's: "the booking succeeds" and "the booking fails" are two tests.
 
 ### Writing a scenario that actually catches a provider regression
