@@ -363,6 +363,12 @@ class SkillRef(DomainModel):
     skill: str
 
 
+# How many skills a call may hold loaded at once (#427): loading one past the
+# cap unloads the one loaded longest ago, in the same switch.
+DEFAULT_MAX_LOADED_SKILLS = 3
+MAX_LOADED_SKILLS_RANGE = (1, 10)
+
+
 # A century: past it, a number of days is a typo for "keep it", which is null.
 MAX_RETENTION_DAYS = 36500
 
@@ -546,6 +552,35 @@ class AgentConfig(DomainModel):
                     err=str(exc),
                 )
         return usable
+
+    # At most this many loaded at once (#427); the one loaded longest ago
+    # makes room for the next.
+    max_loaded_skills: int = DEFAULT_MAX_LOADED_SKILLS
+
+    @field_validator("max_loaded_skills", mode="before")
+    @classmethod
+    def _unusable_cap_is_the_default(cls, value: Any) -> int:
+        """Past the API schema (a call-init inline agent), a cap that is not a
+        whole number is the default and one out of range is clamped into it:
+        a bad cap must not fail the call."""
+        low, high = MAX_LOADED_SKILLS_RANGE
+        if value is None:
+            return DEFAULT_MAX_LOADED_SKILLS
+        if isinstance(value, bool) or not isinstance(value, int):
+            logger.warning(
+                "max_loaded_skills_unusable: {value!r}, the call uses {default}",
+                value=value,
+                default=DEFAULT_MAX_LOADED_SKILLS,
+            )
+            return DEFAULT_MAX_LOADED_SKILLS
+        if not low <= value <= high:
+            logger.warning(
+                "max_loaded_skills_clamped: {value} is outside {low}-{high}",
+                value=value,
+                low=low,
+                high=high,
+            )
+        return min(max(value, low), high)
 
     transport: str = "twilio"  # "twilio" | "webrtc" | "both"
     server_url: ServerUrlConfig = Field(default_factory=ServerUrlConfig)

@@ -109,6 +109,22 @@ def test_every_resolved_skill_is_listed_loaded_or_not():
     ]
 
 
+def test_a_load_marks_only_the_version_that_ran():
+    """#427: after a handoff the call may hold two versions of one skill, the
+    first agent's and the target's. A load is matched by name and version."""
+    facts = CallFacts(
+        resolved_skills=(
+            {"id": "a", "skill": "explain_bill", "version": 1},
+            {"id": "c", "skill": "explain_bill", "version": 2},
+        ),
+        skill_loads=({"skill": "explain_bill", "version": 2},),
+    )
+    assert [s["loaded"] for s in derived_fields(_call(), facts)["skills"]] == [
+        False,
+        True,
+    ]
+
+
 def test_a_call_with_no_skills_lists_none():
     assert derived_fields(_call(), CallFacts())["skills"] == []
 

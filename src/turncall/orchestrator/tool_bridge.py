@@ -318,12 +318,17 @@ class PreparedHandoff(NamedTuple):
 
     Carrying the built frames rather than just the config is the point: the
     switch is committed to the database *before* the pipeline is touched, so
-    anything that can wait or raise has to have happened already.
+    anything that can wait or raise has to have happened already. `skills`
+    is the target agent's (`skill_loader.CallSkills`, none loaded), resolved
+    here for the same reason and swapped into the call by the apply step
+    (#427); `config` is then the target's with its skills' list and
+    `load_skill`.
     """
 
     name: str
     config: AgentConfig
     frames: tuple[Any, ...]
+    skills: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -464,6 +469,11 @@ async def _prepare_handoff(
                 AgentConfig.model_validate(target.config_blob),
             )
 
+        from turncall.orchestrator.skill_loader import prepare_handoff_skills
+
+        # The target's skills, resolved as at a call's start: I/O, so here,
+        # before the commit — never in the apply step (#427).
+        skills, config = await prepare_handoff_skills(config, call_context)
         frames = build_switch_frames(config)
     except Exception:
         logger.exception("handoff_context: failed to prepare the handoff")
@@ -479,7 +489,9 @@ async def _prepare_handoff(
             servers=[s.name for s in config.mcp_servers],
         )
 
-    return PreparedHandoff(name=target.name, config=config, frames=frames)
+    return PreparedHandoff(
+        name=target.name, config=config, frames=frames, skills=skills
+    )
 
 
 async def apply_switch(
@@ -528,11 +540,15 @@ async def _apply_handoff_context(
 
     Everything that can wait or raise happened in `_prepare_handoff`, before
     the switch was committed; `apply_switch` is the part that must not
-    suspend, and nothing here may either.
+    suspend, and nothing here may either — the skills swap included (#427):
+    from here the call's skills are the target agent's, none loaded.
     """
     await apply_switch(
         prepared.config, prepared.frames, call_context, params, clear_context=True
     )
+    holder = getattr(call_context, "skills", None)
+    if holder is not None and prepared.skills is not None:
+        holder.adopt(prepared.skills)
 
     logger.info(
         "handoff_context: switched system instruction to agent '{name}'",
@@ -607,6 +623,12 @@ async def run_handoff(
         return HandoffOutcome(_NOT_PREPARED, None)
     result = await _execute_builtin("handoff_to_agent", args, call_context)
     switched = await _complete_handoff(prepared, result, call_context, params)
+    if switched and prepared.skills is not None and prepared.skills.available:
+        from turncall.orchestrator.skill_loader import record_resolution
+
+        # After the switch, off its path: the call read lists the target's
+        # skill versions beside the first agent's (#427).
+        _spawn(record_resolution(call_context, prepared.skills.available))
     return HandoffOutcome(result, prepared if switched else None)
 
 

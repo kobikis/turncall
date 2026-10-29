@@ -36,8 +36,9 @@ class CallFacts:
     turn_metrics: tuple[dict[str, Any], ...] = ()
     # `provider.failover` payloads in the order they happened (#222).
     failovers: tuple[dict[str, Any], ...] = ()
-    # The skills the call resolved at its start, `{id, skill, version}` in the
-    # agent's order, and its `skill.loaded` payloads in load order (#425).
+    # The skills the call resolved, `{id, skill, version}` in the agent's
+    # order (a handoff's target's after, #427), and its `skill.loaded`
+    # payloads in load order (#425).
     resolved_skills: tuple[dict[str, Any], ...] = ()
     skill_loads: tuple[dict[str, Any], ...] = ()
 
@@ -46,9 +47,10 @@ class CallFacts:
 # call's credentials — MCP headers, an inline `llm.api_key` — so it is read by
 # the pipeline and `config_for_call()` and never shown (#276).
 DYNAMIC_CONFIG = "dynamic_config"
-# The skills the call resolved at its start (#425): `[{id, skill, version}]`,
-# written once by the pipeline's build, so the call stays explainable after
-# a skill is published again. Shown as `skills` (`call_skills`), not here.
+# The skills the call resolved (#425): `[{id, skill, version}]`, written by
+# the pipeline's build and appended to by a handoff for the target agent's
+# (#427), so the call stays explainable after a skill is published again.
+# Shown as `skills` (`call_skills`), not here.
 RESOLVED_SKILLS = "resolved_skills"
 # Keys only TurnCall writes: an outbound dial's `metadata` may not set them.
 RESERVED_METADATA = frozenset({DYNAMIC_CONFIG, RESOLVED_SKILLS})
@@ -80,18 +82,23 @@ def call_skills(
     *,
     events_kept: bool = True,
 ) -> list[dict[str, Any]]:
-    """Every skill the call resolved, in the agent's order: its version and
-    whether the call loaded it. Empty for a call with none.
+    """Every skill version the call resolved, in the agent's order (after a
+    handoff, the target agent's next): its version and whether the call
+    loaded it at any point. A skill unloaded later (#427) still reads loaded;
+    its `skill.unloaded` event says when. Empty for a call with none.
+
+    A load matches by name and version: two agents of one call may resolve
+    two versions of a skill, and only the one loaded ran.
 
     `loaded` is null once retention deleted the call's events (#316): the
     loads they recorded are gone, and false would say the skill never ran.
     """
-    loaded = {load.get("skill") for load in loads}
+    loaded = {(load.get("skill"), load.get("version")) for load in loads}
     return [
         {
             "skill": s["skill"],
             "version": s["version"],
-            "loaded": (s["skill"] in loaded) if events_kept else None,
+            "loaded": ((s["skill"], s["version"]) in loaded) if events_kept else None,
         }
         for s in resolved
     ]

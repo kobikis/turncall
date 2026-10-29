@@ -326,18 +326,237 @@ async def test_the_resolution_is_saved_only_on_a_recorded_call():
     session.__aexit__ = AsyncMock(return_value=None)
     call.session_factory = MagicMock(return_value=session)
     with patch(
-        "turncall.storage.repositories.call_repo.merge_call_metadata",
+        "turncall.storage.repositories.call_repo.append_call_metadata_list",
         AsyncMock(),
-    ) as merge:
+    ) as append:
         await record_resolution(call, (skill,))
 
-    merge.assert_awaited_once_with(
+    # Appended, so a handoff's target's resolution joins the first agent's
+    # (#427); a version already there is skipped by its id.
+    append.assert_awaited_once_with(
         session,
         call.call_id,
-        {
-            "resolved_skills": [
-                {"id": str(skill.id), "skill": "explain_bill", "version": 3}
-            ]
-        },
+        "resolved_skills",
+        [{"id": str(skill.id), "skill": "explain_bill", "version": 3}],
+        unique_by="id",
     )
     session.commit.assert_awaited_once()
+
+
+# --- the limit, the no-op, a handoff (#427) ----------------------------------
+
+
+def _holding(*loaded: ResolvedSkill, available=(), cap: int = 3):
+    from turncall.orchestrator.skill_loader import CallSkills
+    from turncall.orchestrator.tool_bridge import SwitchInputs
+
+    base = AGENT.model_copy(update={"max_loaded_skills": cap})
+    return CallSkills(base, (*loaded, *available), SwitchInputs(), loaded=tuple(loaded))
+
+
+def test_a_load_past_the_cap_unloads_the_oldest_in_the_same_config():
+    from turncall.orchestrator.skill_loader import prepare_load
+
+    a, b, c, d = (_skill(n, _tool(f"{n}_tool")) for n in "abcd")
+    skills = _holding(a, b, c, available=(d,))
+
+    prepared = prepare_load(skills, d)
+
+    assert prepared.unloaded == (a,)
+    assert prepared.loaded == (b, c, d)
+    prompt = prepared.config.system_prompt
+    assert "## Skill: a" not in prompt
+    assert all(f"## Skill: {n} (v1)" in prompt for n in "bcd")
+    # Still loadable again: the list names every skill.
+    assert "- a: When a is needed." in prompt
+    assert [t.name for t in prepared.config.tools] == [
+        "load_skill",
+        "end_call",
+        "lookup",
+        "b_tool",
+        "c_tool",
+        "d_tool",
+    ]
+    # One switch: the frames carry the unload and the load together.
+    prompt_frame, tools_frame = prepared.frames
+    assert "## Skill: a" not in prompt_frame.delta.system_instruction
+    assert "a_tool" not in [t.name for t in tools_frame.tools.standard_tools]
+    assert skills.loaded == (a, b, c), "preparing applied nothing"
+
+
+def test_a_cap_of_one_swaps_the_loaded_skill():
+    from turncall.orchestrator.skill_loader import prepare_load
+
+    a, b = _skill("a"), _skill("b")
+    prepared = prepare_load(_holding(a, available=(b,), cap=1), b)
+
+    assert (prepared.unloaded, prepared.loaded) == ((a,), (b,))
+
+
+@pytest.mark.asyncio
+async def test_loading_a_loaded_skill_changes_nothing():
+    from turncall.orchestrator.skill_loader import run_load_skill
+
+    a = _skill("a", _tool("a_tool"))
+    skills = _holding(a)
+    call = _call(skills, records=True)
+    queued, params = _params()
+    with (
+        patch("turncall.orchestrator.tool_bridge.register_tools") as register,
+        patch("turncall.orchestrator.skill_loader.record_skill_events") as record,
+    ):
+        result = json.loads(await run_load_skill({"name": "a"}, call, params))
+
+    assert result["success"] is True
+    assert "already loaded" in result["message"]
+    assert result["details"] == {"skill": "a", "version": 1, "already_loaded": True}
+    assert queued == [] and skills.loaded == (a,)
+    register.assert_not_called()
+    record.assert_not_called()
+    # An ordinary result: the model's next inference runs after it, as usual.
+    assert "properties" not in params.result_callback.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_an_unload_is_recorded_before_the_load_that_made_room():
+    from turncall.orchestrator.skill_loader import run_load_skill
+
+    a, b = _skill("a", version=4), _skill("b", version=2)
+    skills = _holding(a, available=(b,), cap=1)
+    call = _call(skills, records=True)
+    _, params = _params()
+    emitted: list[dict] = []
+
+    async def emit(_session, **kwargs):
+        emitted.append(kwargs)
+
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+    call.session_factory = MagicMock(return_value=session)
+    with (
+        patch("turncall.orchestrator.tool_bridge.register_tools"),
+        patch("turncall.events.emit.emit_call_event", emit),
+    ):
+        result = json.loads(await run_load_skill({"name": "b"}, call, params))
+        from turncall.orchestrator.tool_bridge import _BG_TASKS
+
+        await asyncio.gather(*_BG_TASKS)
+
+    assert skills.loaded == (b,)
+    assert result["details"] == {"skill": "b", "version": 2, "unloaded": ["a"]}
+    assert "'a' was unloaded" in result["message"]
+    assert [(e["event_type"], e["payload"]) for e in emitted] == [
+        ("skill.unloaded", {"skill": "a", "version": 4, "reason": "limit"}),
+        ("skill.loaded", {"skill": "b", "version": 2, "reason": "load_skill"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_handoff_target_without_skills_runs_its_own_config():
+    from turncall.orchestrator.skill_loader import prepare_handoff_skills
+
+    target = AgentConfig(system_prompt="You are billing.")
+    skills, config = await prepare_handoff_skills(target, _call())
+
+    assert config is target
+    assert skills.available == () and skills.loaded == ()
+
+
+@pytest.mark.asyncio
+async def test_a_handoff_target_with_skills_gets_its_list_and_load_skill():
+    from turncall.orchestrator.skill_loader import prepare_handoff_skills
+
+    target = AgentConfig(
+        system_prompt="You are billing.",
+        skills=[SkillRef(skill="verify")],
+        max_loaded_skills=2,
+    )
+    verify = _skill("verify", _tool("verify_customer"))
+    with patch(
+        "turncall.orchestrator.skill_loader.resolve_call_skills",
+        AsyncMock(return_value=(verify,)),
+    ) as resolve:
+        skills, config = await prepare_handoff_skills(target, call := _call())
+
+    resolve.assert_awaited_once_with(target, call)
+    assert skills.available == (verify,) and skills.loaded == ()
+    assert skills.base is target and skills.cap == 2
+    assert "- verify: When verify is needed." in config.system_prompt
+    assert "## Skill:" not in config.system_prompt
+    assert [t.name for t in config.tools] == ["load_skill"]
+
+
+@pytest.mark.asyncio
+async def test_after_a_handoff_to_an_agent_without_skills_a_stale_load_applies_nothing():
+    """The first agent's `load_skill` handler stays registered (pipecat's
+    registry is never cleared). Called anyway, it finds the target's skills —
+    none — and switches nothing back to the first agent's config."""
+    from turncall.orchestrator.skill_loader import no_skills, run_load_skill
+
+    a = _skill("a", _tool("a_tool"))
+    skills = _holding(a)
+    skills.adopt(no_skills(AgentConfig(system_prompt="You are billing.")))
+    queued, params = _params()
+    with patch("turncall.orchestrator.tool_bridge.register_tools") as register:
+        result = json.loads(await run_load_skill({"name": "a"}, _call(skills), params))
+
+    assert result["success"] is False
+    assert result["message"] == "There is no skill named 'a' to load."
+    assert queued == [] and skills.loaded == ()
+    register.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_handoff_records_the_targets_resolution_only_once_switched():
+    from turncall.orchestrator import tool_bridge
+    from turncall.orchestrator.skill_loader import CallSkills
+    from turncall.orchestrator.tool_bridge import (
+        PreparedHandoff,
+        SwitchInputs,
+        build_switch_frames,
+    )
+
+    verify = _skill("verify")
+    target = CallSkills(AGENT, (verify,), SwitchInputs())
+    prepared = PreparedHandoff(
+        "billing", target.config(), build_switch_frames(target.config()), target
+    )
+    recorded = AsyncMock()
+
+    for committed, expected in ((False, 0), (True, 1)):
+        recorded.reset_mock()
+        with (
+            patch.object(
+                tool_bridge, "_prepare_handoff", AsyncMock(return_value=prepared)
+            ),
+            patch.object(
+                tool_bridge,
+                "_execute_builtin",
+                AsyncMock(return_value=json.dumps({"success": committed})),
+            ),
+            patch.object(tool_bridge, "_apply_handoff_context", AsyncMock()),
+            patch("turncall.orchestrator.skill_loader.record_resolution", recorded),
+        ):
+            await tool_bridge.run_handoff({"agent_id": "x"}, _call(), MagicMock())
+            await asyncio.gather(*tool_bridge._BG_TASKS)
+        assert recorded.await_count == expected
+    assert recorded.await_args.args[1] == (verify,)
+
+
+def test_max_loaded_skills_defaults_to_three_and_an_inline_one_never_fails():
+    assert AgentConfig().max_loaded_skills == 3
+    assert AgentConfig.model_validate({"max_loaded_skills": 0}).max_loaded_skills == 1
+    assert AgentConfig.model_validate({"max_loaded_skills": 99}).max_loaded_skills == 10
+    assert AgentConfig.model_validate({"max_loaded_skills": "x"}).max_loaded_skills == 3
+
+
+@pytest.mark.parametrize("value", [0, 11, -1])
+def test_the_api_refuses_a_cap_out_of_range(value):
+    from pydantic import ValidationError
+
+    from turncall.api.v1.schemas.agents import AgentConfigSchema
+
+    with pytest.raises(ValidationError, match="max_loaded_skills"):
+        AgentConfigSchema(max_loaded_skills=value)
+    assert AgentConfigSchema(max_loaded_skills=10).max_loaded_skills == 10

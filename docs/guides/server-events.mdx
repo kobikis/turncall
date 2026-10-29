@@ -66,6 +66,7 @@ Every delivery is one envelope:
 | `call.agent_handoff` | The call moved to another agent |
 | `provider.failover` | An STT, LLM or TTS moved to its backup |
 | `skill.loaded` | The model loaded one of the agent's [skills](/guides/skills): `{skill, version, reason}` |
+| `skill.unloaded` | A load past `max_loaded_skills` unloaded the skill loaded longest ago: `{skill, version, reason: "limit"}` |
 | `error.raised` | A stage failed; the payload says which and why |
 | `call.customer_silent` / `call.max_duration_reached` / `call.opted_out` | The idle guard, the duration cap, or a do-not-call request ended the call |
 | `dtmf.sent` / `context.injected` | Keypad tones sent / a message added to the live call |

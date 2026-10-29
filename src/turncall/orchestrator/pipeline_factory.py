@@ -5,7 +5,7 @@ Pipecat pipeline with the appropriate STT, LLM, TTS services,
 context aggregation, and observability.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
@@ -53,6 +53,12 @@ from turncall.services.tool_mocks import ToolMocks
 DYNAMIC_AGENT_ID = UUID(int=0)
 
 
+def _no_skills_yet() -> Any:
+    from turncall.orchestrator.skill_loader import no_skills
+
+    return no_skills(AgentConfig())
+
+
 @dataclass(frozen=True)
 class CallContext:
     """Per-call context passed through the pipeline."""
@@ -76,9 +82,10 @@ class CallContext:
     # is what makes every tool dispatch below unconditional there.
     tool_mocks: ToolMocks | None = None
     # The skills this call resolved and which it has loaded (#424):
-    # `orchestrator/skill_loader.CallSkills`, set at build. None for an agent
-    # with no skills, an S2S agent, or a call with no database behind it.
-    skills: Any | None = None
+    # `orchestrator/skill_loader.CallSkills`, set at build. Every context
+    # starts with an empty one, so a call whose agent has no skills still has
+    # a holder for a handoff to swap the target agent's skills into (#427).
+    skills: Any = field(default_factory=_no_skills_yet)
 
     @property
     def is_eval(self) -> bool:

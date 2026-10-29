@@ -8823,6 +8823,14 @@
             "title": "Skills",
             "description": "Skills the model may load mid-call with load_skill, each by name. Cascade voice only; the call runs each skill's live published version"
           },
+          "max_loaded_skills": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Max Loaded Skills",
+            "description": "How many skills a call may hold loaded at once. Loading one more unloads the one loaded longest ago, in the same switch",
+            "default": 3
+          },
           "transport": {
             "type": "string",
             "pattern": "^(twilio|webrtc|both)$",

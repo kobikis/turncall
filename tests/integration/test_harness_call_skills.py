@@ -7,17 +7,22 @@ prompt section, rendered with the call's `{{variables}}`, and the skill's tools
 — with the conversation so far still in the context. The skill's webhook tool
 reaches its webhook and is recorded like any tool, and a skill tool that takes
 an agent tool's name never runs. An agent with no skills is given exactly what
-it was before. Seam A: the real app, stub providers, a fake carrier.
+it was before. A call holds at most `max_loaded_skills` loaded, a skill
+already loaded loads as nothing, and a handoff brings the target agent's
+skills, none loaded (#427). Seam A: the real app, stub providers, a fake
+carrier.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from typing import Any
 
 import pytest
 from aiohttp import web
+from redis.asyncio import Redis
 
 from tests.harness import HARNESS_AGENT, Given, Script, ToolCall, run_app
 from tests.harness.twilio import place_inbound_call
@@ -366,3 +371,213 @@ async def test_a_skill_that_does_not_resolve_is_skipped_and_the_call_goes_on(
 
     assert _prompt(given) == PROMPT
     assert given.tools == []
+
+
+# --- the limit, the no-op, a handoff (#427) ----------------------------------
+
+
+async def _events(app: Any, call_id: str, event_type: str, count: int) -> list:
+    """The call's events of a type, once `count` are written (they are
+    recorded off the switch's path)."""
+    rows: list[dict[str, Any]] = []
+    for _ in range(100):
+        rows = (
+            await app.api.get(
+                f"/v1/calls/{call_id}/events", params={"event_type": event_type}
+            )
+        ).json()["data"]
+        if len(rows) >= count:
+            break
+        await asyncio.sleep(0.1)
+    return rows
+
+
+def _skill_body(name: str, tool_url: str, instructions: str = "") -> dict[str, Any]:
+    return {
+        "name": name,
+        "description": f"Use for {name}.",
+        "instructions": instructions or f"Do {name}.",
+        "tools": [_tool(f"{name}_tool", f"{tool_url}/{name}")],
+    }
+
+
+async def test_a_fourth_load_unloads_the_oldest_and_a_reload_changes_nothing(
+    monkeypatch,
+):
+    held: list[Given] = []
+    reloaded: list[Given] = []
+    last: list[Given] = []
+    script = Script(
+        caller=(SAID,),
+        agent=(
+            ToolCall("load_skill", {"name": "first"}),
+            ToolCall("load_skill", {"name": "second"}),
+            ToolCall("load_skill", {"name": "third"}),
+            # Holding three: the cap. Loading the third again...
+            _remembering(held, ToolCall("load_skill", {"name": "third"})),
+            # ...changed nothing. Now a fourth.
+            _remembering(reloaded, ToolCall("load_skill", {"name": "fourth"})),
+            _remembering(last, "Done."),
+        ),
+    )
+    names = ("first", "second", "third", "fourth")
+    async with run_app(
+        script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        for name in names:
+            await _publish_skill(app, _skill_body(name, "http://127.0.0.1:9"))
+        number = await app.bind_number(
+            await app.create_agent(
+                {
+                    **HARNESS_AGENT,
+                    "first_message": "Hello.",
+                    "skills": [{"skill": n} for n in names],
+                }
+            )
+        )
+        call = await place_inbound_call(
+            app.carrier, app.api, from_number=CALLER, to_number=number
+        )
+        await call.wait_for_agent_speech(1)
+        await call.say(400)
+        await call.wait_for_agent_speech(2)  # "Done."
+        unloaded = await _events(app, call.call_id, "skill.unloaded", 1)
+        loaded = await _events(app, call.call_id, "skill.loaded", 4)
+        delivered = await app.sink.wait_for("skill.unloaded")
+        await call.hang_up()
+        read = (await app.api.get(f"/v1/calls/{call.call_id}")).json()["data"]
+
+    # The re-load: the same prompt and the same tools as before it.
+    [before], [after] = held, reloaded
+    assert _prompt(after) == _prompt(before)
+    assert after.tools == before.tools
+    assert before.tools == ["load_skill", "first_tool", "second_tool", "third_tool"]
+    assert any(
+        m["role"] == "tool" and "already loaded" in str(m.get("content")) for m in after
+    ), list(after)
+
+    # The fourth: the newest three's sections and tools, not the oldest's.
+    [given] = last
+    prompt = _prompt(given)
+    assert "## Skill: first" not in prompt, prompt
+    for name in ("second", "third", "fourth"):
+        assert f"## Skill: {name} (v1)\nDo {name}." in prompt
+    assert "- first: Use for first." in prompt  # still loadable
+    assert given.tools == ["load_skill", "second_tool", "third_tool", "fourth_tool"]
+    assert {"role": "user", "content": SAID} in given
+
+    # Recorded: one unload, for the limit; the re-load is no load at all.
+    gone = {"skill": "first", "version": 1, "reason": "limit"}
+    assert [e["payload"] for e in unloaded] == [gone]
+    assert delivered["payload"] == gone and delivered["_signature_valid"]
+    assert [e["payload"]["skill"] for e in loaded] == list(names)
+    # The read says what the call loaded at any point; the unload is an event.
+    assert read["skills"] == [{"skill": n, "version": 1, "loaded": True} for n in names]
+
+
+@pytest.fixture
+async def redis_up():
+    """The API's handoff runs over the call's control channel, on Redis."""
+    client = Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
+    try:
+        await client.ping()
+    except Exception as exc:
+        pytest.skip(f"Redis not reachable ({type(exc).__name__})")
+    finally:
+        await client.aclose()
+
+
+BILLING_PROMPT = "You are the billing agent."
+END_CALL = {
+    "name": "end_call",
+    "description": "End the call",
+    "parameters_schema": {"type": "object", "properties": {}},
+}
+
+
+async def test_a_handoff_brings_the_targets_skills_none_loaded(monkeypatch, redis_up):
+    after_handoff: list[Given] = []
+    after_load: list[Given] = []
+    script = Script(
+        caller=(SAID, "My date of birth is March 3rd."),
+        agent=(
+            ToolCall("load_skill", {"name": "explain_bill"}),
+            "Let me check.",
+            _remembering(after_handoff, ToolCall("load_skill", {"name": "verify"})),
+            _remembering(after_load, "Thanks."),
+        ),
+    )
+    async with (
+        Backend(variables={"customer_name": "Dana"}) as backend,
+        run_app(
+            script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+        ) as app,
+    ):
+        url = backend.url
+        await _publish_skill(app, _skill_body("explain_bill", url))
+        await _publish_skill(
+            app,
+            _skill_body("verify", url, "Ask {{customer_name}} for the date of birth."),
+        )
+        backend.agent_id = await app.create_agent(
+            {
+                **HARNESS_AGENT,
+                "first_message": "Hello.",
+                "skills": [{"skill": "explain_bill"}],
+            }
+        )
+        # The target lists the skill the call already loaded, too: it starts
+        # with none loaded all the same.
+        billing = await app.create_agent(
+            {
+                **HARNESS_AGENT,
+                "system_prompt": BILLING_PROMPT,
+                "tools": [END_CALL],
+                "skills": [{"skill": "verify"}, {"skill": "explain_bill"}],
+            },
+            name="billing",
+        )
+        number = await _bind_to_call_init(app, f"{url}/call-init")
+        call = await place_inbound_call(
+            app.carrier, app.api, from_number=CALLER, to_number=number
+        )
+        await call.wait_for_agent_speech(1)
+        await call.say(400)
+        await call.wait_for_agent_speech(2)  # "Let me check.", explain_bill loaded
+        handed = await app.api.post(
+            f"/v1/calls/{call.call_id}/handoff", json={"target_agent_id": billing}
+        )
+        assert handed.status_code == 200, handed.text
+        await call.say(400)
+        await call.wait_for_agent_speech(3)  # "Thanks."
+        await _events(app, call.call_id, "skill.loaded", 2)
+        await call.hang_up()
+        ended = await app.sink.wait_for("call.ended")
+        read = (await app.api.get(f"/v1/calls/{call.call_id}")).json()["data"]
+
+    assert handed.json()["data"]["details"]["tools"] == ["load_skill", "end_call"]
+
+    # The target's list, none loaded — not even the skill the call had loaded.
+    [given] = after_handoff
+    prompt = _prompt(given)
+    assert prompt.startswith(BILLING_PROMPT), prompt
+    assert PROMPT not in prompt
+    assert "- verify: Use for verify." in prompt
+    assert "- explain_bill: Use for explain_bill." in prompt
+    assert "## Skill:" not in prompt
+    assert given.tools == ["load_skill", "end_call"]
+
+    # And a target skill loads, rendered with the call's variables.
+    [given] = after_load
+    prompt = _prompt(given)
+    assert "## Skill: verify (v1)\nAsk Dana for the date of birth." in prompt
+    assert "## Skill: explain_bill" not in prompt
+    assert given.tools == ["load_skill", "end_call", "verify_tool"]
+
+    # Both agents' resolutions on the record, the shared version once.
+    skills = [
+        {"skill": "explain_bill", "version": 1, "loaded": True},
+        {"skill": "verify", "version": 1, "loaded": True},
+    ]
+    assert read["skills"] == skills
+    assert ended["payload"]["skills"] == skills

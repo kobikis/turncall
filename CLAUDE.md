@@ -1015,18 +1015,39 @@ wait on (`test_handoff_switch_is_atomic.py`). Its result runs no LLM; its
 `on_context_updated` queues an `LLMRunFrame` behind the switch's frames, so the
 next inference sees the skill. An unknown name answers so and applies nothing.
 
-**What a call records** (#425): the resolution is saved once at build
+**The limit, the no-op, a handoff** (#427): `max_loaded_skills` (default 3,
+API 1-10 else 422; an inline agent's bad value is clamped / defaulted, never a
+failed call) caps `loaded`: `prepare_load` builds the config with the skills
+loaded longest ago dropped (`PreparedLoad.unloaded`), so the unload and the
+load are one switch, one `apply_load`. A skill already loaded answers "already
+loaded" (`details.already_loaded`) before `prepare_load`: no frames, no event,
+an ordinary result. Every `CallContext` starts with an empty `CallSkills`
+(`skill_loader.no_skills`), so a handoff always has a holder: `_prepare_handoff`
+resolves the target's skills (`prepare_handoff_skills` → `resolve_call_skills`,
+same rules as at a call's start, `SwitchInputs()` like the handoff itself) and
+builds the target's skilled config before the commit; `_apply_handoff_context`
+swaps them in after `apply_switch` with `CallSkills.adopt` (plain assignments).
+The target's list and `load_skill` are advertised iff it resolved skills, none
+loaded; a stale `load_skill` after a handoff finds the target's skills, so it
+answers "no skill named" and applies nothing of the first agent's.
+
+**What a call records** (#425): the resolution is saved at build
 (`skill_loader.record_resolution`, from `_with_skills`) as
-`metadata_json["resolved_skills"]` = `[{id, skill, version}]`, merged in with
-`call_repo.merge_call_metadata` (JSONB `||`); hidden from `metadata` on the
+`metadata_json["resolved_skills"]` = `[{id, skill, version}]`, and again for a
+handoff's target, spawned after the switch (#427): appended by
+`call_repo.append_call_metadata_list` (row locked, an `id` already there
+skipped); hidden from `metadata` on the
 read and `call.ended` (`call_view.RESERVED_METADATA`) and a 422 in an outbound
 dial's `metadata`. Each load is a `skill.loaded` call event `{skill, version,
-reason}` (reason `load_skill`; `skill.unloaded` exists for #427, nothing sends
-it yet), stored + dispatched through `emit_call_event` from a task spawned
-right after `apply_load` (`record_skill_event`), never inside it. `skills` on
+reason}` (reason `load_skill`), each unload for the cap a `skill.unloaded`
+(reason `limit`, logged before its load), stored + dispatched through
+`emit_call_event` from one task spawned right after `apply_load`
+(`record_skill_events`), never inside it. `skills` on
 the call read and `call.ended` is `call_view.call_skills`: every resolved
-skill `{skill, version, loaded}`, `[]` with none, `loaded` null once the
-call's events expired (#316). Only when `CallContext.records` — an eval
+skill version `{skill, version, loaded}` (the first agent's, then a handoff
+target's), `[]` with none; `loaded` means loaded at any point in the call,
+matched by name and version (an unload is visible only as its event), and is
+null once the call's events expired (#316). Only when `CallContext.records` — an eval
 records neither. `skill`, `skills` are redaction structural fields; `reason`
 is an identifier on the two `skill.*` events.
 

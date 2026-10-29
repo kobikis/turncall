@@ -62,6 +62,8 @@ curl -X POST http://localhost:8090/v1/agents \
 `skills` names the project's [skills](/guides/skills) the agent may load
 mid-call. The model sees each one's name and description, and loads one with
 the built-in `load_skill` tool when the conversation needs it.
+`max_loaded_skills` (default 3, 1 to 10) caps how many it holds loaded at
+once; loading one more unloads the one loaded longest ago.
 
 ## Warnings on a Read
 

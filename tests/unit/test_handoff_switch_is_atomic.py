@@ -654,3 +654,177 @@ async def test_cancelling_a_skill_load_once_it_has_begun_is_all_or_nothing():
     assert (len(queue), bool(skills.loaded)) in {(0, False), (2, True)}, (
         f"half-applied: {len(queue)} frame(s) queued, loaded={skills.loaded}"
     )
+
+
+# --- The limit and a handoff's skills (#427) ----------------------------------
+# A load past `max_loaded_skills` unloads the oldest in the same switch, and a
+# handoff swaps the target's skills into the call inside its apply step. Both
+# are pinned the same way: one scheduling slice, all or nothing under cancel.
+
+
+def _prepared_load_past_the_cap():
+    from uuid import uuid4 as _id
+
+    from turncall.orchestrator.skill_loader import CallSkills, prepare_load
+    from turncall.orchestrator.tool_bridge import SwitchInputs
+    from turncall.services.skills import ResolvedSkill
+
+    def skill(name):
+        return ResolvedSkill(
+            id=_id(),
+            name=name,
+            version=1,
+            description=f"When {name}.",
+            instructions=f"Do {name}.",
+            tools=(_tool(f"{name}_tool"),),
+        )
+
+    old, new = skill("verify"), skill("explain_bill")
+    skills = CallSkills(
+        base=AgentConfig(system_prompt="You are Maya.", max_loaded_skills=1),
+        available=(old, new),
+        switch=SwitchInputs(),
+        loaded=(old,),
+    )
+    prepared = prepare_load(skills, new)
+    assert prepared.unloaded == (old,) and prepared.loaded == (new,)
+    return skills, prepared
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_unload_and_a_load_complete_within_one_scheduling_slice():
+    from turncall.orchestrator.skill_loader import apply_load
+
+    skills, prepared = _prepared_load_past_the_cap()
+    queue: list = []
+    with patch("turncall.orchestrator.tool_bridge.register_tools"):
+        task = asyncio.create_task(
+            apply_load(prepared, skills, _context(), _params(queue))
+        )
+        await asyncio.sleep(0)
+        done = task.done()
+        await task
+
+    assert done, "the unload-and-load switch suspended partway through"
+    assert len(queue) == 2 and skills.loaded == prepared.loaded
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancelling_an_unload_and_load_once_begun_is_all_or_nothing():
+    from turncall.orchestrator.skill_loader import apply_load
+
+    skills, prepared = _prepared_load_past_the_cap()
+    before = skills.loaded
+    queue: list = []
+    holder: list[asyncio.Task] = []
+
+    def register_and_interrupt(*_a, **_k):
+        holder[0].cancel()
+
+    with patch(
+        "turncall.orchestrator.tool_bridge.register_tools",
+        new=register_and_interrupt,
+    ):
+        holder.append(
+            asyncio.create_task(
+                apply_load(prepared, skills, _context(), _params(queue))
+            )
+        )
+        await asyncio.gather(*holder, return_exceptions=True)
+
+    assert (len(queue), skills.loaded) in [
+        (0, before),
+        (2, prepared.loaded),
+    ], f"half-applied: {len(queue)} frame(s) queued, loaded={skills.loaded}"
+
+
+def _handoff_with_skills():
+    """A call holding one loaded skill, and a prepared handoff to a target
+    with skills of its own."""
+    from uuid import uuid4 as _id
+
+    from turncall.orchestrator.skill_loader import CallSkills
+    from turncall.orchestrator.tool_bridge import (
+        PreparedHandoff,
+        SwitchInputs,
+        build_switch_frames,
+    )
+    from turncall.services.skills import ResolvedSkill
+
+    def skill(name):
+        return ResolvedSkill(
+            id=_id(),
+            name=name,
+            version=1,
+            description=f"When {name}.",
+            instructions=f"Do {name}.",
+            tools=(),
+        )
+
+    first = skill("explain_bill")
+    call_skills = CallSkills(
+        base=AgentConfig(system_prompt="You are Maya."),
+        available=(first,),
+        switch=SwitchInputs(),
+        loaded=(first,),
+    )
+    target = CallSkills(
+        base=AgentConfig(system_prompt="You are billing."),
+        available=(skill("verify"),),
+        switch=SwitchInputs(),
+    )
+    config = target.config()
+    prepared = PreparedHandoff("Billing", config, build_switch_frames(config), target)
+    context = _context()
+    context.skills = call_skills
+    return context, prepared, target
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_handoff_switch_with_its_skills_completes_within_one_slice():
+    from turncall.orchestrator.tool_bridge import _apply_handoff_context
+
+    context, prepared, target = _handoff_with_skills()
+    queue: list = []
+    with patch("turncall.orchestrator.tool_bridge.register_tools"):
+        task = asyncio.create_task(
+            _apply_handoff_context(prepared, context, _params(queue))
+        )
+        await asyncio.sleep(0)
+        done = task.done()
+        await task
+
+    assert done, "the handoff switch suspended partway through its skills swap"
+    assert len(queue) == 2
+    assert context.skills.available == target.available
+    assert context.skills.loaded == () and context.skills.base is target.base
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancelling_a_handoff_with_skills_once_begun_is_all_or_nothing():
+    from turncall.orchestrator.tool_bridge import _apply_handoff_context
+
+    context, prepared, target = _handoff_with_skills()
+    before = context.skills.available
+    queue: list = []
+    params = _params(queue)
+    holder: list[asyncio.Task] = []
+
+    def clear_and_interrupt(_messages):
+        holder[0].cancel()
+
+    params.context.set_messages = clear_and_interrupt
+    with patch("turncall.orchestrator.tool_bridge.register_tools"):
+        holder.append(
+            asyncio.create_task(_apply_handoff_context(prepared, context, params))
+        )
+        await asyncio.gather(*holder, return_exceptions=True)
+
+    assert (len(queue), context.skills.available) in [
+        (0, before),
+        (2, target.available),
+    ], f"half-applied: {len(queue)} frame(s), skills={context.skills.available}"

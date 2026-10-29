@@ -10,11 +10,20 @@ applied with nothing left to wait on — but, unlike a handoff, over the context
 as it is, so the conversation so far is kept.
 
 `CallSkills.available` is what the call resolved, versions included;
-`loaded` is what it has loaded, in load order. Both reach the call record
-(#425): the resolution is saved on the call row at build
-(`record_resolution`), and each load is a `skill.loaded` event, so the call
-read and `call.ended` can say which version of which skill the call ran after
-the skill has been published again.
+`loaded` is what it has loaded, in load order, at most the agent's
+`max_loaded_skills` (#427): a load past the cap unloads the skill loaded
+longest ago in the same switch, and loading a skill already loaded changes
+nothing. Both reach the call record (#425): the resolution is saved on the
+call row at build (`record_resolution`), and each load is a `skill.loaded`
+event (each unload a `skill.unloaded`), so the call read and `call.ended` can
+say which version of which skill the call ran after the skill has been
+published again.
+
+A handoff (#427) gives the call the target agent's skills, none loaded:
+`prepare_handoff_skills` resolves them before the handoff commits, and the
+handoff's apply step swaps them in (`CallSkills.adopt`) with nothing left to
+wait on. Every `CallContext` starts with an empty `CallSkills`, filled at
+build for an agent with skills, so there is always one to swap into.
 """
 
 from __future__ import annotations
@@ -42,8 +51,9 @@ class CallSkills:
     loaded so far.
 
     Not frozen, unlike the rest of the call's context: which skills are loaded
-    is the one thing about it that changes mid-call. `loaded` is replaced
-    whole, never appended to, and only by `apply_load`.
+    is the one thing about it that changes mid-call — and, at a handoff, which
+    agent they are for. `loaded` is replaced whole, never appended to, only
+    by `apply_load`; the rest only by `adopt`.
     """
 
     base: AgentConfig
@@ -54,11 +64,56 @@ class CallSkills:
     def find(self, name: str) -> ResolvedSkill | None:
         return next((s for s in self.available if s.name == name), None)
 
+    def is_loaded(self, name: str) -> bool:
+        return any(s.name == name for s in self.loaded)
+
+    @property
+    def cap(self) -> int:
+        """How many may be loaded at once: the agent's `max_loaded_skills`."""
+        return self.base.max_loaded_skills
+
+    def adopt(self, other: CallSkills) -> None:
+        """Become `other`: a handoff's target agent's skills. Plain
+        assignments, so it cannot suspend or raise — it runs inside the
+        handoff's apply step (`test_handoff_switch_is_atomic.py`)."""
+        self.base = other.base
+        self.available = other.available
+        self.switch = other.switch
+        self.loaded = other.loaded
+
     def config(self, loaded: tuple[ResolvedSkill, ...] | None = None) -> AgentConfig:
         """The config the model runs on with `loaded` (default: what is)."""
         return skilled_config(
             self.base, self.available, self.loaded if loaded is None else loaded
         )
+
+
+def no_skills(config: AgentConfig) -> CallSkills:
+    """A holder with no skills — what every `CallContext` starts with, and
+    what a call whose agent resolved none keeps: nothing to load until a
+    handoff brings some (#427)."""
+    from turncall.orchestrator.tool_bridge import SwitchInputs
+
+    return CallSkills(base=config, available=(), switch=SwitchInputs())
+
+
+async def prepare_handoff_skills(
+    config: AgentConfig, call_context: CallContext
+) -> tuple[CallSkills, AgentConfig]:
+    """The target agent's skills, resolved as at a call's start (its skills'
+    live published versions, the call's project and `{{variables}}`), none
+    loaded — and the config the call then runs: the target's own with the
+    list and `load_skill`, or unchanged for a target with none.
+
+    I/O, so it runs in the handoff's prepare step, before the switch commits.
+    A handoff's switch keeps none of the call's preamble or discovered tools
+    (`SwitchInputs()`), so neither does a later load on the target.
+    """
+    from turncall.orchestrator.tool_bridge import SwitchInputs
+
+    available = await resolve_call_skills(config, call_context)
+    skills = CallSkills(base=config, available=available, switch=SwitchInputs())
+    return skills, skills.config()
 
 
 async def resolve_call_skills(
@@ -111,8 +166,11 @@ async def _call_variables(session: Any, call_context: CallContext) -> dict[str, 
 async def record_resolution(
     call_context: CallContext, available: tuple[ResolvedSkill, ...]
 ) -> None:
-    """Save the skills the call resolved on its row (#425), once, at build:
-    `[{id, skill, version}]` under `metadata_json["resolved_skills"]`.
+    """Save the skills the call resolved on its row (#425):
+    `[{id, skill, version}]` under `metadata_json["resolved_skills"]` — at
+    build, and again after a handoff for the target agent's (#427). Appended,
+    a version already there skipped, so the read lists every skill version
+    the call could have run, the first agent's first.
 
     Only for a call with a row (`records`). Best-effort: a call whose record
     could not be written still runs its skills, and its read shows none.
@@ -127,8 +185,12 @@ async def record_resolution(
     ]
     try:
         async with call_context.session_factory() as session:  # type: ignore[misc]
-            await call_repo.merge_call_metadata(
-                session, call_context.call_id, {RESOLVED_SKILLS: resolution}
+            await call_repo.append_call_metadata_list(
+                session,
+                call_context.call_id,
+                RESOLVED_SKILLS,
+                resolution,
+                unique_by="id",
             )
             await session.commit()
     except Exception:
@@ -137,9 +199,16 @@ async def record_resolution(
         )
 
 
-# Why a skill was loaded: the model asked (`load_skill`). #427 adds `limit`,
-# the reason a `skill.unloaded` gives.
+# Why a skill was loaded: the model asked (`load_skill`). Why one was
+# unloaded: a load past `max_loaded_skills` made room (#427).
 LOADED_BY_MODEL = "load_skill"
+UNLOADED_FOR_LIMIT = "limit"
+
+
+class SkillEvent(NamedTuple):
+    event_type: CallEventType
+    skill: ResolvedSkill
+    reason: str
 
 
 def record_skill_event(
@@ -149,63 +218,84 @@ def record_skill_event(
     *,
     reason: str,
 ) -> None:
-    """A `skill.loaded` / `skill.unloaded` event `{skill, version, reason}`,
+    """A `skill.loaded` / `skill.unloaded` event `{skill, version, reason}`;
+    see `record_skill_events`."""
+    record_skill_events(call_context, [SkillEvent(event_type, skill, reason)])
+
+
+def record_skill_events(call_context: CallContext, events: list[SkillEvent]) -> None:
+    """`skill.loaded` / `skill.unloaded` events `{skill, version, reason}`,
     stored on the call's log and sent to subscribers, off the critical path
     (as a tool's `tool.result` is): the write and a webhook's retries must not
-    sit between the load and the model's next inference. Nothing for a call
-    with no row (an eval)."""
-    if not call_context.records:
+    sit between the load and the model's next inference. One task writes them
+    in order, so an unload is logged before the load that made it. Nothing for
+    a call with no row (an eval)."""
+    if not events or not call_context.records:
         return
     from turncall.orchestrator.tool_bridge import _spawn
 
-    payload = {"skill": skill.name, "version": skill.version, "reason": reason}
-    _spawn(_emit_skill_event(call_context, event_type, payload))
+    _spawn(_emit_skill_events(call_context, events))
 
 
-async def _emit_skill_event(
-    call_context: CallContext, event_type: CallEventType, payload: dict[str, Any]
+async def _emit_skill_events(
+    call_context: CallContext, events: list[SkillEvent]
 ) -> None:
-    try:
-        from turncall.events.emit import emit_call_event
+    from turncall.events.emit import emit_call_event
 
-        # Identifiers only (redaction's structural fields): a plain payload,
-        # no detector to wait on.
-        async with call_context.session_factory() as session:  # type: ignore[misc]
-            await emit_call_event(
-                session,
-                call_id=call_context.call_id,
-                project_id=call_context.project_id,
-                event_type=event_type,
-                payload=payload,
-                commit=True,
+    for event in events:
+        payload = {
+            "skill": event.skill.name,
+            "version": event.skill.version,
+            "reason": event.reason,
+        }
+        try:
+            # Identifiers only (redaction's structural fields): a plain
+            # payload, no detector to wait on.
+            async with call_context.session_factory() as session:  # type: ignore[misc]
+                await emit_call_event(
+                    session,
+                    call_id=call_context.call_id,
+                    project_id=call_context.project_id,
+                    event_type=event.event_type,
+                    payload=payload,
+                    commit=True,
+                )
+        except Exception:
+            logger.exception(
+                "skill_event_not_recorded",
+                call_id=str(call_context.call_id),
+                event_type=str(event.event_type),
             )
-    except Exception:
-        logger.exception(
-            "skill_event_not_recorded",
-            call_id=str(call_context.call_id),
-            event_type=str(event_type),
-        )
 
 
 class PreparedLoad(NamedTuple):
-    """A load with everything built and nothing applied."""
+    """A load with everything built and nothing applied. `unloaded` are the
+    skills it takes off to stay within the cap, longest loaded first."""
 
     skill: ResolvedSkill
     loaded: tuple[ResolvedSkill, ...]
     config: AgentConfig
     frames: tuple[Any, ...]
+    unloaded: tuple[ResolvedSkill, ...] = ()
 
 
 def prepare_load(skills: CallSkills, skill: ResolvedSkill) -> PreparedLoad:
-    """The config and both frames for `skill` loaded. Pure, and may raise:
-    nothing has been applied yet. A skill already loaded is loaded as it is
-    (#427 answers it instead)."""
+    """The config and both frames for `skill` loaded — and, past the cap, the
+    skills loaded longest ago unloaded, in the same config and frames (#427),
+    so the unload and the load are one switch. Pure, and may raise: nothing
+    has been applied yet. A skill already loaded is answered before this
+    (`run_load_skill`); here it would stay where it is."""
     from turncall.orchestrator.tool_bridge import build_switch_frames
 
-    loaded = skills.loaded if skill in skills.loaded else (*skills.loaded, skill)
+    if skills.is_loaded(skill.name):
+        held = skills.loaded
+    else:
+        held = (*skills.loaded, skill)
+    over = max(len(held) - skills.cap, 0)
+    unloaded, loaded = held[:over], held[over:]
     config = skills.config(loaded)
     return PreparedLoad(
-        skill, loaded, config, build_switch_frames(config, skills.switch)
+        skill, loaded, config, build_switch_frames(config, skills.switch), unloaded
     )
 
 
@@ -256,6 +346,18 @@ async def run_load_skill(
         await params.result_callback(result)
         return result
 
+    if skills.is_loaded(name):
+        # Nothing to switch: no frames, no event, the prompt and tools as
+        # they are. The model's next inference runs as after any result.
+        result = _result(
+            True,
+            f"The skill {name!r} is already loaded: its instructions and tools "
+            "are in place. Continue the conversation.",
+            {"skill": skill.name, "version": skill.version, "already_loaded": True},
+        )
+        await params.result_callback(result)
+        return result
+
     try:
         prepared = prepare_load(skills, skill)
     except Exception:
@@ -268,20 +370,50 @@ async def run_load_skill(
     # After the switch, never inside it: `apply_load` must not suspend, and
     # recording is I/O. Spawned in the same step, so the load that happened
     # is the load recorded even if the caller interrupts from here on.
-    record_skill_event(
-        call_context, CallEventType.SKILL_LOADED, skill, reason=LOADED_BY_MODEL
+    record_skill_events(
+        call_context,
+        [
+            *(
+                SkillEvent(CallEventType.SKILL_UNLOADED, s, UNLOADED_FOR_LIMIT)
+                for s in prepared.unloaded
+            ),
+            SkillEvent(CallEventType.SKILL_LOADED, skill, LOADED_BY_MODEL),
+        ],
     )
     logger.info(
-        "load_skill: loaded {skill} v{version}", skill=name, version=skill.version
+        "load_skill: loaded {skill} v{version}, unloaded {unloaded}",
+        skill=name,
+        version=skill.version,
+        unloaded=[s.name for s in prepared.unloaded],
     )
     result = _result(
         True,
         f"The skill {name!r} is loaded: follow its instructions, and its tools "
-        "are now available. Continue the conversation.",
-        {"skill": skill.name, "version": skill.version},
+        "are now available."
+        + _unloaded_note(prepared.unloaded, skills.cap)
+        + " Continue the conversation.",
+        {
+            "skill": skill.name,
+            "version": skill.version,
+            **(
+                {"unloaded": [s.name for s in prepared.unloaded]}
+                if prepared.unloaded
+                else {}
+            ),
+        },
     )
     await params.result_callback(result, properties=_run_llm_after_switch(params))
     return result
+
+
+def _unloaded_note(unloaded: tuple[ResolvedSkill, ...], cap: int) -> str:
+    if not unloaded:
+        return ""
+    names = ", ".join(repr(s.name) for s in unloaded)
+    return (
+        f" At most {cap} skills can be loaded at once, so {names} was unloaded: "
+        "load it again if you need it."
+    )
 
 
 def _run_llm_after_switch(params: Any) -> Any:

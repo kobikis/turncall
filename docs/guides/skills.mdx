@@ -113,15 +113,35 @@ When two tools share a name, the first of built-in, the agent's own tools, loade
 
 An agent with no skills is given no section and no `load_skill`. Skills are not loaded on speech-to-speech agents.
 
-## What a call records
+## How many skills a call holds
 
-The versions a call resolved are saved on the call when it starts, so the call stays explainable after a skill is published again. Each load is a `skill.loaded` event on the call's event log (`GET /v1/calls/{id}/events`), also delivered to [webhook subscribers](/guides/server-events#webhook-events):
+`max_loaded_skills` in the agent config caps how many skills a call holds loaded at once: 3 by default, from 1 to 10.
 
 ```json
-{"event": "skill.loaded", "payload": {"skill": "verify_identity", "version": 2, "reason": "load_skill"}}
+{
+  "skills": [{"skill": "verify_identity"}, {"skill": "explain_bill"}, {"skill": "payment_promise"}, {"skill": "plan_change"}],
+  "max_loaded_skills": 3
+}
 ```
 
-The call read (`GET /v1/calls/{id}` and the list) and `call.ended` carry `skills`: every skill the call resolved, in the agent's order, with the version it resolved to and whether the call loaded it. A skill the call never loaded is listed too. A call whose agent has no skills has an empty list.
+Loading a skill past the cap unloads the one loaded longest ago, in the same switch: its section leaves the prompt and its tools leave the tool list as the new skill's arrive, and the `load_skill` result tells the model which skill went. An unloaded skill stays in the list of skills the model can load, so it can load it again.
+
+Loading a skill that is already loaded changes nothing: the result says it is already loaded, and the prompt and the tools stay as they are.
+
+## Skills across a handoff
+
+When a call is handed to another agent, with the `handoff_to_agent` tool or `POST /v1/calls/{id}/handoff`, the call takes that agent's skills: each resolved as at a call's start (its live published version in the call's project, rendered with the call's template variables), none loaded. The model is given the target agent's list and `load_skill` when it has skills, and neither when it has none. Skills the first agent loaded are not carried over, even when the target lists them too, and the target's own `max_loaded_skills` applies from then on.
+
+## What a call records
+
+The versions a call resolved are saved on the call when it starts, so the call stays explainable after a skill is published again. A handoff adds the target agent's versions. Each load is a `skill.loaded` event on the call's event log (`GET /v1/calls/{id}/events`), and each unload to stay within `max_loaded_skills` a `skill.unloaded` event with reason `limit`, recorded before the load that made room. Both are also delivered to [webhook subscribers](/guides/server-events#webhook-events):
+
+```json
+{"event": "skill.unloaded", "payload": {"skill": "verify_identity", "version": 2, "reason": "limit"}}
+{"event": "skill.loaded", "payload": {"skill": "plan_change", "version": 1, "reason": "load_skill"}}
+```
+
+The call read (`GET /v1/calls/{id}` and the list) and `call.ended` carry `skills`: every skill version the call resolved, in the agent's order (after a handoff, the target agent's next; a version both agents resolved is listed once), with whether the call loaded it at any point. A skill the call never loaded is listed too, and a skill unloaded later still reads `loaded: true`: its `skill.unloaded` event says when it went. A call whose agent has no skills has an empty list.
 
 ```json
 "skills": [
@@ -130,7 +150,7 @@ The call read (`GET /v1/calls/{id}` and the list) and `call.ended` carry `skills
 ]
 ```
 
-An eval run records neither. Skill names, versions and reasons are identifiers, never [redacted](/guides/redaction). `skill.loaded` is in the events kind of [retention](/guides/retention); once a call's events expire, `loaded` is `null`, and the versions stay.
+An eval run records neither. Skill names, versions and reasons are identifiers, never [redacted](/guides/redaction). `skill.loaded` and `skill.unloaded` are in the events kind of [retention](/guides/retention); once a call's events expire, `loaded` is `null`, and the versions stay.
 
 ## Audit
 

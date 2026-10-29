@@ -114,7 +114,8 @@ async def _with_skills(
 ) -> tuple[AgentConfig, CallContext]:
     """The config the call runs with its agent's skills (#424), and the call's
     context carrying them for `load_skill` — or both as given, for an agent
-    with none (no I/O, nothing changed)."""
+    with none (no I/O, nothing changed): its context's `CallSkills` stays the
+    empty one every context starts with, for a handoff to fill (#427)."""
     from turncall.orchestrator.pipeline_factory import switch_inputs
     from turncall.orchestrator.skill_loader import (
         CallSkills,

@@ -24,6 +24,8 @@ from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
 from turncall.domain.models import (
     BUILTIN_TOOL_NAMES,
+    DEFAULT_MAX_LOADED_SKILLS,
+    MAX_LOADED_SKILLS_RANGE,
     SKILL_NAME_MAX,
     SKILL_NAME_PATTERN,
     RetentionConfig,
@@ -773,6 +775,15 @@ class AgentConfigSchema(BaseModel):
             "Skills the model may load mid-call with load_skill, each by name. "
             "Cascade voice only; the call runs each skill's live published "
             "version"
+        ),
+    )
+    max_loaded_skills: int = Field(
+        default=DEFAULT_MAX_LOADED_SKILLS,
+        ge=MAX_LOADED_SKILLS_RANGE[0],
+        le=MAX_LOADED_SKILLS_RANGE[1],
+        description=(
+            "How many skills a call may hold loaded at once. Loading one more "
+            "unloads the one loaded longest ago, in the same switch"
         ),
     )
     transport: str = Field(default="twilio", pattern=r"^(twilio|webrtc|both)$")
