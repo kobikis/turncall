@@ -479,3 +479,101 @@ async def test_a_handoff_that_could_not_be_prepared_is_never_committed():
             await _api_handoff(_params([]))({"agent_id": str(uuid4())})
 
     committed.assert_not_awaited()
+
+
+# --- The switch itself (#422) ------------------------------------------------
+# `apply_switch` is the prompt-and-tools switch the handoff is built on, with
+# clearing the context left to its caller. The tests above reach it through the
+# handoff, which always clears; these pin it directly, both ways, so an `await`
+# added inside it fails whichever caller it is.
+
+
+def _switch_args(config: AgentConfig):
+    from turncall.orchestrator.tool_bridge import build_switch_frames
+
+    return config, build_switch_frames(config)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("clear_context", [True, False])
+async def test_the_extracted_switch_completes_within_one_scheduling_slice(
+    clear_context,
+):
+    from turncall.orchestrator.tool_bridge import apply_switch
+
+    queue: list = []
+    with patch("turncall.orchestrator.tool_bridge.register_tools"):
+        task = asyncio.create_task(
+            apply_switch(
+                *_switch_args(AgentConfig(tools=[_tool("refund")])),
+                _context(),
+                _params(queue),
+                clear_context=clear_context,
+            )
+        )
+        await asyncio.sleep(0)
+        done = task.done()
+        await task
+
+    assert done, "the prompt-and-tools switch suspended partway through"
+    assert len(queue) == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancelling_a_switch_that_keeps_the_context_is_all_or_nothing():
+    """Without the clear, the first mutation is registering the tools — so
+    that is where the caller barges in."""
+    from turncall.orchestrator.tool_bridge import apply_switch
+
+    queue: list = []
+    params = _params(queue)
+    holder: list[asyncio.Task] = []
+    registered: list[bool] = []
+
+    def register_and_interrupt(*_a, **_k):
+        registered.append(True)
+        holder[0].cancel()
+
+    with patch(
+        "turncall.orchestrator.tool_bridge.register_tools",
+        new=register_and_interrupt,
+    ):
+        holder.append(
+            asyncio.create_task(
+                apply_switch(
+                    *_switch_args(AgentConfig(tools=[_tool("refund")])),
+                    _context(),
+                    params,
+                    clear_context=False,
+                )
+            )
+        )
+        await asyncio.gather(*holder, return_exceptions=True)
+
+    assert (len(queue), bool(registered)) in {(0, False), (2, True)}, (
+        f"half-applied: {len(queue)} frame(s) queued, tools registered="
+        f"{bool(registered)}"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_switch_that_keeps_the_context_leaves_the_conversation_alone():
+    from turncall.orchestrator.tool_bridge import apply_switch
+
+    queue: list = []
+    params = _params(queue)
+    with patch("turncall.orchestrator.tool_bridge.register_tools") as register:
+        await apply_switch(
+            *_switch_args(AgentConfig(tools=[_tool("refund")])),
+            _context(),
+            params,
+            clear_context=False,
+        )
+
+    params.context.set_messages.assert_not_called()
+    assert [t.name for t in register.call_args.args[1]] == ["refund"]
+    assert all(f.interruptible is False for f in queue)
+    assert len(queue) == 2

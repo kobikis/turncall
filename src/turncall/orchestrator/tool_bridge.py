@@ -324,10 +324,12 @@ class PreparedHandoff(NamedTuple):
     frames: tuple[Any, ...]
 
 
-def _build_handoff_frames(config: AgentConfig) -> tuple[Any, Any]:
-    """Build the two frames that carry a handoff, marked uninterruptible.
+def build_switch_frames(config: AgentConfig) -> tuple[Any, Any]:
+    """Build the two frames that switch the call to `config`'s prompt and
+    tools, marked uninterruptible.
 
-    Called before the switch is committed, where raising is still safe.
+    Called before anything is committed, where raising is still safe. A
+    handoff builds them for its target agent; nothing here is handoff-specific.
     """
     from pipecat.frames.frames import LLMSetToolsFrame, LLMUpdateSettingsFrame
     from pipecat.processors.aggregators.llm_context import NOT_GIVEN
@@ -426,7 +428,7 @@ async def _prepare_handoff(
                 AgentConfig.model_validate(target.config_blob),
             )
 
-        frames = _build_handoff_frames(config)
+        frames = build_switch_frames(config)
     except Exception:
         logger.exception("handoff_context: failed to prepare the handoff")
         return None
@@ -444,33 +446,57 @@ async def _prepare_handoff(
     return PreparedHandoff(name=target.name, config=config, frames=frames)
 
 
-async def _apply_handoff_context(
-    prepared: PreparedHandoff,
+async def apply_switch(
+    config: AgentConfig,
+    frames: tuple[Any, ...],
     call_context: CallContext,
     params: Any,
+    *,
+    clear_context: bool,
 ) -> None:
-    """Switch the running pipeline to the target agent. Atomically.
+    """Switch the running pipeline to `config`'s prompt and tools. Atomically.
 
-    Everything that can wait or raise happened in `_prepare_handoff`, before
-    the switch was committed. What is left cannot suspend — `queue_frame` puts
-    onto an unbounded asyncio.Queue, which never yields — so an interruption
-    is delivered either before this or after it, never through it.
+    `frames` are `build_switch_frames(config)`, built by the caller along with
+    everything else that can wait or raise, before anything was committed.
+    What is left cannot suspend — `queue_frame` puts onto an unbounded
+    asyncio.Queue, which never yields — so an interruption is delivered either
+    before this or after it, never through it.
+
+    Whether the conversation so far survives is the caller's choice: a handoff
+    clears it, since the target agent starts over.
 
     Adding an `await`, or anything that can raise, reopens the half-applied
     state the `interruptible=False` flag cannot reach: a frame that was never
     built cannot survive a drain. `test_handoff_switch_is_atomic.py` fails if
     it happens.
     """
-    params.context.set_messages([])
-    if prepared.config.tools:
+    if clear_context:
+        params.context.set_messages([])
+    if config.tools:
         from turncall.orchestrator.llm_failover import FailoverLLM
 
         # Every member of a failover group (#222), not only the one answering.
         register_tools(
-            FailoverLLM.group_of(params.llm), list(prepared.config.tools), call_context
+            FailoverLLM.group_of(params.llm), list(config.tools), call_context
         )
-    for frame in prepared.frames:
+    for frame in frames:
         await params.pipeline_worker.queue_frame(frame)
+
+
+async def _apply_handoff_context(
+    prepared: PreparedHandoff,
+    call_context: CallContext,
+    params: Any,
+) -> None:
+    """Switch the running pipeline to the target agent, over a cleared context.
+
+    Everything that can wait or raise happened in `_prepare_handoff`, before
+    the switch was committed; `apply_switch` is the part that must not
+    suspend, and nothing here may either.
+    """
+    await apply_switch(
+        prepared.config, prepared.frames, call_context, params, clear_context=True
+    )
 
     logger.info(
         "handoff_context: switched system instruction to agent '{name}'",
