@@ -577,3 +577,80 @@ async def test_a_switch_that_keeps_the_context_leaves_the_conversation_alone():
     assert [t.name for t in register.call_args.args[1]] == ["refund"]
     assert all(f.interruptible is False for f in queue)
     assert len(queue) == 2
+
+
+# --- Loading a skill (#424) ----------------------------------------------------
+# A load applies its own switch, over the context as it is: `apply_load` is
+# `apply_switch` plus recording what is loaded. Pinned the same way, so an
+# `await` added between the two fails here.
+
+
+def _prepared_load():
+    from uuid import uuid4 as _id
+
+    from turncall.orchestrator.skill_loader import CallSkills, prepare_load
+    from turncall.orchestrator.tool_bridge import SwitchInputs
+    from turncall.services.skills import ResolvedSkill
+
+    skill = ResolvedSkill(
+        id=_id(),
+        name="explain_bill",
+        version=2,
+        description="When the bill changed.",
+        instructions="Compare the invoices.",
+        tools=(_tool("get_invoices"),),
+    )
+    skills = CallSkills(
+        base=AgentConfig(system_prompt="You are Maya."),
+        available=(skill,),
+        switch=SwitchInputs(),
+    )
+    return skills, prepare_load(skills, skill)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_skill_load_completes_within_one_scheduling_slice():
+    from turncall.orchestrator.skill_loader import apply_load
+
+    skills, prepared = _prepared_load()
+    queue: list = []
+    params = _params(queue)
+    with patch("turncall.orchestrator.tool_bridge.register_tools"):
+        task = asyncio.create_task(apply_load(prepared, skills, _context(), params))
+        await asyncio.sleep(0)
+        done = task.done()
+        await task
+
+    assert done, "the skill load suspended partway through"
+    assert len(queue) == 2
+    assert skills.loaded == prepared.loaded
+    params.context.set_messages.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancelling_a_skill_load_once_it_has_begun_is_all_or_nothing():
+    from turncall.orchestrator.skill_loader import apply_load
+
+    skills, prepared = _prepared_load()
+    queue: list = []
+    holder: list[asyncio.Task] = []
+
+    def register_and_interrupt(*_a, **_k):
+        holder[0].cancel()
+
+    with patch(
+        "turncall.orchestrator.tool_bridge.register_tools",
+        new=register_and_interrupt,
+    ):
+        holder.append(
+            asyncio.create_task(
+                apply_load(prepared, skills, _context(), _params(queue))
+            )
+        )
+        await asyncio.gather(*holder, return_exceptions=True)
+
+    assert (len(queue), bool(skills.loaded)) in {(0, False), (2, True)}, (
+        f"half-applied: {len(queue)} frame(s) queued, loaded={skills.loaded}"
+    )

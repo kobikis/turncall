@@ -25,12 +25,11 @@ from turncall.api.v1.schemas.agents import (
     ToolDefinitionSchema,
 )
 from turncall.domain.config_secrets import sanitize_tools
-from turncall.domain.models import BUILTIN_TOOL_NAMES
-
-# A skill's name is what the model passes to load a skill, so it is shaped
-# like a tool name.
-SKILL_NAME_PATTERN = r"^[a-z_][a-z0-9_]*$"
-SKILL_NAME_MAX = 64
+from turncall.domain.models import (
+    BUILTIN_TOOL_NAMES,
+    SKILL_NAME_MAX,
+    SKILL_NAME_PATTERN,
+)
 
 # The description is shown to the model to choose a skill by, as a tool's is;
 # the instructions join the prompt, bounded as an agent's system prompt is.

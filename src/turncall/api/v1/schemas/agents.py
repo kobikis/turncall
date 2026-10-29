@@ -24,6 +24,8 @@ from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
 from turncall.domain.models import (
     BUILTIN_TOOL_NAMES,
+    SKILL_NAME_MAX,
+    SKILL_NAME_PATTERN,
     RetentionConfig,
     resolve_delegation,
 )
@@ -255,6 +257,21 @@ class ToolDefinitionSchema(BaseModel):
             msg = f"Non-built-in tool '{self.name}' requires a webhook_url"
             raise ValueError(msg)
         return self
+
+
+class SkillRefSchema(BaseModel):
+    """A skill the agent may load mid-call (#424), by name. The call runs the
+    skill's live published version, resolved when the call starts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skill: str = Field(
+        ...,
+        min_length=1,
+        max_length=SKILL_NAME_MAX,
+        pattern=SKILL_NAME_PATTERN,
+        description="The name of one of the project's skills",
+    )
 
 
 class GuardrailsSchema(BaseModel):
@@ -749,6 +766,14 @@ class AgentConfigSchema(BaseModel):
     # the agent endpoints refuse this, and it is never dumped into a config_blob.
     knowledge_bases: list[InlineKnowledgeBaseSchema] = Field(
         default_factory=list, exclude=True
+    )
+    skills: list[SkillRefSchema] = Field(
+        default_factory=list,
+        description=(
+            "Skills the model may load mid-call with load_skill, each by name. "
+            "Cascade voice only; the call runs each skill's live published "
+            "version"
+        ),
     )
     transport: str = Field(default="twilio", pattern=r"^(twilio|webrtc|both)$")
     server_url: ServerUrlConfigSchema = Field(default_factory=ServerUrlConfigSchema)

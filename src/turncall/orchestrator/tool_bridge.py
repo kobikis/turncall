@@ -12,6 +12,7 @@ import asyncio
 import dataclasses
 import json
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 from uuid import UUID
 
@@ -20,6 +21,7 @@ from loguru import logger
 from turncall.domain.enums import ToolExecutionMode
 from turncall.domain.models import BUILTIN_TOOL_NAMES, ToolDefinition
 from turncall.services import call_control
+from turncall.services.skills import LOAD_SKILL
 from turncall.services.template_renderer import (
     prepend_knowledge_context,
     render_agent_config,
@@ -324,12 +326,38 @@ class PreparedHandoff(NamedTuple):
     frames: tuple[Any, ...]
 
 
-def build_switch_frames(config: AgentConfig) -> tuple[Any, Any]:
+@dataclass(frozen=True)
+class SwitchInputs:
+    """What the call's prompt and tools were built from besides its config,
+    for a switch that keeps them: the knowledge preamble, the tools discovered
+    or added at build (MCP, then `query_knowledge`), and whether the LLM is a
+    BYOM one that reads its tools from the prompt instead.
+
+    A handoff passes none: the target agent's prompt and tools are its own,
+    and MCP is not reconnected mid-call. A skill load (#424) passes the
+    call's, so loading a skill takes nothing away.
+    """
+
+    knowledge_preamble: str = ""
+    extra_tools: tuple[ToolDefinition, ...] = ()
+    byom: bool = False
+
+
+# A handoff's: the target agent's config and nothing else.
+_NO_INPUTS = SwitchInputs()
+
+
+def build_switch_frames(
+    config: AgentConfig, inputs: SwitchInputs = _NO_INPUTS
+) -> tuple[Any, Any]:
     """Build the two frames that switch the call to `config`'s prompt and
     tools, marked uninterruptible.
 
     Called before anything is committed, where raising is still safe. A
     handoff builds them for its target agent; nothing here is handoff-specific.
+    `inputs` are built the way `create_pipeline` builds them, so a switch that
+    passes the call's own reproduces the call's prompt and tools around
+    `config`'s.
     """
     from pipecat.frames.frames import LLMSetToolsFrame, LLMUpdateSettingsFrame
     from pipecat.processors.aggregators.llm_context import NOT_GIVEN
@@ -345,9 +373,14 @@ def build_switch_frames(config: AgentConfig) -> tuple[Any, Any]:
     # it the old way would send both prompts: the OpenAI adapter prepends
     # system_instruction to the context messages, so the previous agent's
     # instructions would survive the handoff.
+    system_instruction = _build_system_instruction(
+        config,
+        inject_tools_prompt=inputs.byom,
+        knowledge_preamble=inputs.knowledge_preamble,
+    )
     prompt_frame = _mark_uninterruptible(
         LLMUpdateSettingsFrame(
-            delta=LLMSettings(system_instruction=_build_system_instruction(config)),
+            delta=LLMSettings(system_instruction=system_instruction),
             # A failover backup (#222) must take over as the new agent too.
             reach_inactive_services=True,
         )
@@ -355,8 +388,11 @@ def build_switch_frames(config: AgentConfig) -> tuple[Any, Any]:
     # Tools live in two places: the handler registry and the advertised
     # schema. Moving only the prompt left the model believing it was the new
     # agent while still holding the previous one's tools, and none of its own.
-    # NOT_GIVEN clears the set when the target defines none.
-    tools_schema = _build_tools_schema(config)
+    # NOT_GIVEN clears the set when the target defines none, and for a BYOM
+    # LLM, whose tools are in its prompt and never advertised (as at build).
+    tools_schema = (
+        None if inputs.byom else _build_tools_schema(config, list(inputs.extra_tools))
+    )
     tools_frame = _mark_uninterruptible(
         LLMSetToolsFrame(tools=tools_schema if tools_schema is not None else NOT_GIVEN)
     )
@@ -659,6 +695,14 @@ def _register_single_tool(
             # anything that waits or raises after that commit is a window where
             # the record says handed off and the pipeline never switched. #144.
             result = (await run_handoff(dict(args), call_context, params)).result
+        elif function_name == LOAD_SKILL:
+            # Adds a skill's prompt section and tools without clearing the
+            # context, and asks for the model's next inference itself, after
+            # the switch (#424): so it delivers its own result.
+            from turncall.orchestrator.skill_loader import run_load_skill
+
+            result = await run_load_skill(dict(args), call_context, params)
+            delivered = True
         elif function_name in BUILTIN_TOOL_NAMES:
             execution = _execute_builtin(function_name, args, call_context)
             # A transfer takes the call away from this pipeline: the carrier

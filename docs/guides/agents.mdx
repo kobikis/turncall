@@ -37,6 +37,7 @@ curl -X POST http://localhost:8090/v1/agents \
     "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"},
     "tools": [],
     "mcp_servers": [],
+    "skills": [{"skill": "verify_identity"}],
     "silence_timeout_ms": 800,
     "interruption_enabled": true,
     "smart_turn_detection": true,
@@ -57,6 +58,10 @@ curl -X POST http://localhost:8090/v1/agents \
   top-level `aws` block for region and credentials — one per agent, shared by
   both. See [AWS credentials](/guides/providers#credentials).
 </Note>
+
+`skills` names the project's [skills](/guides/skills) the agent may load
+mid-call. The model sees each one's name and description, and loads one with
+the built-in `load_skill` tool when the conversation needs it.
 
 ## Warnings on a Read
 
@@ -100,7 +105,7 @@ Personalize agents per-call using `{{variable}}` placeholders:
 }
 ```
 
-Variables are rendered at call start via [call-init](/guides/call-init) or the API. See [Server Events](/guides/server-events) for how to dynamically inject variables.
+Variables are rendered at call start via [call-init](/guides/call-init) or the API, in a [skill's](/guides/skills) instructions too. See [Server Events](/guides/server-events) for how to dynamically inject variables.
 
 ## Pipeline Mode
 

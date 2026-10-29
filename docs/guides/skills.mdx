@@ -7,7 +7,7 @@ icon: "puzzle-piece"
 A skill is what an agent needs for one task: a description of when to use it, the instructions to follow, the tools it calls and the knowledge bases it reads. You define it once in a project and version it the way you version an agent.
 
 <Note>
-This page covers the skill resource and its lifecycle. Attaching skills to agents and loading them on a call are on their way.
+Skills load on cascade voice calls. Text conversations, pinned versions and a limit on loaded skills are on their way.
 </Note>
 
 ## Create a skill
@@ -71,6 +71,47 @@ curl "http://localhost:8090/v1/skills?name=verify_identity" \
 The list is newest first in the paginated envelope (`total`, `page`, `limit` up to 200). `name` lists one skill's versions, and `state` (`draft`, `published` or `archived`) filters by state: `?state=published` lists the live version of every skill. `GET /v1/skills/{skill_id}` reads one version.
 
 Skills belong to their project: another project's skill is a `404` on every route.
+
+## Attach skills to an agent
+
+List the skills an agent may use by name in its config:
+
+```json
+{
+  "system_prompt": "You are Maya, the support agent. Be brief and warm.",
+  "skills": [{"skill": "verify_identity"}, {"skill": "explain_bill"}]
+}
+```
+
+Each name resolves to the skill's live published version once, when a call starts, so a publish mid-call does not change a running call. A name with no published version in the project is skipped with a warning; the call goes on without it.
+
+## Load a skill on a call
+
+Until a skill is loaded the model sees only its name and description, in a section added to the system prompt, and a built-in tool, `load_skill`:
+
+```text
+You are Maya, the support agent. Be brief and warm.
+
+## Skills you can load
+Load a skill with load_skill when the conversation needs it. Its instructions and tools are added when you load it.
+- verify_identity: Use before discussing anything account-specific: balance, bills, payments.
+- explain_bill: Use when the caller asks why a bill changed.
+```
+
+None of the skills' tools are offered yet. When the conversation needs a skill the model calls `load_skill` with `{"name": "verify_identity"}`, and the skill's instructions join the prompt as their own section, its tools join the tool list, and the model answers with them:
+
+```text
+## Skill: verify_identity (v2)
+Ask for the date of birth and the last 4 digits of the account number. ...
+```
+
+The conversation so far stays in the context: the caller does not repeat themselves. A load costs one more model response, once per skill per call.
+
+A skill's instructions and its tools' descriptions render the call's [template variables](/guides/call-init#response-fields) (`{{name}}`), as the agent's own prompt does. Its webhook tools run like the agent's own, recorded in [tool invocations](/guides/tools).
+
+When two tools share a name, the first of built-in, the agent's own tools, loaded skills' tools in load order, and MCP tools wins, in what the model is offered and in what runs. A skill tool with the name of one of the agent's tools is skipped.
+
+An agent with no skills is given no section and no `load_skill`. Skills are not loaded on speech-to-speech agents.
 
 ## Audit
 

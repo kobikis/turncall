@@ -988,11 +988,37 @@ POST /v1/skills/{id}/rollback
 `skills.tools` is `SealedTools`: webhook secrets sealed at rest and masked on
 read by the agent config's own rule for `tools` (`map_tools` /
 `sanitize_tools`), and sampled by the startup key check. Audited as
-`resource_type: skill` (`audit_log.skill_state`). No delete and no agent
-attachment yet (later tickets of #421).
+`resource_type: skill` (`audit_log.skill_state`). No delete yet.
+
+**On a call** (#424, cascade voice only): an agent's `skills: [{"skill":
+"<name>"}]` resolve once at build (`pipeline_builder._with_skills` →
+`skill_loader.resolve_call_skills` → `services/skills.resolve_skills`), each to
+its live published version in the call's project, instructions and tool
+descriptions rendered with the call row's `template_variables`. A missing or
+unpublished name is a warning and a skipped skill; so is everything on S2S and
+on a call with no database (the demo). The result rides on
+`CallContext.skills` (`CallSkills`: `base` config, `available`
+`ResolvedSkill`s with id/name/version, `switch` inputs, `loaded` in load
+order) — what #425 records. The call runs `skilled_config(base, available,
+loaded)`: the prompt gains `## Skills you can load` (name: description) and
+each loaded skill's `## Skill: <name> (v<N>)`; tools are `load_skill`, the
+agent's own, then loaded skills' in load order, and MCP/`query_knowledge`
+follow as `extra_tools` — every consumer keeps the first of a name, so that
+order is the precedence in what is advertised and what runs. A skill tool
+named like an agent tool or built-in is dropped at resolution. No skills = the
+config unchanged, no I/O. `load_skill` (`BUILTIN_TOOL_NAMES`, never listed in
+`tools`) runs `skill_loader.run_load_skill`: `prepare_load` builds the config
+and `build_switch_frames(config, CallSkills.switch)` — the call's own
+preamble, MCP + KB tools and BYOM choice, so a load takes nothing away — then
+`apply_load` = `apply_switch(clear_context=False)` + `loaded`, with nothing to
+wait on (`test_handoff_switch_is_atomic.py`). Its result runs no LLM; its
+`on_context_updated` queues an `LLMRunFrame` behind the switch's frames, so the
+next inference sees the skill. An unknown name answers so and applies nothing.
 
 Key files: `api/v1/skills.py`, `api/v1/schemas/skills.py`,
-`storage/repositories/skill_repo.py`. Tests: `tests/integration/test_skills_api.py`.
+`storage/repositories/skill_repo.py`, `services/skills.py`,
+`orchestrator/skill_loader.py`. Tests: `tests/integration/test_skills_api.py`,
+`tests/integration/test_harness_call_skills.py`, `tests/unit/test_skills_on_a_call.py`.
 
 ## A/B Testing
 
@@ -1927,6 +1953,7 @@ POST /v1/calls/{id}/analysis/rerun   # Re-run analysis (admin/developer key)
 | `transfer_call` | Transfer to phone number (cold/warm) | `target_number` (required), `transfer_mode`, `transfer_message`, `briefing`, `fallback_message`, `reason` |
 | `handoff_to_agent` | Switch to another agent. Refused (422) on an `openai_live` S2S agent | `agent_id` (required), `reason`, `context` |
 | `send_dtmf` | Send keypad tones | `digits` (required) |
+| `load_skill` | Load one of the agent's skills (#424, see "Skills"): its instructions join the prompt and its tools the tool list, the context kept. Offered automatically to an agent with resolved skills, never listed in `tools` | `name` (required) |
 | `do_not_call` | Suppress the caller's number (project-wide), record `call.opted_out`, end the call after the goodbye, like `end_call` (#228). Opt-in like every built-in: listed in `tools` or absent. A call with no E.164 caller (WebRTC) is refused and keeps running | none |
 
 ### Custom Webhook Tools

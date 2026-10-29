@@ -8815,6 +8815,14 @@
             "type": "array",
             "title": "Knowledge Bases"
           },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/SkillRefSchema"
+            },
+            "type": "array",
+            "title": "Skills",
+            "description": "Skills the model may load mid-call with load_skill, each by name. Cascade voice only; the call runs each skill's live published version"
+          },
           "transport": {
             "type": "string",
             "pattern": "^(twilio|webrtc|both)$",
@@ -11498,6 +11506,25 @@
         ],
         "title": "SetRoutingWeightsRequest",
         "description": "Request to set A/B routing weights on a phone number."
+      },
+      "SkillRefSchema": {
+        "properties": {
+          "skill": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z_][a-z0-9_]*$",
+            "title": "Skill",
+            "description": "The name of one of the project's skills"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "skill"
+        ],
+        "title": "SkillRefSchema",
+        "description": "A skill the agent may load mid-call (#424), by name. The call runs the\nskill's live published version, resolved when the call starts."
       },
       "SuccessEvaluationSchema": {
         "properties": {

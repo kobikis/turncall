@@ -34,7 +34,11 @@ from turncall.orchestrator.deepgram_flux import (
     is_flux,
     mixes_flux,
 )
-from turncall.orchestrator.knowledge_processor import KnowledgeTool, knowledge_tool
+from turncall.orchestrator.knowledge_processor import (
+    KnowledgeTool,
+    knowledge_tool,
+    knowledge_tool_definition,
+)
 from turncall.orchestrator.observability import ObservabilityProcessor
 from turncall.services.credentials import Credentials
 from turncall.services.llm_models import resolve_llm_model
@@ -71,6 +75,10 @@ class CallContext:
     # The eval scenario's tool mocks + policy (#71). None on a real call, which
     # is what makes every tool dispatch below unconditional there.
     tool_mocks: ToolMocks | None = None
+    # The skills this call resolved and which it has loaded (#424):
+    # `orchestrator/skill_loader.CallSkills`, set at build. None for an agent
+    # with no skills, an S2S agent, or a call with no database behind it.
+    skills: Any | None = None
 
     @property
     def is_eval(self) -> bool:
@@ -1338,6 +1346,36 @@ def _with_knowledge(
     return [*(tools or []), knowledge.definition]
 
 
+# LLMs that read their tools from the prompt rather than the tools API.
+_BYOM_PROVIDERS = ("ollama", "custom_openai")
+
+
+def is_byom(config: AgentConfig) -> bool:
+    return config.llm.provider in _BYOM_PROVIDERS
+
+
+def switch_inputs(
+    config: AgentConfig,
+    *,
+    knowledge_preamble: str,
+    mcp_tools: list[Any] | None,
+    knowledge_base_attachments: list[dict[str, Any]] | None,
+) -> Any:
+    """What `create_pipeline` builds a cascade call's prompt and tools from
+    besides its config, for a switch that must keep them (#424): the same
+    preamble, the same discovered tools in the same order (`_with_knowledge`),
+    the same BYOM choice."""
+    from turncall.orchestrator.tool_bridge import SwitchInputs
+
+    knowledge = knowledge_tool_definition(knowledge_base_attachments)
+    extra = [*(mcp_tools or []), *([knowledge] if knowledge is not None else [])]
+    return SwitchInputs(
+        knowledge_preamble=knowledge_preamble,
+        extra_tools=tuple(extra),
+        byom=is_byom(config),
+    )
+
+
 def _build_tools_schema(
     config: AgentConfig,
     extra_tools: list[Any] | None = None,
@@ -1493,7 +1531,7 @@ def create_pipeline(
     # BYOM providers describe their tools in the prompt rather than advertising
     # them through the API: many local models (Gemma and friends) only do
     # function calling by prompting.
-    byom_provider = config.llm.provider in ("ollama", "custom_openai")
+    byom_provider = is_byom(config)
     system_instruction = _build_system_instruction(
         config,
         inject_tools_prompt=byom_provider,

@@ -291,6 +291,22 @@ class KnowledgeTool(NamedTuple):
     handler: Any
 
 
+def knowledge_tool_definition(
+    attachments: list[dict[str, Any]] | None,
+) -> ToolDefinition | None:
+    """What `query_knowledge` is advertised as for these attachments, None
+    without a tool-mode KB. Settings come from the first of them."""
+    tool_kbs = [a for a in attachments or [] if a.get("mode") == "tool"]
+    if not tool_kbs:
+        return None
+    return ToolDefinition(
+        name=KNOWLEDGE_TOOL_SCHEMA["name"],
+        description=tool_kbs[0].get("tool_description")
+        or KNOWLEDGE_TOOL_SCHEMA["description"],
+        parameters_schema=KNOWLEDGE_TOOL_SCHEMA["parameters"],
+    )
+
+
 def knowledge_tool(
     attachments: list[dict[str, Any]] | None,
     session_factory: async_sessionmaker[AsyncSession],
@@ -300,16 +316,11 @@ def knowledge_tool(
     """One tool over every tool-mode KB, None without any. Settings come from
     the first of them. With the call's context its calls are logged and
     recorded like every other tool's."""
-    tool_kbs = [a for a in attachments or [] if a.get("mode") == "tool"]
-    if not tool_kbs:
+    definition = knowledge_tool_definition(attachments)
+    if definition is None:
         return None
+    tool_kbs = [a for a in attachments or [] if a.get("mode") == "tool"]
     first = tool_kbs[0]
-    definition = ToolDefinition(
-        name=KNOWLEDGE_TOOL_SCHEMA["name"],
-        description=first.get("tool_description")
-        or KNOWLEDGE_TOOL_SCHEMA["description"],
-        parameters_schema=KNOWLEDGE_TOOL_SCHEMA["parameters"],
-    )
     handler = create_knowledge_tool_handler(
         knowledge_base_ids=[a["knowledge_base_id"] for a in tool_kbs],
         session_factory=session_factory,

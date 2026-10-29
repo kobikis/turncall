@@ -104,6 +104,40 @@ async def _kb_attachments(
     return await load_agent_kb_attachments(session_factory, call_context.agent_id)
 
 
+async def _with_skills(
+    config: AgentConfig,
+    call_context: CallContext,
+    *,
+    knowledge_preamble: str,
+    mcp_tools: list[Any] | None,
+    kb_attachments: list[dict[str, Any]],
+) -> tuple[AgentConfig, CallContext]:
+    """The config the call runs with its agent's skills (#424), and the call's
+    context carrying them for `load_skill` — or both as given, for an agent
+    with none (no I/O, nothing changed)."""
+    from turncall.orchestrator.pipeline_factory import switch_inputs
+    from turncall.orchestrator.skill_loader import CallSkills, resolve_call_skills
+
+    available = await resolve_call_skills(config, call_context)
+    if not available:
+        return config, call_context
+    skills = CallSkills(
+        base=config,
+        available=available,
+        switch=switch_inputs(
+            config,
+            knowledge_preamble=knowledge_preamble,
+            mcp_tools=mcp_tools,
+            knowledge_base_attachments=kb_attachments or None,
+        ),
+    )
+    logger.info(
+        "skills_resolved: {skills}",
+        skills=[f"{s.name} v{s.version}" for s in available],
+    )
+    return skills.config(), replace(call_context, skills=skills)
+
+
 async def _assemble(
     *,
     config: AgentConfig,
@@ -136,6 +170,14 @@ async def _assemble(
     # the system prompt (create_pipeline is sync, so we build it here).
     knowledge_preamble = await build_knowledge_preamble(
         session_factory, kb_attachments or [], [t.name for t in config.tools]
+    )
+
+    config, call_context = await _with_skills(
+        config,
+        call_context,
+        knowledge_preamble=knowledge_preamble,
+        mcp_tools=mcp_tools,
+        kb_attachments=kb_attachments,
     )
 
     credentials = await load_call_credentials(
