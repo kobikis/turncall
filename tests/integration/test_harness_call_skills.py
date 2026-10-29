@@ -238,6 +238,82 @@ async def test_a_loaded_skill_brings_its_instructions_and_tools(monkeypatch):
     assert ("agent", "It went up by twelve.") in said, said
 
 
+async def test_a_call_records_the_skill_versions_it_ran(monkeypatch):
+    """#425. The call resolves its skills once, at its start: a version
+    published while it is live is not the one it loads. The load is a
+    `skill.loaded` event on the call's log and at a subscriber, and the call
+    read and `call.ended` list the same skills, the one never loaded too."""
+    after: list[Given] = []
+    script = Script(
+        caller=(SAID,),
+        agent=(
+            ToolCall("load_skill", {"name": "explain_bill"}),
+            _remembering(after, "It went up by twelve."),
+        ),
+    )
+    async with run_app(
+        script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        await _publish_skill(
+            app,
+            {"name": "explain_bill", "description": BILL, "instructions": "Old."},
+        )
+        await _publish_skill(
+            app,
+            {"name": "verify_identity", "description": VERIFY, "instructions": "Ask."},
+        )
+        number = await app.bind_number(
+            await app.create_agent(
+                {
+                    **HARNESS_AGENT,
+                    "first_message": "Hello.",
+                    "skills": [{"skill": "explain_bill"}, {"skill": "verify_identity"}],
+                }
+            )
+        )
+
+        call = await place_inbound_call(
+            app.carrier, app.api, from_number=CALLER, to_number=number
+        )
+        await call.wait_for_agent_speech(1)  # the greeting: the call is built
+        newer = await _publish_skill(
+            app,
+            {"name": "explain_bill", "description": BILL, "instructions": "New."},
+        )
+        await call.say(400)
+        await call.wait_for_agent_speech(2)
+        delivered = await app.sink.wait_for("skill.loaded")
+        events = (
+            await app.api.get(
+                f"/v1/calls/{call.call_id}/events",
+                params={"event_type": "skill.loaded"},
+            )
+        ).json()["data"]
+        await call.hang_up()
+        ended = await app.sink.wait_for("call.ended")
+        read = (await app.api.get(f"/v1/calls/{call.call_id}")).json()["data"]
+
+    # Published mid-call, and not what the call loaded.
+    assert newer["version"] == 2
+    [given] = after
+    prompt = _prompt(given)
+    assert "## Skill: explain_bill (v1)\nOld." in prompt, prompt
+    assert "New." not in prompt
+
+    loaded = {"skill": "explain_bill", "version": 1, "reason": "load_skill"}
+    assert [e["payload"] for e in events] == [loaded]
+    assert delivered["payload"] == loaded
+    assert delivered["call_id"] == call.call_id and delivered["_signature_valid"]
+
+    skills = [
+        {"skill": "explain_bill", "version": 1, "loaded": True},
+        {"skill": "verify_identity", "version": 1, "loaded": False},
+    ]
+    assert read["skills"] == skills
+    assert ended["payload"]["skills"] == skills
+    assert "resolved_skills" not in read["metadata"]
+
+
 async def _first_inference(monkeypatch, agent: dict[str, Any], skills=()) -> Given:
     """What an agent's model is given on the caller's first turn."""
     given: list[Given] = []

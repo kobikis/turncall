@@ -158,8 +158,70 @@ async def test_call_ended_payload_matches_the_read(factory, client, seeded):
         )
     payload = dispatch.await_args.kwargs["payload"]
     read = (await client.get(f"/v1/calls/{stored_id}")).json()["data"]
-    for field in ("ended_reason", "agent_name", "agent_version", "latency_summary"):
+    for field in (
+        "ended_reason",
+        "agent_name",
+        "agent_version",
+        "latency_summary",
+        "failovers",
+        "skills",
+    ):
         assert payload[field] == read[field], field
+    assert read["skills"] == []  # no skills: an empty list, as `failovers`
+
+
+async def test_the_skills_a_call_ran_read_the_same_everywhere(factory, client, seeded):
+    """#425: the resolution saved on the row plus the call's `skill.loaded`
+    events — every resolved skill, loaded or not, on the single read, the list
+    and `call.ended`; the stored resolution never shows in `metadata`."""
+    from unittest.mock import AsyncMock, patch
+
+    from turncall.domain.models import AnalysisConfig, LLMConfig
+    from turncall.services import call_analysis_trigger
+    from turncall.services.call_view import RESOLVED_SKILLS
+
+    project_id, _, call_id = seeded
+    async with factory() as session:
+        call = await call_repo.get_call_by_id(session, call_id)
+        call.metadata_json = {"crm_id": "C-1"}
+        await session.commit()
+        await call_repo.merge_call_metadata(
+            session,
+            call_id,
+            {
+                RESOLVED_SKILLS: [
+                    {"id": str(uuid.uuid4()), "skill": "verify", "version": 2},
+                    {"id": str(uuid.uuid4()), "skill": "explain_bill", "version": 1},
+                ]
+            },
+        )
+        await call_repo.create_call_event(
+            session,
+            call_id=call_id,
+            event_type=CallEventType.SKILL_LOADED,
+            payload={"skill": "verify", "version": 2, "reason": "load_skill"},
+            sequence_number=9,
+        )
+        await session.commit()
+
+    expected = [
+        {"skill": "verify", "version": 2, "loaded": True},
+        {"skill": "explain_bill", "version": 1, "loaded": False},
+    ]
+    read = (await client.get(f"/v1/calls/{call_id}")).json()["data"]
+    assert read["skills"] == expected
+    assert read["metadata"] == {"crm_id": "C-1"}  # merged beside, not over
+    items = {c["id"]: c for c in (await client.get("/v1/calls")).json()["data"]}
+    assert items[str(call_id)]["skills"] == expected
+
+    dispatch = AsyncMock()
+    with patch("turncall.events.dispatcher.dispatch_event", dispatch):
+        await call_analysis_trigger._run_post_call(
+            factory, call_id, project_id, AnalysisConfig(enabled=False), LLMConfig(), ""
+        )
+    payload = dispatch.await_args.kwargs["payload"]
+    assert payload["skills"] == expected
+    assert RESOLVED_SKILLS not in payload["metadata"]
 
 
 async def test_an_inline_agents_config_never_leaves_the_call(factory, client, seeded):

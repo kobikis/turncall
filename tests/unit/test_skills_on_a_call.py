@@ -9,6 +9,7 @@ agree, so both are checked against one config. The end-to-end behaviour is in
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -175,8 +176,15 @@ def test_an_unusable_skills_entry_drops_that_skill_not_the_config():
 # --- load_skill ------------------------------------------------------------
 
 
-def _call(skills=None):
-    return SimpleNamespace(call_id=uuid4(), project_id=uuid4(), skills=skills)
+def _call(skills=None, *, records=False):
+    return SimpleNamespace(
+        call_id=uuid4(),
+        project_id=uuid4(),
+        skills=skills,
+        records=records,
+        is_eval=not records,
+        session_factory=MagicMock(),
+    )
 
 
 def _params():
@@ -254,3 +262,82 @@ async def test_a_load_keeps_the_calls_preamble_and_discovered_tools_and_reruns_a
     assert properties.run_llm is False
     await properties.on_context_updated()
     assert isinstance(queued[-1], LLMRunFrame) and len(queued) == 3
+
+
+# --- the record (#425) -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("records", [True, False])
+async def test_a_load_is_a_skill_loaded_event_only_on_a_recorded_call(records):
+    """A load is recorded (stored and dispatched) on a call with a row, after
+    the switch; an eval (`records` false) records nothing."""
+    from turncall.orchestrator.skill_loader import CallSkills, run_load_skill
+    from turncall.orchestrator.tool_bridge import SwitchInputs
+
+    skill = _skill("explain_bill", version=3)
+    skills = CallSkills(AGENT, (skill,), SwitchInputs())
+    call = _call(skills, records=records)
+    _, params = _params()
+    emitted: list[dict] = []
+
+    async def emit(_session, **kwargs):
+        emitted.append(kwargs)
+
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+    call.session_factory = MagicMock(return_value=session)
+    with (
+        patch("turncall.orchestrator.tool_bridge.register_tools"),
+        patch("turncall.events.emit.emit_call_event", emit),
+    ):
+        await run_load_skill({"name": "explain_bill"}, call, params)
+        from turncall.orchestrator.tool_bridge import _BG_TASKS
+
+        await asyncio.gather(*_BG_TASKS)
+
+    if not records:
+        assert emitted == []
+        call.session_factory.assert_not_called()
+        return
+    [event] = emitted
+    assert event["event_type"] == "skill.loaded"
+    assert event["payload"] == {
+        "skill": "explain_bill",
+        "version": 3,
+        "reason": "load_skill",
+    }
+    assert event["call_id"] == call.call_id and event["commit"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_resolution_is_saved_only_on_a_recorded_call():
+    from turncall.orchestrator.skill_loader import record_resolution
+
+    skill = _skill("explain_bill", version=3)
+    eval_call = _call(records=False)
+    await record_resolution(eval_call, (skill,))
+    eval_call.session_factory.assert_not_called()
+
+    call = _call(records=True)
+    session = MagicMock(commit=AsyncMock())
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+    call.session_factory = MagicMock(return_value=session)
+    with patch(
+        "turncall.storage.repositories.call_repo.merge_call_metadata",
+        AsyncMock(),
+    ) as merge:
+        await record_resolution(call, (skill,))
+
+    merge.assert_awaited_once_with(
+        session,
+        call.call_id,
+        {
+            "resolved_skills": [
+                {"id": str(skill.id), "skill": "explain_bill", "version": 3}
+            ]
+        },
+    )
+    session.commit.assert_awaited_once()

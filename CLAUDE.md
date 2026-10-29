@@ -1015,6 +1015,21 @@ wait on (`test_handoff_switch_is_atomic.py`). Its result runs no LLM; its
 `on_context_updated` queues an `LLMRunFrame` behind the switch's frames, so the
 next inference sees the skill. An unknown name answers so and applies nothing.
 
+**What a call records** (#425): the resolution is saved once at build
+(`skill_loader.record_resolution`, from `_with_skills`) as
+`metadata_json["resolved_skills"]` = `[{id, skill, version}]`, merged in with
+`call_repo.merge_call_metadata` (JSONB `||`); hidden from `metadata` on the
+read and `call.ended` (`call_view.RESERVED_METADATA`) and a 422 in an outbound
+dial's `metadata`. Each load is a `skill.loaded` call event `{skill, version,
+reason}` (reason `load_skill`; `skill.unloaded` exists for #427, nothing sends
+it yet), stored + dispatched through `emit_call_event` from a task spawned
+right after `apply_load` (`record_skill_event`), never inside it. `skills` on
+the call read and `call.ended` is `call_view.call_skills`: every resolved
+skill `{skill, version, loaded}`, `[]` with none, `loaded` null once the
+call's events expired (#316). Only when `CallContext.records` — an eval
+records neither. `skill`, `skills` are redaction structural fields; `reason`
+is an identifier on the two `skill.*` events.
+
 Key files: `api/v1/skills.py`, `api/v1/schemas/skills.py`,
 `storage/repositories/skill_repo.py`, `services/skills.py`,
 `orchestrator/skill_loader.py`. Tests: `tests/integration/test_skills_api.py`,
@@ -2061,7 +2076,7 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 `call.ended` payload: `status`, `ended_reason`, `from_number`, `to_number`, `direction`,
 `duration_ms`, `provider_call_sid`, `metadata`, `started_at`, `ended_at`,
 `recording_status`, `recording_url`, `summary`, `analysis`, `agent_name`,
-`agent_version`, `latency_summary`, `failovers` (`[{role, from, to, error}]`, `role` `stt`\|`llm`\|`tts`, #222/#223), `retention` (`{recordings_days, transcripts_days, events_days}`, null = kept for good, #316), and `transcript` (`[{role, text, timestamp}]`).
+`agent_version`, `latency_summary`, `failovers` (`[{role, from, to, error}]`, `role` `stt`\|`llm`\|`tts`, #222/#223), `skills` (`[{skill, version, loaded}]`, every skill the call resolved, `[]` with none, #425), `retention` (`{recordings_days, transcripts_days, events_days}`, null = kept for good, #316), and `transcript` (`[{role, text, timestamp}]`).
 
 `latency_summary` is derived from the call's `metrics.turn` events (#179):
 `{turns, user_to_bot, stages: {stt|llm|tts}, slowest_turn}`, each spread being
@@ -2084,7 +2099,7 @@ status callback, Telnyx's hangup; and the agent's hangup marker, source
 sent and never stored.
 
 The call read (`GET /v1/calls[/{id}]`) carries the same derived fields —
-`ended_reason`, `agent_name`, `agent_version`, `latency_summary`, `failovers` — from the same function,
+`ended_reason`, `agent_name`, `agent_version`, `latency_summary`, `failovers`, `skills` — from the same function,
 `services/call_view.py`, so the read and the webhook cannot disagree (#175).
 `ended_reason` is null on the read while the call is still live; agent fields
 are null for an inline agent and for a deleted agent row.

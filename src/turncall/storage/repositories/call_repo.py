@@ -5,7 +5,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, literal, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.domain.carriers import DEFAULT_CARRIER
@@ -109,6 +110,20 @@ async def update_call_status(
         stmt = stmt.where(CallRow.status.not_in(_ENDED))
     result = await session.execute(stmt.values(**values).returning(CallRow))
     return result.scalar_one_or_none()
+
+
+async def merge_call_metadata(
+    session: AsyncSession, call_id: UUID, values: dict[str, Any]
+) -> None:
+    """Set top-level keys of a call's `metadata_json`, leaving the rest as
+    it is in the database: one `||` in the statement, never a read-modify-
+    write of a copy another writer may have changed since."""
+    await session.execute(
+        update(CallRow)
+        .where(CallRow.id == call_id)
+        .values(metadata_json=CallRow.metadata_json.op("||")(literal(values, JSONB)))
+        .execution_options(synchronize_session=False)
+    )
 
 
 # A call in one of these is over: no stream may start one again.

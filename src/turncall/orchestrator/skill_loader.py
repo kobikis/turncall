@@ -9,8 +9,12 @@ config and both frames are built first, where raising is still harmless, and
 applied with nothing left to wait on — but, unlike a handoff, over the context
 as it is, so the conversation so far is kept.
 
-`CallSkills.available` is what the call resolved, versions included, for the
-call record (#425); `loaded` is what it has loaded, in load order.
+`CallSkills.available` is what the call resolved, versions included;
+`loaded` is what it has loaded, in load order. Both reach the call record
+(#425): the resolution is saved on the call row at build
+(`record_resolution`), and each load is a `skill.loaded` event, so the call
+read and `call.ended` can say which version of which skill the call ran after
+the skill has been published again.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from loguru import logger
 
+from turncall.domain.enums import CallEventType
 from turncall.domain.models import BUILTIN_TOOL_NAMES
 from turncall.services.skills import ResolvedSkill, resolve_skills, skilled_config
 
@@ -103,6 +108,85 @@ async def _call_variables(session: Any, call_context: CallContext) -> dict[str, 
     return variables if isinstance(variables, dict) else {}
 
 
+async def record_resolution(
+    call_context: CallContext, available: tuple[ResolvedSkill, ...]
+) -> None:
+    """Save the skills the call resolved on its row (#425), once, at build:
+    `[{id, skill, version}]` under `metadata_json["resolved_skills"]`.
+
+    Only for a call with a row (`records`). Best-effort: a call whose record
+    could not be written still runs its skills, and its read shows none.
+    """
+    if not available or not call_context.records:
+        return
+    from turncall.services.call_view import RESOLVED_SKILLS
+    from turncall.storage.repositories import call_repo
+
+    resolution = [
+        {"id": str(s.id), "skill": s.name, "version": s.version} for s in available
+    ]
+    try:
+        async with call_context.session_factory() as session:  # type: ignore[misc]
+            await call_repo.merge_call_metadata(
+                session, call_context.call_id, {RESOLVED_SKILLS: resolution}
+            )
+            await session.commit()
+    except Exception:
+        logger.exception(
+            "skills_resolution_not_recorded", call_id=str(call_context.call_id)
+        )
+
+
+# Why a skill was loaded: the model asked (`load_skill`). #427 adds `limit`,
+# the reason a `skill.unloaded` gives.
+LOADED_BY_MODEL = "load_skill"
+
+
+def record_skill_event(
+    call_context: CallContext,
+    event_type: CallEventType,
+    skill: ResolvedSkill,
+    *,
+    reason: str,
+) -> None:
+    """A `skill.loaded` / `skill.unloaded` event `{skill, version, reason}`,
+    stored on the call's log and sent to subscribers, off the critical path
+    (as a tool's `tool.result` is): the write and a webhook's retries must not
+    sit between the load and the model's next inference. Nothing for a call
+    with no row (an eval)."""
+    if not call_context.records:
+        return
+    from turncall.orchestrator.tool_bridge import _spawn
+
+    payload = {"skill": skill.name, "version": skill.version, "reason": reason}
+    _spawn(_emit_skill_event(call_context, event_type, payload))
+
+
+async def _emit_skill_event(
+    call_context: CallContext, event_type: CallEventType, payload: dict[str, Any]
+) -> None:
+    try:
+        from turncall.events.emit import emit_call_event
+
+        # Identifiers only (redaction's structural fields): a plain payload,
+        # no detector to wait on.
+        async with call_context.session_factory() as session:  # type: ignore[misc]
+            await emit_call_event(
+                session,
+                call_id=call_context.call_id,
+                project_id=call_context.project_id,
+                event_type=event_type,
+                payload=payload,
+                commit=True,
+            )
+    except Exception:
+        logger.exception(
+            "skill_event_not_recorded",
+            call_id=str(call_context.call_id),
+            event_type=str(event_type),
+        )
+
+
 class PreparedLoad(NamedTuple):
     """A load with everything built and nothing applied."""
 
@@ -181,6 +265,12 @@ async def run_load_skill(
         return result
 
     await apply_load(prepared, skills, call_context, params)
+    # After the switch, never inside it: `apply_load` must not suspend, and
+    # recording is I/O. Spawned in the same step, so the load that happened
+    # is the load recorded even if the caller interrupts from here on.
+    record_skill_event(
+        call_context, CallEventType.SKILL_LOADED, skill, reason=LOADED_BY_MODEL
+    )
     logger.info(
         "load_skill: loaded {skill} v{version}", skill=name, version=skill.version
     )

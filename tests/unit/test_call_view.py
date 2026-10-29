@@ -88,3 +88,52 @@ def test_latency_summary_omits_a_stage_no_turn_had():
 
 def test_no_turns_is_null_not_zeros():
     assert derived_fields(_call(), CallFacts())["latency_summary"] is None
+
+
+# --- skills (#425) -----------------------------------------------------------
+
+_RESOLVED = (
+    {"id": "a", "skill": "verify_identity", "version": 2},
+    {"id": "b", "skill": "explain_bill", "version": 1},
+)
+
+
+def test_every_resolved_skill_is_listed_loaded_or_not():
+    facts = CallFacts(
+        resolved_skills=_RESOLVED,
+        skill_loads=({"skill": "verify_identity", "version": 2},),
+    )
+    assert derived_fields(_call(), facts)["skills"] == [
+        {"skill": "verify_identity", "version": 2, "loaded": True},
+        {"skill": "explain_bill", "version": 1, "loaded": False},
+    ]
+
+
+def test_a_call_with_no_skills_lists_none():
+    assert derived_fields(_call(), CallFacts())["skills"] == []
+
+
+def test_loaded_is_unknown_once_the_events_expired():
+    call = SimpleNamespace(status="completed", ended_at=ENDED, events_expired_at=ENDED)
+    facts = CallFacts(resolved_skills=_RESOLVED)
+    assert [s["loaded"] for s in derived_fields(call, facts)["skills"]] == [
+        None,
+        None,
+    ]
+
+
+def test_the_stored_resolution_is_read_defensively():
+    from turncall.services.call_view import (
+        RESOLVED_SKILLS,
+        public_metadata,
+        resolved_skills,
+    )
+
+    metadata = {
+        RESOLVED_SKILLS: [*_RESOLVED, "junk", {"skill": "x"}],
+        "template_variables": {"a": "b"},
+    }
+    assert resolved_skills(metadata) == _RESOLVED
+    assert resolved_skills({RESOLVED_SKILLS: "junk"}) == ()
+    # Shown as `skills`, never in the metadata too.
+    assert public_metadata(metadata) == {"template_variables": {"a": "b"}}

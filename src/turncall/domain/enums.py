@@ -127,6 +127,12 @@ class CallEventType(StrEnum):
     # A provider stopped being usable and the call moved to its backup (#222).
     PROVIDER_FAILOVER = "provider.failover"
 
+    # Skills (#425): a skill's instructions and tools added to the live call,
+    # and taken off it again (#427's limit; nothing sends it yet). Stored and
+    # dispatched; identifiers only (`{skill, version, reason}`).
+    SKILL_LOADED = "skill.loaded"
+    SKILL_UNLOADED = "skill.unloaded"
+
     # SMS / Chat
     SESSION_CREATED = "session.created"
     SESSION_UPDATED = "session.updated"

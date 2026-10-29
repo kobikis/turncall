@@ -204,6 +204,29 @@ async def test_why_an_avatar_did_not_show_never_reaches_the_detector(
     assert built == []
 
 
+async def test_what_a_call_ran_of_its_skills_never_reaches_the_detector(
+    monkeypatch,
+) -> None:
+    """A skill's name, version and why it was loaded (#425), and the list of
+    them on `call.ended`, are identifiers: nothing for a detector to read."""
+    built: list[str] = []
+    _use(monkeypatch, lambda: built.append("built") or _Marks())
+    loaded = {"skill": "verify_identity", "version": 2, "reason": "load_skill"}
+    ended = {"skills": [{"skill": "explain_bill", "version": 1, "loaded": False}]}
+
+    out = [
+        await redaction.redact_payload(loaded, POLICY, event_type="skill.loaded"),
+        await redaction.redact_payload(
+            {**loaded, "reason": "limit"}, POLICY, event_type="skill.unloaded"
+        ),
+        await redaction.redact_payload(ended, POLICY, event_type="call.ended"),
+    ]
+
+    assert out == [loaded, {**loaded, "reason": "limit"}, ended]
+    assert built == []
+    assert not redaction.texts_in(loaded, event_type="skill.loaded")
+
+
 async def test_identifiers_read_back_as_data_are_not_analysed(detector) -> None:
     """A provider or tool name is no ORGANIZATION: `provider.failover`'s
     `from`/`to` and `tool_name` are TurnCall's own vocabulary, while a reason

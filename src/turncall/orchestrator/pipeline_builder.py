@@ -116,11 +116,17 @@ async def _with_skills(
     context carrying them for `load_skill` — or both as given, for an agent
     with none (no I/O, nothing changed)."""
     from turncall.orchestrator.pipeline_factory import switch_inputs
-    from turncall.orchestrator.skill_loader import CallSkills, resolve_call_skills
+    from turncall.orchestrator.skill_loader import (
+        CallSkills,
+        record_resolution,
+        resolve_call_skills,
+    )
 
     available = await resolve_call_skills(config, call_context)
     if not available:
         return config, call_context
+    # Once, here: the call runs these versions whatever is published after.
+    await record_resolution(call_context, available)
     skills = CallSkills(
         base=config,
         available=available,
