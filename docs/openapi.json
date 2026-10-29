@@ -5714,6 +5714,69 @@
         }
       }
     },
+    "/v1/skills/{name}/agents": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "List Skill Agents",
+        "description": "The project's draft and published agent versions listing the skill,\neach with the skill version it resolves to now. A name the project has no\nversion of is a 404.",
+        "operationId": "list_skill_agents_v1_skills__name__agents_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z_][a-z0-9_]*$",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Skill Agents V1 Skills  Name  Agents Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/skills/{skill_id}": {
       "get": {
         "tags": [
@@ -5828,6 +5891,75 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Update Skill V1 Skills  Skill Id  Put"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Delete Skill",
+        "description": "Delete one version. A 409 naming the agents while any draft or\npublished agent version lists the skill: remove it from their `skills`\nfirst.",
+        "operationId": "delete_skill_v1_skills__skill_id__delete",
+        "parameters": [
+          {
+            "name": "skill_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Skill Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Skill V1 Skills  Skill Id  Delete"
                 }
               }
             },

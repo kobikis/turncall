@@ -983,12 +983,41 @@ GET  /v1/skills/{id}
 PUT  /v1/skills/{id}                  # draft only; fields sent replace, the rest kept
 POST /v1/skills/{id}/publish
 POST /v1/skills/{id}/rollback
+DELETE /v1/skills/{id}                # one version; 409 naming the agents while any lists the name
+GET  /v1/skills/{name}/agents         # draft + published agent versions listing it, the version each resolves to
 ```
 
 `skills.tools` is `SealedTools`: webhook secrets sealed at rest and masked on
 read by the agent config's own rule for `tools` (`map_tools` /
 `sanitize_tools`), and sampled by the startup key check. Audited as
-`resource_type: skill` (`audit_log.skill_state`). No delete yet.
+`resource_type: skill` (`audit_log.skill_state`).
+
+**Safety at save** (#428). Agent create/update (`api/v1/agents._check_skills`,
+beside `_check_ambience`) refuse with a 422 `invalid_agent_config` from
+`services/skills.attachment_refusal`, checked against the version each entry
+resolves to now (live published): a name with no published version (draft-only
+included: a call resolves published only — "has no published version", vs "is
+not a skill" for a name never created), a name listed twice, and a skill tool
+whose name is a built-in's, the agent's own tool's or an earlier listed skill's
+(`tool_collision`, pure; the message names both sides, `skills[1]
+'explain_bill' tool 'get_invoices' collides with the agent's own tool
+'get_invoices'`, details `{field, skill, tool, collides_with}`).
+`AgentConfigSchema` refuses `load_skill` in `tools`. The save takes
+`lock_name` for each listed name, as a delete does. Not re-checked on agent
+publish/rollback or skill publish: a later skill version's colliding tool is
+still dropped at resolution, and an archived agent rolled back over a deleted
+skill skips it. **Delete** is one version (`DELETE /v1/skills/{id}`, audited
+`deleted` via `change.gone()`), a 409 `{skill, agents: [{agent_id, name,
+version, state}]}` while any **draft or published** agent version lists the
+name — whatever the version, since publish/rollback can make any version live;
+archived agent versions (a deleted agent is archived) do not count, as for
+takeaways. `skill_repo.agents_listing` is that set (JSONB containment on
+`config_blob->'skills'`), also behind `GET /v1/skills/{name}/agents`: `[{agent_id,
+agent_name, agent_version, agent_state, skill, resolved_skill_id,
+resolved_version, pinned}]`, `pinned` false until #426, 404 for a name with no
+version. An S2S agent with skills carries `skills_ignored_on_s2s` in the agent
+read's `warnings` (`config_warnings.skills_on_s2s_warning`), and the build skips
+them logging the same message at warning level (`skills_skipped`).
 
 **On a call** (#424, cascade voice only): an agent's `skills: [{"skill":
 "<name>"}]` resolve once at build (`pipeline_builder._with_skills` →
@@ -1054,7 +1083,8 @@ is an identifier on the two `skill.*` events.
 Key files: `api/v1/skills.py`, `api/v1/schemas/skills.py`,
 `storage/repositories/skill_repo.py`, `services/skills.py`,
 `orchestrator/skill_loader.py`. Tests: `tests/integration/test_skills_api.py`,
-`tests/integration/test_harness_call_skills.py`, `tests/unit/test_skills_on_a_call.py`.
+`tests/integration/test_harness_call_skills.py`, `tests/unit/test_skills_on_a_call.py`,
+`tests/unit/test_skill_attachment_rules.py`.
 
 ## A/B Testing
 

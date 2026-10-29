@@ -40,6 +40,7 @@ from turncall.domain.providers import (
 )
 from turncall.orchestrator import grok_voice, xai_config
 from turncall.orchestrator.deepgram_flux import MIXED_FLUX_GROUP, mixes_flux
+from turncall.services.skills import LOAD_SKILL
 
 
 def _refuse_nested_failover(entries: list[Any]) -> None:
@@ -795,6 +796,18 @@ class AgentConfigSchema(BaseModel):
         names = [t.name for t in self.tools]
         if len(names) != len(set(names)):
             msg = "Tool names must be unique within an agent"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def refuse_load_skill_in_tools(self) -> "AgentConfigSchema":
+        # Offered by the platform to an agent with skills (#424), built from
+        # them; listed by hand it would be a load_skill with nothing to load.
+        if any(t.name == LOAD_SKILL for t in self.tools):
+            msg = (
+                f"tools: '{LOAD_SKILL}' is offered automatically to an agent "
+                "with skills; list skills in `skills` instead"
+            )
             raise ValueError(msg)
         return self
 

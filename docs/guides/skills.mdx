@@ -7,7 +7,7 @@ icon: "puzzle-piece"
 A skill is what an agent needs for one task: a description of when to use it, the instructions to follow, the tools it calls and the knowledge bases it reads. You define it once in a project and version it the way you version an agent.
 
 <Note>
-Skills load on cascade voice calls. Text conversations, pinned versions and a limit on loaded skills are on their way.
+Skills load on cascade voice calls. Text conversations and pinned versions are on their way.
 </Note>
 
 ## Create a skill
@@ -83,7 +83,43 @@ List the skills an agent may use by name in its config:
 }
 ```
 
-Each name resolves to the skill's live published version once, when a call starts, so a publish mid-call does not change a running call. A name with no published version in the project is skipped with a warning; the call goes on without it.
+Each name resolves to the skill's live published version once, when a call starts, so a publish mid-call does not change a running call.
+
+Saving the agent (`POST /v1/agents`, `PUT /v1/agents/{agent_id}`) checks its skills against the version each resolves to now, and refuses with a `422` that names both sides:
+
+| Refused | Message |
+|---------|---------|
+| A name the project has no skill of | `skills[0] 'nope' is not a skill in this project` |
+| A name with only drafts: a call runs published versions only | `skills[1] 'draft_only' has no published version in this project; publish one first` |
+| A skill tool named like one of the agent's own tools | `skills[1] 'explain_bill' tool 'get_invoices' collides with the agent's own tool 'get_invoices'` |
+| Two listed skills with a tool of the same name | `skills[1] 'payment_promise' tool 'get_invoices' collides with skills[0] 'explain_bill' tool 'get_invoices'` |
+| A name listed twice | `skills[1] 'explain_bill' is listed twice (first as skills[0])` |
+
+`details` carries the entry (`field`, `skill`) and, for a collision, `tool` and `collides_with`. `load_skill` is offered automatically, so listing it in the agent's own `tools` is refused too.
+
+A skill version published after the agent was saved is not checked against it: a tool of that version whose name the agent already uses is skipped on the call, as is a skill an [inline call-init agent](/guides/call-init) names that has no published version.
+
+## Who uses a skill
+
+```bash
+curl http://localhost:8090/v1/skills/verify_identity/agents \
+  -H "Authorization: Bearer tc_xxx"
+```
+
+```json
+[
+  {"agent_id": "...", "agent_name": "collections", "agent_version": 3, "agent_state": "published",
+   "skill": "verify_identity", "resolved_skill_id": "...", "resolved_version": 2, "pinned": false},
+  {"agent_id": "...", "agent_name": "support", "agent_version": 7, "agent_state": "draft",
+   "skill": "verify_identity", "resolved_skill_id": "...", "resolved_version": 2, "pinned": false}
+]
+```
+
+Every draft and published agent version of the project that lists the skill, by agent name and version, with the skill version it resolves to now: the live published one, or `null` when none is published. An archived agent version, a deleted agent's included, is not listed. A name the project has no version of is a `404`.
+
+## Delete a skill
+
+`DELETE /v1/skills/{skill_id}` deletes one version. While any agent version listed above names the skill, it is a `409` whose `details.agents` names them (`agent_id`, `name`, `version`, `state`), whatever the version deleted: those agents follow the live version, and a publish or rollback can make any version of the skill live. Remove the skill from their `skills` first. A deleted version is gone from every read; the calls that ran it keep their record of it.
 
 ## Load a skill on a call
 
@@ -111,7 +147,7 @@ A skill's instructions and its tools' descriptions render the call's [template v
 
 When two tools share a name, the first of built-in, the agent's own tools, loaded skills' tools in load order, and MCP tools wins, in what the model is offered and in what runs. A skill tool with the name of one of the agent's tools is skipped.
 
-An agent with no skills is given no section and no `load_skill`. Skills are not loaded on speech-to-speech agents.
+An agent with no skills is given no section and no `load_skill`. Skills are not loaded on speech-to-speech agents: an S2S agent that lists skills carries a `skills_ignored_on_s2s` entry in its read's `warnings`, and its calls run without them, logging why.
 
 ## How many skills a call holds
 
@@ -154,4 +190,4 @@ An eval run records neither. Skill names, versions and reasons are identifiers, 
 
 ## Audit
 
-Every create, edit, publish and rollback is an [audit log](/guides/audit-log) entry with `resource_type: "skill"`. A publish or rollback also writes an `archived` entry for the version it took out of service.
+Every create, edit, publish, rollback and delete is an [audit log](/guides/audit-log) entry with `resource_type: "skill"`. A publish or rollback also writes an `archived` entry for the version it took out of service.

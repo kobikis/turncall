@@ -438,6 +438,7 @@ class TestColumnTypes:
             ("services/retention.py", "AgentRow.config_blob", "retention"),
             (f"{repos}/ambience_repo.py", "AgentRow.config_blob", "ambience"),
             (f"{repos}/takeaway_repo.py", "AgentRow.config_blob", "analysis"),
+            (f"{repos}/skill_repo.py", "AgentRow.config_blob", "skills"),
             (
                 f"{repos}/sms_message_repo.py",
                 "SmsSessionRow.metadata_json",

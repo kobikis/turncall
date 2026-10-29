@@ -6,8 +6,10 @@ archived one and archiving the live one). Lists are newest first in the
 paginated envelope. Another project's skill is a 404 on every route. A skill's
 tools are the agent tool schema with the agent's rules, a refusal naming the
 tool; their webhook secrets are sealed at rest and masked on every read. Every
-change is an audit entry with the skill's state. Seam A: the real app over
-Postgres (`run_app`).
+change is an audit entry with the skill's state. An agent may list only live
+skills whose tools take no name already taken, a skill an agent lists is not
+deleted, and the agents using a skill are listed with the version each
+resolves to (#428). Seam A: the real app over Postgres (`run_app`).
 """
 
 from __future__ import annotations
@@ -220,6 +222,12 @@ async def test_another_projects_skill_is_not_found(monkeypatch) -> None:
                     "rollback": (
                         await other.post(f"/v1/skills/{published['id']}/rollback")
                     ).status_code,
+                    "delete": (
+                        await other.delete(f"/v1/skills/{draft['id']}")
+                    ).status_code,
+                    "agents": (
+                        await other.get("/v1/skills/explain_bill/agents")
+                    ).status_code,
                 }
                 listed = (await other.get("/v1/skills")).json()
                 # Its own skill of the same name is its own version 1.
@@ -227,7 +235,14 @@ async def test_another_projects_skill_is_not_found(monkeypatch) -> None:
         finally:
             await _delete_project(other_id)
 
-        assert statuses == {"get": 404, "put": 404, "publish": 404, "rollback": 404}
+        assert statuses == {
+            "get": 404,
+            "put": 404,
+            "publish": 404,
+            "rollback": 404,
+            "delete": 404,
+            "agents": 404,
+        }
         assert listed["data"] == [] and listed["total"] == 0
         assert own.status_code == 201 and own.json()["data"]["version"] == 1
         # Nothing of ours moved.
@@ -426,3 +441,262 @@ async def test_every_change_is_an_audit_entry_with_the_skill_state(
         "/state": {"before": "archived", "after": "published"}
     }
     assert all(SECRET not in str(e) for es in entries.values() for e in es)
+
+
+# --- safety at save (#428) ---------------------------------------------------
+
+AGENT = {"system_prompt": "You are Maya."}
+
+
+async def _publish(app: Harness, body: dict[str, Any]) -> dict[str, Any]:
+    created = await _create(app, body)
+    return await _post(app, f"/v1/skills/{created['id']}/publish")
+
+
+async def _agent(
+    app: Harness, config: dict[str, Any], name: str = "support"
+) -> httpx.Response:
+    return await app.api.post("/v1/agents", json={"name": name, "config": config})
+
+
+def _refusal(response: httpx.Response) -> str:
+    assert response.status_code == 422, response.text
+    return str(response.json()["error"])
+
+
+async def test_an_agent_lists_only_live_skills_whose_tools_are_free(
+    monkeypatch,
+) -> None:
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        await _publish(app, _skill())  # verify_identity: verify_customer
+        await _publish(app, _skill("explain_bill", tools=[_tool("get_invoices")]))
+        await _publish(app, _skill("payment_promise", tools=[_tool("get_invoices")]))
+        await _create(app, _skill("draft_only", tools=[_tool("draft_tool")]))
+        own_tool = _tool("get_invoices")
+
+        unknown = await _agent(app, {**AGENT, "skills": [{"skill": "nope"}]})
+        draft_only = await _agent(
+            app,
+            {
+                **AGENT,
+                "skills": [{"skill": "verify_identity"}, {"skill": "draft_only"}],
+            },
+        )
+        with_own = await _agent(
+            app,
+            {
+                **AGENT,
+                "tools": [own_tool],
+                "skills": [{"skill": "verify_identity"}, {"skill": "explain_bill"}],
+            },
+        )
+        two_skills = await _agent(
+            app,
+            {
+                **AGENT,
+                "skills": [{"skill": "explain_bill"}, {"skill": "payment_promise"}],
+            },
+        )
+        twice = await _agent(
+            app,
+            {**AGENT, "skills": [{"skill": "explain_bill"}, {"skill": "explain_bill"}]},
+        )
+        listed_load_skill = await _agent(
+            app,
+            {
+                **AGENT,
+                "tools": [{"name": "load_skill", "description": "Load"}],
+                "skills": [{"skill": "explain_bill"}],
+            },
+        )
+        fine = await _agent(
+            app,
+            {
+                **AGENT,
+                "skills": [{"skill": "verify_identity"}, {"skill": "explain_bill"}],
+            },
+        )
+        assert fine.status_code == 201, fine.text
+        agent_id = fine.json()["data"]["id"]
+        update = await app.api.put(
+            f"/v1/agents/{agent_id}",
+            json={
+                "config": {
+                    **AGENT,
+                    "tools": [own_tool],
+                    "skills": [{"skill": "explain_bill"}],
+                }
+            },
+        )
+        read = (await app.api.get(f"/v1/agents/{agent_id}")).json()["data"]
+
+    assert _refusal(unknown) == "skills[0] 'nope' is not a skill in this project"
+    assert unknown.json()["code"] == "invalid_agent_config"
+    assert unknown.json()["details"] == {
+        "field": "skills[0]",
+        "skill": "nope",
+        "published": False,
+    }
+    # A call runs live published versions only, so a draft is no skill yet.
+    assert _refusal(draft_only) == (
+        "skills[1] 'draft_only' has no published version in this project; "
+        "publish one first"
+    )
+    assert _refusal(with_own) == (
+        "skills[1] 'explain_bill' tool 'get_invoices' collides with the "
+        "agent's own tool 'get_invoices'"
+    )
+    assert with_own.json()["details"]["collides_with"] == (
+        "the agent's own tool 'get_invoices'"
+    )
+    assert _refusal(two_skills) == (
+        "skills[1] 'payment_promise' tool 'get_invoices' collides with "
+        "skills[0] 'explain_bill' tool 'get_invoices'"
+    )
+    assert _refusal(twice) == (
+        "skills[1] 'explain_bill' is listed twice (first as skills[0])"
+    )
+    assert _refusal(listed_load_skill) == "Validation error"
+    assert "'load_skill' is offered automatically" in str(
+        listed_load_skill.json()["details"]["errors"]
+    )
+    # An update is checked the same way, and a refused one changes nothing.
+    assert _refusal(update) == (
+        "skills[0] 'explain_bill' tool 'get_invoices' collides with the "
+        "agent's own tool 'get_invoices'"
+    )
+    assert read["config"]["skills"] == [
+        {"skill": "verify_identity"},
+        {"skill": "explain_bill"},
+    ]
+    assert read["warnings"] == []
+
+
+async def test_a_skill_in_use_is_not_deleted_and_an_unused_one_is(
+    monkeypatch,
+) -> None:
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        v1 = await _publish(app, _skill())
+        v2 = await _create(app, _skill())  # a draft of a skill in use
+        unused = await _create(app, _skill("unused"))
+        support = await _agent(app, {**AGENT, "skills": [{"skill": "verify_identity"}]})
+        assert support.status_code == 201, support.text
+        support_id = support.json()["data"]["id"]
+
+        refused = await app.api.delete(f"/v1/skills/{v2['id']}")
+        deleted_unused = await app.api.delete(f"/v1/skills/{unused['id']}")
+        gone = await app.api.get(f"/v1/skills/{unused['id']}")
+
+        # Deleting the agent archives it: an archived version holds nothing.
+        assert (await app.api.delete(f"/v1/agents/{support_id}")).status_code == 200
+        deleted_draft = await app.api.delete(f"/v1/skills/{v2['id']}")
+        deleted_live = await app.api.delete(f"/v1/skills/{v1['id']}")
+        again = await app.api.delete(f"/v1/skills/{v1['id']}")
+        audit = await _audit(app, deleted_live)
+        left = (await app.api.get("/v1/skills")).json()
+
+    assert refused.status_code == 409, refused.text
+    assert "support v1 (draft)" in refused.json()["error"]
+    assert refused.json()["details"] == {
+        "skill": "verify_identity",
+        "agents": [
+            {"agent_id": support_id, "name": "support", "version": 1, "state": "draft"}
+        ],
+    }
+    assert deleted_unused.status_code == 200, deleted_unused.text
+    assert deleted_unused.json()["data"] == {"deleted": True}
+    assert gone.status_code == 404
+    assert deleted_draft.status_code == 200, deleted_draft.text
+    assert deleted_live.status_code == 200, deleted_live.text
+    assert again.status_code == 404
+    assert left["total"] == 0
+
+    [entry] = audit
+    assert (entry["resource_type"], entry["resource_id"], entry["action"]) == (
+        "skill",
+        v1["id"],
+        "deleted",
+    )
+    assert entry["changes"]["/name"] == {"before": "verify_identity", "after": None}
+    assert entry["changes"]["/state"] == {"before": "published", "after": None}
+
+
+async def test_the_agents_using_a_skill_and_the_version_each_resolves_to(
+    monkeypatch,
+) -> None:
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        await _publish(app, _skill())
+        await _publish(app, _skill("explain_bill", tools=[_tool("get_invoices")]))
+        uses = {"skills": [{"skill": "verify_identity"}]}
+        collections = (await _agent(app, {**AGENT, **uses}, "collections")).json()
+        await _post(app, f"/v1/agents/{collections['data']['id']}/publish")
+        support = (await _agent(app, {**AGENT, **uses}, "support")).json()["data"]
+        retired = (await _agent(app, {**AGENT, **uses}, "retired")).json()["data"]
+        await app.api.delete(f"/v1/agents/{retired['id']}")
+        await _agent(app, {**AGENT, "skills": [{"skill": "explain_bill"}]}, "billing")
+        await _agent(app, AGENT, "plain")
+
+        before = await app.api.get("/v1/skills/verify_identity/agents")
+        v2 = await _publish(app, _skill())
+        after = await app.api.get("/v1/skills/verify_identity/agents")
+        draft_name = await _create(app, _skill("draft_only"))
+        drafts = await app.api.get("/v1/skills/draft_only/agents")
+        missing = await app.api.get("/v1/skills/never_created/agents")
+        bad = await app.api.get("/v1/skills/Not-A-Name/agents")
+
+    assert before.status_code == 200, before.text
+    rows = before.json()["data"]
+    assert [(r["agent_name"], r["agent_version"], r["agent_state"]) for r in rows] == [
+        ("collections", 1, "published"),
+        ("support", 1, "draft"),
+    ]
+    assert rows[1] == {
+        "agent_id": support["id"],
+        "agent_name": "support",
+        "agent_version": 1,
+        "agent_state": "draft",
+        "skill": "verify_identity",
+        "resolved_skill_id": rows[1]["resolved_skill_id"],
+        "resolved_version": 1,
+        "pinned": False,
+    }
+    # A publish moves every agent following the live version.
+    assert [
+        (r["resolved_version"], r["resolved_skill_id"]) for r in after.json()["data"]
+    ] == [
+        (2, v2["id"]),
+        (2, v2["id"]),
+    ]
+    assert drafts.status_code == 200 and drafts.json()["data"] == []
+    assert draft_name["state"] == "draft"
+    assert missing.status_code == 404
+    assert bad.status_code == 422
+
+
+async def test_an_s2s_agent_with_skills_is_warned_on_the_read(monkeypatch) -> None:
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        await _publish(app, _skill())
+        created = await _agent(
+            app,
+            {
+                **AGENT,
+                "pipeline_mode": "s2s",
+                "skills": [{"skill": "verify_identity"}],
+            },
+        )
+        assert created.status_code == 201, created.text
+        read = (await app.api.get(f"/v1/agents/{created.json()['data']['id']}")).json()
+
+    [warning] = [
+        w for w in read["data"]["warnings"] if w["code"] == "skills_ignored_on_s2s"
+    ]
+    assert warning["skills"] == ["verify_identity"]
+    assert "pipeline_mode='cascade'" in warning["message"]

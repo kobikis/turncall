@@ -173,3 +173,36 @@ class SkillResponse(BaseModel):
             updated_at=row.updated_at,
             published_at=row.published_at,
         )
+
+
+class SkillAgentResponse(BaseModel):
+    """One agent version that lists a skill (#428), and the skill version it
+    resolves to now: the live published one, or None with nothing published.
+    `pinned` is always false until agents can pin a version (#426)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    agent_id: UUID
+    agent_name: str
+    agent_version: int
+    agent_state: str
+    skill: str
+    resolved_skill_id: UUID | None
+    resolved_version: int | None
+    pinned: bool = False
+
+    @classmethod
+    def from_rows(
+        cls, agent: Any, skill: str, live: Any | None
+    ) -> "SkillAgentResponse":
+        # #426: a pinned entry resolves to its pinned version, not `live`.
+        return cls(
+            agent_id=agent.id,
+            agent_name=agent.name,
+            agent_version=agent.version,
+            agent_state=agent.state,
+            skill=skill,
+            resolved_skill_id=live.id if live is not None else None,
+            resolved_version=live.version if live is not None else None,
+            pinned=False,
+        )

@@ -10,11 +10,12 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.domain.enums import SkillState
-from turncall.storage.models import SkillRow
+from turncall.storage.models import AgentRow, SkillRow
 
 
 async def lock_name(session: AsyncSession, project_id: UUID, name: str) -> None:
@@ -189,3 +190,35 @@ async def archive_other_published(
         .returning(SkillRow.id)
     )
     return sorted(result.scalars().all())
+
+
+# The agent states that count as using a skill (#428): a published version runs
+# calls and a draft can be published. An archived version is history — a
+# deleted agent is archived too — so it holds nothing back; rolled back to, it
+# runs without a skill that is gone (a warning at build).
+USING_STATES = ("draft", "published")
+
+
+async def agents_listing(
+    session: AsyncSession, project_id: UUID, name: str
+) -> list[AgentRow]:
+    """The project's draft and published agent versions whose `skills` list
+    `name`, by agent name then version."""
+    result = await session.execute(
+        select(AgentRow)
+        .where(
+            AgentRow.project_id == project_id,
+            AgentRow.state.in_(USING_STATES),
+            AgentRow.config_blob["skills"].contains([{"skill": name}]),
+        )
+        .order_by(AgentRow.name, AgentRow.version)
+    )
+    return list(result.scalars().all())
+
+
+async def delete(session: AsyncSession, skill_id: UUID) -> bool:
+    """Delete one skill version. False if it was already gone."""
+    result = await session.execute(
+        sa_delete(SkillRow).where(SkillRow.id == skill_id).returning(SkillRow.id)
+    )
+    return result.scalar_one_or_none() is not None

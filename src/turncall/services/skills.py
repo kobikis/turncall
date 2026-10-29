@@ -14,6 +14,13 @@ everything that advertises or registers tools keeps the first of a name, so
 both what the model is shown and what runs follow it. A skill tool that takes
 the name of an agent tool or a built-in is dropped at resolution.
 
+What an agent may list is checked when it is saved (#428,
+`attachment_refusal`): every name must have a live published version, and no
+tool of those versions may share a name with a built-in, the agent's own tool
+or another listed skill's. The drop at resolution stays for what changes
+after the save: a skill version published later, or a stored agent from
+before the rule.
+
 No pipecat here: the text channels will build on the same rules (#430).
 """
 
@@ -27,7 +34,12 @@ from uuid import UUID
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from turncall.domain.models import AgentConfig, SkillRef, ToolDefinition
+from turncall.domain.models import (
+    BUILTIN_TOOL_NAMES,
+    AgentConfig,
+    SkillRef,
+    ToolDefinition,
+)
 from turncall.services.template_renderer import render_template
 
 LOAD_SKILL = "load_skill"
@@ -122,6 +134,111 @@ def _as_resolved(
         instructions=render_template(row.instructions, variables),
         tools=tuple(tools),
     )
+
+
+@dataclass(frozen=True)
+class AttachmentRefusal:
+    """Why an agent may not list its skills as written: a 422's message and
+    details, naming both sides."""
+
+    message: str
+    details: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Attached:
+    """One entry of an agent's `skills`, as the version it resolves to now."""
+
+    index: int
+    name: str
+    tool_names: tuple[str, ...]
+
+
+async def attachment_refusal(
+    session: AsyncSession,
+    project_id: UUID,
+    skill_names: Sequence[str],
+    agent_tool_names: Sequence[str],
+) -> AttachmentRefusal | None:
+    """Why `skill_names` cannot be an agent's skills, or None if they can.
+
+    Each name must have a live published version in the project — what a
+    call runs; a name with only drafts is refused like one never created, as
+    a call would skip it. Then the tools of those versions must not collide
+    (`tool_collision`). A name listed twice is refused too.
+    """
+    from turncall.storage.repositories import skill_repo
+
+    attached: list[Attached] = []
+    first_index: dict[str, int] = {}
+    for index, name in enumerate(skill_names):
+        if name in first_index:
+            return AttachmentRefusal(
+                f"skills[{index}] '{name}' is listed twice "
+                f"(first as skills[{first_index[name]}])",
+                {"field": f"skills[{index}]", "skill": name},
+            )
+        first_index[name] = index
+        row = await skill_repo.get_published(session, project_id, name)
+        if row is None:
+            drafts = await skill_repo.count_skills(session, project_id, name=name)
+            return _unknown(index, name, has_versions=drafts > 0)
+        tools = tuple(str(t.get("name", "")) for t in row.tools or [])
+        attached.append(Attached(index, name, tools))
+    return tool_collision(agent_tool_names, attached)
+
+
+def _unknown(index: int, name: str, *, has_versions: bool) -> AttachmentRefusal:
+    why = (
+        "has no published version in this project; publish one first"
+        if has_versions
+        else "is not a skill in this project"
+    )
+    return AttachmentRefusal(
+        f"skills[{index}] '{name}' {why}",
+        {"field": f"skills[{index}]", "skill": name, "published": False},
+    )
+
+
+def tool_collision(
+    agent_tool_names: Sequence[str], attached: Sequence[Attached]
+) -> AttachmentRefusal | None:
+    """The first skill tool whose name is already taken — by a built-in, the
+    agent's own tool, or an earlier listed skill's tool — or None.
+
+    A load would otherwise drop it silently (first of a name wins), so a
+    skill's tool would never run on this agent.
+    """
+    own = set(agent_tool_names)
+    claimed: dict[str, Attached] = {}
+    for skill in attached:
+        side = f"skills[{skill.index}] '{skill.name}' tool"
+        for tool in skill.tool_names:
+            other = _taken_by(tool, own, claimed)
+            if other is not None:
+                return AttachmentRefusal(
+                    f"{side} '{tool}' collides with {other}",
+                    {
+                        "field": f"skills[{skill.index}]",
+                        "skill": skill.name,
+                        "tool": tool,
+                        "collides_with": other,
+                    },
+                )
+        for tool in skill.tool_names:
+            claimed.setdefault(tool, skill)
+    return None
+
+
+def _taken_by(tool: str, own: set[str], claimed: dict[str, Attached]) -> str | None:
+    if tool in BUILTIN_TOOL_NAMES:
+        return f"the built-in '{tool}'"
+    if tool in own:
+        return f"the agent's own tool '{tool}'"
+    earlier = claimed.get(tool)
+    if earlier is not None:
+        return f"skills[{earlier.index}] '{earlier.name}' tool '{tool}'"
+    return None
 
 
 def available_section(skills: Sequence[ResolvedSkill]) -> str:

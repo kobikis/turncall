@@ -80,7 +80,10 @@ def test_every_mutating_route_on_an_audited_resource_records() -> None:
         "/v1/skills/{skill_id}/publish",
         "/v1/skills/{skill_id}/rollback",
     } <= {path for path, _ in mutating}
-    assert len(mutating) >= 26
+    assert ("/v1/skills/{skill_id}", {"DELETE"}) in [
+        (path, route.methods) for path, route in mutating
+    ]
+    assert len(mutating) >= 29
     unaudited = [
         (sorted(route.methods), path)
         for path, route in mutating

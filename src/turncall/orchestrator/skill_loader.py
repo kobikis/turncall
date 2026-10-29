@@ -36,6 +36,7 @@ from loguru import logger
 
 from turncall.domain.enums import CallEventType
 from turncall.domain.models import BUILTIN_TOOL_NAMES
+from turncall.orchestrator.config_warnings import skills_on_s2s_warning
 from turncall.services.skills import ResolvedSkill, resolve_skills, skilled_config
 
 if TYPE_CHECKING:
@@ -122,15 +123,17 @@ async def resolve_call_skills(
     """The agent's skills as this call runs them, or none.
 
     Cascade voice only: a realtime session reads no system or tool change
-    made after it starts on most providers (#428 warns about it). A call with
+    made after it starts on most providers, so an S2S agent's skills are
+    skipped with a warning (the agent read carries the same, #428). A call with
     no database behind it — the website demo — has no project to resolve a
     skill in. Nothing here can fail the call: a skill that does not resolve is
     a warning and a skipped skill.
     """
     if not config.skills:
         return ()
-    if config.pipeline_mode == "s2s":
-        logger.info("skills_skipped: an S2S agent loads no skills")
+    on_s2s = skills_on_s2s_warning(config)
+    if on_s2s is not None:
+        logger.warning("skills_skipped: {message}", message=on_s2s["message"])
         return ()
     if not call_context.has_database:
         logger.warning("skills_skipped: no database to resolve skills against")

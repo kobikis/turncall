@@ -40,8 +40,15 @@ class Backend:
     """The customer's server: call-init on `/call-init`, every tool's webhook
     on its own path. Records each request's path and JSON body."""
 
-    def __init__(self, *, agent_id: str = "", variables: dict[str, str]) -> None:
+    def __init__(
+        self,
+        *,
+        agent_id: str = "",
+        variables: dict[str, str],
+        agent: dict[str, Any] | None = None,
+    ) -> None:
         self.agent_id = agent_id
+        self.agent = agent
         self.variables = variables
         self.requests: list[tuple[str, dict[str, Any]]] = []
         self.url = ""
@@ -65,9 +72,11 @@ class Backend:
     async def _answer(self, request: web.Request) -> web.Response:
         self.requests.append((request.path, await request.json()))
         if request.path == "/call-init":
-            return web.json_response(
-                {"agent_id": self.agent_id, "variables": self.variables}
+            # An inline agent (no row) when one is set, else the stored one.
+            chosen = (
+                {"agent": self.agent} if self.agent else {"agent_id": self.agent_id}
             )
+            return web.json_response({**chosen, "variables": self.variables})
         return web.json_response({"answered_by": request.path})
 
     def tool_paths(self) -> list[str]:
@@ -153,23 +162,18 @@ async def test_a_loaded_skill_brings_its_instructions_and_tools(monkeypatch):
         ) as app,
     ):
         url = backend.url
-        explain_bill = await _publish_skill(
-            app,
-            {
-                "name": "explain_bill",
-                "description": BILL,
-                "instructions": "Compare the last two invoices for {{customer_name}}.",
-                "tools": [
-                    _tool(
-                        "get_invoices",
-                        f"{url}/get_invoices",
-                        "Fetch {{customer_name}}'s last two invoices",
-                    ),
-                    # Takes the agent's own tool's name: the agent's keeps it.
-                    _tool("lookup_account", f"{url}/skill_lookup"),
-                ],
-            },
+        get_invoices = _tool(
+            "get_invoices",
+            f"{url}/get_invoices",
+            "Fetch {{customer_name}}'s last two invoices",
         )
+        bill = {
+            "name": "explain_bill",
+            "description": BILL,
+            "instructions": "Compare the last two invoices for {{customer_name}}.",
+            "tools": [get_invoices],
+        }
+        await _publish_skill(app, bill)
         await _publish_skill(
             app,
             {
@@ -186,6 +190,19 @@ async def test_a_loaded_skill_brings_its_instructions_and_tools(monkeypatch):
                 "tools": [_tool("lookup_account", f"{url}/agent_lookup")],
                 "skills": [{"skill": "explain_bill"}, {"skill": "verify_identity"}],
             }
+        )
+        # Published after the agent was saved (#428 refuses the collision at
+        # save): v2's second tool takes the agent's own tool's name, and the
+        # agent's keeps it.
+        explain_bill = await _publish_skill(
+            app,
+            {
+                **bill,
+                "tools": [
+                    get_invoices,
+                    _tool("lookup_account", f"{url}/skill_lookup"),
+                ],
+            },
         )
         number = await _bind_to_call_init(app, f"{url}/call-init")
 
@@ -213,7 +230,7 @@ async def test_a_loaded_skill_brings_its_instructions_and_tools(monkeypatch):
     # order — over the conversation as it was.
     [second] = after
     prompt = _prompt(second)
-    assert "## Skill: explain_bill (v1)\nCompare the last two invoices for Dana." in (
+    assert "## Skill: explain_bill (v2)\nCompare the last two invoices for Dana." in (
         prompt
     )
     assert "## Skill: verify_identity" not in prompt
@@ -319,19 +336,13 @@ async def test_a_call_records_the_skill_versions_it_ran(monkeypatch):
     assert "resolved_skills" not in read["metadata"]
 
 
-async def _first_inference(monkeypatch, agent: dict[str, Any], skills=()) -> Given:
+async def _first_inference(monkeypatch, agent: dict[str, Any]) -> Given:
     """What an agent's model is given on the caller's first turn."""
     given: list[Given] = []
     script = Script(caller=(SAID,), agent=(_remembering(given, "Hi."),))
     async with run_app(
         script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
     ) as app:
-        for body, publish in skills:
-            created = await app.api.post("/v1/skills", json=body)
-            assert created.status_code == 201, created.text
-            if publish:
-                skill_id = created.json()["data"]["id"]
-                await app.api.post(f"/v1/skills/{skill_id}/publish")
         number = await app.bind_number(
             await app.create_agent(
                 {**HARNESS_AGENT, "first_message": "Hello.", **agent}
@@ -358,19 +369,45 @@ async def test_an_agent_without_skills_is_given_what_it_always_was(monkeypatch):
 async def test_a_skill_that_does_not_resolve_is_skipped_and_the_call_goes_on(
     monkeypatch,
 ):
-    draft = {
-        "name": "draft_only",
-        "description": "Never published.",
-        "instructions": "Nothing.",
+    """A stored agent cannot list such a skill (#428), but an inline call-init
+    agent never passes the API's checks: a miss is a skipped skill."""
+    given: list[Given] = []
+    script = Script(caller=(SAID,), agent=(_remembering(given, "Hi."),))
+    inline = {
+        **HARNESS_AGENT,
+        "first_message": "Hello.",
+        "skills": [{"skill": "draft_only"}, {"skill": "never_created"}],
     }
-    given = await _first_inference(
-        monkeypatch,
-        {"skills": [{"skill": "draft_only"}, {"skill": "never_created"}]},
-        skills=[(draft, False)],
-    )
+    async with (
+        Backend(variables={}, agent=inline) as backend,
+        run_app(
+            script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+        ) as app,
+    ):
+        created = await app.api.post(
+            "/v1/skills",
+            json={
+                "name": "draft_only",
+                "description": "Never published.",
+                "instructions": "Nothing.",
+            },
+        )
+        assert created.status_code == 201, created.text
+        number = await _bind_to_call_init(app, f"{backend.url}/call-init")
+        call = await place_inbound_call(
+            app.carrier, app.api, from_number=CALLER, to_number=number
+        )
+        await call.wait_for_agent_speech(1)
+        await call.say(400)
+        await call.wait_for_agent_speech(2)
+        await call.hang_up()
+        ended = await app.sink.wait_for("call.ended")
 
-    assert _prompt(given) == PROMPT
-    assert given.tools == []
+    [first] = given
+    assert _prompt(first) == PROMPT
+    assert first.tools == []
+    assert ended["agent_id"] is None  # it ran the inline agent
+    assert ended["payload"]["skills"] == []
 
 
 # --- the limit, the no-op, a handoff (#427) ----------------------------------

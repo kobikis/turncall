@@ -7,14 +7,16 @@ archives the previous one, and a rollback restores an archived version as
 live and archives the current one. A published or archived version never
 changes. Every change is an audit log entry (`skill_state`).
 
-Attaching skills to agents, loading them on a call and deleting one are later
-tickets of #421.
+A version is deleted on its own (#428), and not while any draft or published
+agent version of the project lists the skill's name — whatever the version:
+an agent follows the live version, and publish and rollback can make any
+version of the name the live one. `GET /{name}/agents` lists those agents.
 """
 
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Path, Query
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,13 +25,14 @@ from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.api.responses import ok, paginated
 from turncall.api.v1.schemas.skills import (
-    SKILL_NAME_PATTERN,
     CreateSkillRequest,
+    SkillAgentResponse,
     SkillResponse,
     UpdateSkillRequest,
 )
 from turncall.auth import Auth, WriteAuth
 from turncall.domain.enums import AuditAction, AuditResource, SkillState
+from turncall.domain.models import SKILL_NAME_MAX, SKILL_NAME_PATTERN
 from turncall.services import audit_log
 from turncall.services.audit_log import AuditTrail
 from turncall.storage.models import SkillRow
@@ -157,6 +160,22 @@ async def list_skills(
     )
 
 
+@router.get("/{name}/agents")
+async def list_skill_agents(
+    name: Annotated[str, Path(max_length=SKILL_NAME_MAX, pattern=SKILL_NAME_PATTERN)],
+    auth: Auth,
+    session: DbSession,
+) -> dict[str, Any]:
+    """The project's draft and published agent versions listing the skill,
+    each with the skill version it resolves to now. A name the project has no
+    version of is a 404."""
+    if not await skill_repo.count_skills(session, auth.project_id, name=name):
+        raise NotFoundError("Skill", name)
+    live = await skill_repo.get_published(session, auth.project_id, name)
+    agents = await skill_repo.agents_listing(session, auth.project_id, name)
+    return ok([SkillAgentResponse.from_rows(a, name, live) for a in agents])
+
+
 @router.get("/{skill_id}")
 async def get_skill(skill_id: UUID, auth: Auth, session: DbSession) -> dict[str, Any]:
     return ok(SkillResponse.from_row(await _skill(session, skill_id, auth.project_id)))
@@ -256,3 +275,50 @@ async def rollback_skill(
         archived_versions=len(archived),
     )
     return ok(SkillResponse.from_row(row))
+
+
+@router.delete("/{skill_id}")
+async def delete_skill(
+    skill_id: UUID, auth: WriteAuth, session: DbSession, audit: Audit
+) -> dict[str, Any]:
+    """Delete one version. A 409 naming the agents while any draft or
+    published agent version lists the skill: remove it from their `skills`
+    first."""
+    existing = await _skill(session, skill_id, auth.project_id)
+    # An agent save takes the same lock, so a save racing this delete either
+    # lands first and is counted below, or reads the name without this version.
+    await skill_repo.lock_name(session, auth.project_id, existing.name)
+    agents = await skill_repo.agents_listing(session, auth.project_id, existing.name)
+    if agents:
+        raise ConflictError(
+            f"Skill '{existing.name}' is listed by {len(agents)} agent "
+            f"version(s): {_named(agents)}. Remove it from their skills first.",
+            details={
+                "skill": existing.name,
+                "agents": [
+                    {
+                        "agent_id": str(a.id),
+                        "name": a.name,
+                        "version": a.version,
+                        "state": a.state,
+                    }
+                    for a in agents
+                ],
+            },
+        )
+    with audit.change(
+        AuditResource.SKILL,
+        skill_id,
+        AuditAction.DELETED,
+        audit_log.skill_state,
+        existing,
+    ) as change:
+        if not await skill_repo.delete(session, skill_id):
+            raise ConflictError("Skill was modified concurrently")
+        change.gone()
+    logger.info("skill_deleted", skill=existing.name, version=existing.version)
+    return ok({"deleted": True})
+
+
+def _named(agents: list[Any]) -> str:
+    return ", ".join(f"{a.name} v{a.version} ({a.state})" for a in agents)
