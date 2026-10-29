@@ -7,6 +7,7 @@ names the tool it is about, and a built-in's name is refused, since a skill
 tool is a webhook tool and built-ins outrank every skill tool.
 """
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -32,6 +33,7 @@ from turncall.domain.models import (
     SKILL_NAME_PATTERN,
 )
 from turncall.services.skill_knowledge import auto_mode_warning
+from turncall.services.skills import pin_refusal
 
 # The description is shown to the model to choose a skill by, as a tool's is;
 # the instructions join the prompt, bounded as an agent's system prompt is.
@@ -187,8 +189,9 @@ class SkillResponse(BaseModel):
 
 class SkillAgentResponse(BaseModel):
     """One agent version that lists a skill (#428), and the skill version it
-    resolves to now: the live published one, or None with nothing published.
-    `pinned` is always false until agents can pin a version (#426)."""
+    resolves to now: for an entry that pins one (#426), that version — None
+    if it no longer runs (deleted, or not a version of this skill) — else the
+    live published one, or None with nothing published."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -203,16 +206,42 @@ class SkillAgentResponse(BaseModel):
 
     @classmethod
     def from_rows(
-        cls, agent: Any, skill: str, live: Any | None
+        cls,
+        agent: Any,
+        skill: str,
+        live: Any | None,
+        versions: Mapping[UUID, Any] | None = None,
     ) -> "SkillAgentResponse":
-        # #426: a pinned entry resolves to its pinned version, not `live`.
+        """`versions`: the project's skill versions the listed agents pin,
+        by id."""
+        pin = pinned_version_id(agent.config_blob, skill)
+        resolved = live
+        if pin is not None:
+            resolved = (versions or {}).get(pin)
+            if resolved is not None and pin_refusal(skill, resolved) is not None:
+                resolved = None
         return cls(
             agent_id=agent.id,
             agent_name=agent.name,
             agent_version=agent.version,
             agent_state=agent.state,
             skill=skill,
-            resolved_skill_id=live.id if live is not None else None,
-            resolved_version=live.version if live is not None else None,
-            pinned=False,
+            resolved_skill_id=resolved.id if resolved is not None else None,
+            resolved_version=resolved.version if resolved is not None else None,
+            pinned=pin is not None,
         )
+
+
+def pinned_version_id(config_blob: Any, skill: str) -> UUID | None:
+    """The version an agent's stored config pins `skill` to, or None."""
+    entries = config_blob.get("skills") if isinstance(config_blob, dict) else None
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("skill") == skill:
+            raw = entry.get("version_id")
+            try:
+                return UUID(str(raw)) if raw else None
+            except ValueError:
+                return None
+    return None

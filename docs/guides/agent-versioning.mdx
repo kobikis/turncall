@@ -27,6 +27,10 @@ flowchart LR
 
 Each published version is immutable — editing after publish means a new draft.
 
+<Note>
+  The [skills](/guides/skills) an agent lists are the exception: an entry that follows a skill's live version runs whatever version of the skill is published when a call starts, so a skill publish or rollback changes a published agent's calls without republishing it. Pin a skill version to hold an agent on it, and read each call's `skills` for the versions it ran. See [Pin a version](/guides/skills#pin-a-version) and ADR-0030.
+</Note>
+
 ## States
 
 | State | Description |

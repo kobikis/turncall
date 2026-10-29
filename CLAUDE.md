@@ -953,7 +953,10 @@ Requires PostgreSQL with `pgvector` extension (`CREATE EXTENSION IF NOT EXISTS v
 
 ## Agent Versioning
 
-Linear version model with auto-promotion. Each published version is immutable.
+Linear version model with auto-promotion. Each published version is immutable
+— its own config. The skills it follows are not: an unpinned `skills` entry
+runs the skill's live version, so a skill publish or rollback changes a
+published agent's next call (see "Skills", ADR-0030).
 
 ### Lifecycle
 
@@ -1020,15 +1023,16 @@ archived agent versions (a deleted agent is archived) do not count, as for
 takeaways. `skill_repo.agents_listing` is that set (JSONB containment on
 `config_blob->'skills'`), also behind `GET /v1/skills/{name}/agents`: `[{agent_id,
 agent_name, agent_version, agent_state, skill, resolved_skill_id,
-resolved_version, pinned}]`, `pinned` false until #426, 404 for a name with no
-version. An S2S agent with skills carries `skills_ignored_on_s2s` in the agent
+resolved_version, pinned}]` (a pinned entry resolves to its pin, null if the
+pin no longer runs; `SkillAgentResponse.from_rows` + `skill_repo.get_by_ids`),
+404 for a name with no version. An S2S agent with skills carries `skills_ignored_on_s2s` in the agent
 read's `warnings` (`config_warnings.skills_on_s2s_warning`), and the build skips
 them logging the same message at warning level (`skills_skipped`).
 
 **On a call** (#424, cascade voice only): an agent's `skills: [{"skill":
 "<name>"}]` resolve once at build (`pipeline_builder._with_skills` →
 `skill_loader.resolve_call_skills` → `services/skills.resolve_skills`), each to
-its live published version in the call's project, instructions and tool
+its live published version in the call's project (or its pin, below), instructions and tool
 descriptions rendered with the call row's `template_variables`. A missing or
 unpublished name is a warning and a skipped skill; so is everything on S2S and
 on a call with no database (the demo). The result rides on
@@ -1090,7 +1094,7 @@ answers "no skill named" and applies nothing of the first agent's.
 
 **What a call records** (#425): the resolution is saved at build
 (`skill_loader.record_resolution`, from `_with_skills`) as
-`metadata_json["resolved_skills"]` = `[{id, skill, version}]`, and again for a
+`metadata_json["resolved_skills"]` = `[{id, skill, version, pinned}]`, and again for a
 handoff's target, spawned after the switch (#427): appended by
 `call_repo.append_call_metadata_list` (row locked, an `id` already there
 skipped); hidden from `metadata` on the
@@ -1101,12 +1105,32 @@ reason}` (reason `load_skill`), each unload for the cap a `skill.unloaded`
 `emit_call_event` from one task spawned right after `apply_load`
 (`record_skill_events`), never inside it. `skills` on
 the call read and `call.ended` is `call_view.call_skills`: every resolved
-skill version `{skill, version, loaded}` (the first agent's, then a handoff
+skill version `{skill, version, pinned, loaded}` (the first agent's, then a handoff
 target's), `[]` with none; `loaded` means loaded at any point in the call,
 matched by name and version (an unload is visible only as its event), and is
 null once the call's events expired (#316). Only when `CallContext.records` — an eval
 records neither. `skill`, `skills` are redaction structural fields; `reason`
 is an identifier on the two `skill.*` events.
+
+**Pins and the live version** (#426, ADR-0030 — which relaxes "a published
+agent version is immutable"). `SkillRef.version_id` (domain and
+`SkillRefSchema`; stored only when set, so an unpinned entry stays
+`{"skill"}`) pins a skill **version id** — an id, not a number, since a
+rollback makes an old number live again. Without one an entry follows the
+live published version: a skill publish or rollback reaches every follower's
+next call with no agent publish (resolution is per call; a running call never
+changes). A pin resolves to exactly that row, **published or archived** (the
+next publish archives it); never a draft. One rule, `services/skills
+.pin_refusal(name, row)`, decides both sides: at save (`attachment_refusal`,
+422 `skills[i] '<name>' version_id '<id>' is not a version of a skill in this
+project` — nonexistent or another project's — / `is a version of '<other>',
+not of '<name>'` / `is a draft (vN); pin a published or archived version`,
+details `{field: "skills[i].version_id", skill, version_id}`; collisions are
+checked against the pinned version's tools) and at resolution (a warning and
+a skipped skill, for an inline agent or a stale pin). `ResolvedSkill.pinned`
+rides into the record and `call_skills`; an entry stored before #426 has no
+`pinned` and reads false. Delete still 409s any version of a listed name,
+pinned or not.
 
 Key files: `api/v1/skills.py`, `api/v1/schemas/skills.py`,
 `storage/repositories/skill_repo.py`, `services/skills.py`,
@@ -2155,7 +2179,7 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 `call.ended` payload: `status`, `ended_reason`, `from_number`, `to_number`, `direction`,
 `duration_ms`, `provider_call_sid`, `metadata`, `started_at`, `ended_at`,
 `recording_status`, `recording_url`, `summary`, `analysis`, `agent_name`,
-`agent_version`, `latency_summary`, `failovers` (`[{role, from, to, error}]`, `role` `stt`\|`llm`\|`tts`, #222/#223), `skills` (`[{skill, version, loaded}]`, every skill the call resolved, `[]` with none, #425), `retention` (`{recordings_days, transcripts_days, events_days}`, null = kept for good, #316), and `transcript` (`[{role, text, timestamp}]`).
+`agent_version`, `latency_summary`, `failovers` (`[{role, from, to, error}]`, `role` `stt`\|`llm`\|`tts`, #222/#223), `skills` (`[{skill, version, pinned, loaded}]`, every skill the call resolved, `[]` with none, #425), `retention` (`{recordings_days, transcripts_days, events_days}`, null = kept for good, #316), and `transcript` (`[{role, text, timestamp}]`).
 
 `latency_summary` is derived from the call's `metrics.turn` events (#179):
 `{turns, user_to_bot, stages: {stt|llm|tts}, slowest_turn}`, each spread being

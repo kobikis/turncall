@@ -182,7 +182,8 @@ async def prepare_handoff_skills(
     config: AgentConfig, call_context: CallContext
 ) -> tuple[CallSkills, AgentConfig]:
     """The target agent's skills, resolved as at a call's start (its skills'
-    live published versions, the call's project and `{{variables}}`), none
+    pinned or live published versions, the call's project and
+    `{{variables}}`), none
     loaded — and the config the call then runs: the target's own with the
     list and `load_skill`, or unchanged for a target with none.
 
@@ -256,7 +257,7 @@ async def record_resolution(
     call_context: CallContext, available: tuple[ResolvedSkill, ...]
 ) -> None:
     """Save the skills the call resolved on its row (#425):
-    `[{id, skill, version}]` under `metadata_json["resolved_skills"]` — at
+    `[{id, skill, version, pinned}]` (`pinned`, #426) under `metadata_json["resolved_skills"]` — at
     build, and again after a handoff for the target agent's (#427). Appended,
     a version already there skipped, so the read lists every skill version
     the call could have run, the first agent's first.
@@ -270,7 +271,8 @@ async def record_resolution(
     from turncall.storage.repositories import call_repo
 
     resolution = [
-        {"id": str(s.id), "skill": s.name, "version": s.version} for s in available
+        {"id": str(s.id), "skill": s.name, "version": s.version, "pinned": s.pinned}
+        for s in available
     ]
     try:
         async with call_context.session_factory() as session:  # type: ignore[misc]

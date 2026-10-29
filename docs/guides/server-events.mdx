@@ -82,7 +82,7 @@ Every delivery is one envelope:
 
 Tool calls go to each tool's own `webhook_url` — see [Tools](/guides/tools).
 
-`call.ended` carries `skills`, every skill the call resolved with its version and whether it was loaded (an empty list when the agent has none), as the call read does. See [Skills](/guides/skills#what-a-call-records).
+`call.ended` carries `skills`, every skill the call resolved with its version, whether the agent pinned it and whether it was loaded (an empty list when the agent has none), as the call read does. See [Skills](/guides/skills#what-a-call-records).
 
 `call.ended` carries the call's `retention`: how many days its recording, transcript and events are kept, `null` for good. See [Retention](/guides/retention).
 

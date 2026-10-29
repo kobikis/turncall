@@ -165,6 +165,83 @@ async def test_a_skill_that_does_not_resolve_is_skipped():
     assert [(s.name, s.version) for s in resolved] == [("live", 2)]
 
 
+@pytest.mark.asyncio
+async def test_a_pin_resolves_to_its_version_whatever_is_live():
+    """#426: a pinned entry runs exactly its version — an archived one too —
+    and never the live one; a pin that names a draft, another skill's
+    version or nothing in the project is a warning and a skipped skill."""
+    project = uuid4()
+
+    def _row(name, version, state):
+        return SimpleNamespace(
+            id=uuid4(),
+            name=name,
+            version=version,
+            state=state,
+            description="d",
+            instructions=f"{name} v{version}",
+            tools=[],
+        )
+
+    live = _row("verify", 3, "published")
+    archived = _row("verify", 1, "archived")
+    draft = _row("explain", 2, "draft")
+    other = _row("promise", 1, "published")
+    rows = {r.id: r for r in (archived, draft, other)}
+
+    async def get_by_id(_session, skill_id, *, project_id):
+        assert project_id == project
+        return rows.get(skill_id)
+
+    async def get_published(_session, _project, name):
+        return live if name == "verify" else None
+
+    with (
+        patch("turncall.storage.repositories.skill_repo.get_by_id", new=get_by_id),
+        patch(
+            "turncall.storage.repositories.skill_repo.get_published",
+            new=get_published,
+        ),
+    ):
+        pinned = await resolve_skills(
+            MagicMock(),
+            project,
+            [
+                SkillRef(skill="verify", version_id=archived.id),
+                SkillRef(skill="explain", version_id=draft.id),
+                SkillRef(skill="nope", version_id=other.id),
+                SkillRef(skill="gone", version_id=uuid4()),
+            ],
+            variables={},
+            taken_tool_names=set(),
+        )
+        following = await resolve_skills(
+            MagicMock(),
+            project,
+            [SkillRef(skill="verify")],
+            variables={},
+            taken_tool_names=set(),
+        )
+
+    assert [(s.name, s.version, s.pinned) for s in pinned] == [("verify", 1, True)]
+    assert [(s.name, s.version, s.pinned) for s in following] == [("verify", 3, False)]
+
+
+def test_why_a_pin_cannot_run():
+    from turncall.services.skills import pin_refusal
+
+    def row(name="verify", state="published", version=2):
+        return SimpleNamespace(name=name, state=state, version=version)
+
+    assert pin_refusal("verify", row()) is None
+    assert pin_refusal("verify", row(state="archived")) is None
+    assert "not a version of a skill in this project" in pin_refusal("verify", None)
+    assert "a version of 'explain', not of 'verify'" in pin_refusal(
+        "verify", row(name="explain")
+    )
+    assert "is a draft (v2)" in pin_refusal("verify", row(state="draft"))
+
+
 def test_an_unusable_skills_entry_drops_that_skill_not_the_config():
     config = AgentConfig.model_validate(
         {"skills": [{"skill": "ok"}, {"nope": 1}, "bad"]}
@@ -337,7 +414,14 @@ async def test_the_resolution_is_saved_only_on_a_recorded_call():
         session,
         call.call_id,
         "resolved_skills",
-        [{"id": str(skill.id), "skill": "explain_bill", "version": 3}],
+        [
+            {
+                "id": str(skill.id),
+                "skill": "explain_bill",
+                "version": 3,
+                "pinned": False,
+            }
+        ],
         unique_by="id",
     )
     session.commit.assert_awaited_once()

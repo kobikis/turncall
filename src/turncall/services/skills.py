@@ -2,8 +2,10 @@
 the prompt and tools a model is given for them.
 
 A call resolves its agent's skills once, when its pipeline is built: each name
-to the skill's live published version in the call's project, its instructions
-and tool descriptions rendered with the call's `{{variables}}`. Until a skill is
+to the skill's live published version in the call's project — or, for an entry
+that pins one (#426, ADR-0030), to exactly that version, published or archived
+— its instructions and tool descriptions rendered with the call's
+`{{variables}}`. Until a skill is
 loaded the model sees only its name and description, in a generated prompt
 section, plus the built-in `load_skill`; loading one appends its instructions
 as a section of their own and adds its tools — and, with its knowledge bases
@@ -17,9 +19,10 @@ both what the model is shown and what runs follow it. A skill tool that takes
 the name of an agent tool or a built-in is dropped at resolution.
 
 What an agent may list is checked when it is saved (#428,
-`attachment_refusal`): every name must have a live published version, and no
-tool of those versions may share a name with a built-in, the agent's own tool
-or another listed skill's. The drop at resolution stays for what changes
+`attachment_refusal`): every name must have a live published version (a pin:
+must name a published or archived version of that skill in the project), and
+no tool of those versions may share a name with a built-in, the agent's own
+tool or another listed skill's. The drop at resolution stays for what changes
 after the save: a skill version published later, or a stored agent from
 before the rule.
 
@@ -30,12 +33,13 @@ from __future__ import annotations
 
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from turncall.domain.enums import SkillState
 from turncall.domain.models import (
     BUILTIN_TOOL_NAMES,
     AgentConfig,
@@ -72,6 +76,8 @@ class ResolvedSkill:
     instructions: str
     tools: tuple[ToolDefinition, ...]
     knowledge: SkillKnowledge = NO_KNOWLEDGE
+    # The agent named this version (#426) rather than following the live one.
+    pinned: bool = False
 
 
 async def resolve_skills(
@@ -82,14 +88,14 @@ async def resolve_skills(
     variables: dict[str, str],
     taken_tool_names: Collection[str],
 ) -> tuple[ResolvedSkill, ...]:
-    """Each named skill's live published version, in the agent's order.
+    """Each named skill's version, in the agent's order: the pinned one for an
+    entry with `version_id` (#426), else the live published one.
 
-    A name with nothing published, or a version that cannot be read, is a
+    A name with nothing published, a pin that names no version of the skill
+    in the project (or a draft), or a version that cannot be read, is a
     warning and a skipped skill: a stale skill name must not take calls down.
     A name listed twice is resolved once.
     """
-    from turncall.storage.repositories import skill_repo
-
     resolved: list[ResolvedSkill] = []
     seen: set[str] = set()
     for ref in refs:
@@ -98,13 +104,8 @@ async def resolve_skills(
             continue
         seen.add(ref.skill)
         try:
-            row = await skill_repo.get_published(session, project_id, ref.skill)
+            row = await _version_for(session, project_id, ref)
             if row is None:
-                logger.warning(
-                    "skill_skipped: no published version of {skill} in the "
-                    "project, call runs without it",
-                    skill=ref.skill,
-                )
                 continue
             knowledge = await resolve_skill_knowledge(
                 session,
@@ -112,7 +113,15 @@ async def resolve_skills(
                 row.name,
                 getattr(row, "knowledge_bases", None) or [],
             )
-            resolved.append(_as_resolved(row, variables, taken_tool_names, knowledge))
+            resolved.append(
+                _as_resolved(
+                    row,
+                    variables,
+                    taken_tool_names,
+                    knowledge,
+                    pinned=ref.version_id is not None,
+                )
+            )
         except Exception:
             logger.exception(
                 "skill_skipped: could not resolve {skill}", skill=ref.skill
@@ -120,11 +129,56 @@ async def resolve_skills(
     return tuple(resolved)
 
 
+async def _version_for(
+    session: AsyncSession, project_id: UUID, ref: SkillRef
+) -> Any | None:
+    """The skill version `ref` runs, or None (logged) when there is none."""
+    from turncall.storage.repositories import skill_repo
+
+    if ref.version_id is None:
+        row = await skill_repo.get_published(session, project_id, ref.skill)
+        if row is None:
+            logger.warning(
+                "skill_skipped: no published version of {skill} in the "
+                "project, call runs without it",
+                skill=ref.skill,
+            )
+        return row
+    row = await skill_repo.get_by_id(session, ref.version_id, project_id=project_id)
+    why = pin_refusal(ref.skill, row)
+    if why is not None:
+        logger.warning(
+            "skill_skipped: pinned version {version_id} {why}, call runs "
+            "without {skill}",
+            skill=ref.skill,
+            version_id=str(ref.version_id),
+            why=why,
+        )
+        return None
+    return row
+
+
+def pin_refusal(name: str, row: Any | None) -> str | None:
+    """Why a pin on skill `name` cannot run the version `row` (looked up by
+    id in the agent's project), or None if it can. A pin runs a published or
+    an archived version — the pin is what keeps an agent on a version after
+    the next publish archives it — never a draft, which can still change."""
+    if row is None:
+        return "is not a version of a skill in this project"
+    if row.name != name:
+        return f"is a version of '{row.name}', not of '{name}'"
+    if row.state == SkillState.DRAFT.value:
+        return f"is a draft (v{row.version}); pin a published or archived version"
+    return None
+
+
 def _as_resolved(
     row: Any,
     variables: dict[str, str],
     taken_tool_names: Collection[str],
     knowledge: SkillKnowledge = NO_KNOWLEDGE,
+    *,
+    pinned: bool = False,
 ) -> ResolvedSkill:
     tools = []
     for raw in row.tools or []:
@@ -152,6 +206,7 @@ def _as_resolved(
         instructions=render_template(row.instructions, variables),
         tools=tuple(tools),
         knowledge=knowledge,
+        pinned=pinned,
     )
 
 
@@ -173,24 +228,34 @@ class Attached:
     tool_names: tuple[str, ...]
 
 
+class Ref(Protocol):
+    """An entry of an agent's `skills`: the domain `SkillRef` or the API's."""
+
+    skill: str
+    version_id: UUID | None
+
+
 async def attachment_refusal(
     session: AsyncSession,
     project_id: UUID,
-    skill_names: Sequence[str],
+    refs: Sequence[Ref],
     agent_tool_names: Sequence[str],
 ) -> AttachmentRefusal | None:
-    """Why `skill_names` cannot be an agent's skills, or None if they can.
+    """Why `refs` cannot be an agent's skills, or None if they can.
 
-    Each name must have a live published version in the project — what a
-    call runs; a name with only drafts is refused like one never created, as
-    a call would skip it. Then the tools of those versions must not collide
-    (`tool_collision`). A name listed twice is refused too.
+    Each entry must resolve to what a call would run: its pinned version
+    (#426) — a published or archived version of that skill in the project —
+    or, unpinned, a live published version; a name with only drafts is
+    refused like one never created, as a call would skip it. Then the tools
+    of those versions must not collide (`tool_collision`). A name listed
+    twice is refused too, pinned or not: a call holds one version of a skill.
     """
     from turncall.storage.repositories import skill_repo
 
     attached: list[Attached] = []
     first_index: dict[str, int] = {}
-    for index, name in enumerate(skill_names):
+    for index, ref in enumerate(refs):
+        name = ref.skill
         if name in first_index:
             return AttachmentRefusal(
                 f"skills[{index}] '{name}' is listed twice "
@@ -198,13 +263,32 @@ async def attachment_refusal(
                 {"field": f"skills[{index}]", "skill": name},
             )
         first_index[name] = index
-        row = await skill_repo.get_published(session, project_id, name)
-        if row is None:
-            drafts = await skill_repo.count_skills(session, project_id, name=name)
-            return _unknown(index, name, has_versions=drafts > 0)
+        if ref.version_id is not None:
+            row = await skill_repo.get_by_id(
+                session, ref.version_id, project_id=project_id
+            )
+            why = pin_refusal(name, row)
+            if row is None or why is not None:
+                return _bad_pin(index, name, ref.version_id, why or "")
+        else:
+            row = await skill_repo.get_published(session, project_id, name)
+            if row is None:
+                drafts = await skill_repo.count_skills(session, project_id, name=name)
+                return _unknown(index, name, has_versions=drafts > 0)
         tools = tuple(str(t.get("name", "")) for t in row.tools or [])
         attached.append(Attached(index, name, tools))
     return tool_collision(agent_tool_names, attached)
+
+
+def _bad_pin(index: int, name: str, version_id: UUID, why: str) -> AttachmentRefusal:
+    return AttachmentRefusal(
+        f"skills[{index}] '{name}' version_id '{version_id}' {why}",
+        {
+            "field": f"skills[{index}].version_id",
+            "skill": name,
+            "version_id": str(version_id),
+        },
+    )
 
 
 def _unknown(index: int, name: str, *, has_versions: bool) -> AttachmentRefusal:

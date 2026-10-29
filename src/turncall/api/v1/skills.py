@@ -29,6 +29,7 @@ from turncall.api.v1.schemas.skills import (
     SkillAgentResponse,
     SkillResponse,
     UpdateSkillRequest,
+    pinned_version_id,
 )
 from turncall.auth import Auth, WriteAuth
 from turncall.domain.enums import AuditAction, AuditResource, SkillState
@@ -167,13 +168,17 @@ async def list_skill_agents(
     session: DbSession,
 ) -> dict[str, Any]:
     """The project's draft and published agent versions listing the skill,
-    each with the skill version it resolves to now. A name the project has no
-    version of is a 404."""
+    each with the skill version it resolves to now — the pinned one for an
+    entry that pins (#426), else the live published one. A name the project
+    has no version of is a 404."""
     if not await skill_repo.count_skills(session, auth.project_id, name=name):
         raise NotFoundError("Skill", name)
     live = await skill_repo.get_published(session, auth.project_id, name)
     agents = await skill_repo.agents_listing(session, auth.project_id, name)
-    return ok([SkillAgentResponse.from_rows(a, name, live) for a in agents])
+    pinned = (pinned_version_id(a.config_blob, name) for a in agents)
+    pins = {pin for pin in pinned if pin is not None}
+    versions = await skill_repo.get_by_ids(session, pins, project_id=auth.project_id)
+    return ok([SkillAgentResponse.from_rows(a, name, live, versions) for a in agents])
 
 
 @router.get("/{skill_id}")

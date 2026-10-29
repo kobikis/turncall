@@ -61,6 +61,10 @@ Skills follow [agent versioning](/guides/agent-versioning):
 
 A published version never changes; to change a live skill, create a new version, edit it, and publish it.
 
+<Warning>
+  Publishing or rolling back a skill changes every agent that follows its live version, on each agent's next call, without republishing those agents. [Who uses a skill](#who-uses-a-skill) lists them before you publish; [pin a version](#pin-a-version) to hold an agent back. See ADR-0030.
+</Warning>
+
 ## List and read
 
 ```bash
@@ -83,7 +87,20 @@ List the skills an agent may use by name in its config:
 }
 ```
 
-Each name resolves to the skill's live published version once, when a call starts, so a publish mid-call does not change a running call.
+Each name resolves to the skill's live published version once, when a call starts, so a publish mid-call does not change a running call, and the next call runs whatever is live then.
+
+### Pin a version
+
+An entry may pin one version of the skill by its id, the `id` a skill read returns:
+
+```json
+"skills": [
+  {"skill": "verify_identity"},
+  {"skill": "payment_promise", "version_id": "4a73a31b-d797-4cfc-bf6c-bca5895c928b"}
+]
+```
+
+A pinned entry runs exactly that version on every call, whatever is published or rolled back later. It still runs once a newer publish archives it; a draft cannot be pinned, since it can still change. The pin is an id rather than a version number because a rollback makes an older number live again, and an id always names the same version. To move a pinned agent to a newer version, change the pin in the agent's config.
 
 Saving the agent (`POST /v1/agents`, `PUT /v1/agents/{agent_id}`) checks its skills against the version each resolves to now, and refuses with a `422` that names both sides:
 
@@ -93,11 +110,14 @@ Saving the agent (`POST /v1/agents`, `PUT /v1/agents/{agent_id}`) checks its ski
 | A name with only drafts: a call runs published versions only | `skills[1] 'draft_only' has no published version in this project; publish one first` |
 | A skill tool named like one of the agent's own tools | `skills[1] 'explain_bill' tool 'get_invoices' collides with the agent's own tool 'get_invoices'` |
 | Two listed skills with a tool of the same name | `skills[1] 'payment_promise' tool 'get_invoices' collides with skills[0] 'explain_bill' tool 'get_invoices'` |
-| A name listed twice | `skills[1] 'explain_bill' is listed twice (first as skills[0])` |
+| A name listed twice, pinned or not | `skills[1] 'explain_bill' is listed twice (first as skills[0])` |
+| A pin naming no version in the project: an id that does not exist, or another project's | `skills[0] 'verify_identity' version_id '<id>' is not a version of a skill in this project` |
+| A pin naming another skill's version | `skills[0] 'verify_identity' version_id '<id>' is a version of 'explain_bill', not of 'verify_identity'` |
+| A pin naming a draft | `skills[0] 'verify_identity' version_id '<id>' is a draft (v3); pin a published or archived version` |
 
-`details` carries the entry (`field`, `skill`) and, for a collision, `tool` and `collides_with`. `load_skill` is offered automatically, so listing it in the agent's own `tools` is refused too.
+For a pinned entry the tools checked are the pinned version's, not the live one's. `details` carries the entry (`field`, `skill`; for a pin, `field` is `skills[i].version_id` and `version_id` is set) and, for a collision, `tool` and `collides_with`. `load_skill` is offered automatically, so listing it in the agent's own `tools` is refused too.
 
-A skill version published after the agent was saved is not checked against it: a tool of that version whose name the agent already uses is skipped on the call, as is a skill an [inline call-init agent](/guides/call-init) names that has no published version.
+A skill version published after the agent was saved is not checked against it: a tool of that version whose name the agent already uses is skipped on the call, as is a skill an [inline call-init agent](/guides/call-init) names that has no published version, or pins a version that is not one of that skill's in the project.
 
 ## Who uses a skill
 
@@ -109,17 +129,17 @@ curl http://localhost:8090/v1/skills/verify_identity/agents \
 ```json
 [
   {"agent_id": "...", "agent_name": "collections", "agent_version": 3, "agent_state": "published",
-   "skill": "verify_identity", "resolved_skill_id": "...", "resolved_version": 2, "pinned": false},
+   "skill": "verify_identity", "resolved_skill_id": "...", "resolved_version": 1, "pinned": true},
   {"agent_id": "...", "agent_name": "support", "agent_version": 7, "agent_state": "draft",
    "skill": "verify_identity", "resolved_skill_id": "...", "resolved_version": 2, "pinned": false}
 ]
 ```
 
-Every draft and published agent version of the project that lists the skill, by agent name and version, with the skill version it resolves to now: the live published one, or `null` when none is published. An archived agent version, a deleted agent's included, is not listed. A name the project has no version of is a `404`.
+Every draft and published agent version of the project that lists the skill, by agent name and version, with the skill version it resolves to now and `pinned`: for a pinned entry its pinned version, for any other the live published one, or `null` when none is published. This is who a publish or a rollback reaches: every entry with `pinned: false`. An archived agent version, a deleted agent's included, is not listed. A name the project has no version of is a `404`.
 
 ## Delete a skill
 
-`DELETE /v1/skills/{skill_id}` deletes one version. While any agent version listed above names the skill, it is a `409` whose `details.agents` names them (`agent_id`, `name`, `version`, `state`), whatever the version deleted: those agents follow the live version, and a publish or rollback can make any version of the skill live. Remove the skill from their `skills` first. A deleted version is gone from every read; the calls that ran it keep their record of it.
+`DELETE /v1/skills/{skill_id}` deletes one version. While any agent version listed above names the skill, it is a `409` whose `details.agents` names them (`agent_id`, `name`, `version`, `state`), whatever the version deleted, pinned or not: an agent following the live version can be moved to any version of the skill by a publish or rollback, and a pinned one runs its version on every call. Remove the skill from their `skills` first. A deleted version is gone from every read; the calls that ran it keep their record of it.
 
 ## Load a skill on a call
 
@@ -189,7 +209,7 @@ Loading a skill that is already loaded changes nothing: the result says it is al
 
 ## Skills across a handoff
 
-When a call is handed to another agent, with the `handoff_to_agent` tool or `POST /v1/calls/{id}/handoff`, the call takes that agent's skills: each resolved as at a call's start (its live published version in the call's project, rendered with the call's template variables), none loaded. The model is given the target agent's list and `load_skill` when it has skills, and neither when it has none. Skills the first agent loaded are not carried over, even when the target lists them too, and the target's own `max_loaded_skills` applies from then on.
+When a call is handed to another agent, with the `handoff_to_agent` tool or `POST /v1/calls/{id}/handoff`, the call takes that agent's skills: each resolved as at a call's start (its pinned or live published version in the call's project, rendered with the call's template variables), none loaded. The model is given the target agent's list and `load_skill` when it has skills, and neither when it has none. Skills the first agent loaded are not carried over, even when the target lists them too, and the target's own `max_loaded_skills` applies from then on.
 
 ## What a call records
 
@@ -200,12 +220,12 @@ The versions a call resolved are saved on the call when it starts, so the call s
 {"event": "skill.loaded", "payload": {"skill": "plan_change", "version": 1, "reason": "load_skill"}}
 ```
 
-The call read (`GET /v1/calls/{id}` and the list) and `call.ended` carry `skills`: every skill version the call resolved, in the agent's order (after a handoff, the target agent's next; a version both agents resolved is listed once), with whether the call loaded it at any point. A skill the call never loaded is listed too, and a skill unloaded later still reads `loaded: true`: its `skill.unloaded` event says when it went. A call whose agent has no skills has an empty list.
+The call read (`GET /v1/calls/{id}` and the list) and `call.ended` carry `skills`: every skill version the call resolved, in the agent's order (after a handoff, the target agent's next; a version both agents resolved is listed once), with whether the agent pinned it and whether the call loaded it at any point. A skill the call never loaded is listed too, and a skill unloaded later still reads `loaded: true`: its `skill.unloaded` event says when it went. A call whose agent has no skills has an empty list.
 
 ```json
 "skills": [
-  {"skill": "verify_identity", "version": 2, "loaded": true},
-  {"skill": "explain_bill", "version": 1, "loaded": false}
+  {"skill": "verify_identity", "version": 2, "pinned": false, "loaded": true},
+  {"skill": "explain_bill", "version": 1, "pinned": true, "loaded": false}
 ]
 ```
 

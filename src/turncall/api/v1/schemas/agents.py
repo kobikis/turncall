@@ -10,11 +10,13 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SerializerFunctionWrapHandler,
     ValidationError,
     ValidationInfo,
     computed_field,
     field_serializer,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -264,7 +266,8 @@ class ToolDefinitionSchema(BaseModel):
 
 class SkillRefSchema(BaseModel):
     """A skill the agent may load mid-call (#424), by name. The call runs the
-    skill's live published version, resolved when the call starts."""
+    skill's live published version, resolved when the call starts — or, with
+    `version_id` (#426), exactly that version."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -275,6 +278,25 @@ class SkillRefSchema(BaseModel):
         pattern=SKILL_NAME_PATTERN,
         description="The name of one of the project's skills",
     )
+    version_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Pin one version of the skill, by its id: the agent runs that "
+            "version, published or archived, whatever is published later. "
+            "Omitted or null, the agent follows the live published version"
+        ),
+    )
+
+    @model_serializer(mode="wrap")
+    def _as_stored(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # config_blob is JSONB and model_dump() is python-mode, so the id is a
+        # string; an unpinned entry is stored as it always was, `{"skill"}`.
+        data: dict[str, Any] = handler(self)
+        if self.version_id is None:
+            data.pop("version_id", None)
+        else:
+            data["version_id"] = str(self.version_id)
+        return data
 
 
 class GuardrailsSchema(BaseModel):
@@ -775,7 +797,7 @@ class AgentConfigSchema(BaseModel):
         description=(
             "Skills the model may load mid-call with load_skill, each by name. "
             "Cascade voice only; the call runs each skill's live published "
-            "version"
+            "version, or the version an entry pins with version_id"
         ),
     )
     max_loaded_skills: int = Field(

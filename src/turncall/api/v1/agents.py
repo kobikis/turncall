@@ -51,18 +51,19 @@ async def _check_ambience(
 async def _check_skills(
     session: AsyncSession, project_id: UUID, config: AgentConfigSchema | None
 ) -> None:
-    """The skills an agent lists must be live in the project and bring no tool
-    whose name is taken (#428): checked against the version each resolves to
-    now, at save, rather than skipped or dropped on a call."""
+    """The skills an agent lists must be live in the project — or, pinned,
+    name a published or archived version of that skill there (#426) — and
+    bring no tool whose name is taken (#428): checked against the version
+    each resolves to now, at save, rather than skipped or dropped on a call."""
     if config is None or not config.skills:
         return
-    names = [ref.skill for ref in config.skills]
+    names = {ref.skill for ref in config.skills}
     # The lock a skill delete takes: a delete racing this save either lands
     # first and is seen below, or waits and then sees this agent.
-    for name in sorted(set(names)):
+    for name in sorted(names):
         await skill_repo.lock_name(session, project_id, name)
     refusal = await skills.attachment_refusal(
-        session, project_id, names, [tool.name for tool in config.tools]
+        session, project_id, config.skills, [tool.name for tool in config.tools]
     )
     if refusal is not None:
         raise ApiError(

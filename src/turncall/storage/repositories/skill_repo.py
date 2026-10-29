@@ -74,6 +74,21 @@ async def get_by_id(
     return result.scalar_one_or_none()
 
 
+async def get_by_ids(
+    session: AsyncSession, skill_ids: set[UUID], *, project_id: UUID
+) -> dict[UUID, SkillRow]:
+    """The project's skill versions among `skill_ids`, by id: what the agents
+    pinning them resolve to (#426). An id not in the project is absent."""
+    if not skill_ids:
+        return {}
+    result = await session.execute(
+        select(SkillRow).where(
+            SkillRow.id.in_(skill_ids), SkillRow.project_id == project_id
+        )
+    )
+    return {row.id: row for row in result.scalars().all()}
+
+
 async def get_published(
     session: AsyncSession, project_id: UUID, name: str
 ) -> SkillRow | None:

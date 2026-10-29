@@ -189,6 +189,7 @@ async def test_the_skills_a_call_ran_read_the_same_everywhere(factory, client, s
             session,
             call_id,
             {
+                # Stored as before #426, with no `pinned`: read as false.
                 RESOLVED_SKILLS: [
                     {"id": str(uuid.uuid4()), "skill": "verify", "version": 2},
                     {"id": str(uuid.uuid4()), "skill": "explain_bill", "version": 1},
@@ -205,8 +206,8 @@ async def test_the_skills_a_call_ran_read_the_same_everywhere(factory, client, s
         await session.commit()
 
     expected = [
-        {"skill": "verify", "version": 2, "loaded": True},
-        {"skill": "explain_bill", "version": 1, "loaded": False},
+        {"skill": "verify", "version": 2, "pinned": False, "loaded": True},
+        {"skill": "explain_bill", "version": 1, "pinned": False, "loaded": False},
     ]
     read = (await client.get(f"/v1/calls/{call_id}")).json()["data"]
     assert read["skills"] == expected

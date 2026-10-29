@@ -36,7 +36,7 @@ class CallFacts:
     turn_metrics: tuple[dict[str, Any], ...] = ()
     # `provider.failover` payloads in the order they happened (#222).
     failovers: tuple[dict[str, Any], ...] = ()
-    # The skills the call resolved, `{id, skill, version}` in the agent's
+    # The skills the call resolved, `{id, skill, version, pinned}` in the agent's
     # order (a handoff's target's after, #427), and its `skill.loaded`
     # payloads in load order (#425).
     resolved_skills: tuple[dict[str, Any], ...] = ()
@@ -47,7 +47,8 @@ class CallFacts:
 # call's credentials — MCP headers, an inline `llm.api_key` — so it is read by
 # the pipeline and `config_for_call()` and never shown (#276).
 DYNAMIC_CONFIG = "dynamic_config"
-# The skills the call resolved (#425): `[{id, skill, version}]`, written by
+# The skills the call resolved (#425): `[{id, skill, version, pinned}]`
+# (`pinned` since #426; an entry without it was a live-following one), written by
 # the pipeline's build and appended to by a handoff for the target agent's
 # (#427), so the call stays explainable after a skill is published again.
 # Shown as `skills` (`call_skills`), not here.
@@ -62,7 +63,7 @@ def public_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def resolved_skills(metadata: dict[str, Any] | None) -> tuple[dict[str, Any], ...]:
-    """The skills stored on a call row, each `{id, skill, version}`; anything
+    """The skills stored on a call row, each `{id, skill, version[, pinned]}`; anything
     else under the key is skipped rather than shown."""
     stored = (metadata or {}).get(RESOLVED_SKILLS)
     if not isinstance(stored, list):
@@ -83,8 +84,9 @@ def call_skills(
     events_kept: bool = True,
 ) -> list[dict[str, Any]]:
     """Every skill version the call resolved, in the agent's order (after a
-    handoff, the target agent's next): its version and whether the call
-    loaded it at any point. A skill unloaded later (#427) still reads loaded;
+    handoff, the target agent's next): its version, whether the agent pinned
+    it (#426; an entry stored before pins existed reads false) and whether the
+    call loaded it at any point. A skill unloaded later (#427) still reads loaded;
     its `skill.unloaded` event says when. Empty for a call with none.
 
     A load matches by name and version: two agents of one call may resolve
@@ -98,6 +100,7 @@ def call_skills(
         {
             "skill": s["skill"],
             "version": s["version"],
+            "pinned": s.get("pinned") is True,
             "loaded": ((s["skill"], s["version"]) in loaded) if events_kept else None,
         }
         for s in resolved

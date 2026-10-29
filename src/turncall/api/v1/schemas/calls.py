@@ -43,6 +43,8 @@ class CallSkill(BaseModel):
 
     skill: str
     version: int
+    # The agent pinned this version rather than following the live one (#426).
+    pinned: bool = False
     # Whether the call loaded it; null once the call's events expired (#316).
     loaded: bool | None
 

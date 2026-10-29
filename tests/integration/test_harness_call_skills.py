@@ -328,8 +328,8 @@ async def test_a_call_records_the_skill_versions_it_ran(monkeypatch):
     assert delivered["call_id"] == call.call_id and delivered["_signature_valid"]
 
     skills = [
-        {"skill": "explain_bill", "version": 1, "loaded": True},
-        {"skill": "verify_identity", "version": 1, "loaded": False},
+        {"skill": "explain_bill", "version": 1, "pinned": False, "loaded": True},
+        {"skill": "verify_identity", "version": 1, "pinned": False, "loaded": False},
     ]
     assert read["skills"] == skills
     assert ended["payload"]["skills"] == skills
@@ -509,7 +509,9 @@ async def test_a_fourth_load_unloads_the_oldest_and_a_reload_changes_nothing(
     assert delivered["payload"] == gone and delivered["_signature_valid"]
     assert [e["payload"]["skill"] for e in loaded] == list(names)
     # The read says what the call loaded at any point; the unload is an event.
-    assert read["skills"] == [{"skill": n, "version": 1, "loaded": True} for n in names]
+    assert read["skills"] == [
+        {"skill": n, "version": 1, "pinned": False, "loaded": True} for n in names
+    ]
 
 
 @pytest.fixture
@@ -613,8 +615,133 @@ async def test_a_handoff_brings_the_targets_skills_none_loaded(monkeypatch, redi
 
     # Both agents' resolutions on the record, the shared version once.
     skills = [
-        {"skill": "explain_bill", "version": 1, "loaded": True},
-        {"skill": "verify", "version": 1, "loaded": True},
+        {"skill": "explain_bill", "version": 1, "pinned": False, "loaded": True},
+        {"skill": "verify", "version": 1, "pinned": False, "loaded": True},
     ]
     assert read["skills"] == skills
     assert ended["payload"]["skills"] == skills
+
+
+# --- pins and the live version (#426) ----------------------------------------
+
+
+async def _ended(app: Any, call_id: str) -> dict[str, Any]:
+    """The `call.ended` a subscriber got for this call."""
+    for _ in range(200):
+        for envelope in app.sink.of("call.ended"):
+            if envelope["call_id"] == call_id:
+                return dict(envelope)
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"no call.ended for {call_id}")
+
+
+async def _call_and_load(app: Any, number: str) -> tuple[str, dict[str, Any]]:
+    """One call on which the model loads `verify_identity`: its id and its
+    `call.ended`."""
+    call = await place_inbound_call(
+        app.carrier, app.api, from_number=CALLER, to_number=number
+    )
+    await call.wait_for_agent_speech(1)
+    await call.say(400)
+    await call.wait_for_agent_speech(2)
+    await call.hang_up()
+    return call.call_id, await _ended(app, call.call_id)
+
+
+async def test_a_pin_keeps_its_version_and_followers_get_each_publish_and_rollback(
+    monkeypatch,
+):
+    """Two agents on one skill: `support` follows the live version, and
+    `collections` pins v1. Neither agent is touched after it is saved. Each
+    publish and the rollback reach `support`'s next call; `collections` runs
+    v1 throughout, archived from the first publish on. The call read,
+    `call.ended` and the skill's agents list say which entries were pinned."""
+    loaded: list[Given] = []
+    script = Script(
+        caller=(SAID,),
+        agent=(
+            ToolCall("load_skill", {"name": "verify_identity"}),
+            _remembering(loaded, "Verified."),
+        ),
+    )
+
+    def verify(version: int) -> dict[str, Any]:
+        return {
+            "name": "verify_identity",
+            "description": VERIFY,
+            "instructions": f"Verify, as version {version} says.",
+        }
+
+    async with run_app(
+        script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        v1 = await _publish_skill(app, verify(1))
+        agent = {**HARNESS_AGENT, "first_message": "Hello."}
+        support = await app.bind_number(
+            await app.create_agent(
+                {**agent, "skills": [{"skill": "verify_identity"}]}, "support"
+            )
+        )
+        collections = await app.bind_number(
+            await app.create_agent(
+                {
+                    **agent,
+                    "skills": [{"skill": "verify_identity", "version_id": v1["id"]}],
+                },
+                "collections",
+            )
+        )
+
+        await _publish_skill(app, verify(2))  # v1 archived
+        v3 = await _publish_skill(app, verify(3))  # v2 archived
+        listing = (await app.api.get("/v1/skills/verify_identity/agents")).json()
+        ran = [await _call_and_load(app, support)]
+        pinned_call, pinned_ended = await _call_and_load(app, collections)
+        pinned_read = (await app.api.get(f"/v1/calls/{pinned_call}")).json()["data"]
+
+        v2_id = (
+            await app.api.get(
+                "/v1/skills", params={"name": "verify_identity", "state": "archived"}
+            )
+        ).json()["data"]
+        [v2] = [s for s in v2_id if s["version"] == 2]
+        rolled = await app.api.post(f"/v1/skills/{v2['id']}/rollback")
+        assert rolled.status_code == 200, rolled.text
+        ran.append(await _call_and_load(app, support))
+        ran.append(await _call_and_load(app, collections))
+        follower_read = (await app.api.get(f"/v1/calls/{ran[0][0]}")).json()["data"]
+
+    sections = [
+        next(line for line in _prompt(g).splitlines() if line.startswith("## Skill:"))
+        for g in loaded
+    ]
+    assert sections == [
+        "## Skill: verify_identity (v3)",  # support, after two publishes
+        "## Skill: verify_identity (v1)",  # collections, its pin archived
+        "## Skill: verify_identity (v2)",  # support, after the rollback
+        "## Skill: verify_identity (v1)",  # collections, still
+    ]
+    assert "Verify, as version 1 says." in _prompt(loaded[1])
+
+    following = [{"skill": "verify_identity", "version": 3, "pinned": False}]
+    pinned = [{"skill": "verify_identity", "version": 1, "pinned": True}]
+    assert [
+        {k: s[k] for k in ("skill", "version", "pinned")}
+        for s in ran[0][1]["payload"]["skills"]
+    ] == following
+    assert follower_read["skills"] == [{**following[0], "loaded": True}]
+    assert pinned_ended["payload"]["skills"] == [{**pinned[0], "loaded": True}]
+    assert pinned_read["skills"] == pinned_ended["payload"]["skills"]
+    assert [s["version"] for s in ran[1][1]["payload"]["skills"]] == [2]
+    assert ran[2][1]["payload"]["skills"] == [{**pinned[0], "loaded": True}]
+
+    rows = {r["agent_name"]: r for r in listing["data"]}
+    assert (rows["support"]["resolved_skill_id"], rows["support"]["pinned"]) == (
+        v3["id"],
+        False,
+    )
+    assert (
+        rows["collections"]["resolved_skill_id"],
+        rows["collections"]["resolved_version"],
+        rows["collections"]["pinned"],
+    ) == (v1["id"], 1, True)

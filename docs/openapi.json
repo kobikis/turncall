@@ -5720,7 +5720,7 @@
           "skills"
         ],
         "summary": "List Skill Agents",
-        "description": "The project's draft and published agent versions listing the skill,\neach with the skill version it resolves to now. A name the project has no\nversion of is a 404.",
+        "description": "The project's draft and published agent versions listing the skill,\neach with the skill version it resolves to now \u2014 the pinned one for an\nentry that pins (#426), else the live published one. A name the project\nhas no version of is a 404.",
         "operationId": "list_skill_agents_v1_skills__name__agents_get",
         "parameters": [
           {
@@ -8953,7 +8953,7 @@
             },
             "type": "array",
             "title": "Skills",
-            "description": "Skills the model may load mid-call with load_skill, each by name. Cascade voice only; the call runs each skill's live published version"
+            "description": "Skills the model may load mid-call with load_skill, each by name. Cascade voice only; the call runs each skill's live published version, or the version an entry pins with version_id"
           },
           "max_loaded_skills": {
             "type": "integer",
@@ -11656,6 +11656,19 @@
             "pattern": "^[a-z_][a-z0-9_]*$",
             "title": "Skill",
             "description": "The name of one of the project's skills"
+          },
+          "version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Id",
+            "description": "Pin one version of the skill, by its id: the agent runs that version, published or archived, whatever is published later. Omitted or null, the agent follows the live published version"
           }
         },
         "additionalProperties": false,
@@ -11664,7 +11677,7 @@
           "skill"
         ],
         "title": "SkillRefSchema",
-        "description": "A skill the agent may load mid-call (#424), by name. The call runs the\nskill's live published version, resolved when the call starts."
+        "description": "A skill the agent may load mid-call (#424), by name. The call runs the\nskill's live published version, resolved when the call starts \u2014 or, with\n`version_id` (#426), exactly that version."
       },
       "SuccessEvaluationSchema": {
         "properties": {

@@ -104,8 +104,25 @@ def test_every_resolved_skill_is_listed_loaded_or_not():
         skill_loads=({"skill": "verify_identity", "version": 2},),
     )
     assert derived_fields(_call(), facts)["skills"] == [
-        {"skill": "verify_identity", "version": 2, "loaded": True},
-        {"skill": "explain_bill", "version": 1, "loaded": False},
+        {"skill": "verify_identity", "version": 2, "pinned": False, "loaded": True},
+        {"skill": "explain_bill", "version": 1, "pinned": False, "loaded": False},
+    ]
+
+
+def test_pinned_reads_from_the_stored_entry_and_defaults_to_false():
+    """#426: an entry stored before pins existed has no `pinned`, and was a
+    live-following skill."""
+    facts = CallFacts(
+        resolved_skills=(
+            {"id": "a", "skill": "verify_identity", "version": 1, "pinned": True},
+            {"id": "b", "skill": "explain_bill", "version": 1},
+            {"id": "c", "skill": "promise", "version": 3, "pinned": "yes"},
+        ),
+    )
+    assert [s["pinned"] for s in derived_fields(_call(), facts)["skills"]] == [
+        True,
+        False,
+        False,
     ]
 
 

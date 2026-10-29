@@ -212,7 +212,11 @@ async def test_what_a_call_ran_of_its_skills_never_reaches_the_detector(
     built: list[str] = []
     _use(monkeypatch, lambda: built.append("built") or _Marks())
     loaded = {"skill": "verify_identity", "version": 2, "reason": "load_skill"}
-    ended = {"skills": [{"skill": "explain_bill", "version": 1, "loaded": False}]}
+    ended = {
+        "skills": [
+            {"skill": "explain_bill", "version": 1, "pinned": False, "loaded": False}
+        ]
+    }
 
     out = [
         await redaction.redact_payload(loaded, POLICY, event_type="skill.loaded"),

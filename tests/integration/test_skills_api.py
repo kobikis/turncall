@@ -782,3 +782,129 @@ async def test_an_s2s_agent_with_skills_is_warned_on_the_read(monkeypatch) -> No
     ]
     assert warning["skills"] == ["verify_identity"]
     assert "pipeline_mode='cascade'" in warning["message"]
+
+
+async def _other_projects_skill(app: Harness) -> tuple[str, str]:
+    """A published skill version in another project: (project id, version id)."""
+    platform = {"X-Platform-Key": PLATFORM_KEY}
+    project = await app.api.post(
+        "/v1/projects", json={"name": "other"}, headers=platform
+    )
+    assert project.status_code == 201, project.text
+    other_id = project.json()["data"]["id"]
+    key = await app.api.post(
+        "/v1/api-keys",
+        params={"project_id": other_id},
+        json={"name": "other", "role": "admin"},
+        headers=platform,
+    )
+    assert key.status_code == 201, key.text
+    token = key.json()["data"]["raw_key"]
+    async with httpx.AsyncClient(
+        base_url=app.base_url, headers={"Authorization": f"Bearer {token}"}
+    ) as other:
+        created = await other.post("/v1/skills", json=_skill())
+        assert created.status_code == 201, created.text
+        skill_id = created.json()["data"]["id"]
+        published = await other.post(f"/v1/skills/{skill_id}/publish")
+        assert published.status_code == 200, published.text
+    return other_id, skill_id
+
+
+async def test_a_pin_names_a_runnable_version_of_that_skill_in_the_project(
+    monkeypatch,
+) -> None:
+    """#426. A pin runs exactly its version, so at save it must be a published
+    or archived version of the named skill in the agent's project, and the
+    tools that must be free are that version's, not the live one's."""
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        v1 = await _publish(app, _skill(tools=[_tool("old_lookup")]))
+        v2 = await _publish(app, _skill())  # live; archives v1
+        v3 = await _create(app, _skill())  # a draft
+        bill = await _publish(app, _skill("explain_bill", tools=[_tool("get_bill")]))
+        other_project, foreign = await _other_projects_skill(app)
+        try:
+
+            def pinned(version_id: str, **config: Any) -> dict[str, Any]:
+                return {
+                    **AGENT,
+                    **config,
+                    "skills": [{"skill": "verify_identity", "version_id": version_id}],
+                }
+
+            own = {"tools": [_tool("verify_customer")]}
+            following_collides = await _agent(
+                app, {**AGENT, **own, "skills": [{"skill": "verify_identity"}]}
+            )
+            on_v1 = await _agent(app, pinned(v1["id"], **own), "collections")
+            v1_collides = await _agent(
+                app, pinned(v1["id"], tools=[_tool("old_lookup")])
+            )
+            draft = await _agent(app, pinned(v3["id"]))
+            another_skill = await _agent(app, pinned(bill["id"]))
+            nowhere = await _agent(app, pinned(str(uuid.uuid4())))
+            another_project = await _agent(app, pinned(foreign))
+            follower = await _agent(
+                app, {**AGENT, "skills": [{"skill": "verify_identity"}]}, "support"
+            )
+            assert on_v1.status_code == 201, on_v1.text
+            assert follower.status_code == 201, follower.text
+            on_v1_id = on_v1.json()["data"]["id"]
+            update = await app.api.put(
+                f"/v1/agents/{on_v1_id}", json={"config": pinned(bill["id"])}
+            )
+            read = (await app.api.get(f"/v1/agents/{on_v1_id}")).json()["data"]
+            listing = (await app.api.get("/v1/skills/verify_identity/agents")).json()[
+                "data"
+            ]
+            delete_pinned = await app.api.delete(f"/v1/skills/{v1['id']}")
+        finally:
+            await _delete_project(other_project)
+
+    assert _refusal(following_collides) == (
+        "skills[0] 'verify_identity' tool 'verify_customer' collides with the "
+        "agent's own tool 'verify_customer'"
+    )
+    # Pinned to v1, whose tool is not the agent's: the live v2's would be.
+    assert _refusal(v1_collides) == (
+        "skills[0] 'verify_identity' tool 'old_lookup' collides with the "
+        "agent's own tool 'old_lookup'"
+    )
+    assert _refusal(draft) == (
+        f"skills[0] 'verify_identity' version_id '{v3['id']}' is a draft (v3); "
+        "pin a published or archived version"
+    )
+    assert draft.json()["details"] == {
+        "field": "skills[0].version_id",
+        "skill": "verify_identity",
+        "version_id": v3["id"],
+    }
+    assert _refusal(another_skill) == (
+        f"skills[0] 'verify_identity' version_id '{bill['id']}' is a version of "
+        "'explain_bill', not of 'verify_identity'"
+    )
+    not_here = "is not a version of a skill in this project"
+    assert _refusal(nowhere).endswith(not_here)
+    assert _refusal(another_project) == (
+        f"skills[0] 'verify_identity' version_id '{foreign}' {not_here}"
+    )
+    assert _refusal(update).endswith("not of 'verify_identity'")
+
+    # Stored as sent: a pin keeps its id, an unpinned entry is just the name.
+    assert read["config"]["skills"] == [
+        {"skill": "verify_identity", "version_id": v1["id"]}
+    ]
+    assert follower.json()["data"]["config"]["skills"] == [{"skill": "verify_identity"}]
+    assert [
+        (r["agent_name"], r["resolved_skill_id"], r["resolved_version"], r["pinned"])
+        for r in listing
+    ] == [
+        ("collections", v1["id"], 1, True),
+        ("support", v2["id"], 2, False),
+    ]
+    # A version an agent pins is in use like any other of the name (#428).
+    assert delete_pinned.status_code == 409, delete_pinned.text
+    assert "collections v1 (draft)" in delete_pinned.json()["error"]
+    assert "Remove it from their skills first" in delete_pinned.json()["error"]

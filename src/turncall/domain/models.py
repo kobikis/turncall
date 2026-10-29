@@ -357,10 +357,16 @@ SKILL_NAME_MAX = 64
 
 class SkillRef(DomainModel):
     """A skill an agent may load (#424): the name of one of its project's
-    skills, resolved to that skill's live published version when a call's
-    pipeline is built."""
+    skills, resolved when a call's pipeline is built.
+
+    Without `version_id` the call runs the skill's live published version, so
+    a publish or a rollback reaches the agent's next call with no agent
+    publish. With it (#426, ADR-0030) the call runs exactly that version of
+    the skill — published or archived — whatever was published since.
+    """
 
     skill: str
+    version_id: UUID | None = None
 
 
 # How many skills a call may hold loaded at once (#427): loading one past the
