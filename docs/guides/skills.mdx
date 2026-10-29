@@ -1,0 +1,77 @@
+---
+title: Skills
+description: "Versioned capabilities: instructions, tools and knowledge bases defined once"
+icon: "puzzle-piece"
+---
+
+A skill is what an agent needs for one task: a description of when to use it, the instructions to follow, the tools it calls and the knowledge bases it reads. You define it once in a project and version it the way you version an agent.
+
+<Note>
+This page covers the skill resource and its lifecycle. Attaching skills to agents and loading them on a call are on their way.
+</Note>
+
+## Create a skill
+
+```bash
+curl -X POST http://localhost:8090/v1/skills \
+  -H "Authorization: Bearer tc_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "verify_identity",
+    "description": "Use before discussing anything account-specific: balance, bills, payments.",
+    "instructions": "Ask for the date of birth and the last 4 digits of the account number. Call verify_customer with both. Never reveal an account detail before it returns verified=true.",
+    "tools": [{
+      "name": "verify_customer",
+      "description": "Verify the caller against the account",
+      "parameters_schema": {
+        "type": "object",
+        "properties": {"dob": {"type": "string"}, "last4": {"type": "string"}},
+        "required": ["dob", "last4"]
+      },
+      "webhook_url": "https://crm.example.com/tools/verify",
+      "webhook_secret": "a-secret-of-16-or-more-characters"
+    }],
+    "knowledge_bases": []
+  }'
+```
+
+The response is version 1, a `draft`. Creating a skill with a name the project already has makes the next version of that skill, also a draft.
+
+| Field | |
+|-------|---|
+| `name` | Lowercase letters, digits and underscores, starting with a letter or `_` (the shape of a tool name), at most 64 characters. Shared by every version of the skill, so it cannot be edited |
+| `description` | When to use the skill, 1-1024 characters. The model chooses a skill by it |
+| `instructions` | What to do once the skill is in use, 1-128,000 characters |
+| `tools` | [Custom webhook tools](/guides/tools), in the agent's tool schema and under the agent's rules: a `webhook_url` (https outside development), an optional `webhook_secret` to sign each request. Names are unique within the skill, and a built-in's name (`end_call`, `transfer_call`, ...) is refused |
+| `knowledge_bases` | Knowledge bases of the project, with the fields of an [agent's link](/guides/knowledge-base): `knowledge_base_id`, `mode`, `top_k`, `similarity_threshold`, `priority`, `tool_description` |
+
+A refusal names what it refused: a tool by its place and name (`tools[1] 'get_invoices' webhook_url: ...`), a knowledge base outside the project by its place and id.
+
+A tool's `webhook_secret` is encrypted at rest and every read returns it as `"***"`, as an agent's is.
+
+## Lifecycle
+
+Skills follow [agent versioning](/guides/agent-versioning):
+
+| Request | |
+|---------|---|
+| `PUT /v1/skills/{skill_id}` | Edit a draft. Send only the fields to change: `description`, `instructions`, `tools`, `knowledge_bases`. A published or archived version is a `409` |
+| `POST /v1/skills/{skill_id}/publish` | Make a draft the skill's live version. The previously published version of the same name is archived |
+| `POST /v1/skills/{skill_id}/rollback` | Make an archived version live again. The current live version is archived |
+
+A published version never changes; to change a live skill, create a new version, edit it, and publish it.
+
+## List and read
+
+```bash
+curl "http://localhost:8090/v1/skills?name=verify_identity" \
+  -H "Authorization: Bearer tc_xxx"
+```
+
+The list is newest first in the paginated envelope (`total`, `page`, `limit` up to 200). `name` lists one skill's versions, and `state` (`draft`, `published` or `archived`) filters by state: `?state=published` lists the live version of every skill. `GET /v1/skills/{skill_id}` reads one version.
+
+Skills belong to their project: another project's skill is a `404` on every route.
+
+## Audit
+
+Every create, edit, publish and rollback is an [audit log](/guides/audit-log) entry with `resource_type: "skill"`. A publish or rollback also writes an `archived` entry for the version it took out of service.

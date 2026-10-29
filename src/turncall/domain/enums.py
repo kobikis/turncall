@@ -43,6 +43,12 @@ class AgentState(StrEnum):
     ARCHIVED = "archived"  # Superseded by a newer published version
 
 
+# A skill version (#423) moves through an agent version's states, by the same
+# rules: a draft is edited, publish makes it live and archives the previous
+# live version of its name, rollback restores an archived one.
+SkillState = AgentState
+
+
 class ToolExecutionStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
@@ -194,6 +200,7 @@ class AuditResource(StrEnum):
     PHONE_NUMBER = "phone_number"
     API_KEY = "api_key"
     PROJECT = "project"
+    SKILL = "skill"
 
 
 class AuditAction(StrEnum):

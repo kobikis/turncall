@@ -1,8 +1,8 @@
 """The audit trail a route records its changes on (#317, ADR-0024).
 
-A route that changes an agent, a project credential, a phone number, an API
-key or a project setting takes `Audit` (or `PlatformAudit`, on the bootstrap
-routes the platform credential calls) and records each change: `with
+A route that changes an agent, a skill, a project credential, a phone number,
+an API key or a project setting takes `Audit` (or `PlatformAudit`, on the
+bootstrap routes the platform credential calls) and records each change: `with
 audit.change(...)` for a resource that existed, which takes its "before"
 itself, or `audit.record(...)` for one it created. Three things hold the rest:
 
@@ -38,6 +38,7 @@ AUDIT_HEADER = "X-TurnCall-Audit-Id"
 # Every mutating route under these is audited (the wiring test holds it).
 AUDITED_PREFIXES = (
     "/v1/agents",
+    "/v1/skills",
     "/v1/credentials",
     "/v1/phone-numbers",
     "/v1/api-keys",

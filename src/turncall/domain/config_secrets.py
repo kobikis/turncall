@@ -81,6 +81,12 @@ def sanitize_target(target: Any) -> Any:
     return {**target, "agent": sanitize_config(target["agent"])}
 
 
+def sanitize_tools(tools: Any) -> Any:
+    """Mask a tool list held outside an agent config — a skill's (#423) — by
+    the agent config's own rule for `tools`, so the two never differ."""
+    return sanitize_config({"tools": tools})["tools"]
+
+
 def _mask_llm(llm: dict[str, Any]) -> dict[str, Any]:
     out = {**llm}
     if out.get("api_key") is not None:
@@ -144,6 +150,12 @@ def map_secrets(config: Any, fn: Callable[[str], str]) -> Any:
         out["mcp_servers"] = [_map_mcp_server(s, fn) for s in mcp_servers]
 
     return out
+
+
+def map_tools(tools: Any, fn: Callable[[str], str]) -> Any:
+    """`map_secrets` over a tool list held outside an agent config (a skill's,
+    #423): the same paths `sanitize_tools` masks."""
+    return map_secrets({"tools": tools}, fn)["tools"]
 
 
 def map_inline_target(target: Any, fn: Callable[[str], str]) -> Any:

@@ -368,6 +368,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(takeaways_router, prefix="/v1")
 
+    from turncall.api.v1.skills import router as skills_router
+
+    app.include_router(skills_router, prefix="/v1")
+
     from turncall.api.v1.ambience import router as ambience_router
 
     app.include_router(ambience_router, prefix="/v1")

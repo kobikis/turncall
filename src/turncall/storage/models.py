@@ -26,6 +26,7 @@ from turncall.storage.sealing import (
     SealedMetadata,
     SealedTarget,
     SealedText,
+    SealedTools,
 )
 
 
@@ -822,6 +823,50 @@ class TakeawayRow(Base):
     __table_args__ = (
         Index("ix_takeaways_project_id", "project_id"),
         UniqueConstraint("project_id", "name", name="uq_takeaways_project_name"),
+    )
+
+
+class SkillRow(Base):
+    """One version of a named skill (#423): what an agent needs for one task.
+
+    Each row is a version, as an agent row is: `name` + `version` identify it
+    within a project, `state` is the agent lifecycle (draft, published,
+    archived; `SkillState`). Only a draft changes; publishing archives the
+    previous published version of the name, and rollback restores an archived
+    one. `tools` holds the agent tool schema, its secrets sealed at rest like
+    an agent config's (ADR-0020); `knowledge_bases` the link fields.
+    """
+
+    __tablename__ = "skills"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=new_uuid
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    instructions: Mapped[str] = mapped_column(Text, nullable=False)
+    tools: Mapped[list] = mapped_column(SealedTools, nullable=False, default=list)
+    knowledge_bases: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "name", "version", name="uq_skills_project_name_version"
+        ),
+        Index("ix_skills_project_created", "project_id", "created_at"),
     )
 
 

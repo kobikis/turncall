@@ -30,7 +30,9 @@ from turncall.domain.config_secrets import (
     map_dynamic_config,
     map_inline_target,
     map_secrets,
+    map_tools,
     sanitize_config,
+    sanitize_tools,
 )
 from turncall.domain.models import AgentConfig
 from turncall.storage import sealing
@@ -43,6 +45,7 @@ from turncall.storage.sealing import (
     SealedMetadata,
     SealedTarget,
     SealedText,
+    SealedTools,
     is_sealed,
     seal,
     unseal,
@@ -346,6 +349,22 @@ class TestColumnTypes:
             assert "LEAK" not in json.dumps(stored)
             assert col.process_result_value(stored, postgresql.dialect()) == value
 
+    def test_skill_tools_round_trip(self, env_key) -> None:
+        """A skill's tool list (#423) is sealed and masked by the agent
+        config's own rule for `tools`."""
+        tools = SECRETFUL["tools"]
+        col = SealedTools()
+        stored = col.process_bind_param(tools, postgresql.dialect())
+        assert "LEAK" not in json.dumps(stored)
+        assert is_sealed(stored[0]["webhook_secret"])
+        assert stored[1] == tools[1]
+        assert col.process_result_value(stored, postgresql.dialect()) == tools
+        assert (
+            map_tools(tools, str.upper)
+            == map_secrets({"tools": tools}, str.upper)["tools"]
+        )
+        assert sanitize_tools(tools) == sanitize_config({"tools": tools})["tools"]
+
     def test_a_write_without_a_secret_needs_no_key(self, no_env_key) -> None:
         plain = {"llm": {"provider": "openai"}, "system_prompt": "hi"}
         assert (
@@ -470,7 +489,7 @@ class TestStartupCheck:
 
         In order: project credential, Twilio token, webhook secret, server_url
         secret, then a sample of documents from agents, calls, sms_sessions,
-        eval_runs and eval_scenarios.
+        eval_runs, eval_scenarios and skills (a tool list).
         """
         order = [
             "credential",
@@ -482,6 +501,7 @@ class TestStartupCheck:
             "sms_sessions",
             "eval_runs",
             "eval_scenarios",
+            "skills",
         ]
         assert set(found) <= set(order)
         session = AsyncMock()
@@ -526,6 +546,15 @@ class TestStartupCheck:
         )
 
     @pytest.mark.asyncio
+    async def test_a_sealed_skill_tool_secret_is_opened(self, keyed) -> None:
+        """skills.tools is a tool list, walked as an agent config's `tools`."""
+        tools = json.dumps(map_tools(SECRETFUL["tools"], lambda v: seal(v, keyed)))
+        other = _settings(Fernet.generate_key().decode())
+        with pytest.raises(CredentialKeyError, match="rotated"):
+            await credential_repo.ensure_readable(self._session(skills=[tools]), other)
+        await credential_repo.ensure_readable(self._session(skills=[tools]), keyed)
+
+    @pytest.mark.asyncio
     async def test_a_prompt_that_mentions_the_prefix_is_no_sample(self, keyed) -> None:
         """The first match only mentions the prefix in its prompt; the next row
         holds a real sealed secret, and that one is opened."""
@@ -548,7 +577,7 @@ class TestStartupCheck:
         session = AsyncMock()
         session.scalar.return_value = None
         await credential_repo.ensure_readable(session, _settings())
-        assert session.scalar.await_count == 9
+        assert session.scalar.await_count == 10
 
     @pytest.mark.asyncio
     async def test_it_warns_when_the_key_is_unset(self, keyed) -> None:

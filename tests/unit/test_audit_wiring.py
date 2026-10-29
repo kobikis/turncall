@@ -4,8 +4,8 @@ ADR-0024), and nothing but the janitor changes an entry.
 What this guards:
 
 - Every mutating route under `AUDITED_PREFIXES` (agents and their versions,
-  publish, rollback and knowledge bases; credentials; phone numbers; API
-  keys; projects and their settings) takes an audit trail. A new one that
+  publish, rollback and knowledge bases; skills and theirs; credentials;
+  phone numbers; API keys; projects and their settings) takes an audit trail. A new one that
   does not fails here, by name.
 - A request on such a route that would commit without recording is refused,
   and its change rolled back: the commit itself checks (`before_commit`),
@@ -75,8 +75,12 @@ def test_every_mutating_route_on_an_audited_resource_records() -> None:
         "/v1/phone-numbers/{phone_number_id}",
         "/v1/api-keys/{api_key_id}",
         "/v1/projects/{project_id}/retention",
+        "/v1/skills",
+        "/v1/skills/{skill_id}",
+        "/v1/skills/{skill_id}/publish",
+        "/v1/skills/{skill_id}/rollback",
     } <= {path for path, _ in mutating}
-    assert len(mutating) >= 22
+    assert len(mutating) >= 26
     unaudited = [
         (sorted(route.methods), path)
         for path, route in mutating

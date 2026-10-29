@@ -24,6 +24,7 @@ from turncall.storage.models import (
     PhoneNumberRow,
     ProjectCredentialRow,
     ProjectRow,
+    SkillRow,
     SmsSessionRow,
     WebhookSubscriptionRow,
     utc_now,
@@ -194,13 +195,15 @@ async def ensure_readable(session: AsyncSession, settings: Settings) -> None:
         if first is not None:
             unseal(first, settings)
     # The agent config in each: the whole blob, a call-init's inline config,
-    # an inline eval target's agent. Each is walked as an agent config.
-    for config in (
-        AgentRow.config_blob,
-        CallRow.metadata_json["dynamic_config"],
-        SmsSessionRow.metadata_json["dynamic_config"],
-        EvalRunRow.target["agent"],
-        EvalScenarioRow.default_target["agent"],
+    # an inline eval target's agent. Each is walked as an agent config; a
+    # skill's tool list (#423) as an agent config's `tools`.
+    for config, as_config in (
+        (AgentRow.config_blob, _itself),
+        (CallRow.metadata_json["dynamic_config"], _itself),
+        (SmsSessionRow.metadata_json["dynamic_config"], _itself),
+        (EvalRunRow.target["agent"], _itself),
+        (EvalScenarioRow.default_target["agent"], _itself),
+        (SkillRow.tools, _as_tools),
     ):
         document = cast(type_coerce(config, JSONB), Text)
         sample = (
@@ -211,7 +214,7 @@ async def ensure_readable(session: AsyncSession, settings: Settings) -> None:
         )
         found = await session.scalar(select(func.array_agg(sample.c.doc)))
         for stored in found or ():
-            if _unseal_one(json.loads(stored), settings):
+            if _unseal_one(as_config(json.loads(stored)), settings):
                 break
 
 
@@ -230,6 +233,14 @@ def warn_if_no_key(settings: Settings) -> str | None:
     )
     logger.warning(message)
     return message
+
+
+def _itself(document: Any) -> Any:
+    return document
+
+
+def _as_tools(tools: Any) -> dict[str, Any]:
+    return {"tools": tools}
 
 
 def _unseal_one(config: Any, settings: Settings) -> bool:

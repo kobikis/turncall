@@ -963,6 +963,37 @@ States: `draft` → `published` → `archived`
 - `api/v1/agents.py` — Publish with auto-archive + auto-promote, versions, rollback
 - `storage/repositories/agent_repo.py` — `archive_previous_published()`, `update_phone_number_routing()`, `list_versions()`
 
+## Skills
+
+A project's versioned capabilities (#421; the resource is #423): `name`
+(tool-name shaped, `^[a-z_][a-z0-9_]*$`, ≤64, shared by the versions and never
+edited), `description` (when to use it), `instructions`, `tools` (the agent's
+`ToolDefinitionSchema` and rules; a refusal names `tools[i] '<name>'`; a
+built-in's name is refused) and `knowledge_bases` (the link fields, each a KB
+of the project). Each row of `skills` is a version, with the agent lifecycle
+above: create is a draft (the next version of an existing name), `PUT` edits a
+draft only (409 otherwise), publish archives the name's other published
+version, rollback restores an archived one and archives the live one. Writes
+to one name serialize on an advisory lock (`skill_repo.lock_name`).
+
+```
+POST /v1/skills                       # draft vN of `name`
+GET  /v1/skills                       # ?name= ?state= ?page= ?limit= (≤200), newest first
+GET  /v1/skills/{id}
+PUT  /v1/skills/{id}                  # draft only; fields sent replace, the rest kept
+POST /v1/skills/{id}/publish
+POST /v1/skills/{id}/rollback
+```
+
+`skills.tools` is `SealedTools`: webhook secrets sealed at rest and masked on
+read by the agent config's own rule for `tools` (`map_tools` /
+`sanitize_tools`), and sampled by the startup key check. Audited as
+`resource_type: skill` (`audit_log.skill_state`). No delete and no agent
+attachment yet (later tickets of #421).
+
+Key files: `api/v1/skills.py`, `api/v1/schemas/skills.py`,
+`storage/repositories/skill_repo.py`. Tests: `tests/integration/test_skills_api.py`.
+
 ## A/B Testing
 
 Weighted traffic routing on phone numbers. Deterministic by caller number (SHA256 hash).
@@ -1171,15 +1202,15 @@ and the janitor:
 
 ## Audit log
 
-Every change through the API to agents, project credentials, phone numbers,
-API keys and project settings is an entry in `audit_log` (#317, ADR-0024):
+Every change through the API to agents, skills, project credentials, phone
+numbers, API keys and project settings is an entry in `audit_log` (#317, ADR-0024):
 api key (or `actor: platform` for the bootstrap), resource, action, `changes`
 (RFC 6901 JSON Pointer → before/after), `request_id`. `GET /v1/audit-log`,
 admin key, newest first, filters `resource_type`/`resource_id`/`action`/
 `request_id`/`since`/`until`, `cursor`/`next_cursor` paging.
 
-- **Adding a mutating route** under `/v1/agents`, `/v1/credentials`,
-  `/v1/phone-numbers`, `/v1/api-keys` or `/v1/projects`? It takes `audit:
+- **Adding a mutating route** under `/v1/agents`, `/v1/skills`,
+  `/v1/credentials`, `/v1/phone-numbers`, `/v1/api-keys` or `/v1/projects`? It takes `audit:
   Audit` (`api/audit.py`; `PlatformAudit` on a platform-key route) and
   records once per resource it changed, the primary one first: `with
   audit.change(resource, id, action, state, row) as change:` around the write
@@ -1192,8 +1223,8 @@ admin key, newest first, filters `resource_type`/`resource_id`/`action`/
   (500, rolled back), **whoever commits** — DbSession, or a route that
   commits itself before a side effect (credentials, redaction). The first
   entry's id is `X-TurnCall-Audit-Id` and every entry's `request_id`.
-- **States** (`services/audit_log`): `agent_state`, `phone_number_state`,
-  `api_key_state`, `credential_state`, `project_state`,
+- **States** (`services/audit_log`): `agent_state`, `skill_state`,
+  `phone_number_state`, `api_key_state`, `credential_state`, `project_state`,
   `knowledge_base_link`, or `fields(...)` for a part. `public` (the masked
   read) is what is written; `raw` is only compared. A new secret on one of
   these resources must be masked in its state, as a new agent-config secret
