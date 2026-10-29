@@ -20,7 +20,7 @@ What a loaded skill's KBs do:
   and at resolution, never a refusal — the attachment does its part once
   switched to `tool` or `prompt`.
 
-No pipecat here: the text channels will build on the same rules (#430).
+No pipecat here: the text channels build on the same rules (#430).
 """
 
 from __future__ import annotations
@@ -51,6 +51,21 @@ class SkillKnowledge:
 
 
 NO_KNOWLEDGE = SkillKnowledge()
+
+
+def searched_attachments(
+    own: Sequence[dict[str, Any]], loaded: Sequence[Any]
+) -> list[dict[str, Any]]:
+    """What `query_knowledge` searches with `loaded` skills loaded: the
+    agent's own tool-mode attachments, then each loaded skill's, in load
+    order, each KB once. One rule for a call and a text session (#430)."""
+    seen: set[str] = set()
+    unique = []
+    for a in [*own, *(a for s in loaded for a in s.knowledge.search)]:
+        if str(a["knowledge_base_id"]) not in seen:
+            seen.add(str(a["knowledge_base_id"]))
+            unique.append(a)
+    return unique
 
 
 def auto_mode_warning(knowledge_bases: Sequence[Any]) -> dict[str, Any] | None:

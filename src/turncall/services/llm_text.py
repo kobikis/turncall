@@ -36,6 +36,44 @@ _MAX_TOOL_ROUNDS = 5
 
 
 @dataclass(frozen=True)
+class TurnUpdate:
+    """The system prompt and tools a turn's next round runs on: what a
+    `load_skill` in an earlier round changed (#430)."""
+
+    system_prompt: str
+    tools: list[dict[str, Any]]
+
+
+# Asked after every round of tool calls, so a tool that changed what the model
+# is given (a skill load) reaches the next round. Omitted: every round runs on
+# what the turn began with.
+TurnRefresh = Callable[[], TurnUpdate]
+
+
+def _with_system(messages: list[dict[str, Any]], prompt: str) -> list[dict[str, Any]]:
+    """`messages` with the first system message's content `prompt` — the
+    agent's prompt; a system message from the session's history stays."""
+    out = list(messages)
+    for i, m in enumerate(out):
+        if m.get("role") == "system":
+            out[i] = {**m, "content": prompt}
+            return out
+    return [{"role": "system", "content": prompt}, *out] if prompt else out
+
+
+def _system_parts(messages: list[dict[str, Any]]) -> list[str]:
+    return [m["content"] for m in messages if m.get("role") == "system"]
+
+
+def _set(body: dict[str, Any], key: str, value: Any) -> None:
+    """`body[key] = value`, or no such key for an empty one."""
+    if value:
+        body[key] = value
+    else:
+        body.pop(key, None)
+
+
+@dataclass(frozen=True)
 class CompletionResult:
     """Result of a text completion."""
 
@@ -81,12 +119,39 @@ def _anthropic_text(blocks: list[dict[str, Any]]) -> str:
     return "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
 
 
+def _anthropic_system(parts: list[str]) -> list[dict[str, Any]] | None:
+    """One cached block, as the voice path sends it (#374): the breakpoint
+    caches the tools and the system prompt for the turn's tool rounds and the
+    session's next message."""
+    if not parts:
+        return None
+    return [
+        {
+            "type": "text",
+            "text": "\n\n".join(parts),
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+def _anthropic_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": t["name"],
+            "description": t.get("description", ""),
+            "input_schema": t.get("parameters") or {"type": "object", "properties": {}},
+        }
+        for t in tools or []
+    ]
+
+
 async def _complete_text_anthropic(
     config: LLMConfig,
     messages: list[dict[str, Any]],
     api_key: str,
     tools: list[dict[str, Any]] | None = None,
     execute_tool: ToolExecutor | None = None,
+    refresh: TurnRefresh | None = None,
 ) -> CompletionResult:
     """Generate a text completion via the Anthropic Messages API.
 
@@ -113,27 +178,8 @@ async def _complete_text_anthropic(
         "messages": conversation,
         "max_tokens": config.max_tokens,
     }
-    if system_parts:
-        # One cached block, as the voice path sends it (#374): the breakpoint
-        # caches the tools and the system prompt for the turn's tool rounds and
-        # the session's next message.
-        body["system"] = [
-            {
-                "type": "text",
-                "text": "\n\n".join(system_parts),
-                "cache_control": {"type": "ephemeral"},
-            }
-        ]
-    if tools:
-        body["tools"] = [
-            {
-                "name": t["name"],
-                "description": t.get("description", ""),
-                "input_schema": t.get("parameters")
-                or {"type": "object", "properties": {}},
-            }
-            for t in tools
-        ]
+    _set(body, "system", _anthropic_system(system_parts))
+    _set(body, "tools", _anthropic_tools(tools))
 
     client = get_http_client()
     total_tokens = 0
@@ -185,6 +231,11 @@ async def _complete_text_anthropic(
                 ],
             }
         )
+        if refresh is not None:
+            update = refresh()
+            prompted = _with_system(messages, update.system_prompt)
+            _set(body, "system", _anthropic_system(_system_parts(prompted)))
+            _set(body, "tools", _anthropic_tools(update.tools))
 
     logger.warning(
         "chat_tool_rounds_exhausted", model=config.model, rounds=_MAX_TOOL_ROUNDS
@@ -195,12 +246,37 @@ async def _complete_text_anthropic(
     )
 
 
+def _bedrock_system(parts: list[str]) -> list[dict[str, Any]] | None:
+    return [{"text": "\n\n".join(parts)}] if parts else None
+
+
+def _bedrock_tools(tools: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    if not tools:
+        return None
+    return {
+        "tools": [
+            {
+                "toolSpec": {
+                    "name": t["name"],
+                    "description": t.get("description", ""),
+                    "inputSchema": {
+                        "json": t.get("parameters")
+                        or {"type": "object", "properties": {}}
+                    },
+                }
+            }
+            for t in tools
+        ]
+    }
+
+
 async def _complete_text_bedrock(
     config: LLMConfig,
     aws: AWSConfig,
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
     execute_tool: ToolExecutor | None = None,
+    refresh: TurnRefresh | None = None,
 ) -> CompletionResult:
     """Generate a text completion via the Bedrock converse API (ADR-0016).
 
@@ -235,26 +311,10 @@ async def _complete_text_bedrock(
         "messages": conversation,
         "inferenceConfig": inference_config,
     }
-    if system_parts:
-        kwargs["system"] = [{"text": "\n\n".join(system_parts)}]
+    _set(kwargs, "system", _bedrock_system(system_parts))
     if config.extra:
         kwargs["additionalModelRequestFields"] = config.extra
-    if tools:
-        kwargs["toolConfig"] = {
-            "tools": [
-                {
-                    "toolSpec": {
-                        "name": t["name"],
-                        "description": t.get("description", ""),
-                        "inputSchema": {
-                            "json": t.get("parameters")
-                            or {"type": "object", "properties": {}}
-                        },
-                    }
-                }
-                for t in tools
-            ]
-        }
+    _set(kwargs, "toolConfig", _bedrock_tools(tools))
 
     # One client for the whole exchange rather than one per round.
     client = boto3.client(
@@ -312,6 +372,11 @@ async def _complete_text_bedrock(
                 ],
             }
         )
+        if refresh is not None:
+            update = refresh()
+            prompted = _with_system(messages, update.system_prompt)
+            _set(kwargs, "system", _bedrock_system(_system_parts(prompted)))
+            _set(kwargs, "toolConfig", _bedrock_tools(update.tools))
 
     logger.warning(
         "chat_tool_rounds_exhausted", model=config.model, rounds=_MAX_TOOL_ROUNDS
@@ -355,12 +420,35 @@ def _gemini_response(call: dict[str, Any], result: str) -> dict[str, Any]:
     return {"functionResponse": response}
 
 
+def _gemini_system(parts: list[str]) -> dict[str, Any] | None:
+    return {"parts": [{"text": "\n\n".join(parts)}]} if parts else None
+
+
+def _gemini_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    if not tools:
+        return None
+    return [
+        {
+            "functionDeclarations": [
+                {
+                    "name": t["name"],
+                    "description": t.get("description", ""),
+                    "parametersJsonSchema": t.get("parameters")
+                    or {"type": "object", "properties": {}},
+                }
+                for t in tools
+            ]
+        }
+    ]
+
+
 async def _complete_text_google(
     config: LLMConfig,
     messages: list[dict[str, Any]],
     api_key: str,
     tools: list[dict[str, Any]] | None = None,
     execute_tool: ToolExecutor | None = None,
+    refresh: TurnRefresh | None = None,
 ) -> CompletionResult:
     """Generate a text completion via Gemini's generateContent (#205).
 
@@ -391,22 +479,8 @@ async def _complete_text_google(
         ],
         "generationConfig": generation,
     }
-    if system_parts:
-        body["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
-    if tools:
-        body["tools"] = [
-            {
-                "functionDeclarations": [
-                    {
-                        "name": t["name"],
-                        "description": t.get("description", ""),
-                        "parametersJsonSchema": t.get("parameters")
-                        or {"type": "object", "properties": {}},
-                    }
-                    for t in tools
-                ]
-            }
-        ]
+    _set(body, "systemInstruction", _gemini_system(system_parts))
+    _set(body, "tools", _gemini_tools(tools))
 
     url = _GEMINI_URL.format(model=config.model.removeprefix("models/"))
     headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
@@ -447,6 +521,11 @@ async def _complete_text_google(
                 ],
             }
         )
+        if refresh is not None:
+            update = refresh()
+            prompted = _with_system(messages, update.system_prompt)
+            _set(body, "systemInstruction", _gemini_system(_system_parts(prompted)))
+            _set(body, "tools", _gemini_tools(update.tools))
 
     logger.warning(
         "chat_tool_rounds_exhausted", model=config.model, rounds=_MAX_TOOL_ROUNDS
@@ -487,12 +566,17 @@ def _decode_args(fn: dict[str, Any]) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _openai_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    return [{"type": "function", "function": t} for t in tools or []]
+
+
 async def _complete_text_openai(
     config: LLMConfig,
     messages: list[dict[str, Any]],
     api_key: str,
     tools: list[dict[str, Any]] | None = None,
     execute_tool: ToolExecutor | None = None,
+    refresh: TurnRefresh | None = None,
 ) -> CompletionResult:
     """Chat-completions call, with an optional tool loop.
 
@@ -521,8 +605,7 @@ async def _complete_text_openai(
     if config.provider == "openrouter" and config.fallback_models:
         # OpenRouter's `models` array — tried in order, primary first.
         body["models"] = [config.model, *config.fallback_models]
-    if tools:
-        body["tools"] = [{"type": "function", "function": t} for t in tools]
+    _set(body, "tools", _openai_tools(tools))
 
     client = get_http_client()
     total_tokens = 0
@@ -562,6 +645,10 @@ async def _complete_text_openai(
             }
             for call, result in zip(calls, results, strict=True)
         )
+        if refresh is not None:
+            update = refresh()
+            body["messages"] = _with_system(body["messages"], update.system_prompt)
+            _set(body, "tools", _openai_tools(update.tools))
 
     # Cap reached. Withhold the tools so the model has to answer in words: an
     # SMS with a mediocre answer beats an SMS that never arrives.
@@ -583,6 +670,7 @@ async def complete_text(
     tools: list[dict[str, Any]] | None = None,
     execute_tool: ToolExecutor | None = None,
     credentials: Credentials | None = None,
+    refresh: TurnRefresh | None = None,
 ) -> CompletionResult:
     """Generate a text completion using the agent's LLM config.
 
@@ -602,6 +690,10 @@ async def complete_text(
     request this function always sent — which callers like post-call analysis
     and the transfer briefing depend on, since a tool call there would be
     nonsense.
+
+    `refresh` is asked after every round of tool calls for the system prompt
+    and tools the next round runs on (#430): a skill loaded in one round is in
+    the next. The first system message is the one it replaces.
 
     Note: openrouter is blocked for customer SMS/Chat conversations at the
     sms_chat boundary, but allowed here for internal callers like post-call
@@ -627,19 +719,24 @@ async def complete_text(
 
     if config.provider == "bedrock":
         result = await _complete_text_bedrock(
-            config, credentials.aws(aws or AWSConfig()), messages, tools, execute_tool
+            config,
+            credentials.aws(aws or AWSConfig()),
+            messages,
+            tools,
+            execute_tool,
+            refresh,
         )
     elif config.provider == "anthropic":
         result = await _complete_text_anthropic(
-            config, messages, api_key, tools, execute_tool
+            config, messages, api_key, tools, execute_tool, refresh
         )
     elif config.provider == "google":
         result = await _complete_text_google(
-            config, messages, api_key, tools, execute_tool
+            config, messages, api_key, tools, execute_tool, refresh
         )
     else:
         result = await _complete_text_openai(
-            config, messages, api_key, tools, execute_tool
+            config, messages, api_key, tools, execute_tool, refresh
         )
 
     logger.debug(

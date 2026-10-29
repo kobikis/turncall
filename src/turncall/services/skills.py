@@ -26,11 +26,17 @@ tool or another listed skill's. The drop at resolution stays for what changes
 after the save: a skill version published later, or a stored agent from
 before the rule.
 
-No pipecat here: the text channels will build on the same rules (#430).
+What a `load_skill` holds and answers is decided here too, for voice and
+text alike (#430): `after_load` (the `max_loaded_skills` cap, the skill
+loaded longest ago unloaded first) and the result the model reads for an
+unknown skill, one already loaded, and a load.
+
+No pipecat here: the text channels build on the same rules (#430).
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -411,4 +417,78 @@ def skilled_config(
             "system_prompt": "\n\n".join(s for s in sections if s),
             "tools": tools,
         }
+    )
+
+
+def resolution_entries(available: Sequence[ResolvedSkill]) -> list[dict[str, Any]]:
+    """What a conversation resolved, as it is stored on its record (#425,
+    #426): `[{id, skill, version, pinned}]` — a call's row, a text session's
+    metadata (#430)."""
+    return [
+        {"id": str(s.id), "skill": s.name, "version": s.version, "pinned": s.pinned}
+        for s in available
+    ]
+
+
+def after_load(
+    loaded: Sequence[ResolvedSkill], skill: ResolvedSkill, cap: int
+) -> tuple[tuple[ResolvedSkill, ...], tuple[ResolvedSkill, ...]]:
+    """What is loaded once `skill` is, and what that unloads (#427): `skill`
+    joins the end of `loaded` (or stays where it is, already there), and past
+    `cap` the skills loaded longest ago go, oldest first."""
+    if any(s.name == skill.name for s in loaded):
+        held = tuple(loaded)
+    else:
+        held = (*loaded, skill)
+    over = max(len(held) - cap, 0)
+    return held[over:], held[:over]
+
+
+def load_result(success: bool, message: str, details: dict[str, Any] | None) -> str:
+    """`load_skill`'s result, as the model reads it."""
+    return json.dumps({"success": success, "message": message, "details": details})
+
+
+def unknown_skill_result(name: str, available: Sequence[ResolvedSkill]) -> str:
+    """A `load_skill` naming no skill the conversation can load."""
+    names = ", ".join(s.name for s in available)
+    return load_result(
+        False,
+        f"There is no skill named {name!r} to load."
+        + (f" The skills you can load are: {names}." if names else ""),
+        None,
+    )
+
+
+def already_loaded_result(skill: ResolvedSkill) -> str:
+    """A `load_skill` of a skill already loaded: nothing changes."""
+    return load_result(
+        True,
+        f"The skill {skill.name!r} is already loaded: its instructions and tools "
+        "are in place. Continue the conversation.",
+        {"skill": skill.name, "version": skill.version, "already_loaded": True},
+    )
+
+
+def loaded_result(
+    skill: ResolvedSkill, unloaded: Sequence[ResolvedSkill], cap: int
+) -> str:
+    """A `load_skill` that loaded `skill`, and unloaded `unloaded` to stay
+    within `cap`."""
+    note = ""
+    if unloaded:
+        names = ", ".join(repr(s.name) for s in unloaded)
+        note = (
+            f" At most {cap} skills can be loaded at once, so {names} was "
+            "unloaded: load it again if you need it."
+        )
+    return load_result(
+        True,
+        f"The skill {skill.name!r} is loaded: follow its instructions, and its "
+        "tools are now available." + note + " Continue the conversation.",
+        {
+            "skill": skill.name,
+            "version": skill.version,
+            **({"unloaded": [s.name for s in unloaded]} if unloaded else {}),
+        },
     )

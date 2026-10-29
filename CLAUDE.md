@@ -498,6 +498,8 @@ row's keys.
 - Expired after 24h inactivity (lazy on lookup + background cleanup every 15 min)
 - Over the project's `messages_per_minute` (#226): not stored, no LLM; Chat API `429`, SMS/WhatsApp unanswered (see "Limits")
 - Webhook events: `session.created`, `session.updated`, `session.deleted`, `chat.created`
+- The agent's skills (#430): resolved once per session, loaded ones kept in its metadata across messages (`services/text_skills.py`; see "Skills")
+- Metadata writes merge one key (`sms_session_repo.merge_session_metadata`, `||`), so `variables` and loaded skills from concurrent messages don't overwrite each other
 
 ### Phone Number Config
 - `sms_enabled: true` on bind → auto-configures Twilio SMS webhook
@@ -1029,7 +1031,7 @@ pin no longer runs; `SkillAgentResponse.from_rows` + `skill_repo.get_by_ids`),
 read's `warnings` (`config_warnings.skills_on_s2s_warning`), and the build skips
 them logging the same message at warning level (`skills_skipped`).
 
-**On a call** (#424, cascade voice only): an agent's `skills: [{"skill":
+**On a call** (#424, cascade voice; text: below, #430): an agent's `skills: [{"skill":
 "<name>"}]` resolve once at build (`pipeline_builder._with_skills` →
 `skill_loader.resolve_call_skills` → `services/skills.resolve_skills`), each to
 its live published version in the call's project (or its pin, below), instructions and tool
@@ -1132,11 +1134,41 @@ rides into the record and `call_skills`; an entry stored before #426 has no
 `pinned` and reads false. Delete still 409s any version of a listed name,
 pinned or not.
 
+**In a text conversation** (#430, Chat API, SMS, WhatsApp text — all through
+`sms_chat._process_chat_message`): `services/text_skills.session_skills`
+resolves the agent's skills on the session's first message with skills
+(`resolve_skills`, pins honoured; the session's `{{variables}}`) and stores
+`metadata_json["resolved_skills"]` (`skills.resolution_entries`, a call row's
+shape); every later message re-reads **those versions by id** (as pins, the
+stored `pinned` kept), for the names the agent still lists, rendered with the
+variables as they stand — a mid-session publish reaches the next session. The
+turn runs `SessionSkills.config()` (= `skilled_config`): the prompt section,
+`load_skill` first in `chat_tools` (the one built-in text offers), then agent
+tools, loaded skills' tools, MCP, `query_knowledge` (own tool-mode links +
+loaded skills' search, `skill_knowledge.searched_attachments`, read at each
+call; a loaded skill's search adds the tool hint). `SessionSkills.load` is
+pure: the cap (`skills.after_load`), already-loaded and unknown answers
+(`skills.*_result`) are voice's own functions. A load reaches the turn's next
+round through `complete_text(refresh=)` (`llm_text.TurnUpdate`: every dialect
+replaces the first system message and the tools after each tool round) and
+the session through `text_skills.persist_loads`, before the reply is stored,
+same commit: the turn's loads replayed onto `metadata_json["loaded_skills"]`
+(names, load order) under `sms_session_repo.lock_session_metadata` (`FOR
+UPDATE`) and written by `merge_session_metadata` (`||`, one key) — two
+concurrent messages keep both loads; the resolution write takes the same lock
+(in a savepoint, so a failure is a warning and a turn without skills). A
+failed reply stores no load. Recorded: the `load_skill` `tool_invocations` row
+and `loaded_skills`; no `skill.*` events (a session has no event log), no
+session-read field. A new session starts empty.
+
 Key files: `api/v1/skills.py`, `api/v1/schemas/skills.py`,
 `storage/repositories/skill_repo.py`, `services/skills.py`,
-`services/skill_knowledge.py`, `orchestrator/skill_loader.py`. Tests: `tests/integration/test_skills_api.py`,
-`tests/integration/test_harness_call_skills.py`, `tests/unit/test_skills_on_a_call.py`,
-`tests/unit/test_skill_attachment_rules.py`.
+`services/skill_knowledge.py`, `services/text_skills.py`,
+`orchestrator/skill_loader.py`. Tests: `tests/integration/test_skills_api.py`,
+`tests/integration/test_harness_call_skills.py`,
+`tests/integration/test_chat_skills.py`, `tests/unit/test_skills_on_a_call.py`,
+`tests/unit/test_skill_attachment_rules.py`, `tests/unit/test_text_skills.py`,
+`tests/unit/test_text_turn_refresh.py`.
 
 ## A/B Testing
 
@@ -2128,7 +2160,7 @@ Connect agents to MCP servers for auto-discovered tools. Tools are fetched at ca
 
 Tool names are flat and unique: precedence is built-in > agent `tools` > MCP (server order — claimed serially after a concurrent discovery round, so the agent's config decides, not which server answered first); a collision is skipped + logged. That order is enforced twice — in what gets advertised (`_build_tools_schema`) *and* in what actually runs (`tool_bridge`, `chat_tools`), which have to agree. `handoff_to_agent` swaps the prompt and the target's `tools` (via `LLMSetToolsFrame`) but does **not** re-connect MCP servers mid-call. Both of those frames are queued with `interruptible = False`, so a caller talking over the handoff lands before it or after it, never through the middle — the half-applied state (previous agent's prompt and tools, cleared context, new handlers underneath) raised nothing and logged nothing. The flag only covers the **drain**; an interruption also cancels a sync tool's task, and a frame that was never built cannot survive a drain. So the handoff is prepare-then-apply: `_prepare_handoff` does all of the I/O **and** builds both frames **before** `call_control.handoff_to_agent` commits `status=HANDED_OFF` + `active_agent_id`, and `_apply_handoff_context` then applies the switch with nothing left to wait on and nothing left that can raise (a raise after the commit is the same divergence with a deterministic trigger). `_complete_handoff` gates that on the switch actually committing — applying one the database refused is the same bug upside down — a DB round-trip *after* that commit left the call record handed off while the live pipeline kept the previous agent, logged nowhere, since `CancelledError` slips past `except Exception` (#144). Narrow by design: spoken frames are *supposed* to be dropped on barge-in. `test_handoff_survives_interruption.py` pins the drain half (both frames surviving, a spoken one still dropped, the flag not spreading); `test_handoff_switch_is_atomic.py` pins the cancellation half, and fails if an `await` reappears in the switch.
 
-Tools run on voice **and** text, on every LLM provider — OpenAI-compatible (`tools`/`tool_calls`), Anthropic (`input_schema` + tool_use/tool_result blocks) and Bedrock Converse (`toolSpec`/`toolUse`/`toolResult`) each have their own dialect in `llm_text.py`. Built-ins are voice-only — all four resolve through `call_control` against a live `call_id`. `query_knowledge` is not a built-in and runs on both: a text turn offers it for the agent's `tool`-mode knowledge bases (`chat_tools._knowledge_search`, over `services/retrieval.query_knowledge`, the same search the voice handler runs), last, so an agent tool of that name keeps it. Calls within one round run concurrently. Text turns cap at `_MAX_TOOL_ROUNDS` (5), then re-ask with the tools withheld so a reply always goes out.
+Tools run on voice **and** text, on every LLM provider — OpenAI-compatible (`tools`/`tool_calls`), Anthropic (`input_schema` + tool_use/tool_result blocks) and Bedrock Converse (`toolSpec`/`toolUse`/`toolResult`) each have their own dialect in `llm_text.py`. Built-ins are voice-only — they resolve through `call_control` against a live `call_id` — except `load_skill`, which a text turn offers to an agent with skills (#430, see "Skills"). `query_knowledge` is not a built-in and runs on both: a text turn offers it for the agent's `tool`-mode knowledge bases and loaded skills' (`chat_tools._search`, over `services/retrieval.query_knowledge`, the same search the voice handler runs), last, so an agent tool of that name keeps it. Calls within one round run concurrently. Text turns cap at `_MAX_TOOL_ROUNDS` (5), then re-ask with the tools withheld so a reply always goes out.
 
 ### Tool Invocation Recording
 All tool calls (webhook + MCP + builtin, and `query_knowledge` via `tool_bridge.recorded_tool` on voice) are recorded in `tool_invocations` with input, output, status, latency_ms, and dispatched as `tool.result` events.

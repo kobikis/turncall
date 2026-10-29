@@ -36,7 +36,6 @@ this holder.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -50,7 +49,18 @@ from turncall.services.retrieval import (
     KNOWLEDGE_TOOL_HINT,
     KNOWLEDGE_TOOL_SCHEMA,
 )
-from turncall.services.skills import ResolvedSkill, resolve_skills, skilled_config
+from turncall.services.skill_knowledge import searched_attachments
+from turncall.services.skills import (
+    ResolvedSkill,
+    after_load,
+    already_loaded_result,
+    load_result,
+    loaded_result,
+    resolution_entries,
+    resolve_skills,
+    skilled_config,
+    unknown_skill_result,
+)
 
 QUERY_KNOWLEDGE = KNOWLEDGE_TOOL_SCHEMA["name"]
 
@@ -118,17 +128,7 @@ class CallSkills:
     def searched(self) -> list[dict[str, Any]]:
         """What `query_knowledge` searches now: the agent's own tool-mode KBs,
         then each loaded skill's, in load order, each KB once."""
-        attachments = [
-            *self.own_knowledge,
-            *(a for s in self.loaded for a in s.knowledge.search),
-        ]
-        seen: set[str] = set()
-        unique = []
-        for a in attachments:
-            if str(a["knowledge_base_id"]) not in seen:
-                seen.add(str(a["knowledge_base_id"]))
-                unique.append(a)
-        return unique
+        return searched_attachments(self.own_knowledge, self.loaded)
 
     def knowledge_switch(self, loaded: tuple[ResolvedSkill, ...]) -> SwitchInputs:
         """The switch's inputs with `loaded`: the call's own, plus — when a
@@ -270,10 +270,7 @@ async def record_resolution(
     from turncall.services.call_view import RESOLVED_SKILLS
     from turncall.storage.repositories import call_repo
 
-    resolution = [
-        {"id": str(s.id), "skill": s.name, "version": s.version, "pinned": s.pinned}
-        for s in available
-    ]
+    resolution = resolution_entries(available)
     try:
         async with call_context.session_factory() as session:  # type: ignore[misc]
             await call_repo.append_call_metadata_list(
@@ -387,12 +384,7 @@ def prepare_load(
     by `apply_load`."""
     from turncall.orchestrator.tool_bridge import build_switch_frames
 
-    if skills.is_loaded(skill.name):
-        held = skills.loaded
-    else:
-        held = (*skills.loaded, skill)
-    over = max(len(held) - skills.cap, 0)
-    unloaded, loaded = held[:over], held[over:]
+    loaded, unloaded = after_load(skills.loaded, skill, skills.cap)
     config = skills.config(loaded)
     knowledge = _knowledge_for(skills, loaded, config, call_context)
     switch = skills.knowledge_switch(loaded) if knowledge else skills.switch
@@ -462,10 +454,6 @@ async def apply_load(
     skills.loaded = prepared.loaded
 
 
-def _result(success: bool, message: str, details: dict[str, Any] | None) -> str:
-    return json.dumps({"success": success, "message": message, "details": details})
-
-
 async def run_load_skill(
     args: dict[str, Any], call_context: CallContext, params: Any
 ) -> str:
@@ -482,25 +470,14 @@ async def run_load_skill(
     name = str(args.get("name") or "")
     skill = skills.find(name) if skills is not None else None
     if skills is None or skill is None:
-        names = ", ".join(s.name for s in skills.available) if skills else ""
-        result = _result(
-            False,
-            f"There is no skill named {name!r} to load."
-            + (f" The skills you can load are: {names}." if names else ""),
-            None,
-        )
+        result = unknown_skill_result(name, skills.available if skills else ())
         await params.result_callback(result)
         return result
 
     if skills.is_loaded(name):
         # Nothing to switch: no frames, no event, the prompt and tools as
         # they are. The model's next inference runs as after any result.
-        result = _result(
-            True,
-            f"The skill {name!r} is already loaded: its instructions and tools "
-            "are in place. Continue the conversation.",
-            {"skill": skill.name, "version": skill.version, "already_loaded": True},
-        )
+        result = already_loaded_result(skill)
         await params.result_callback(result)
         return result
 
@@ -508,7 +485,7 @@ async def run_load_skill(
         prepared = prepare_load(skills, skill, call_context)
     except Exception:
         logger.exception("load_skill: could not prepare {skill}", skill=name)
-        result = _result(False, f"The skill {name!r} could not be loaded.", None)
+        result = load_result(False, f"The skill {name!r} could not be loaded.", None)
         await params.result_callback(result)
         return result
 
@@ -532,34 +509,9 @@ async def run_load_skill(
         version=skill.version,
         unloaded=[s.name for s in prepared.unloaded],
     )
-    result = _result(
-        True,
-        f"The skill {name!r} is loaded: follow its instructions, and its tools "
-        "are now available."
-        + _unloaded_note(prepared.unloaded, skills.cap)
-        + " Continue the conversation.",
-        {
-            "skill": skill.name,
-            "version": skill.version,
-            **(
-                {"unloaded": [s.name for s in prepared.unloaded]}
-                if prepared.unloaded
-                else {}
-            ),
-        },
-    )
+    result = loaded_result(skill, prepared.unloaded, skills.cap)
     await params.result_callback(result, properties=_run_llm_after_switch(params))
     return result
-
-
-def _unloaded_note(unloaded: tuple[ResolvedSkill, ...], cap: int) -> str:
-    if not unloaded:
-        return ""
-    names = ", ".join(repr(s.name) for s in unloaded)
-    return (
-        f" At most {cap} skills can be loaded at once, so {names} was unloaded: "
-        "load it again if you need it."
-    )
 
 
 def _run_llm_after_switch(params: Any) -> Any:

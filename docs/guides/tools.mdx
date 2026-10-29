@@ -204,7 +204,8 @@ differences worth knowing:
 - **Built-in tools are voice-only.** `end_call`, `transfer_call`, `send_dtmf`,
   `do_not_call` and `handoff_to_agent` all act on a live call, so they aren't offered in a
   text session. Configure them if you like — they're simply not advertised to
-  the model there.
+  the model there. The exception is `load_skill`, offered to an agent with
+  [skills](/guides/skills#skills-in-a-text-conversation).
 - **Tool exchanges aren't part of the stored history.** Chat history is
   rebuilt from the stored customer and assistant messages each turn, so the
   model sees its own tool calls while it resolves one message and not

@@ -211,6 +211,24 @@ Loading a skill that is already loaded changes nothing: the result says it is al
 
 When a call is handed to another agent, with the `handoff_to_agent` tool or `POST /v1/calls/{id}/handoff`, the call takes that agent's skills: each resolved as at a call's start (its pinned or live published version in the call's project, rendered with the call's template variables), none loaded. The model is given the target agent's list and `load_skill` when it has skills, and neither when it has none. Skills the first agent loaded are not carried over, even when the target lists them too, and the target's own `max_loaded_skills` applies from then on.
 
+## Skills in a text conversation
+
+A text conversation — the [Chat API](/guides/sms-chat), an SMS or a WhatsApp text — holds skills the way a call does, across its messages. The prompt lists the agent's skills and the reply's tool loop offers `load_skill`. A load in one round of the loop gives the next round the skill's section and tools, so the reply that loaded `explain_bill` can call `get_invoices` before it goes out:
+
+```text
+POST /v1/chat {"agent_id": "...", "message": "Why is my bill higher?"}
+  → load_skill("explain_bill") → get_invoices() → "Your bill went up by ..."
+POST /v1/chat {"agent_id": "...", "session_id": "...", "message": "When is it due?"}
+  → explain_bill is still loaded: its section and get_invoices are there from the first round
+```
+
+- **Resolved once per session.** A session's first message resolves the agent's skills (pinned or live published versions, in the project) and the session keeps those versions: a skill published mid-conversation reaches the next session, not this one. Instructions and tool descriptions render the session's [template variables](/guides/sms-chat) as they stand on each message.
+- **Loaded for the session.** What a message loads stays loaded for the session's later messages. A new session starts with nothing loaded.
+- **The same rules as a call.** `max_loaded_skills` unloads the skill loaded longest ago, a skill already loaded loads as nothing, an unknown name is answered with the skills that can be loaded, and tools take the same precedence. A loaded skill's `prompt`-mode documents join its section and its `tool`-mode knowledge bases are searched through `query_knowledge`.
+- **Two messages at once.** Two messages of one session answered at the same time keep both of their loads, within `max_loaded_skills`.
+
+A text load is recorded as a `load_skill` row in the session's tool invocations (`GET /v1/chat/sessions/{id}/tool-invocations`), like any text tool. A text session has no event log, so there are no `skill.loaded` events.
+
 ## What a call records
 
 The versions a call resolved are saved on the call when it starts, so the call stays explainable after a skill is published again. A handoff adds the target agent's versions. Each load is a `skill.loaded` event on the call's event log (`GET /v1/calls/{id}/events`), and each unload to stay within `max_loaded_skills` a `skill.unloaded` event with reason `limit`, recorded before the load that made room. Both are also delivered to [webhook subscribers](/guides/server-events#webhook-events):
