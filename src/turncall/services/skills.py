@@ -6,7 +6,9 @@ to the skill's live published version in the call's project, its instructions
 and tool descriptions rendered with the call's `{{variables}}`. Until a skill is
 loaded the model sees only its name and description, in a generated prompt
 section, plus the built-in `load_skill`; loading one appends its instructions
-as a section of their own and adds its tools.
+as a section of their own and adds its tools — and, with its knowledge bases
+read at resolution (`skill_knowledge`, #429), its `prompt`-mode documents in
+that section.
 
 Tool precedence is built-in, then the agent's own tools, then loaded skills'
 tools in load order, then MCP. `skilled_config` puts them in that order and
@@ -40,6 +42,11 @@ from turncall.domain.models import (
     SkillRef,
     ToolDefinition,
 )
+from turncall.services.skill_knowledge import (
+    NO_KNOWLEDGE,
+    SkillKnowledge,
+    resolve_skill_knowledge,
+)
 from turncall.services.template_renderer import render_template
 
 LOAD_SKILL = "load_skill"
@@ -54,8 +61,9 @@ AVAILABLE_HINT = (
 @dataclass(frozen=True)
 class ResolvedSkill:
     """One skill version as a call runs it: `instructions` and the tools'
-    descriptions are already rendered with the call's variables, and tools
-    whose names the agent already uses are gone."""
+    descriptions are already rendered with the call's variables, tools whose
+    names the agent already uses are gone, and its knowledge bases are read
+    (#429): what a load adds needs no I/O."""
 
     id: UUID
     name: str
@@ -63,6 +71,7 @@ class ResolvedSkill:
     description: str
     instructions: str
     tools: tuple[ToolDefinition, ...]
+    knowledge: SkillKnowledge = NO_KNOWLEDGE
 
 
 async def resolve_skills(
@@ -97,7 +106,13 @@ async def resolve_skills(
                     skill=ref.skill,
                 )
                 continue
-            resolved.append(_as_resolved(row, variables, taken_tool_names))
+            knowledge = await resolve_skill_knowledge(
+                session,
+                project_id,
+                row.name,
+                getattr(row, "knowledge_bases", None) or [],
+            )
+            resolved.append(_as_resolved(row, variables, taken_tool_names, knowledge))
         except Exception:
             logger.exception(
                 "skill_skipped: could not resolve {skill}", skill=ref.skill
@@ -106,7 +121,10 @@ async def resolve_skills(
 
 
 def _as_resolved(
-    row: Any, variables: dict[str, str], taken_tool_names: Collection[str]
+    row: Any,
+    variables: dict[str, str],
+    taken_tool_names: Collection[str],
+    knowledge: SkillKnowledge = NO_KNOWLEDGE,
 ) -> ResolvedSkill:
     tools = []
     for raw in row.tools or []:
@@ -133,6 +151,7 @@ def _as_resolved(
         description=row.description,
         instructions=render_template(row.instructions, variables),
         tools=tuple(tools),
+        knowledge=knowledge,
     )
 
 
@@ -248,8 +267,12 @@ def available_section(skills: Sequence[ResolvedSkill]) -> str:
 
 
 def loaded_section(skill: ResolvedSkill) -> str:
-    """A loaded skill's instructions, as their own prompt section."""
-    return f"## Skill: {skill.name} (v{skill.version})\n{skill.instructions}"
+    """A loaded skill's instructions, as their own prompt section — followed
+    by its `prompt`-mode knowledge bases' documents (#429)."""
+    section = f"## Skill: {skill.name} (v{skill.version})\n{skill.instructions}"
+    if skill.knowledge.text:
+        return f"{section}\n\n{skill.knowledge.text}"
+    return section
 
 
 def load_skill_tool(skills: Sequence[ResolvedSkill]) -> ToolDefinition:

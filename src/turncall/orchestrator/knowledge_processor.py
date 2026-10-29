@@ -6,6 +6,7 @@ Supports three modes:
 - prompt: Full text injected at pipeline creation (handled externally)
 """
 
+from collections.abc import Callable
 from typing import Any, NamedTuple
 from uuid import UUID
 
@@ -254,6 +255,23 @@ def create_knowledge_tool_handler(
 
     Returns an async function compatible with Pipecat's FunctionCallParams.
     """
+    return _search_handler(
+        lambda: (knowledge_base_ids, top_k, similarity_threshold),
+        session_factory=session_factory,
+        openai_api_key=openai_api_key,
+        embedding_model=embedding_model,
+    )
+
+
+def _search_handler(
+    searched: Callable[[], tuple[list[UUID], int, float]],
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    openai_api_key: str,
+    embedding_model: str = "text-embedding-3-small",
+) -> Any:
+    """`query_knowledge`'s handler over `searched()` — the KB ids, `top_k` and
+    threshold, read on each call."""
 
     async def handler(params: Any) -> None:
         """Handle query_knowledge tool call from LLM."""
@@ -262,6 +280,7 @@ def create_knowledge_tool_handler(
             await params.result_callback({"error": "query parameter is required"})
             return
 
+        knowledge_base_ids, top_k, similarity_threshold = searched()
         try:
             async with session_factory() as session:
                 found = await query_knowledge(
@@ -334,3 +353,38 @@ def knowledge_tool(
         handler = recorded_tool(definition.name, handler, call_context)
     logger.info("KB tool mode enabled for {n} KBs", n=len(tool_kbs))
     return KnowledgeTool(definition, handler)
+
+
+def searching_knowledge_tool(
+    searched: Callable[[], list[dict[str, Any]]],
+    attachments: list[dict[str, Any]],
+    session_factory: async_sessionmaker[AsyncSession],
+    openai_api_key: str,
+    call_context: Any,
+) -> KnowledgeTool | None:
+    """`query_knowledge` over whichever tool-mode attachments `searched()`
+    names when the model calls it — the agent's own and its loaded skills'
+    (#429), so a skill unloaded since is no longer searched. Advertised as
+    `attachments` would be (None without a tool-mode one); settings come from
+    the first searched, as for `knowledge_tool`. Recorded like it."""
+    definition = knowledge_tool_definition(attachments)
+    if definition is None:
+        return None
+
+    def settings() -> tuple[list[UUID], int, float]:
+        attachments = searched()
+        first = attachments[0] if attachments else {}
+        return (
+            [a["knowledge_base_id"] for a in attachments],
+            first.get("top_k", 5),
+            first.get("similarity_threshold", 0.3),
+        )
+
+    from turncall.orchestrator.tool_bridge import recorded_tool
+
+    handler = _search_handler(
+        settings, session_factory=session_factory, openai_api_key=openai_api_key
+    )
+    return KnowledgeTool(
+        definition, recorded_tool(definition.name, handler, call_context)
+    )

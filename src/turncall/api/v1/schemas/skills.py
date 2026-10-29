@@ -17,6 +17,7 @@ from pydantic import (
     Field,
     ValidationError,
     ValidatorFunctionWrapHandler,
+    computed_field,
     field_validator,
 )
 
@@ -30,6 +31,7 @@ from turncall.domain.models import (
     SKILL_NAME_MAX,
     SKILL_NAME_PATTERN,
 )
+from turncall.services.skill_knowledge import auto_mode_warning
 
 # The description is shown to the model to choose a skill by, as a tool's is;
 # the instructions join the prompt, bounded as an agent's system prompt is.
@@ -156,6 +158,14 @@ class SkillResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     published_at: datetime | None
+
+    # Derived on every read, never stored: the agent read's shape (#148). An
+    # `auto`-mode knowledge base is accepted and not applied on a call (#429).
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def warnings(self) -> list[dict[str, Any]]:
+        auto = auto_mode_warning(self.knowledge_bases)
+        return [auto] if auto is not None else []
 
     @classmethod
     def from_row(cls, row: Any) -> "SkillResponse":

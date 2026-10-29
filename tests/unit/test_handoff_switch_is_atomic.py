@@ -828,3 +828,85 @@ async def test_cancelling_a_handoff_with_skills_once_begun_is_all_or_nothing():
         (0, before),
         (2, target.available),
     ], f"half-applied: {len(queue)} frame(s), skills={context.skills.available}"
+
+
+# --- A skill's knowledge bases (#429) -----------------------------------------
+# A load of a skill with tool-mode KBs also registers `query_knowledge` in its
+# apply step. The handler and the KB text were built before it (resolution,
+# `prepare_load`); the registration is a plain assignment. Pinned the same way.
+
+
+def _prepared_load_with_knowledge(context):
+    from uuid import uuid4 as _id
+
+    from turncall.orchestrator.skill_loader import CallSkills, prepare_load
+    from turncall.orchestrator.tool_bridge import SwitchInputs
+    from turncall.services.skill_knowledge import SkillKnowledge
+    from turncall.services.skills import ResolvedSkill
+
+    skill = ResolvedSkill(
+        id=_id(),
+        name="explain_bill",
+        version=1,
+        description="When the bill changed.",
+        instructions="Compare the invoices.",
+        tools=(),
+        knowledge=SkillKnowledge(
+            text="[Knowledge Base Context] fees",
+            search=({"knowledge_base_id": _id(), "mode": "tool"},),
+        ),
+    )
+    skills = CallSkills(
+        base=AgentConfig(system_prompt="You are Maya."),
+        available=(skill,),
+        switch=SwitchInputs(),
+    )
+    prepared = prepare_load(skills, skill, context)
+    assert prepared.knowledge is not None
+    return skills, prepared
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_load_that_brings_a_search_completes_within_one_slice():
+    from turncall.orchestrator.skill_loader import apply_load
+
+    context = _context()
+    skills, prepared = _prepared_load_with_knowledge(context)
+    queue: list = []
+    params = _params(queue)
+    task = asyncio.create_task(apply_load(prepared, skills, context, params))
+    await asyncio.sleep(0)
+    done = task.done()
+    await task
+
+    assert done, "the skill load suspended partway through"
+    assert len(queue) == 2
+    assert skills.loaded == prepared.loaded
+    params.llm.register_function.assert_any_call(
+        "query_knowledge", prepared.knowledge.handler
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancelling_a_load_that_brings_a_search_is_all_or_nothing():
+    from turncall.orchestrator.skill_loader import apply_load
+
+    context = _context()
+    skills, prepared = _prepared_load_with_knowledge(context)
+    queue: list = []
+    params = _params(queue)
+    holder: list[asyncio.Task] = []
+
+    def register_and_interrupt(name, *_a, **_k):
+        if name == "query_knowledge":
+            holder[0].cancel()
+
+    params.llm.register_function.side_effect = register_and_interrupt
+    holder.append(asyncio.create_task(apply_load(prepared, skills, context, params)))
+    await asyncio.gather(*holder, return_exceptions=True)
+
+    assert (len(queue), bool(skills.loaded)) in {(0, False), (2, True)}, (
+        f"half-applied: {len(queue)} frame(s) queued, loaded={skills.loaded}"
+    )

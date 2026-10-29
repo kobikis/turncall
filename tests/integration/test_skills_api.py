@@ -345,6 +345,88 @@ async def test_knowledge_bases_are_the_projects(monkeypatch) -> None:
     assert edit.status_code == 422, edit.text
 
 
+async def test_another_projects_knowledge_base_is_refused_at_save(monkeypatch) -> None:
+    """#429: a real KB of another project, not just an unknown id."""
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        platform = {"X-Platform-Key": PLATFORM_KEY}
+        project = await app.api.post(
+            "/v1/projects", json={"name": "other"}, headers=platform
+        )
+        assert project.status_code == 201, project.text
+        other_id = project.json()["data"]["id"]
+        try:
+            key = await app.api.post(
+                "/v1/api-keys",
+                params={"project_id": other_id},
+                json={"name": "other", "role": "admin"},
+                headers=platform,
+            )
+            assert key.status_code == 201, key.text
+            token = key.json()["data"]["raw_key"]
+            async with httpx.AsyncClient(
+                base_url=app.base_url, headers={"Authorization": f"Bearer {token}"}
+            ) as other:
+                theirs = await other.post("/v1/knowledge-bases", json={"name": "x"})
+            assert theirs.status_code == 201, theirs.text
+            kb_id = theirs.json()["data"]["id"]
+            refused = await app.api.post(
+                "/v1/skills",
+                json=_skill(
+                    knowledge_bases=[
+                        {
+                            "knowledge_base_id": kb_id,
+                            "mode": "tool",
+                            "tool_description": "Search",
+                        }
+                    ]
+                ),
+            )
+        finally:
+            await _delete_project(other_id)
+
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["details"] == {
+        "field": "knowledge_bases[0]",
+        "knowledge_base_id": kb_id,
+    }
+
+
+async def test_an_auto_mode_knowledge_base_is_a_warning_on_the_skill(
+    monkeypatch,
+) -> None:
+    """#429: accepted, and said on every read — a call does not apply it."""
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        auto, prompt = [
+            (await app.api.post("/v1/knowledge-bases", json={"name": n})).json()[
+                "data"
+            ]["id"]
+            for n in ("auto", "prompt")
+        ]
+        created = await _create(
+            app,
+            _skill(
+                knowledge_bases=[
+                    {"knowledge_base_id": auto},  # the default mode, auto
+                    {"knowledge_base_id": prompt, "mode": "prompt"},
+                ]
+            ),
+        )
+        read = await _read(app, created["id"])
+        listed = (await app.api.get("/v1/skills")).json()["data"]
+        plain = await _create(app, _skill("explain_bill"))
+
+    for skill in (created, read, listed[-1]):
+        [warning] = skill["warnings"]
+        assert warning["code"] == "knowledge_mode_unsupported"
+        assert warning["modes"] == ["auto"]
+        assert warning["knowledge_base_ids"] == [auto]
+    assert plain["warnings"] == []
+
+
 async def test_a_tool_secret_is_sealed_at_rest_and_masked_on_read(
     monkeypatch,
 ) -> None:

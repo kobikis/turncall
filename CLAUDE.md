@@ -932,6 +932,12 @@ agent read says the same — `config_warnings.knowledge_mode_warning` is the one
 rule both use. The links live outside the config, so the agent endpoints load
 their modes (`knowledge_repo.kb_modes_by_agent`, one query per page).
 
+### Skills
+
+A skill's own KBs (#429) apply only once it is loaded: `prompt` text in its
+prompt section, `tool` through the same `query_knowledge`, `auto` warned and
+skipped. See "Skills".
+
 ### Inline agents
 
 An agent with no row — call-init `agent`, an eval `inline` target — names its
@@ -1044,6 +1050,28 @@ wait on (`test_handoff_switch_is_atomic.py`). Its result runs no LLM; its
 `on_context_updated` queues an `LLMRunFrame` behind the switch's frames, so the
 next inference sees the skill. An unknown name answers so and applies nothing.
 
+**A skill's knowledge bases** (#429): read at resolution, never at a load
+(`services/skill_knowledge.resolve_skill_knowledge`, from `resolve_skills`;
+each KB re-checked against the call's project, a miss a warning and a skipped
+attachment) onto `ResolvedSkill.knowledge` (`SkillKnowledge(text, search)`).
+`prompt` text is appended to the skill's `## Skill:` section
+(`loaded_section`). `tool` attachments are searched by `query_knowledge`:
+`CallSkills.searched()` = the agent's own tool-mode attachments
+(`own_knowledge`, `()` after a handoff) + the loaded skills', read when the
+model calls it, so an unload stops searching them. `prepare_load` builds the
+handler (`knowledge_processor.searching_knowledge_tool`, recorded like the
+build's, key `CallSkills.embedding_key` — why `_assemble` now loads
+credentials before `_with_skills`) and `knowledge_switch` adds the tool and
+the awareness + tool hints to the preamble only when the call offers no
+`query_knowledge` yet (hints already there kept once); `apply_load` registers
+it on the failover group (sync, replaces the build's own-KB handler). Not
+offered when a config tool or an MCP tool has the name. `auto` is accepted at
+save, warned on every skill read (`SkillResponse.warnings`,
+`skill_knowledge.auto_mode_warning`, code `knowledge_mode_unsupported`,
+`knowledge_base_ids`) and skipped with a warning at resolution. Tests:
+`tests/integration/test_harness_call_skill_knowledge.py`,
+`tests/unit/test_skill_knowledge.py`.
+
 **The limit, the no-op, a handoff** (#427): `max_loaded_skills` (default 3,
 API 1-10 else 422; an inline agent's bad value is clamped / defaulted, never a
 failed call) caps `loaded`: `prepare_load` builds the config with the skills
@@ -1082,7 +1110,7 @@ is an identifier on the two `skill.*` events.
 
 Key files: `api/v1/skills.py`, `api/v1/schemas/skills.py`,
 `storage/repositories/skill_repo.py`, `services/skills.py`,
-`orchestrator/skill_loader.py`. Tests: `tests/integration/test_skills_api.py`,
+`services/skill_knowledge.py`, `orchestrator/skill_loader.py`. Tests: `tests/integration/test_skills_api.py`,
 `tests/integration/test_harness_call_skills.py`, `tests/unit/test_skills_on_a_call.py`,
 `tests/unit/test_skill_attachment_rules.py`.
 

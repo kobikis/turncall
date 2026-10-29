@@ -45,7 +45,7 @@ The response is version 1, a `draft`. Creating a skill with a name the project a
 | `tools` | [Custom webhook tools](/guides/tools), in the agent's tool schema and under the agent's rules: a `webhook_url` (https outside development), an optional `webhook_secret` to sign each request. Names are unique within the skill, and a built-in's name (`end_call`, `transfer_call`, ...) is refused |
 | `knowledge_bases` | Knowledge bases of the project, with the fields of an [agent's link](/guides/knowledge-base): `knowledge_base_id`, `mode`, `top_k`, `similarity_threshold`, `priority`, `tool_description` |
 
-A refusal names what it refused: a tool by its place and name (`tools[1] 'get_invoices' webhook_url: ...`), a knowledge base outside the project by its place and id.
+A refusal names what it refused: a tool by its place and name (`tools[1] 'get_invoices' webhook_url: ...`), a knowledge base outside the project by its place and id. What each mode does on a call is in [A skill's knowledge bases](#a-skills-knowledge-bases).
 
 A tool's `webhook_secret` is encrypted at rest and every read returns it as `"***"`, as an agent's is.
 
@@ -148,6 +148,29 @@ A skill's instructions and its tools' descriptions render the call's [template v
 When two tools share a name, the first of built-in, the agent's own tools, loaded skills' tools in load order, and MCP tools wins, in what the model is offered and in what runs. A skill tool with the name of one of the agent's tools is skipped.
 
 An agent with no skills is given no section and no `load_skill`. Skills are not loaded on speech-to-speech agents: an S2S agent that lists skills carries a `skills_ignored_on_s2s` entry in its read's `warnings`, and its calls run without them, logging why.
+
+## A skill's knowledge bases
+
+A skill's `knowledge_bases` take effect when it is loaded, by their `mode`:
+
+| Mode | Once the skill is loaded |
+|------|---|
+| `prompt` | The documents' full text joins the skill's own section, after its instructions |
+| `tool` | `query_knowledge` searches them. An agent with its own tool-mode knowledge base already offers it, and the same tool then searches the agent's and every loaded skill's. An agent without one is offered it by the load, with the hint to search before saying no |
+| `auto` | Not applied: per-turn retrieval is built with the call, before any skill is loaded. Accepted at save, and every read of the skill carries a `knowledge_mode_unsupported` entry in its `warnings` naming the knowledge bases (`knowledge_base_ids`). `auto` is the default, so name `tool` or `prompt` |
+
+```json
+"warnings": [
+  {
+    "code": "knowledge_mode_unsupported",
+    "message": "A knowledge base attached to a skill in 'auto' mode is not applied: ...",
+    "modes": ["auto"],
+    "knowledge_base_ids": ["6f1c..."]
+  }
+]
+```
+
+Before the load neither is in the prompt or searchable through the skill. A skill unloaded to make room (below) takes its documents out of the prompt and its knowledge bases out of the search. The documents are read when the call starts, with the skill, so a load reads nothing; a document added mid-call is in the next call. With several tool-mode knowledge bases, `top_k` and `similarity_threshold` come from the first searched: the agent's own, then the skills' in load order. A tool of the agent's, a skill's or an MCP server's named `query_knowledge` keeps the name, and the skills' knowledge bases are then not searchable.
 
 ## How many skills a call holds
 

@@ -24,12 +24,20 @@ A handoff (#427) gives the call the target agent's skills, none loaded:
 handoff's apply step swaps them in (`CallSkills.adopt`) with nothing left to
 wait on. Every `CallContext` starts with an empty `CallSkills`, filled at
 build for an agent with skills, so there is always one to swap into.
+
+A skill's knowledge bases (#429) are read when it resolves: a load adds its
+`prompt`-mode documents to its section and makes its `tool`-mode KBs
+searchable through `query_knowledge` — the agent's own if it has one, else
+one the load adds with its hint — and an unload takes both away again. The
+handler is registered in the load's apply step (a plain assignment in
+pipecat's registry) and reads which KBs to search when it is called, from
+this holder.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from loguru import logger
@@ -37,10 +45,18 @@ from loguru import logger
 from turncall.domain.enums import CallEventType
 from turncall.domain.models import BUILTIN_TOOL_NAMES
 from turncall.orchestrator.config_warnings import skills_on_s2s_warning
+from turncall.services.retrieval import (
+    KNOWLEDGE_AWARENESS_HINT,
+    KNOWLEDGE_TOOL_HINT,
+    KNOWLEDGE_TOOL_SCHEMA,
+)
 from turncall.services.skills import ResolvedSkill, resolve_skills, skilled_config
+
+QUERY_KNOWLEDGE = KNOWLEDGE_TOOL_SCHEMA["name"]
 
 if TYPE_CHECKING:
     from turncall.domain.models import AgentConfig
+    from turncall.orchestrator.knowledge_processor import KnowledgeTool
     from turncall.orchestrator.pipeline_factory import CallContext
     from turncall.orchestrator.tool_bridge import SwitchInputs
 
@@ -55,12 +71,21 @@ class CallSkills:
     is the one thing about it that changes mid-call — and, at a handoff, which
     agent they are for. `loaded` is replaced whole, never appended to, only
     by `apply_load`; the rest only by `adopt`.
+
+    `own_knowledge` are the agent's own tool-mode KB attachments, which the
+    switch's `query_knowledge` searches (none after a handoff, whose switch
+    keeps no discovered tools); `embedding_key` is the call's OpenAI key, for
+    the query's embedding (#429).
     """
 
     base: AgentConfig
     available: tuple[ResolvedSkill, ...]
     switch: SwitchInputs
     loaded: tuple[ResolvedSkill, ...] = ()
+    own_knowledge: tuple[dict[str, Any], ...] = ()
+    # A key: never in a repr, since the call's context (which holds this)
+    # may be.
+    embedding_key: str = field(default="", repr=False)
 
     def find(self, name: str) -> ResolvedSkill | None:
         return next((s for s in self.available if s.name == name), None)
@@ -81,12 +106,67 @@ class CallSkills:
         self.available = other.available
         self.switch = other.switch
         self.loaded = other.loaded
+        self.own_knowledge = other.own_knowledge
+        self.embedding_key = other.embedding_key
 
     def config(self, loaded: tuple[ResolvedSkill, ...] | None = None) -> AgentConfig:
         """The config the model runs on with `loaded` (default: what is)."""
         return skilled_config(
             self.base, self.available, self.loaded if loaded is None else loaded
         )
+
+    def searched(self) -> list[dict[str, Any]]:
+        """What `query_knowledge` searches now: the agent's own tool-mode KBs,
+        then each loaded skill's, in load order, each KB once."""
+        attachments = [
+            *self.own_knowledge,
+            *(a for s in self.loaded for a in s.knowledge.search),
+        ]
+        seen: set[str] = set()
+        unique = []
+        for a in attachments:
+            if str(a["knowledge_base_id"]) not in seen:
+                seen.add(str(a["knowledge_base_id"]))
+                unique.append(a)
+        return unique
+
+    def knowledge_switch(self, loaded: tuple[ResolvedSkill, ...]) -> SwitchInputs:
+        """The switch's inputs with `loaded`: the call's own, plus — when a
+        loaded skill has tool-mode KBs and the call offers no
+        `query_knowledge` yet — that tool, last, and the hints an agent's own
+        tool-mode KB puts in the preamble (those already there kept once)."""
+        skill_search = [a for s in loaded for a in s.knowledge.search]
+        offered = {t.name for t in self.switch.extra_tools}
+        if not skill_search or QUERY_KNOWLEDGE in offered:
+            return self.switch
+        from turncall.orchestrator.knowledge_processor import (
+            knowledge_tool_definition,
+        )
+
+        definition = knowledge_tool_definition(skill_search)
+        if definition is None:  # every entry is tool-mode; for the type checker
+            return self.switch
+        preamble = self.switch.knowledge_preamble
+        hints = [
+            h
+            for h in (KNOWLEDGE_AWARENESS_HINT, KNOWLEDGE_TOOL_HINT)
+            if h not in preamble
+        ]
+        return replace(
+            self.switch,
+            knowledge_preamble="\n\n".join(p for p in (preamble, *hints) if p),
+            extra_tools=(*self.switch.extra_tools, definition),
+        )
+
+
+def _knowledge_taken(config: AgentConfig, call_context: Any) -> bool:
+    """Whether a tool of the agent's or a loaded skill's — or an MCP server's
+    — has the name `query_knowledge`: the first of a name wins, so the KBs'
+    search is not offered under it."""
+    if any(t.name == QUERY_KNOWLEDGE for t in config.tools):
+        return True
+    mcp = getattr(call_context, "mcp_manager", None)
+    return mcp is not None and bool(mcp.is_mcp_tool(QUERY_KNOWLEDGE))
 
 
 def no_skills(config: AgentConfig) -> CallSkills:
@@ -113,7 +193,13 @@ async def prepare_handoff_skills(
     from turncall.orchestrator.tool_bridge import SwitchInputs
 
     available = await resolve_call_skills(config, call_context)
-    skills = CallSkills(base=config, available=available, switch=SwitchInputs())
+    current = getattr(call_context, "skills", None)
+    skills = CallSkills(
+        base=config,
+        available=available,
+        switch=SwitchInputs(),
+        embedding_key=getattr(current, "embedding_key", ""),
+    )
     return skills, skills.config()
 
 
@@ -273,21 +359,30 @@ async def _emit_skill_events(
 
 class PreparedLoad(NamedTuple):
     """A load with everything built and nothing applied. `unloaded` are the
-    skills it takes off to stay within the cap, longest loaded first."""
+    skills it takes off to stay within the cap, longest loaded first;
+    `knowledge` the `query_knowledge` handler to register, when the loaded
+    skills have tool-mode KBs to search (#429)."""
 
     skill: ResolvedSkill
     loaded: tuple[ResolvedSkill, ...]
     config: AgentConfig
     frames: tuple[Any, ...]
     unloaded: tuple[ResolvedSkill, ...] = ()
+    knowledge: KnowledgeTool | None = None
 
 
-def prepare_load(skills: CallSkills, skill: ResolvedSkill) -> PreparedLoad:
+def prepare_load(
+    skills: CallSkills, skill: ResolvedSkill, call_context: Any = None
+) -> PreparedLoad:
     """The config and both frames for `skill` loaded — and, past the cap, the
     skills loaded longest ago unloaded, in the same config and frames (#427),
     so the unload and the load are one switch. Pure, and may raise: nothing
     has been applied yet. A skill already loaded is answered before this
-    (`run_load_skill`); here it would stay where it is."""
+    (`run_load_skill`); here it would stay where it is.
+
+    With the call's context, the loaded skills' tool-mode KBs are offered
+    through `query_knowledge` (#429): its handler is built here, registered
+    by `apply_load`."""
     from turncall.orchestrator.tool_bridge import build_switch_frames
 
     if skills.is_loaded(skill.name):
@@ -297,8 +392,45 @@ def prepare_load(skills: CallSkills, skill: ResolvedSkill) -> PreparedLoad:
     over = max(len(held) - skills.cap, 0)
     unloaded, loaded = held[:over], held[over:]
     config = skills.config(loaded)
+    knowledge = _knowledge_for(skills, loaded, config, call_context)
+    switch = skills.knowledge_switch(loaded) if knowledge else skills.switch
     return PreparedLoad(
-        skill, loaded, config, build_switch_frames(config, skills.switch), unloaded
+        skill,
+        loaded,
+        config,
+        build_switch_frames(config, switch),
+        unloaded,
+        knowledge,
+    )
+
+
+def _knowledge_for(
+    skills: CallSkills,
+    loaded: tuple[ResolvedSkill, ...],
+    config: AgentConfig,
+    call_context: Any,
+) -> KnowledgeTool | None:
+    """The handler that searches the agent's tool-mode KBs and the loaded
+    skills' — None when no loaded skill has one, or the name is taken."""
+    if call_context is None or not any(s.knowledge.search for s in loaded):
+        return None
+    if _knowledge_taken(config, call_context):
+        logger.warning(
+            "skill_knowledge_not_offered: a tool named query_knowledge is "
+            "already the call's, so the loaded skills' knowledge bases are not "
+            "searchable"
+        )
+        return None
+    from turncall.orchestrator.knowledge_processor import searching_knowledge_tool
+
+    # The holder's own `searched`, read when the model calls the tool: after
+    # this load is applied that is `loaded`'s; after a later unload, less.
+    return searching_knowledge_tool(
+        skills.searched,
+        [*skills.own_knowledge, *(a for s in loaded for a in s.knowledge.search)],
+        call_context.session_factory,
+        skills.embedding_key,
+        call_context,
     )
 
 
@@ -316,6 +448,15 @@ async def apply_load(
     await apply_switch(
         prepared.config, prepared.frames, call_context, params, clear_context=False
     )
+    if prepared.knowledge is not None:
+        from turncall.orchestrator.llm_failover import FailoverLLM
+
+        # Every member of a failover group, as `apply_switch` registers tools.
+        # It replaces the build's handler for the agent's own KBs: this one
+        # searches those too.
+        FailoverLLM.group_of(params.llm).register_function(
+            prepared.knowledge.definition.name, prepared.knowledge.handler
+        )
     skills.loaded = prepared.loaded
 
 
@@ -362,7 +503,7 @@ async def run_load_skill(
         return result
 
     try:
-        prepared = prepare_load(skills, skill)
+        prepared = prepare_load(skills, skill, call_context)
     except Exception:
         logger.exception("load_skill: could not prepare {skill}", skill=name)
         result = _result(False, f"The skill {name!r} could not be loaded.", None)

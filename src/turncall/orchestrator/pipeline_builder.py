@@ -111,6 +111,7 @@ async def _with_skills(
     knowledge_preamble: str,
     mcp_tools: list[Any] | None,
     kb_attachments: list[dict[str, Any]],
+    embedding_key: str,
 ) -> tuple[AgentConfig, CallContext]:
     """The config the call runs with its agent's skills (#424), and the call's
     context carrying them for `load_skill` — or both as given, for an agent
@@ -137,6 +138,9 @@ async def _with_skills(
             mcp_tools=mcp_tools,
             knowledge_base_attachments=kb_attachments or None,
         ),
+        # What `query_knowledge` searches besides a loaded skill's KBs (#429).
+        own_knowledge=tuple(a for a in kb_attachments if a.get("mode") == "tool"),
+        embedding_key=embedding_key,
     )
     logger.info(
         "skills_resolved: {skills}",
@@ -179,16 +183,17 @@ async def _assemble(
         session_factory, kb_attachments or [], [t.name for t in config.tools]
     )
 
+    credentials = await load_call_credentials(
+        session_factory, call_context.project_id, settings
+    )
+
     config, call_context = await _with_skills(
         config,
         call_context,
         knowledge_preamble=knowledge_preamble,
         mcp_tools=mcp_tools,
         kb_attachments=kb_attachments,
-    )
-
-    credentials = await load_call_credentials(
-        session_factory, call_context.project_id, settings
+        embedding_key=credentials.api_key("openai"),
     )
     # Checked before anything is built, so a call that cannot work says which
     # key it lacks rather than "Missing credentials" from one SDK or a 401
