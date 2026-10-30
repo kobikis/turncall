@@ -243,6 +243,8 @@ async def test_a_procedure_walked_never_reaches_the_detector(monkeypatch) -> Non
         "kind": "step",
     }
     refused = {"procedure": "no_internet", "from": "Restart", "to": "resolved"}
+    # A handoff leaving it (#448): `reason` is TurnCall's word here.
+    left = {"procedure": "no_internet", "from": "Restart", "reason": "handoff"}
     ended = {
         "procedures": [
             {
@@ -259,13 +261,15 @@ async def test_a_procedure_walked_never_reaches_the_detector(monkeypatch) -> Non
     out = [
         await redaction.redact_payload(step, POLICY, event_type="procedure.step"),
         await redaction.redact_payload(refused, POLICY, event_type="procedure.refused"),
+        await redaction.redact_payload(left, POLICY, event_type="procedure.left"),
         await redaction.redact_payload(ended, POLICY, event_type="call.ended"),
     ]
 
-    assert out == [step, refused, ended]
+    assert out == [step, refused, left, ended]
     assert built == []
     assert not redaction.texts_in(step, event_type="procedure.step")
     assert not redaction.texts_in(refused, event_type="procedure.refused")
+    assert not redaction.texts_in(left, event_type="procedure.left")
 
 
 async def test_identifiers_read_back_as_data_are_not_analysed(detector) -> None:

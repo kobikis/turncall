@@ -138,6 +138,9 @@ class CallEventType(StrEnum):
     # (`{procedure, from, to}`). Stored, never dispatched; identifiers only.
     PROCEDURE_STEP = "procedure.step"
     PROCEDURE_REFUSED = "procedure.refused"
+    # A running procedure a handoff ended where it stood (#448):
+    # `{procedure, from, reason}`, `reason` `handoff`. Stored only, likewise.
+    PROCEDURE_LEFT = "procedure.left"
 
     # SMS / Chat
     SESSION_CREATED = "session.created"

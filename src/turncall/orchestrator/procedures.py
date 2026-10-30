@@ -38,6 +38,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from turncall.domain.enums import CallEventType
 from turncall.domain.models import AgentConfig, ToolDefinition
+from turncall.domain.procedure_graph import ENDING_KINDS
 from turncall.domain.procedure_state import MoveOutcome, ProcedureState, move
 from turncall.domain.procedure_window import WINDOW_MARKER, startable_section
 from turncall.domain.procedures import MOVE_TO_STEP, Procedure
@@ -88,24 +89,61 @@ def with_procedures(
     """The config the call runs with its procedures' tool, and the context
     holding them running — or both as given, for an agent with none or an
     S2S call (no window can reach a realtime model; #444 warns of it)."""
-    if config.pipeline_mode == "s2s" or not config.procedures:
+    running, state = running_procedures(config)
+    if not state.procedures:
         return config, call_context
+    logger.info("procedures_running: {names}", names=[r.name for r in state.runs])
+    return running, replace(call_context, procedures=CallProcedures(state))
+
+
+def running_procedures(config: AgentConfig) -> tuple[AgentConfig, ProcedureState]:
+    """`config` with its procedures' tool and prompt section, and its
+    procedures as at a call's start — or `config` as given and none, for an
+    agent with none or an S2S one. The build's, and a handoff target's
+    (#448), which is held to the same rule as an agent a call starts as."""
+    if config.pipeline_mode == "s2s" or not config.procedures:
+        return config, ProcedureState()
     tools = [
         move_to_step_tool(config.procedures),
         # An inline agent skipped the API's refusal of the name.
         *(t for t in config.tools if t.name != MOVE_TO_STEP),
     ]
-    holder = CallProcedures(ProcedureState.at_call_start(config.procedures))
-    logger.info(
-        "procedures_running: {names}", names=[r.name for r in holder.state.runs]
-    )
     update: dict[str, Any] = {"tools": tools}
     if (section := startable_section(config.procedures)) is not None:
         update["system_prompt"] = f"{config.system_prompt}\n\n{section}"
     return (
         config.model_copy(update=update),
-        replace(call_context, procedures=holder),
+        ProcedureState.at_call_start(config.procedures),
     )
+
+
+def leave_procedures(call_context: CallContext, target: ProcedureState) -> None:
+    """A handoff's (#448): the call's running procedures end where they
+    stand, and `target` — the target agent's, running as at a call's start —
+    takes their place, in one assignment on the call's holder, which the
+    window processor reads. Nothing awaited: it runs inside the handoff's
+    switch. Each procedure left mid-way is a `procedure.left` `{procedure,
+    from, reason}`; one at an `end` or `escalate` step had already ended."""
+    holder: CallProcedures | None = getattr(call_context, "procedures", None)
+    if holder is None:
+        return
+    left = [
+        run
+        for run in holder.state.runs
+        if (graph := holder.state.procedure(run.name)) is not None
+        and (step := graph.step(run.current)) is not None
+        and step.kind not in ENDING_KINDS
+    ]
+    holder.state = target
+    if left:
+        logger.info("procedures_left: {names}", names=[r.name for r in left])
+    if not call_context.records:
+        return
+    for run in left:
+        payload = {"procedure": run.name, "from": run.current, "reason": "handoff"}
+        holder.record(
+            store_call_event(call_context, CallEventType.PROCEDURE_LEFT, payload)
+        )
 
 
 def move_to_step_tool(procedures: Sequence[Procedure]) -> ToolDefinition:

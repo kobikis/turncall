@@ -114,7 +114,7 @@ turn the model is shown only a **window** of it, and reports each move.
 | `steps[].start` | The step the procedure starts at |
 | `steps[].tool` | A tool the model should call at the step |
 | `steps[].moves` | The moves allowed from the step: `{to, when}`, `when` a plain-language condition the model judges |
-| `steps[].escalate` | What an `escalate` step does: `{"transfer_call": {...}}` (the [transfer tool's](/guides/tools) fields) or `{"handoff_to_agent": {"agent_id": "..."}}` |
+| `steps[].escalate` | What an `escalate` step does when the call reaches it, required there and nowhere else ([Escalation](#procedures)): `{"transfer_call": {...}}` (the [transfer tool's](/guides/tools) fields) or `{"handoff_to_agent": {"agent_id": "..."}}` |
 
 **The window.** Before each caller turn the model is given one message, right
 before the turn and replacing the previous turn's: the current step and what
@@ -195,12 +195,45 @@ once a call connects. A step's `text` renders the call's
 - every move goes to a step that exists;
 - every step can be reached from the start step by its moves;
 - at least one step is of kind `end` or `escalate`;
+- each `escalate` step names exactly one action (below), and no other step names one;
+- a handoff escalation names an agent of the project;
 - at most 50 steps, and `window_depth` at most 5.
 
 ```json
 {"success": false, "code": "validation_error", "error": "Validation error",
  "details": {"errors": [{"msg": "Value error, procedures[0] 'no_internet': step 'after_restart' moves to 'technican', which does not exist", "...": "..."}]}}
 ```
+
+**Escalation.** A procedure that cannot resolve the problem ends safely: an
+`escalate` step names its action, and when the model moves the call there,
+TurnCall runs it. A transfer takes the [`transfer_call` tool's](/guides/tools)
+fields and goes the way that tool does (see [Call transfer](/guides/tools#call-transfer-cold--warm)), so it works on every carrier the tool
+works on and is refused the same way where it does not (a warm transfer on
+Asterisk, say); a handoff names an agent and goes the way `handoff_to_agent`
+does.
+
+```json
+{"id": "technician", "kind": "escalate",
+ "text": "Tell the caller a technician will take it from here.",
+ "escalate": {"transfer_call": {"target_number": "+15550009999", "transfer_mode": "warm",
+                                "briefing": "Router has no lights after a power check."}}}
+
+{"id": "billing", "kind": "escalate",
+ "text": "Tell the caller billing will take it from here.",
+ "escalate": {"handoff_to_agent": {"agent_id": "<billing agent id>", "reason": "billing question"}}}
+```
+
+The move's result tells the model what became of the transfer or handoff. The
+call's `procedures` then reads `completed: false` and `escalated_at` the step.
+Have the step's `text` say what the caller should hear: the model says it in
+the same reply as the move.
+
+**A handoff ends the procedures.** Whatever hands the call off — an escalate
+step, the `handoff_to_agent` tool or
+[`POST /v1/calls/{id}/handoff`](/guides/tools#live-call-control) — the first agent's
+running procedures end where they stood, each recorded as left, and the
+target agent's own procedures start as they would at the start of a call. The
+target never sees the first agent's.
 
 A [call-init](/guides/call-init) inline agent skips that check, so the same
 rule runs when its call is built: a broken procedure, or an entry that is not
@@ -217,8 +250,10 @@ build's log.
 
 Every move is on the call's event log (`GET /v1/calls/{id}/events`), in the
 order it was made: a `procedure.step` for a move the procedure allowed, a
-`procedure.refused` for one it refused. They are stored, never sent to
-webhook subscribers, and an eval run records none.
+`procedure.refused` for one it refused, and a `procedure.left` for one a
+handoff ended before it reached an `end` or `escalate` step (`{procedure, from,
+reason: "handoff"}`). They are stored, never sent to webhook subscribers, and
+an eval run records none.
 
 ```json
 {"event_type": "procedure.step",    "payload": {"procedure": "no_internet", "from": "lights",        "to": "restart",       "kind": "instruct"}}
@@ -244,12 +279,12 @@ events, so the two always agree:
 | Field | Meaning |
 |-------|---------|
 | `path` | Every step reached, in order, a move back included |
-| `ended_at` | The last step reached |
+| `ended_at` | The last step reached, or the step a handoff left it at |
 | `completed` | `true` when `ended_at` is an `end` step |
 | `escalated_at` | `ended_at`, when it is an `escalate` step; otherwise `null` |
 | `refused_moves` | How many moves were refused |
 
-A procedure is listed once it moved or had a move refused. The list is empty
+A procedure is listed once it moved, had a move refused or was left. The list is empty
 for a call that followed none, and `null` once [retention](/guides/retention)
 deleted the call's transcript: the moves go with it.
 

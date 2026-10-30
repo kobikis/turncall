@@ -220,6 +220,72 @@ async def test_a_broken_graph_is_refused_at_create_and_update_naming_the_step(
     assert f"procedures[1] 'router_down': {said}" in _refusal(updated)
 
 
+def _escalating(action: dict[str, Any]) -> dict[str, Any]:
+    escalating = procedure()
+    escalating["steps"][2] = {**escalating["steps"][2], "escalate": action}
+    return escalating
+
+
+async def test_an_escalate_step_that_does_not_say_what_it_does_is_refused(
+    monkeypatch,
+) -> None:
+    # #448: reaching an escalate step runs its action, so the action is
+    # checked at save: one of the two, each in the tool's own shape.
+    both = {
+        "transfer_call": {"target_number": "+15550009999"},
+        "handoff_to_agent": {"agent_id": "7b0c8d4e-1f2a-4b3c-9d8e-6f5a4b3c2d1e"},
+    }
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        none = await _agent(app, {**AGENT, "procedures": [_escalating({})]})
+        two = await _agent(app, {**AGENT, "procedures": [_escalating(both)]})
+        not_e164 = await _agent(
+            app,
+            {
+                **AGENT,
+                "procedures": [
+                    _escalating({"transfer_call": {"target_number": "the desk"}})
+                ],
+            },
+        )
+
+    where = "procedures[0] 'no_internet': step 'technician'"
+    assert f"{where} escalates with no action" in _refusal(none)
+    assert f"{where} names both a transfer and a handoff" in _refusal(two)
+    assert "target_number" in _refusal(not_e164)
+
+
+async def test_a_handoff_escalation_names_an_agent_of_the_project(
+    monkeypatch,
+) -> None:
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        billing = await _agent(app, AGENT)
+        assert billing.status_code == 201, billing.text
+        billing_id = billing.json()["data"]["id"]
+        to_billing = _escalating({"handoff_to_agent": {"agent_id": billing_id}})
+        stranger = "7b0c8d4e-1f2a-4b3c-9d8e-6f5a4b3c2d1e"
+        to_nobody = _escalating({"handoff_to_agent": {"agent_id": stranger}})
+
+        created = await _agent(app, {**AGENT, "procedures": [to_billing]})
+        refused = await _agent(app, {**AGENT, "procedures": [to_nobody]})
+        updated = await app.api.put(
+            f"/v1/agents/{billing_id}",
+            json={"config": {**AGENT, "procedures": [to_nobody]}},
+        )
+
+    assert created.status_code == 201, created.text
+    said = (
+        f"procedures[0] 'no_internet': step 'technician' hands off to "
+        f"'{stranger}', which is not an agent in this project"
+    )
+    assert said in _refusal(refused)
+    assert said in _refusal(updated)
+    assert refused.json()["code"] == "invalid_agent_config"
+
+
 async def test_an_s2s_agents_read_says_its_procedures_are_ignored(monkeypatch):
     s2s = {**AGENT, "pipeline_mode": "s2s", "s2s": {"provider": "google"}}
     async with run_app(

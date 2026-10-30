@@ -108,7 +108,7 @@ A mocked tool returns your canned response and the real webhook is never called 
                           "args": {"procedure": "cancel_order", "to": "cancelled"}}]}]}]}
 ```
 
-An agent that skips the confirmation and moves straight to `cancelled` fails this run: its move arrives with the wrong arguments (and the procedure refuses it). That is a verdict about the agent, so the run is `failed`, not `errored`. An eval records no `procedure.*` call events; the path is in `tool_calls`.
+An agent that skips the confirmation and moves straight to `cancelled` fails this run: its move arrives with the wrong arguments (and the procedure refuses it). That is a verdict about the agent, so the run is `failed`, not `errored`. An eval records no `procedure.*` call events; the path is in `tool_calls`. A move onto an [escalate step](/guides/agents#procedures) runs its transfer or handoff as `transfer_call` or `handoff_to_agent` would run: mocked by a mock of that name, and refused under `mock_only` without one, so a scenario that reaches an escalate step mocks its action.
 
 Mocks belong to the scenario, not the run: "the booking succeeds, does it report the confirmation correctly?" and "the booking fails, does it avoid claiming success?" are two different tests.
 

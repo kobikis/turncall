@@ -325,13 +325,16 @@ class PreparedHandoff(NamedTuple):
     is the target agent's (`skill_loader.CallSkills`, none loaded), resolved
     here for the same reason and swapped into the call by the apply step
     (#427); `config` is then the target's with its skills' list and
-    `load_skill`.
+    `load_skill`. `procedures` is the target's `ProcedureState`, running as
+    at a call's start, which replaces the call's (#448); `config` then
+    carries its `move_to_step`.
     """
 
     name: str
     config: AgentConfig
     frames: tuple[Any, ...]
     skills: Any | None = None
+    procedures: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -472,8 +475,12 @@ async def _prepare_handoff(
                 AgentConfig.model_validate(target.config_blob),
             )
 
+        from turncall.orchestrator.procedures import running_procedures
         from turncall.orchestrator.skill_loader import prepare_handoff_skills
 
+        # The target's procedures, as at a call's start (#448), before its
+        # skills as at build, so a skill load keeps `move_to_step`.
+        config, procedures = running_procedures(config)
         # The target's skills, resolved as at a call's start: I/O, so here,
         # before the commit — never in the apply step (#427).
         skills, config = await prepare_handoff_skills(config, call_context)
@@ -493,7 +500,11 @@ async def _prepare_handoff(
         )
 
     return PreparedHandoff(
-        name=target.name, config=config, frames=frames, skills=skills
+        name=target.name,
+        config=config,
+        frames=frames,
+        skills=skills,
+        procedures=procedures,
     )
 
 
@@ -545,14 +556,20 @@ async def _apply_handoff_context(
     Everything that can wait or raise happened in `_prepare_handoff`, before
     the switch was committed; `apply_switch` is the part that must not
     suspend, and nothing here may either — the skills swap included (#427):
-    from here the call's skills are the target agent's, none loaded.
+    from here the call's skills are the target agent's, none loaded. So is
+    the procedures swap (#448): the first agent's running procedures end,
+    recorded as left, and the target's run.
     """
+    from turncall.domain.procedure_state import ProcedureState
+    from turncall.orchestrator.procedures import leave_procedures
+
     await apply_switch(
         prepared.config, prepared.frames, call_context, params, clear_context=True
     )
     holder = getattr(call_context, "skills", None)
     if holder is not None and prepared.skills is not None:
         holder.adopt(prepared.skills)
+    leave_procedures(call_context, prepared.procedures or ProcedureState())
 
     logger.info(
         "handoff_context: switched system instruction to agent '{name}'",
@@ -762,10 +779,13 @@ def _register_single_tool(
             result = await run_load_skill(dict(args), call_context, params)
             delivered = True
         elif function_name == MOVE_TO_STEP:
-            # Checked and applied in one step, nothing awaited (#442).
+            # Checked and applied in one step, nothing awaited (#442); then an
+            # escalate step's transfer or handoff, if it reached one (#448).
+            from turncall.orchestrator.procedure_escalation import run_escalation
             from turncall.orchestrator.procedures import run_move_to_step
 
-            result = run_move_to_step(dict(args), call_context).result
+            moved = run_move_to_step(dict(args), call_context)
+            result = await run_escalation(moved, call_context, params)
         elif function_name in BUILTIN_TOOL_NAMES:
             execution = _execute_builtin(function_name, args, call_context)
             # A transfer takes the call away from this pipeline: the carrier

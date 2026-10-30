@@ -22,6 +22,8 @@ MOVE_TO_STEP = "move_to_step"
 STEP_KINDS = ("ask", "instruct", "check", "escalate", "end")
 # `call`: active from the first turn. `on_request`: the model starts it (#446).
 START_MODES = ("call", "on_request")
+# An escalate step's transfer modes: the `transfer_call` tool's (#448).
+TRANSFER_MODES = ("cold", "warm")
 DEFAULT_WINDOW_DEPTH = 1
 
 

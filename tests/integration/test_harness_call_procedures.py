@@ -74,6 +74,8 @@ NO_INTERNET = {
             "id": "technician",
             "kind": "escalate",
             "text": "Explain a technician will be booked.",
+            # What reaching it does (#448); no test here goes this far.
+            "escalate": {"transfer_call": {"target_number": "+15550009999"}},
         },
     ],
 }

@@ -19,10 +19,18 @@ and joins the tuple as a closure.
 No pipecat here: the API schema imports this module.
 """
 
+import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
+from uuid import UUID
 
-from turncall.domain.procedures import START_MODES, STEP_KINDS, Procedure
+from turncall.domain.procedures import (
+    START_MODES,
+    STEP_KINDS,
+    TRANSFER_MODES,
+    Procedure,
+    StepEscalation,
+)
 
 # How many steps one procedure may have, and how far ahead its window may
 # reach. The window is in the context on every turn, so both bound what each
@@ -32,6 +40,10 @@ MAX_WINDOW_DEPTH = 5
 
 # The kinds a procedure can end at: a step with no way on.
 ENDING_KINDS = ("end", "escalate")
+
+# An escalate step's transfer target: the API's `E164_PATTERN`, for an inline
+# agent that skipped it.
+_E164 = re.compile(r"\+[1-9]\d{1,14}")
 
 Check = Callable[[Procedure], str | None]
 
@@ -153,6 +165,60 @@ def _all_reachable(procedure: Procedure) -> str | None:
     return f"step '{unreached}' cannot be reached from the start step '{start.id}'"
 
 
+def _escalations(procedure: Procedure) -> str | None:
+    """Each `escalate` step names one action, and only those do (#448).
+    Reaching the step runs it, so an inline agent's action is checked as the
+    API schema checks a stored one's: a mode the transfer knows, an E.164
+    target, an agent id that is one."""
+    for step in procedure.steps:
+        action = step.escalate
+        actions = (
+            [] if action is None else [action.transfer_call, action.handoff_to_agent]
+        )
+        named = [a for a in actions if a is not None]
+        if step.kind != "escalate":
+            if named:
+                return (
+                    f"step '{step.id}' is of kind '{step.kind}'; only an "
+                    "escalate step takes an escalate action"
+                )
+            continue
+        if not named:
+            return (
+                f"step '{step.id}' escalates with no action; give it "
+                "escalate.transfer_call or escalate.handoff_to_agent"
+            )
+        if len(named) > 1:
+            return (
+                f"step '{step.id}' names both a transfer and a handoff; an "
+                "escalate step does one"
+            )
+        if (problem := _action_problem(step.escalate)) is not None:
+            return f"step '{step.id}' {problem}"
+    return None
+
+
+def _action_problem(action: StepEscalation | None) -> str | None:
+    transfer = action.transfer_call if action is not None else None
+    handoff = action.handoff_to_agent if action is not None else None
+    if handoff is not None:
+        try:
+            UUID(handoff.agent_id)
+        except ValueError:
+            return f"hands off to '{handoff.agent_id}', which is not an agent id"
+    if transfer is not None:
+        if transfer.transfer_mode not in TRANSFER_MODES:
+            return (
+                f"transfers with mode '{transfer.transfer_mode}'; it must be "
+                f"one of {', '.join(TRANSFER_MODES)}"
+            )
+        if not _E164.fullmatch(transfer.target_number):
+            return (
+                f"transfers to '{transfer.target_number}', which is not an E.164 number"
+            )
+    return None
+
+
 def _step_tools_in(callable_tools: frozenset[str]) -> Check:
     """A step's `tool` is one the agent can call (#447): its own tools and
     the built-ins. A step names one of them; it is never a tool of its own."""
@@ -179,4 +245,5 @@ _CHECKS: tuple[Check, ...] = (
     _moves_land,
     _has_an_ending,
     _all_reachable,
+    _escalations,
 )

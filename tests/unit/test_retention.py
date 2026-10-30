@@ -122,6 +122,7 @@ def test_the_transcript_is_the_conversation_and_what_was_made_from_it() -> None:
         # The path a procedure took through the conversation (#443).
         CallEventType.PROCEDURE_STEP,
         CallEventType.PROCEDURE_REFUSED,
+        CallEventType.PROCEDURE_LEFT,
     }
 
 

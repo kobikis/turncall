@@ -63,9 +63,6 @@ NOT_CONSUMED: dict[str, str] = {
         "consumed, but by the pure graph rule in domain/procedure_graph.py, "
         "which the build runs to fail the call naming it (#444)"
     ),
-    "ProcedureStep.escalate": (
-        "accepted and stored; reaching an escalate step runs it from #448"
-    ),
     "AgentConfig.analysis": (
         "consumed, but through the raw blob rather than the attribute: "
         "call_analysis_trigger rebuilds it with "

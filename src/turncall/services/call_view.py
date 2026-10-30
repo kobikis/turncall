@@ -112,7 +112,11 @@ def call_skills(
 
 # What a call's `procedures` are derived from (#443), read in one ordered
 # stream: a summary reads the order across event types.
-PROCEDURE_EVENTS = (CallEventType.PROCEDURE_STEP, CallEventType.PROCEDURE_REFUSED)
+PROCEDURE_EVENTS = (
+    CallEventType.PROCEDURE_STEP,
+    CallEventType.PROCEDURE_REFUSED,
+    CallEventType.PROCEDURE_LEFT,
+)
 
 
 @dataclass(frozen=True)
@@ -160,6 +164,10 @@ def _walked(
             path=_standing_at(walk.path, at),
             refused_moves=walk.refused_moves + 1,
         )
+    if event_type == CallEventType.PROCEDURE_LEFT:
+        # A handoff ended it where it stood (#448): not completed, ended at
+        # the step it was left at — its start, if it never moved.
+        return replace(walk, path=_standing_at(walk.path, at))
     return walk
 
 

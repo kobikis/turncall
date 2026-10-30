@@ -28,12 +28,16 @@ def _procedure(steps: list[dict[str, Any]], **extra: Any) -> Procedure:
     return Procedure.model_validate({"name": "no_internet", "steps": steps, **extra})
 
 
+_TRANSFER = {"transfer_call": {"target_number": "+15550009999"}}
+_HANDOFF = {"handoff_to_agent": {"agent_id": "7b0c8d4e-1f2a-4b3c-9d8e-6f5a4b3c2d1e"}}
+
+
 def _good(**extra: Any) -> Procedure:
     return _procedure(
         [
             _step("lights", start=True, moves=_to("restart", "technician")),
             _step("restart", "instruct", moves=_to("done", "technician")),
-            _step("technician", "escalate"),
+            _step("technician", "escalate", escalate=_TRANSFER),
             _step("done", "end"),
         ],
         **extra,
@@ -258,3 +262,81 @@ def test_a_sound_inline_procedure_reads_as_written():
 
     assert one == _good()
     assert procedures_refusal([one]) is None
+
+
+# --- an escalate step's action (#448) ---------------------------------------
+#
+# An escalate step names what it does, and reaching it does that: a transfer
+# with the `transfer_call` tool's fields, or a handoff to an agent. A step
+# that names neither, or both, would leave the call where it is with the
+# procedure over; one that names an action but is not an escalate step would
+# never run it.
+
+
+def _escalating(action: Any) -> Procedure:
+    extra = {} if action is None else {"escalate": action}
+    return _procedure(
+        [
+            _step("lights", start=True, moves=_to("technician")),
+            _step("technician", "escalate", **extra),
+        ]
+    )
+
+
+def test_an_escalate_step_transfers_or_hands_off():
+    assert procedures_refusal([_escalating(_TRANSFER)]) is None
+    assert procedures_refusal([_escalating(_HANDOFF)]) is None
+
+
+def test_an_escalate_step_with_no_action():
+    expected = (
+        "procedures[0] 'no_internet': step 'technician' escalates with no "
+        "action; give it escalate.transfer_call or escalate.handoff_to_agent"
+    )
+
+    assert procedures_refusal([_escalating(None)]) == expected
+    assert procedures_refusal([_escalating({})]) == expected
+
+
+def test_an_escalate_step_with_both_actions():
+    assert procedures_refusal([_escalating({**_TRANSFER, **_HANDOFF})]) == (
+        "procedures[0] 'no_internet': step 'technician' names both a transfer "
+        "and a handoff; an escalate step does one"
+    )
+
+
+def test_an_action_on_a_step_that_does_not_escalate():
+    bad = _procedure(
+        [
+            _step("lights", start=True, moves=_to("done"), escalate=_TRANSFER),
+            _step("done", "end"),
+        ]
+    )
+
+    assert procedures_refusal([bad]) == (
+        "procedures[0] 'no_internet': step 'lights' is of kind 'ask'; only an "
+        "escalate step takes an escalate action"
+    )
+
+
+def test_an_escalation_an_inline_agent_got_wrong():
+    # The API schema refuses these by shape; an inline agent's config parses
+    # any string, and a handoff then has no agent to go to.
+    bad_agent = _escalating({"handoff_to_agent": {"agent_id": "the-billing-one"}})
+    bad_mode = _escalating(
+        {"transfer_call": {"target_number": "+15550009999", "transfer_mode": "hot"}}
+    )
+    bad_number = _escalating({"transfer_call": {"target_number": "the desk"}})
+
+    assert procedures_refusal([bad_agent]) == (
+        "procedures[0] 'no_internet': step 'technician' hands off to "
+        "'the-billing-one', which is not an agent id"
+    )
+    assert procedures_refusal([bad_mode]) == (
+        "procedures[0] 'no_internet': step 'technician' transfers with mode "
+        "'hot'; it must be one of cold, warm"
+    )
+    assert procedures_refusal([bad_number]) == (
+        "procedures[0] 'no_internet': step 'technician' transfers to "
+        "'the desk', which is not an E.164 number"
+    )

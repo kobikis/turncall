@@ -78,6 +78,40 @@ async def _check_skills(
         )
 
 
+async def _check_escalations(
+    session: AsyncSession, project_id: UUID, config: AgentConfigSchema | None
+) -> None:
+    """A procedure's handoff escalation names an agent of this project
+    (#448): a typo'd id fails here rather than as a refused handoff on the
+    call that needed it."""
+    if config is None:
+        return
+    for index, procedure in enumerate(config.procedures):
+        for step in procedure.steps:
+            handoff = step.escalate.handoff_to_agent if step.escalate else None
+            if handoff is None:
+                continue
+            agent = await agent_repo.get_agent_by_id(
+                session, UUID(handoff.agent_id), project_id=project_id
+            )
+            if agent is not None:
+                continue
+            field = f"procedures[{index}]"
+            raise ApiError(
+                status_code=422,
+                code=ErrorCode.INVALID_AGENT_CONFIG,
+                message=(
+                    f"{field} '{procedure.name}': step '{step.id}' hands off "
+                    f"to '{handoff.agent_id}', which is not an agent in this "
+                    "project"
+                ),
+                details={
+                    "field": f"{field}.steps.escalate.handoff_to_agent.agent_id",
+                    "agent_id": handoff.agent_id,
+                },
+            )
+
+
 def _refuse_inline_knowledge_bases(config: AgentConfigSchema | None) -> None:
     """A stored agent's KBs are its links — one source, never two that can
     disagree (#260). `knowledge_bases` is for an agent with no row."""
@@ -221,6 +255,7 @@ async def create_agent(
     _refuse_inline_knowledge_bases(body.config)
     await _check_ambience(session, auth.project_id, body.config)
     await _check_skills(session, auth.project_id, body.config)
+    await _check_escalations(session, auth.project_id, body.config)
     before = await _retention_before(session, auth, {body.name})
     _refuse_written_retention(before, body.name, body.config.model_dump())
     next_version = await agent_repo.get_next_version(
@@ -318,6 +353,7 @@ async def update_agent(
     _refuse_inline_knowledge_bases(body.config)
     await _check_ambience(session, auth.project_id, body.config)
     await _check_skills(session, auth.project_id, body.config)
+    await _check_escalations(session, auth.project_id, body.config)
     config_blob = body.config.model_dump() if body.config else existing.config_blob
     name = body.name or existing.name
     before = await _retention_before(session, auth, {existing.name, name})

@@ -86,6 +86,7 @@ TRANSCRIPT_EVENTS = frozenset(
         # A procedure's moves (#443) are the path the conversation took.
         CallEventType.PROCEDURE_STEP.value,
         CallEventType.PROCEDURE_REFUSED.value,
+        CallEventType.PROCEDURE_LEFT.value,
     }
 )
 # Call events that name the recording, and are kept while it is.

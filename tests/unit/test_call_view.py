@@ -270,6 +270,35 @@ def test_a_refusal_for_a_procedure_not_running_stands_nowhere():
     }
 
 
+def _left(frm, procedure="no_internet"):
+    return (
+        "procedure.left",
+        {"procedure": procedure, "from": frm, "reason": "handoff"},
+    )
+
+
+def test_a_procedure_left_on_a_handoff_ends_where_it_was_left():
+    """#448: a handoff ends the first agent's procedures where they stood."""
+    events = [_step("lights", "restart", kind="instruct"), _left("restart")]
+    assert _procedures(events) == [
+        {
+            "name": "no_internet",
+            "path": ["lights", "restart"],
+            "completed": False,
+            "ended_at": "restart",
+            "escalated_at": None,
+            "refused_moves": 0,
+        }
+    ]
+
+
+def test_a_procedure_left_before_it_moved_stood_at_its_start():
+    [procedure] = _procedures([_left("lights")])
+    assert procedure["path"] == ["lights"]
+    assert procedure["ended_at"] == "lights"
+    assert procedure["completed"] is False
+
+
 def test_a_call_with_no_procedures_lists_none():
     assert _procedures([]) == []
 

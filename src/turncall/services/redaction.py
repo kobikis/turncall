@@ -207,6 +207,8 @@ _IDENTIFIERS_BY_EVENT: dict[str, frozenset[str]] = {
     # Step ids of a procedure's graph (#443).
     "procedure.step": frozenset({"from", "to"}),
     "procedure.refused": frozenset({"from", "to"}),
+    # #448: the step it was left at, and why (`handoff`).
+    "procedure.left": frozenset({"from", "reason"}),
 }
 _UUID = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"

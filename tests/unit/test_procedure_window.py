@@ -56,6 +56,7 @@ NO_INTERNET = Procedure.model_validate(
                 "id": "technician",
                 "kind": "escalate",
                 "text": "Explain a technician will be booked.",
+                "escalate": {"transfer_call": {"target_number": "+15550009999"}},
             },
         ],
     }

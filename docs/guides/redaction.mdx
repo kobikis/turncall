@@ -55,7 +55,7 @@ You can also choose `PERSON`, `LOCATION`, `DATE_TIME`, `ORGANIZATION`, `URL`, `I
 - **Logs and traces**: see [below](#logs-and-traces).
 - **Text conversations** (SMS, WhatsApp and the Chat API): see [below](#text-conversations).
 
-TurnCall's own identifiers are never analysed: ids, timestamps, statuses, provider names (the `from` and `to` of `provider.failover`), tool names (`tool_name`) and skill names, versions and load reasons (`skill.loaded`, and `skills` on `call.ended`), and procedure names and step ids (`procedure.step`, `procedure.refused`, and `procedures` on `call.ended`). With `ORGANIZATION` chosen, "Azure" in a provider name stays as it is.
+TurnCall's own identifiers are never analysed: ids, timestamps, statuses, provider names (the `from` and `to` of `provider.failover`), tool names (`tool_name`) and skill names, versions and load reasons (`skill.loaded`, and `skills` on `call.ended`), and procedure names and step ids (`procedure.step`, `procedure.refused`, `procedure.left`, and `procedures` on `call.ended`). With `ORGANIZATION` chosen, "Azure" in a provider name stays as it is.
 
 Not yet redacted: the call record's own `metadata` and numbers (the numbers stay on purpose, see above).
 

@@ -1301,8 +1301,10 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   pure, first problem wins, `procedures[i] '<name>': step '<id>' ...`. Unique
   procedure names and step ids, one start step, every move to an existing
   step, every step reachable from the start, an `end` or `escalate` step,
-  `MAX_STEPS` (50), `MAX_WINDOW_DEPTH` (5); for an inline agent also the kind
-  and start-mode words the schema's Literals cover. Applied twice: the
+  `MAX_STEPS` (50), `MAX_WINDOW_DEPTH` (5), each `escalate` step naming
+  exactly one action and no other step one (#448, `_escalations`); for an
+  inline agent also the kind and start-mode words the schema's Literals cover,
+  and an escalation's E.164 target, transfer mode and agent-id UUID. Applied twice: the
   `AgentConfigSchema.validate_procedure_graphs` validator (422
   `validation_error`, also an eval `inline` target) and
   `pipeline_builder._check_procedures`, before `with_procedures`, which raises
@@ -1330,9 +1332,11 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   each `to`, a move back included), `ended_at` the last, `completed` when it
   is an `end` step, `escalated_at` it when an `escalate` one. A procedure that
   never moved has no event and is not listed. `[]` with none; null once the
-  transcript or the events expired. Both events are transcript-class
+  transcript or the events expired. The events (and #448's `procedure.left`)
+  are transcript-class
   (`retention.TRANSCRIPT_EVENTS`); `procedure`, `procedures` are redaction
-  structural fields and `from`/`to` identifiers on the two events. An
+  structural fields and `from`/`to` (`from`/`reason` on `procedure.left`)
+  identifiers on the events. An
   `on_request` start (#446) is a `procedure.step` with `from` null.
 - **Start modes, several procedures** (#446). `start: "on_request"`: not
   running until the model moves it to its start step — `move` starts it
@@ -1356,6 +1360,33 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   `mcp_servers` is not checked (its tools are discovered at call start).
   `template_renderer.render_agent_config` renders each step's `text` with the
   call's `{{variables}}`, so the window, preview and move result show it.
+- **Escalation** (#448, `orchestrator/procedure_escalation.py`). An accepted
+  move onto an `escalate` step runs its action from the `move_to_step`
+  branch (`run_escalation`, after `run_move_to_step`): `escalate
+  .transfer_call` (the `transfer_call` tool's fields) through
+  `_execute_builtin("transfer_call")`, shielded as the tool is, so it works —
+  and is refused, `UnsupportedCarrierAction` — wherever the tool does;
+  `escalate.handoff_to_agent` (`{agent_id, reason?, context?}`) through
+  `run_handoff`, the tool's and the live API's. The move's result carries the
+  action's: `success` the action's, `details.escalation` `{action, ...its
+  result}`. In an eval the action goes through `tool_mocks.intercept` under
+  its tool's name (mocked, or refused under `mock_only`). The summary reads
+  `completed: false, escalated_at: <step>` from the `procedure.step` alone.
+  At save, `api/v1/agents._check_escalations` 422s (`invalid_agent_config`)
+  a handoff to an agent not in the project; an inline agent's is refused at
+  the call (`_prepare_handoff` is project-scoped).
+- **A handoff ends the procedures** (#448): every handoff — an escalate
+  step, the `handoff_to_agent` tool, `POST /v1/calls/{id}/handoff` — goes
+  through `run_handoff`. `_prepare_handoff` gives the target's config
+  `running_procedures` (the build's transform: `move_to_step`, the startable
+  section, its `call` procedures at their start) before its skills, into
+  `PreparedHandoff.procedures`; `_apply_handoff_context` calls
+  `leave_procedures`, which sets the **existing** holder's `state` (the
+  window processor holds that holder) to the target's in one assignment and
+  queues a `procedure.left` `{procedure, from, reason: "handoff"}` on the
+  holder for each run not at an `end`/`escalate` step. Nothing awaited
+  (`test_handoff_switch_is_atomic.py`). In the summary a left procedure ends
+  where it was left (`path` opened by `from` if it never moved), not completed.
 - **In an eval** (#449): `move_to_step` is never mocked
   (`tool_mocks.NEVER_MOCKED`, beside `load_skill`): it runs under
   `mock_only`, the procedure accepting or refusing it, recorded in
@@ -1376,7 +1407,9 @@ Tests: `tests/unit/test_procedure_window.py`, `test_procedure_state.py`,
 `test_harness_call_procedure_rules.py`,
 `tests/integration/test_harness_call_procedure_steps.py`,
 `tests/integration/test_harness_call_procedure_record.py`,
-`tests/integration/test_harness_call_procedure_moves.py`.
+`tests/integration/test_harness_call_procedure_moves.py`,
+`tests/integration/test_harness_call_procedure_escalation.py`,
+`tests/unit/test_procedure_escalation.py`.
 
 ## A/B Testing
 
@@ -1557,7 +1590,7 @@ and the janitor:
   `expired` (enum value) where there was one, and `recording.ready`'s `*_url`
   fields nulled. Transcript: `TRANSCRIPT_EVENTS` (`transcript.*`,
   `tool.called`/`tool.result`, `context.injected`, `procedure.step`/
-  `procedure.refused`), the call's
+  `procedure.refused`, `procedure.left`), the call's
   `tool_invocations`, `analysis_json`, and every other event's free-text
   fields (`redaction.text_fields`) nulled. Events: every other call event,
   but `recording.ready` stays while the recording does (deleted with it).
@@ -2441,7 +2474,7 @@ provider_call_id}`. Dispatched only — there is no event log to store it on.
 Stored-only call events — on the call's event log (`GET /v1/calls/{id}/events`),
 never sent to webhook subscribers, none in an eval: `metrics.turn` (#176),
 `delegation.completed` (#247), `avatar.unavailable` (#402, see "Video
-Avatar"), `procedure.step` / `procedure.refused` (#443, see "Procedures"),
+Avatar"), `procedure.step` / `procedure.refused` / `procedure.left` (#443, #448, see "Procedures"),
 `voicemail.detected`, and the log's own
 `call.ended` rows (the carrier's: Twilio's `completed`/`busy`/`no-answer`
 status callback, Telnyx's hangup; and the agent's hangup marker, source
