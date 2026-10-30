@@ -12,6 +12,8 @@ import asyncio
 import dataclasses
 import json
 import time
+import weakref
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 from uuid import UUID
@@ -518,15 +520,16 @@ async def apply_switch(
     built cannot survive a drain. `test_handoff_switch_is_atomic.py` fails if
     it happens.
     """
+    from turncall.orchestrator.llm_failover import FailoverLLM
+
     if clear_context:
         params.context.set_messages([])
+    # Every member of a failover group (#222), not only the one answering.
+    group = FailoverLLM.group_of(params.llm)
+    drop_config_tools(group, keep=config.tools)
     if config.tools:
-        from turncall.orchestrator.llm_failover import FailoverLLM
-
-        # Every member of a failover group (#222), not only the one answering.
-        register_tools(
-            FailoverLLM.group_of(params.llm), list(config.tools), call_context
-        )
+        register_tools(group, list(config.tools), call_context)
+    remember_config_tools(group, config.tools)
     for frame in frames:
         await params.pipeline_worker.queue_frame(frame)
 
@@ -636,6 +639,38 @@ def advertised_tool_names(prepared: PreparedHandoff) -> list[str]:
     """The tools a handoff's frame advertises: what the model now holds."""
     tools = getattr(prepared.frames[-1], "tools", None)
     return [t.name for t in getattr(tools, "standard_tools", None) or []]
+
+
+# The config tools each LLM (or failover group) has handlers for, so a switch
+# can take away the ones its new config no longer has: an unloaded skill's,
+# the previous agent's on a handoff. MCP tools and `query_knowledge` are
+# registered beside these, never in them, and a switch keeps both.
+_CONFIG_TOOLS: weakref.WeakKeyDictionary[Any, frozenset[str]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def remember_config_tools(llm: Any, tools: Sequence[ToolDefinition]) -> None:
+    """Record the config tools `llm` now has handlers for."""
+    _CONFIG_TOOLS[llm] = frozenset(t.name for t in tools)
+
+
+def drop_config_tools(llm: Any, *, keep: Sequence[ToolDefinition]) -> None:
+    """Unregister the config tools `llm` has handlers for that `keep` lacks.
+
+    Pipecat drops a handler on its own only for a tool it registered itself
+    from the advertised schema; these were registered by name, so a tool the
+    switch stops advertising would still run if the model called it (its
+    earlier call is in the kept context). A call to one now gets pipecat's
+    "not available" result. Cannot raise or suspend: it runs inside
+    `apply_switch`.
+    """
+    kept = {t.name for t in keep}
+    gone = _CONFIG_TOOLS.get(llm, frozenset()) - kept
+    for member in getattr(llm, "llms", None) or [llm]:
+        for name in gone:
+            if member.has_function(name):
+                member.unregister_function(name)
 
 
 def register_tools(

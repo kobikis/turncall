@@ -588,6 +588,105 @@ async def test_a_fourth_load_unloads_the_oldest_and_a_reload_changes_nothing(
     ]
 
 
+async def test_an_unloaded_skills_tool_no_longer_runs(monkeypatch):
+    """Unloaded for the limit, its tool is gone from what runs, not only from
+    what is advertised: a call the model makes to it anyway (it is still in
+    the kept context) reaches no webhook."""
+    after_unload: list[Given] = []
+    script = Script(
+        caller=(SAID,),
+        agent=(
+            ToolCall("load_skill", {"name": "first"}),
+            ToolCall("first_tool", {}),
+            ToolCall("load_skill", {"name": "second"}),
+            ToolCall("first_tool", {}),
+            _remembering(after_unload, "Done."),
+        ),
+    )
+    async with (
+        Backend(variables={}) as backend,
+        run_app(
+            script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+        ) as app,
+    ):
+        for name in ("first", "second"):
+            await _publish_skill(app, _skill_body(name, backend.url))
+        number = await app.bind_number(
+            await app.create_agent(
+                {
+                    **HARNESS_AGENT,
+                    "first_message": "Hello.",
+                    "max_loaded_skills": 1,
+                    "skills": [{"skill": "first"}, {"skill": "second"}],
+                }
+            )
+        )
+        call = await place_inbound_call(
+            app.carrier, app.api, from_number=CALLER, to_number=number
+        )
+        await call.wait_for_agent_speech(1)
+        await call.say(400)
+        await call.wait_for_agent_speech(2)  # "Done."
+        await call.hang_up()
+
+    assert backend.tool_paths() == ["/first"]
+    [given] = after_unload
+    assert given.tools == ["load_skill", "second_tool"]
+
+
+async def test_after_a_handoff_the_first_agents_tool_no_longer_runs(monkeypatch):
+    """The same for a handoff: the first agent's webhook tool is not the
+    target's, so a call to it after the switch reaches no webhook."""
+    target: list[str] = []
+    script = Script(
+        caller=(SAID,),
+        agent=(
+            lambda _given: ToolCall("handoff_to_agent", {"agent_id": target[0]}),
+            ToolCall("lookup_account", {}),
+            "Billing here.",
+        ),
+    )
+    async with (
+        Backend(variables={}) as backend,
+        run_app(
+            script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+        ) as app,
+    ):
+        target.append(
+            await app.create_agent({**HARNESS_AGENT, "system_prompt": BILLING_PROMPT})
+        )
+        handoff = {
+            "name": "handoff_to_agent",
+            "description": "Hand the call to another agent",
+            "parameters_schema": {
+                "type": "object",
+                "properties": {"agent_id": {"type": "string"}},
+                "required": ["agent_id"],
+            },
+        }
+        number = await app.bind_number(
+            await app.create_agent(
+                {
+                    **HARNESS_AGENT,
+                    "first_message": "Hello.",
+                    "tools": [
+                        handoff,
+                        _tool("lookup_account", f"{backend.url}/agent_lookup"),
+                    ],
+                }
+            )
+        )
+        call = await place_inbound_call(
+            app.carrier, app.api, from_number=CALLER, to_number=number
+        )
+        await call.wait_for_agent_speech(1)
+        await call.say(400)
+        await call.wait_for_agent_speech(2)  # "Billing here."
+        await call.hang_up()
+
+    assert backend.tool_paths() == []
+
+
 @pytest.fixture
 async def redis_up():
     """The API's handoff runs over the call's control channel, on Redis."""
