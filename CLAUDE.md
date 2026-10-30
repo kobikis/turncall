@@ -1280,6 +1280,17 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   pops the path); anything else is refused, the result naming the allowed
   moves (`details.allowed`) and the window staying put. The result is the
   `{success, message, details}` JSON the other built-ins answer.
+- **In an eval** (#449): `move_to_step` is never mocked
+  (`tool_mocks.NEVER_MOCKED`, beside `load_skill`): it runs under
+  `mock_only`, the procedure accepting or refusing it, recorded in
+  `tool_calls` with outcome `applied` (a refused move too, its result saying
+  so); a scenario's mock for it is ignored with a `mock_ignored` warning
+  (`run_warnings.warn_never_mocked`, which names what each ignored tool
+  changes). A move is a tool call, so a `function_call` expectation (`calls:`
+  with `{procedure, to}`) asserts the path, and an agent that skips a step
+  scores `failed`, never `errored`. No `procedure.*` events (`records` is
+  false). Tests: `tests/integration/test_eval_procedures.py`,
+  `tests/unit/test_eval_procedures.py`.
 
 Tests: `tests/unit/test_procedure_window.py`, `test_procedure_state.py`,
 `tests/integration/test_procedures_api.py`,
@@ -1988,8 +1999,8 @@ one target.
   refused and the iteration is `errored` naming it; `live` is the typed opt-in
   for read-only tools. What each iteration called lands in its results entry as
   `tool_calls`, each with its `outcome` (`mocked`, `refused`, `executed`, or
-  `applied` for `load_skill`, which is never mocked: it changes the agent under
-  test, #431 — see "Skills"). Mocks are the **scenario's**, never the
+  `applied` for `load_skill` and `move_to_step`, which are never mocked: they
+  change the agent under test, #431, #449 — see "Skills", "Procedures"). Mocks are the **scenario's**, never the
   run's: "the booking succeeds" and "the booking fails" are two tests.
 
 ### Writing a scenario that actually catches a provider regression
