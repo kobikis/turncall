@@ -345,3 +345,103 @@ async def test_a_call_init_inline_agent_follows_its_procedure(monkeypatch):
     [first] = given
     assert "current step: lights (ask)" in _window(first)
     assert "move_to_step" in first.tools
+
+
+PASSWORD = {
+    "name": "reset_password",
+    "description": "Caller forgot the password to their account",
+    "start": "on_request",
+    "steps": [
+        {
+            "id": "identify",
+            "kind": "ask",
+            "start": True,
+            "text": "Ask for the email address on the account.",
+            "moves": [{"to": "sent", "when": "the caller gave an email"}],
+        },
+        {"id": "sent", "kind": "end", "text": "Say a reset link is on its way."},
+    ],
+}
+ON_REQUEST = {**NO_INTERNET, "start": "on_request"}
+
+
+def _prompt(given: Given) -> str:
+    return next((m["content"] for m in given if m["role"] == "system"), "")
+
+
+def _shown(given: Given) -> str:
+    return json.dumps(list(given))
+
+
+async def test_an_on_request_procedure_runs_once_the_model_starts_it(monkeypatch):
+    """#446. Before the start the model has each procedure's name and
+    description, never a step; a move in one not running is refused unless
+    it starts it; once started, its window is at its start step — and the
+    other procedure's steps are never shown."""
+    given: list[Given] = []
+    script = Script(
+        caller=("What are your hours?", "My internet is down.", "The red one."),
+        agent=(
+            _remembering(given, "Nine to five."),
+            # Not its start step: refused, naming it.
+            _remembering(given, _move("power")),
+            _remembering(given, _move("lights")),
+            _remembering(given, "Which lights are on?"),
+            _remembering(given, "That's the internet light."),
+        ),
+    )
+    async with run_app(
+        script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        number = await app.bind_number(
+            await app.create_agent(
+                {
+                    **HARNESS_AGENT,
+                    "first_message": "Hello.",
+                    "procedures": [ON_REQUEST, PASSWORD],
+                }
+            )
+        )
+        call = await _call(app, number)
+        for turn, inferences in enumerate((1, 4, 5), start=2):
+            await call.say(400)
+            await _until(lambda n=inferences: len(given) >= n)
+            await call.wait_for_agent_speech(turn)
+        await call.hang_up()
+        await app.sink.wait_for("call.ended")
+
+    before, refusing, starting, after_start, next_turn = given
+    # Before: names and descriptions and how to start; no step, no window.
+    prompt = _prompt(before)
+    assert "- no_internet: Caller has no internet connection at home" in prompt
+    assert "- reset_password: Caller forgot the password to their account" in prompt
+    assert "start step: lights" in prompt and "start step: identify" in prompt
+    assert _windows(before) == [] and _windows(refusing) == []
+    assert "move_to_step" in before.tools
+    for each in (before, refusing):
+        for step in (*NO_INTERNET["steps"], *PASSWORD["steps"]):
+            assert step["text"] not in _shown(each), step["id"]
+
+    # A move in it before the start is refused, naming the start.
+    [refused] = _tool_results(starting)
+    assert refused["success"] is False
+    assert (
+        "'no_internet' is not running. Start it at its start step 'lights'"
+        in (refused["message"])
+    )
+
+    # The start: its result says what to do at the start step.
+    started = _tool_results(after_start)[-1]
+    assert started["success"] is True
+    assert "Started 'no_internet'" in started["message"]
+    assert "Ask which lights on the router are on." in started["message"]
+
+    # The next turn's window is at the start step, and only this procedure's.
+    window = _window(next_turn)
+    assert "current step: lights (ask)" in window
+    assert "reset_password" not in window and "identify" not in window
+
+    # The other procedure's steps never reach the model.
+    for each in given:
+        for step in PASSWORD["steps"]:
+            assert step["text"] not in _shown(each), step["id"]

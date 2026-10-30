@@ -4,7 +4,7 @@ procedure's depth. A pure function of the graph, the path and the depth."""
 
 import pytest
 
-from turncall.domain.procedure_window import build_window
+from turncall.domain.procedure_window import build_window, startable_section
 from turncall.domain.procedures import Procedure
 
 NO_INTERNET = Procedure.model_validate(
@@ -116,3 +116,20 @@ def test_a_step_with_no_way_on_says_so():
     assert "current step: resolved (end)" in window
     assert "← back to after_restart  (always allowed)" in window
     assert "preview" not in window
+
+
+@pytest.mark.unit
+def test_only_on_request_procedures_are_listed_to_start_and_never_a_step():
+    later = NO_INTERNET.model_copy(update={"name": "later", "start": "on_request"})
+
+    section = startable_section((NO_INTERNET, later))
+
+    assert section is not None
+    assert section.startswith("## Procedures you can start\n")
+    assert section.endswith(
+        "\n- later: Caller has no internet connection at home (start step: lights)"
+    )
+    assert "no_internet" not in section
+    assert all(step.text not in section for step in NO_INTERNET.steps)
+    # A `call` procedure is the window's: the prompt gains nothing for it.
+    assert startable_section((NO_INTERNET,)) is None

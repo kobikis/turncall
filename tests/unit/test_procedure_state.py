@@ -19,6 +19,24 @@ LATER = Procedure.model_validate(
 )
 
 
+LATER_TWO_STEPS = Procedure.model_validate(
+    {
+        "name": "billing",
+        "start": "on_request",
+        "steps": [
+            {
+                "id": "ask",
+                "kind": "ask",
+                "start": True,
+                "text": "Ask.",
+                "moves": [{"to": "refund", "when": "a refund is due"}],
+            },
+            {"id": "refund", "kind": "end", "text": "Refund."},
+        ],
+    }
+)
+
+
 def _at(*path: str) -> ProcedureState:
     state = ProcedureState.at_call_start((NO_INTERNET,))
     for step in path[1:]:
@@ -99,12 +117,53 @@ def test_moving_back_needs_no_move_entry():
 
 
 @pytest.mark.unit
-def test_a_procedure_not_running_is_refused():
+def test_an_on_request_procedure_starts_at_its_start_step_on_a_move_there():
     state = ProcedureState.at_call_start((NO_INTERNET, LATER))
 
-    unknown = move(state, "no_such", "ask")
-    idle = move(state, "billing", "ask")
+    outcome = move(state, "billing", "ask")
 
-    assert not unknown.accepted and not idle.accepted
+    assert outcome.accepted
+    assert (outcome.from_step, outcome.to_step, outcome.kind) == (None, "ask", "end")
+    assert outcome.state.run("billing").path == ("ask",)
+    # The procedure already running keeps its place.
+    assert outcome.state.run("no_internet").path == ("lights",)
+    result = json.loads(outcome.result)
+    assert result["success"] is True
+    assert "Started 'billing'" in result["message"]
+    assert "Do now: Ask." in result["message"]
+    assert result["details"] == {"procedure": "billing", "step": "ask"}
+
+
+@pytest.mark.unit
+def test_a_procedure_not_running_is_refused_unless_started_at_its_start():
+    state = ProcedureState.at_call_start((NO_INTERNET, LATER_TWO_STEPS))
+
+    unknown = move(state, "no_such", "ask")
+    mid_way = move(state, "billing", "refund")
+
+    assert not unknown.accepted and not mid_way.accepted
+    assert mid_way.state is state
     assert "no procedure named 'no_such'" in json.loads(unknown.result)["message"]
-    assert "'billing' is not running" in json.loads(idle.result)["message"]
+    refused = json.loads(mid_way.result)
+    assert refused["message"] == (
+        "'billing' is not running. Start it at its start step 'ask'. "
+        "Running: ['no_internet']."
+    )
+    assert refused["details"] == {
+        "procedure": "billing",
+        "at": None,
+        "allowed": ["ask"],
+    }
+
+
+@pytest.mark.unit
+def test_a_call_procedure_not_running_cannot_be_started_by_a_move():
+    # Not running: e.g. left on a handoff (#448). Only `on_request` starts.
+    state = ProcedureState(procedures=(NO_INTERNET,))
+
+    outcome = move(state, "no_internet", "lights")
+
+    assert not outcome.accepted
+    refused = json.loads(outcome.result)
+    assert refused["message"] == "'no_internet' is not running. Running: []."
+    assert refused["details"]["allowed"] == []

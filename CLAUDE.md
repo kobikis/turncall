@@ -1280,6 +1280,18 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   pops the path); anything else is refused, the result naming the allowed
   moves (`details.allowed`) and the window staying put. The result is the
   `{success, message, details}` JSON the other built-ins answer.
+- **Start modes, several procedures** (#446). `start: "on_request"`: not
+  running until the model moves it to its start step — `move` starts it
+  (`from_step` None, a new `ProcedureRun` appended; result `Started '<name>'.`
+  + the start step's text). Until then the prompt carries only
+  `## Procedures you can start` (`procedure_window.startable_section`: name,
+  description, start step id, never step text), appended to `system_prompt`
+  by `with_procedures` — static for the call, so it still lists one already
+  started. Any other move in a procedure not running is refused (`'<name>' is
+  not running`, plus `Start it at its start step '<id>'` and
+  `details.allowed: [<start id>]` for an `on_request` one); a `call` one not
+  running is never started by a move. Several may run at once, each its own
+  window in the one `[Procedure]` message; one not running shows no step.
 
 Tests: `tests/unit/test_procedure_window.py`, `test_procedure_state.py`,
 `tests/integration/test_procedures_api.py`,

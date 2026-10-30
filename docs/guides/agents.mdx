@@ -142,6 +142,27 @@ moves and the result tells the model what to do at the new step. Anything
 else is refused, the result naming the moves that are allowed and why, and the
 procedure and its window stay where they were.
 
+**Start modes and several procedures.** An agent can carry several
+procedures, such as one per fault family. A `start: "call"` one runs from the
+first turn. A `start: "on_request"` one lets the agent handle general
+questions and run the procedure only when it applies: until it starts, the
+prompt names it with its description and its start step's id, and no step's
+text:
+
+```text
+## Procedures you can start
+When one applies, start it with move_to_step(procedure=<its name>, to=<its start step>); its steps are then shown to you one at a time.
+- no_internet: Caller has no internet connection at home (start step: lights)
+- reset_password: Caller forgot the password to their account (start step: identify)
+```
+
+The model starts one with `move_to_step` to its start step; the result says
+what to do there, and from the next turn its window is shown. A move in a
+procedure that is not running is otherwise refused with the reason (an
+`on_request` one's names its start step). The model is never shown the steps
+of a procedure that is not running, and when several run, each has its own
+window in the one message.
+
 Procedures are part of the agent's config, so they version, publish, roll back
 and A/B-route with the agent, and a [call-init](/guides/call-init) inline
 agent can carry its own. Cascade voice calls only.
