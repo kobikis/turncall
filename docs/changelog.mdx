@@ -5,6 +5,19 @@ description: "Latest updates and improvements to TurnCall"
 
 <Update label="Unreleased" description="Unreleased" tags={["Feature"]}>
 
+## Added
+
+**Skills.** Give an agent capabilities it loads only when the conversation needs
+them. A skill is a project's versioned set of instructions, tools and knowledge
+bases, with a description that says when to use it. An agent lists skills by
+name; on a call it sees their names and descriptions and loads one with the
+`load_skill` tool, which adds the skill's instructions and tools without losing
+the conversation. Up to three are loaded at once by default. An agent follows a
+skill's published version, so publishing a skill reaches the agents using it on
+their next call, or it can pin a version. Skills work on voice calls (cascade),
+chat, SMS and WhatsApp text, call-init inline agents and evals, and each call
+records which skills it loaded. See [Skills](/guides/skills).
+
 </Update>
 
 <Update label="2026-10-30" description="October 30, 2026" tags={["Release", "Fix"]}>

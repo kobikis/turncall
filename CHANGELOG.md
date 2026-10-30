@@ -11,6 +11,36 @@ and is not part of this repository's history.
 
 ## [Unreleased]
 
+### Added
+
+- **Skills** (#421–#431). A skill is a project's versioned capability: a
+  `name`, a `description` saying when to use it, `instructions`, `tools` and
+  `knowledge_bases`. `/v1/skills` creates, edits (drafts only), publishes,
+  rolls back and deletes versions with the agent lifecycle, and `GET
+  /v1/skills/{name}/agents` lists the agent versions that use one. An agent
+  lists skills in `skills: [{"skill": "<name>"}]`; each runs its live published
+  version, or the version pinned by `version_id` (ADR-0030: a skill publish
+  reaches an unpinned agent's next call with no agent publish). A call
+  advertises the skills' names and descriptions and offers the `load_skill`
+  built-in. Loading one adds its instructions to the prompt and its tools and
+  `prompt`/`tool` knowledge bases to the call, keeping the context;
+  `max_loaded_skills` (default 3) unloads the oldest. A handoff resolves the
+  target's skills.
+- **What a call records about its skills** (#425). `skill.loaded` and
+  `skill.unloaded` call events, and `skills` on the call read and `call.ended`
+  (`[{skill, version, pinned, loaded}]`, `[]` with none).
+- **Skills in text conversations, inline agents and evals** (#430, #431). Chat,
+  SMS and WhatsApp text offer `load_skill` and keep loaded skills across the
+  session's messages; a call-init inline agent's skills resolve against the
+  call's project; an eval run resolves its target's skills once and runs those
+  versions in every iteration. `load_skill` is never mocked.
+- Saving an agent refuses (`422`) a skill with no published version, a skill
+  listed twice, a pin that is not a version of that skill, and a skill tool
+  whose name collides with a built-in, the agent's own tool or another listed
+  skill's (#426, #428). Deleting a skill version an agent lists is a `409`
+  naming the agents. Skills are cascade only: an S2S agent carries a
+  `skills_ignored_on_s2s` warning and runs without them.
+
 ## [2.1.1]
 
 A fix for a first run: 2.1.0 would not start on a database that had not been
