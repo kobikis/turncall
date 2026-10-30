@@ -919,6 +919,7 @@ PDF, TXT, Markdown, DOCX, CSV, JSON, YAML, XML, TSV
 - `services/document_ingestion.py` — Upload, extract, chunk, embed pipeline
 - `services/retrieval.py` — Query embedding + pgvector search + formatting
 - `orchestrator/knowledge_processor.py` — Pipecat FrameProcessor (auto mode) + tool handler (tool mode)
+- `orchestrator/turn_message.py` — `replace_turn_message(context, marker, make)` (#441): the one per-turn `developer` message before the caller's turn, the previous turn's taken out, the context re-read after `make`. Auto mode's passages ride on it; each user has its own marker (the text the message starts with), so two never take out each other's
 - `storage/repositories/knowledge_repo.py` — KB, document, chunk, link CRUD
 - `api/v1/knowledge.py` — REST endpoints
 - `adapters/storage/` — Local filesystem and S3 storage adapters
