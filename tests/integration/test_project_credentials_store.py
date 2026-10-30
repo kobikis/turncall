@@ -327,3 +327,15 @@ async def test_a_secret_written_without_the_key_raises_the_key_error(
             await session.rollback()
     finally:
         get_settings.cache_clear()
+
+
+async def test_startup_check_passes_an_unmigrated_database(factory):
+    """A first run starts TurnCall before `make migrate`: no tables, so no
+    secrets, and nothing to fail on. It used to stop startup on the first
+    query (`relation "project_credentials" does not exist`)."""
+    async with factory() as session:
+        schema = f"empty_{uuid.uuid4().hex}"
+        await session.execute(text(f"CREATE SCHEMA {schema}"))
+        await session.execute(text(f"SET LOCAL search_path TO {schema}"))
+        await credential_repo.ensure_readable(session, _other_key())
+        await session.rollback()

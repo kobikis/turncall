@@ -27,6 +27,20 @@ and is not part of this repository's history.
   TurnCall now sends `max_completion_tokens`, leaves out what the model refuses
   and logs `openai_param_dropped` (`services/openai_models.py`).
 
+## [2.1.1]
+
+A fix for a first run: 2.1.0 would not start on a database that had not been
+migrated yet.
+
+### Fixed
+
+- **TurnCall starts on a database that has not been migrated yet.** 2.1.0's
+  startup check for stored secrets queried `project_credentials` first and
+  stopped the server when the table was missing, so a first run's `make
+  docker-up` left the API container exited before `make migrate` could run.
+  With no tables there are no secrets: the check now logs
+  `startup_unmigrated_database` and lets the server start.
+
 ## [2.1.0]
 
 Avatars on speech-to-speech calls, xAI Grok across every role, Telnyx and

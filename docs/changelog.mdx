@@ -16,6 +16,18 @@ description: "Latest updates and improvements to TurnCall"
 
 </Update>
 
+<Update label="2026-10-30" description="October 30, 2026" tags={["Release", "Fix"]}>
+
+## 2.1.1
+
+## Fixed
+
+- TurnCall starts on a database that has not been migrated yet. 2.1.0 stopped
+  at startup when its tables were missing, so on a first run the API container
+  exited before `make migrate` could run.
+
+</Update>
+
 <Update label="2026-10-27" description="October 27, 2026" tags={["Release", "Feature", "Update", "Fix"]}>
 
 ## 2.1.0
