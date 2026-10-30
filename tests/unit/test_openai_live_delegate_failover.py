@@ -136,7 +136,7 @@ def test_the_delegate_is_a_failover_group_whose_members_all_hold_the_tools() -> 
     assert isinstance(group, FailoverLLM)
     assert live.delegate_llm is group
     assert [group.label(m) for m in group.llms] == [
-        "openai/gpt-4o-mini",
+        "openai/gpt-5.4-mini",
         "anthropic/claude-sonnet-5",
     ]
     for member in group.llms:

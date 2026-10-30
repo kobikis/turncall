@@ -61,7 +61,7 @@ CLASSIFIER_ONLY_JUDGES: frozenset[str] = frozenset({"jev"})
 # judge is a local Ollama; the hosted ones pick a small, cheap model, because a
 # judge reads one reply and answers a yes/no question.
 DEFAULT_MODELS: dict[str, str] = {
-    "openai": "gpt-4o-mini",
+    "openai": "gpt-5.4-mini",
     "anthropic": "claude-haiku-4-5-20251001",
 }
 

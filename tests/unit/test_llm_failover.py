@@ -155,7 +155,7 @@ class TestBuild:
         stage = _create_llm_stage(config, creds("sk-test", anthropic="sk-ant"))
         assert isinstance(stage, FailoverLLM)
         assert [stage.label(s) for s in stage.llms] == [
-            "openai/gpt-4o-mini",
+            "openai/gpt-5.4-mini",
             "anthropic/claude-sonnet-5",
         ]
         assert stage.llms[1]._client.api_key == "sk-ant"
