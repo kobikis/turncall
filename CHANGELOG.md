@@ -66,6 +66,14 @@ and is not part of this repository's history.
   tools on gpt-5.4 and later each ended the call on its first reply with a 400.
   TurnCall now sends `max_completion_tokens`, leaves out what the model refuses
   and logs `openai_param_dropped` (`services/openai_models.py`).
+- **A browser call the caller hangs up is no longer recorded as failed.** With
+  audio still queued for the browser (the end of the goodbye, the background
+  sound), pipecat 1.14's output write timed out 10 s later and the call ended
+  `failed` with `pipeline_error`. What the pipeline reports after the caller
+  has left is now logged (`error_after_caller_left`), not recorded.
+- **An agent on xAI speech-to-text hangs up about 2 s sooner.** xAI does not
+  answer the websocket close, so every call's end waited pipecat's 2 s close
+  timeout after the goodbye; TurnCall now waits 0.25 s.
 
 ## [2.1.1]
 

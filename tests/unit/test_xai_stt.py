@@ -301,3 +301,11 @@ class TestARefusedKeyIsNamed:
 
         _, frame = await self._handshake_refused(b'{"error":"invalid sample_rate"}')
         assert frame.category is ErrorCategory.INVALID_REQUEST
+
+
+def test_the_socket_closes_without_waiting_on_xai() -> None:
+    """xAI never answers the close handshake, so pipecat's default 2 s close
+    timeout held every call's end that long after the goodbye (measured
+    2.15-2.2 s against the live endpoint). Nothing it would still send matters
+    once the call is ending."""
+    assert _build()._ws_close_timeout <= 0.25
