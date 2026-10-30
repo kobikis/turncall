@@ -41,6 +41,9 @@ class CallFacts:
     # payloads in load order (#425).
     resolved_skills: tuple[dict[str, Any], ...] = ()
     skill_loads: tuple[dict[str, Any], ...] = ()
+    # The call's `PROCEDURE_EVENTS`, `(event_type, payload)` in the order they
+    # happened (#443).
+    procedure_events: tuple[tuple[str, dict[str, Any]], ...] = ()
 
 
 # Call-init's inline agent, stored raw on the call (ADR-0017). It carries the
@@ -105,6 +108,81 @@ def call_skills(
         }
         for s in resolved
     ]
+
+
+# What a call's `procedures` are derived from (#443), read in one ordered
+# stream: a summary reads the order across event types.
+PROCEDURE_EVENTS = (CallEventType.PROCEDURE_STEP, CallEventType.PROCEDURE_REFUSED)
+
+
+@dataclass(frozen=True)
+class ProcedureWalk:
+    """One procedure as its events tell it: every step reached, in order
+    (a move back included), the kind of the last one and the moves refused."""
+
+    name: str
+    path: tuple[str, ...] = ()
+    last_kind: str | None = None
+    refused_moves: int = 0
+
+    def summary(self) -> dict[str, Any]:
+        ended_at = self.path[-1] if self.path else None
+        return {
+            "name": self.name,
+            "path": list(self.path),
+            "completed": self.last_kind == "end",
+            "ended_at": ended_at,
+            "escalated_at": ended_at if self.last_kind == "escalate" else None,
+            "refused_moves": self.refused_moves,
+        }
+
+
+def _standing_at(path: tuple[str, ...], at: Any) -> tuple[str, ...]:
+    """The path so far; an event's `from` opens it when it is the first heard
+    of — the step the procedure started at moves nowhere to be recorded."""
+    return path if path or not isinstance(at, str) else (at,)
+
+
+def _walked(
+    walk: ProcedureWalk, event_type: str, payload: dict[str, Any]
+) -> ProcedureWalk:
+    """`walk` with one more of its events read."""
+    at, to = payload.get("from"), payload.get("to")
+    if event_type == CallEventType.PROCEDURE_STEP and isinstance(to, str):
+        return replace(
+            walk,
+            path=(*_standing_at(walk.path, at), to),
+            last_kind=payload.get("kind"),
+        )
+    if event_type == CallEventType.PROCEDURE_REFUSED:
+        return replace(
+            walk,
+            path=_standing_at(walk.path, at),
+            refused_moves=walk.refused_moves + 1,
+        )
+    return walk
+
+
+def call_procedures(
+    events: tuple[tuple[str, dict[str, Any]], ...], *, events_kept: bool = True
+) -> list[dict[str, Any]] | None:
+    """What the call did of each procedure, in the order each first appears:
+    `{name, path, completed, ended_at, escalated_at, refused_moves}`.
+    `completed` when the last step reached is an `end` step; `escalated_at`
+    that step when it is an `escalate` one. Empty for a call with none.
+
+    Null once retention deleted the events (they go with the transcript,
+    #316): an empty list would say the call followed no procedure.
+    """
+    if not events_kept:
+        return None
+    walks: dict[str, ProcedureWalk] = {}
+    for event_type, payload in events:
+        name = payload.get("procedure")
+        if not isinstance(name, str):
+            continue
+        walks[name] = _walked(walks.get(name, ProcedureWalk(name)), event_type, payload)
+    return [walk.summary() for walk in walks.values()]
 
 
 _STAGES = ("stt", "llm", "tts")
@@ -210,6 +288,11 @@ def derived_fields(call: Any, facts: CallFacts) -> dict[str, Any]:
             facts.skill_loads,
             events_kept=getattr(call, "events_expired_at", None) is None,
         ),
+        "procedures": call_procedures(
+            facts.procedure_events,
+            events_kept=getattr(call, "transcript_expired_at", None) is None
+            and getattr(call, "events_expired_at", None) is None,
+        ),
     }
 
 
@@ -235,6 +318,9 @@ async def load_call_facts(
         if any(resolved.values())
         else {}
     )
+    procedure_events = await call_repo.list_typed_payloads_by_call(
+        session, call_ids, PROCEDURE_EVENTS
+    )
     agent_ids = list({c.active_agent_id for c in calls if c.active_agent_id})
     agents = (
         await agent_repo.get_names_and_versions(session, agent_ids) if agent_ids else {}
@@ -250,6 +336,7 @@ async def load_call_facts(
             failovers=tuple(failovers.get(call.id, ())),
             resolved_skills=resolved[call.id],
             skill_loads=tuple(skill_loads.get(call.id, ())),
+            procedure_events=tuple(procedure_events.get(call.id, ())),
         )
     return facts
 

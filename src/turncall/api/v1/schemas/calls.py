@@ -49,6 +49,23 @@ class CallSkill(BaseModel):
     loaded: bool | None
 
 
+class CallProcedure(BaseModel):
+    """What a call did of one procedure (#443), derived from its events."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    # Every step reached, in order, a move back included.
+    path: list[str]
+    # The last step reached is an `end` step.
+    completed: bool
+    # The last step reached; null when the procedure never stood on one.
+    ended_at: str | None
+    # The last step reached, when it is an `escalate` step.
+    escalated_at: str | None
+    refused_moves: int
+
+
 class CallResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
@@ -80,6 +97,9 @@ class CallResponse(BaseModel):
     # Every skill the call resolved, in the agent's order (#425); empty when
     # the agent has none.
     skills: list[CallSkill] = []
+    # What the call did of each procedure, in the order each first moved
+    # (#443); empty when it followed none, null once its events expired.
+    procedures: list[CallProcedure] | None = []
     # When retention deleted each kind of the call's data (#316), null = kept.
     recording_expired_at: datetime | None = None
     transcript_expired_at: datetime | None = None

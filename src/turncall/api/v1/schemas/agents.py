@@ -34,7 +34,8 @@ from turncall.domain.models import (
     RetentionConfig,
     resolve_delegation,
 )
-from turncall.domain.procedures import MOVE_TO_STEP
+from turncall.domain.procedure_graph import procedures_refusal
+from turncall.domain.procedures import MOVE_TO_STEP, Procedure
 from turncall.domain.providers import (
     AVATAR_PROVIDERS,
     LLM_PROVIDERS,
@@ -44,6 +45,7 @@ from turncall.domain.providers import (
 )
 from turncall.orchestrator import grok_voice, xai_config
 from turncall.orchestrator.deepgram_flux import MIXED_FLUX_GROUP, mixes_flux
+from turncall.services.retrieval import KNOWLEDGE_TOOL_SCHEMA
 from turncall.services.skills import LOAD_SKILL
 
 
@@ -853,6 +855,27 @@ class AgentConfigSchema(BaseModel):
                 "with procedures; define them in `procedures` instead"
             )
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_procedure_graphs(self) -> "AgentConfigSchema":
+        # One rule, run here and at build for an inline agent (#444). Here it
+        # also checks each step's tool is one the agent can call (#447),
+        # unless the agent has an MCP server, whose tools are discovered at
+        # call start; `query_knowledge` comes from KB links the config does
+        # not hold.
+        callable_tools = (
+            None
+            if self.mcp_servers
+            else {
+                *(t.name for t in self.tools),
+                *BUILTIN_TOOL_NAMES,
+                KNOWLEDGE_TOOL_SCHEMA["name"],
+            }
+        )
+        graphs = [Procedure.model_validate(p.model_dump()) for p in self.procedures]
+        if problem := procedures_refusal(graphs, callable_tools=callable_tools):
+            raise ValueError(problem)
         return self
 
     @model_validator(mode="after")

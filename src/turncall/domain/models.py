@@ -30,7 +30,7 @@ from turncall.domain.enums import (
     ToolExecutionMode,
     ToolExecutionStatus,
 )
-from turncall.domain.procedures import Procedure
+from turncall.domain.procedures import Procedure, read_procedure
 
 
 class DomainModel(BaseModel):
@@ -593,33 +593,23 @@ class AgentConfig(DomainModel):
 
     # Graphs of steps the agent follows on a cascade voice call (#442,
     # ADR-0032). Only the shape is parsed here; whether a graph holds
-    # together is the build's rule (#444), which can say why.
+    # together is the build's rule (#444, `domain/procedure_graph`), which
+    # can say why.
     procedures: list[Procedure] = Field(default_factory=list)
 
     @field_validator("procedures", mode="before")
     @classmethod
-    def _unreadable_procedures_are_skipped(cls, value: Any) -> list[Procedure]:
+    def _unreadable_procedures_are_kept(cls, value: Any) -> list[Procedure]:
         """An inline agent's config arrives from a call-init webhook, past
-        any API schema: an entry that cannot be read as a procedure at all
-        drops that procedure, never the call."""
+        any API schema, and is parsed before the build: a raise here would
+        fail the call before it could say why. So an entry that cannot be
+        read as a procedure at all is kept, marked `unreadable`, and the
+        build's rule fails the call naming it (#444)."""
         if value is None:
             return []
         if not isinstance(value, list):
-            logger.warning(
-                "procedure_skipped: procedures is not a list, call runs without them"
-            )
-            return []
-        usable = []
-        for entry in value:
-            try:
-                usable.append(Procedure.model_validate(entry))
-            except ValidationError as exc:
-                logger.warning(
-                    "procedure_skipped: unreadable procedures entry, call runs "
-                    "without it: {err}",
-                    err=str(exc),
-                )
-        return usable
+            return [Procedure(name="", unreadable="procedures must be a list")]
+        return [read_procedure(entry) for entry in value]
 
     transport: str = "twilio"  # "twilio" | "webrtc" | "both"
     server_url: ServerUrlConfig = Field(default_factory=ServerUrlConfig)

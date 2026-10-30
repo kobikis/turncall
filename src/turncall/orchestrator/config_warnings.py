@@ -56,6 +56,7 @@ def config_warnings(
                 _readability_warning(config),
                 knowledge_mode_warning(config, kb_modes),
                 skills_on_s2s_warning(config),
+                procedures_on_s2s_warning(config),
             )
             if warning is not None
         ]
@@ -112,6 +113,31 @@ def skills_on_s2s_warning(config: AgentConfig) -> dict[str, Any] | None:
             "pipeline_mode='cascade' to load skills."
         ),
         "skills": names,
+        "provider": config.s2s.provider,
+    }
+
+
+def procedures_on_s2s_warning(config: AgentConfig) -> dict[str, Any] | None:
+    """Procedures on an S2S agent (#444), which follows none.
+
+    The window is a context message put before each caller turn, and a
+    realtime model has no such point. `pipeline_builder` skips them on
+    exactly this rule and logs this message, so the build and the agent read
+    cannot disagree.
+    """
+    if config.pipeline_mode != "s2s" or not config.procedures:
+        return None
+    names = [procedure.name for procedure in config.procedures]
+    return {
+        "code": "procedures_ignored_on_s2s",
+        "message": (
+            f"procedures ({', '.join(names)}) are ignored on this S2S agent "
+            f"({config.s2s.provider}): the window of the current step is put "
+            "before each turn, and a realtime model has no such point, so "
+            "calls run without them. Use pipeline_mode='cascade' to follow "
+            "procedures."
+        ),
+        "procedures": names,
         "provider": config.s2s.provider,
     }
 

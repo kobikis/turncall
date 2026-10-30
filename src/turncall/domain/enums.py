@@ -133,6 +133,12 @@ class CallEventType(StrEnum):
     SKILL_LOADED = "skill.loaded"
     SKILL_UNLOADED = "skill.unloaded"
 
+    # Procedures (#443): a move the agent reported, accepted
+    # (`{procedure, from, to, kind}`, `kind` the step it reached) or refused
+    # (`{procedure, from, to}`). Stored, never dispatched; identifiers only.
+    PROCEDURE_STEP = "procedure.step"
+    PROCEDURE_REFUSED = "procedure.refused"
+
     # SMS / Chat
     SESSION_CREATED = "session.created"
     SESSION_UPDATED = "session.updated"

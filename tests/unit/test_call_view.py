@@ -170,3 +170,113 @@ def test_the_stored_resolution_is_read_defensively():
     assert resolved_skills({RESOLVED_SKILLS: "junk"}) == ()
     # Shown as `skills`, never in the metadata too.
     assert public_metadata(metadata) == {"template_variables": {"a": "b"}}
+
+
+# --- procedures (#443) -------------------------------------------------------
+
+_STEP, _REFUSED = "procedure.step", "procedure.refused"
+
+
+def _step(frm, to, kind="step", procedure="no_internet"):
+    return (_STEP, {"procedure": procedure, "from": frm, "to": to, "kind": kind})
+
+
+def _refused(frm, to, procedure="no_internet"):
+    return (_REFUSED, {"procedure": procedure, "from": frm, "to": to})
+
+
+def _procedures(events, call=None):
+    facts = CallFacts(procedure_events=tuple(events))
+    return derived_fields(call or _call(), facts)["procedures"]
+
+
+def test_a_procedure_walked_to_its_end_reads_completed():
+    """The spec's worked example: a refusal, then the path to `end`."""
+    events = [
+        _step("lights", "restart"),
+        _refused("restart", "after_restart"),
+        _step("restart", "after_restart"),
+        _step("after_restart", "resolved", kind="end"),
+    ]
+    assert _procedures(events) == [
+        {
+            "name": "no_internet",
+            "path": ["lights", "restart", "after_restart", "resolved"],
+            "completed": True,
+            "ended_at": "resolved",
+            "escalated_at": None,
+            "refused_moves": 1,
+        }
+    ]
+
+
+def test_a_move_back_is_on_the_path_and_the_path_ends_where_the_call_did():
+    events = [
+        _step("lights", "restart"),
+        _step("restart", "lights"),
+        _step("lights", "power"),
+    ]
+    [procedure] = _procedures(events)
+    assert procedure["path"] == ["lights", "restart", "lights", "power"]
+    assert procedure["ended_at"] == "power"
+    assert procedure["completed"] is False
+
+
+def test_reaching_an_end_step_and_moving_back_off_it_is_not_completed():
+    events = [_step("ask", "done", kind="end"), _step("done", "ask")]
+    assert _procedures(events)[0]["completed"] is False
+
+
+def test_a_procedure_ended_on_an_escalate_step_says_where():
+    events = [_step("lights", "technician", kind="escalate")]
+    [procedure] = _procedures(events)
+    assert procedure["escalated_at"] == "technician"
+    assert procedure["completed"] is False
+
+
+def test_a_start_move_from_nowhere_opens_the_path():
+    """A move with `from: null` (a procedure started mid-call) has no step
+    before it."""
+    assert _procedures([_step(None, "lights")])[0]["path"] == ["lights"]
+
+
+def test_only_refused_moves_still_show_where_the_procedure_stood():
+    [procedure] = _procedures([_refused("lights", "resolved")] * 2)
+    assert procedure["path"] == ["lights"]
+    assert procedure["ended_at"] == "lights"
+    assert procedure["refused_moves"] == 2
+
+
+def test_each_procedure_is_listed_in_the_order_it_first_appears():
+    events = [
+        _step("a1", "a2", procedure="billing"),
+        _refused("x", "y", procedure="no_internet"),
+        _step("a2", "a3", procedure="billing"),
+    ]
+    assert [p["name"] for p in _procedures(events)] == ["billing", "no_internet"]
+    assert _procedures(events)[0]["path"] == ["a1", "a2", "a3"]
+
+
+def test_a_refusal_for_a_procedure_not_running_stands_nowhere():
+    """`from` is null when the procedure was not running: no step to stand at."""
+    [procedure] = _procedures([_refused(None, "lights", procedure="nope")])
+    assert procedure == {
+        "name": "nope",
+        "path": [],
+        "completed": False,
+        "ended_at": None,
+        "escalated_at": None,
+        "refused_moves": 1,
+    }
+
+
+def test_a_call_with_no_procedures_lists_none():
+    assert _procedures([]) == []
+
+
+@pytest.mark.parametrize("expired", ["transcript_expired_at", "events_expired_at"])
+def test_the_summary_is_unknown_once_its_events_expired(expired):
+    """The events go with the transcript (#316): an empty list would say the
+    call followed no procedure."""
+    call = SimpleNamespace(status="completed", ended_at=ENDED, **{expired: ENDED})
+    assert _procedures([_step("a", "b")], call) is None

@@ -20,9 +20,13 @@ from loguru import logger
 
 from turncall.config.settings import Settings
 from turncall.domain.models import AgentConfig
+from turncall.domain.procedure_graph import procedures_refusal
 from turncall.orchestrator.avatar import avatar_gate
 from turncall.orchestrator.call_session import CallSession, fail_unstarted_call
-from turncall.orchestrator.config_warnings import knowledge_mode_warning
+from turncall.orchestrator.config_warnings import (
+    knowledge_mode_warning,
+    procedures_on_s2s_warning,
+)
 from turncall.orchestrator.pipeline_factory import (
     DYNAMIC_AGENT_ID,
     CallContext,
@@ -150,6 +154,18 @@ async def _with_skills(
     return skills.config(), replace(call_context, skills=skills)
 
 
+def _check_procedures(config: AgentConfig) -> None:
+    """The agent API's graph rule, for an inline agent that skipped it
+    (#444): a broken procedure fails the call naming it, rather than the
+    call running without it or with half of it. On S2S none runs
+    (`with_procedures`), so there is only that to say."""
+    if (ignored := procedures_on_s2s_warning(config)) is not None:
+        logger.warning("procedures_skipped: {message}", message=ignored["message"])
+        return
+    if (problem := procedures_refusal(config.procedures)) is not None:
+        raise ValueError(problem)
+
+
 async def _assemble(
     *,
     config: AgentConfig,
@@ -188,6 +204,7 @@ async def _assemble(
         session_factory, call_context.project_id, settings
     )
 
+    _check_procedures(config)
     # Before the skills: a skill load rebuilds the tools from the config
     # they start from, which must keep move_to_step.
     config, call_context = with_procedures(config, call_context)

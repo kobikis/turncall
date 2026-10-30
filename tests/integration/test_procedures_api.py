@@ -17,7 +17,14 @@ from tests.harness import Harness, Script, run_app
 
 pytestmark = pytest.mark.integration
 
-AGENT = {"system_prompt": "You are Maya."}
+LINE_STATUS = {
+    "name": "line_status",
+    "description": "Look up the caller's line status",
+    "parameters_schema": {"type": "object", "properties": {}},
+    "webhook_url": "https://example.com/line_status",
+}
+# A step's tool is one of the agent's (#447).
+AGENT = {"system_prompt": "You are Maya.", "tools": [LINE_STATUS]}
 
 
 def procedure(name: str = "no_internet", **extra: Any) -> dict[str, Any]:
@@ -156,3 +163,76 @@ async def test_move_to_step_is_not_listed_in_tools(monkeypatch) -> None:
         refused = await _agent(app, {**AGENT, "tools": [tool]})
 
     assert "offered automatically to an agent with procedures" in _refusal(refused)
+
+
+def _step_tool(tool: str) -> dict[str, Any]:
+    body = procedure()
+    body["steps"][1] = {**body["steps"][1], "tool": tool}
+    return body
+
+
+async def test_a_step_tool_that_is_not_the_agents_is_refused_at_save(
+    monkeypatch,
+) -> None:
+    """#447: a step names a tool the agent has, or a built-in."""
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        refused = await _agent(app, {**AGENT, "procedures": [_step_tool("line_stats")]})
+        agent_id = (await _agent(app, AGENT)).json()["data"]["id"]
+        updated = await app.api.put(
+            f"/v1/agents/{agent_id}",
+            json={"config": {**AGENT, "procedures": [_step_tool("line_stats")]}},
+        )
+        builtin = await _agent(app, {**AGENT, "procedures": [_step_tool("end_call")]})
+
+    for response in (refused, updated):
+        assert (
+            "procedures[0] 'no_internet': step 'restart' names tool 'line_stats', "
+            "which is not one of the agent's tools or a built-in"
+        ) in _refusal(response)
+    assert builtin.status_code == 201, builtin.text
+
+
+async def test_a_broken_graph_is_refused_at_create_and_update_naming_the_step(
+    monkeypatch,
+) -> None:
+    # #444: the graph rule runs at save, so the mistake is found here rather
+    # than on a call.
+    broken = procedure("router_down")
+    broken["steps"][1] = {
+        **broken["steps"][1],
+        "moves": [{"to": "technican", "when": "it is still red"}],
+    }
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        created = await _agent(app, {**AGENT, "procedures": [broken]})
+        sound = await _agent(app, {**AGENT, "procedures": [procedure()]})
+        assert sound.status_code == 201, sound.text
+        updated = await app.api.put(
+            f"/v1/agents/{sound.json()['data']['id']}",
+            json={"config": {**AGENT, "procedures": [procedure(), broken]}},
+        )
+
+    said = "step 'restart' moves to 'technican', which does not exist"
+    assert f"procedures[0] 'router_down': {said}" in _refusal(created)
+    assert f"procedures[1] 'router_down': {said}" in _refusal(updated)
+
+
+async def test_an_s2s_agents_read_says_its_procedures_are_ignored(monkeypatch):
+    s2s = {**AGENT, "pipeline_mode": "s2s", "s2s": {"provider": "google"}}
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        created = await _agent(app, {**s2s, "procedures": [procedure()]})
+        assert created.status_code == 201, created.text
+        read = await app.api.get(f"/v1/agents/{created.json()['data']['id']}")
+
+    [warning] = [
+        w
+        for w in read.json()["data"]["warnings"]
+        if w["code"] == "procedures_ignored_on_s2s"
+    ]
+    assert warning["procedures"] == ["no_internet"]
+    assert warning["provider"] == "google"

@@ -149,9 +149,109 @@ and the window at the new step. A move with nothing said beside it gets one
 model call so the caller is answered, and a move beside another tool, such
 as a step's lookup, gets one once both results are in.
 
+**Start modes and several procedures.** An agent can carry several
+procedures, such as one per fault family. A `start: "call"` one runs from the
+first turn. A `start: "on_request"` one lets the agent handle general
+questions and run the procedure only when it applies: until it starts, the
+prompt names it with its description and its start step's id, and no step's
+text:
+
+```text
+## Procedures you can start
+When one applies, start it with move_to_step(procedure=<its name>, to=<its start step>); its steps are then shown to you one at a time.
+- no_internet: Caller has no internet connection at home (start step: lights)
+- reset_password: Caller forgot the password to their account (start step: identify)
+```
+
+The model starts one with `move_to_step` to its start step; the result says
+what to do there, and from the next turn its window is shown. A move in a
+procedure that is not running is otherwise refused with the reason (an
+`on_request` one's names its start step). The model is never shown the steps
+of a procedure that is not running, and when several run, each has its own
+window in the one message.
+
+**Step tools and variables.** A step's `tool` names a tool the model should
+call at that point, so an API check happens where it belongs and its result
+informs the next move. The window says so, at the step and in the preview
+(`after_restart (check, tool: line_status)`). It is one of the agent's own
+`tools` (or a built-in, or `query_knowledge`) and runs like any other: it
+reaches its webhook and is recorded in the call's tool invocations. Naming a
+tool the agent does not have is a `422` naming the procedure and the step; an
+agent with `mcp_servers` is not checked, since its MCP tools are only known
+once a call connects. A step's `text` renders the call's
+[template variables](#template-variables) like the rest of the config:
+
+```json
+{"id": "after_restart", "kind": "check", "tool": "line_status",
+ "text": "Check the line status for {{account_id}}.",
+ "moves": [{"to": "resolved", "when": "the line is fine"}]}
+```
+
+**Rules.** A procedure is checked when the agent is saved, so a mistake is a
+`422` naming the procedure and the step rather than something found on a call:
+
+- step ids are unique within the procedure, and procedure names within the agent;
+- exactly one step has `start: true`;
+- every move goes to a step that exists;
+- every step can be reached from the start step by its moves;
+- at least one step is of kind `end` or `escalate`;
+- at most 50 steps, and `window_depth` at most 5.
+
+```json
+{"success": false, "code": "validation_error", "error": "Validation error",
+ "details": {"errors": [{"msg": "Value error, procedures[0] 'no_internet': step 'after_restart' moves to 'technican', which does not exist", "...": "..."}]}}
+```
+
+A [call-init](/guides/call-init) inline agent skips that check, so the same
+rule runs when its call is built: a broken procedure, or an entry that is not
+a procedure at all, fails the call with `ended_reason: pipeline_error` and an
+`error.raised` event naming the problem — never a call that runs without it.
+
 Procedures are part of the agent's config, so they version, publish, roll back
 and A/B-route with the agent, and a [call-init](/guides/call-init) inline
-agent can carry its own. Cascade voice calls only.
+agent can carry its own. Cascade voice calls only: on an S2S agent they are
+skipped, said on its read (`procedures_ignored_on_s2s`, below) and in the
+build's log.
+
+### What a call records
+
+Every move is on the call's event log (`GET /v1/calls/{id}/events`), in the
+order it was made: a `procedure.step` for a move the procedure allowed, a
+`procedure.refused` for one it refused. They are stored, never sent to
+webhook subscribers, and an eval run records none.
+
+```json
+{"event_type": "procedure.step",    "payload": {"procedure": "no_internet", "from": "lights",        "to": "restart",       "kind": "instruct"}}
+{"event_type": "procedure.refused", "payload": {"procedure": "no_internet", "from": "restart",       "to": "after_restart"}}
+{"event_type": "procedure.step",    "payload": {"procedure": "no_internet", "from": "restart",       "to": "after_restart", "kind": "check"}}
+{"event_type": "procedure.step",    "payload": {"procedure": "no_internet", "from": "after_restart", "to": "resolved",      "kind": "end"}}
+```
+
+The call read and `call.ended` both carry `procedures`, worked out from those
+events, so the two always agree:
+
+```json
+"procedures": [{
+  "name": "no_internet",
+  "path": ["lights", "restart", "after_restart", "resolved"],
+  "completed": true,
+  "ended_at": "resolved",
+  "escalated_at": null,
+  "refused_moves": 1
+}]
+```
+
+| Field | Meaning |
+|-------|---------|
+| `path` | Every step reached, in order, a move back included |
+| `ended_at` | The last step reached |
+| `completed` | `true` when `ended_at` is an `end` step |
+| `escalated_at` | `ended_at`, when it is an `escalate` step; otherwise `null` |
+| `refused_moves` | How many moves were refused |
+
+A procedure is listed once it moved or had a move refused. The list is empty
+for a call that followed none, and `null` once [retention](/guides/retention)
+deleted the call's transcript: the moves go with it.
 
 ## Warnings on a Read
 
@@ -180,6 +280,7 @@ them would break working agents.
 | `pronunciations_ignored_on_s2s` | `pipeline_mode: "s2s"` has no TTS stage for the markup to apply to |
 | `knowledge_mode_unsupported` | A [knowledge base](/guides/s2s#knowledge-bases) is linked in `auto` mode to an S2S agent, which skips it: auto retrieval runs before each LLM turn, and a speech-to-speech model has no such point. Carries `modes` and `provider`. Link it in `tool` or `prompt` mode |
 | `skills_ignored_on_s2s` | An S2S agent lists [skills](/guides/skills), which only cascade calls load; its calls run without them. Carries `skills` and `provider` |
+| `procedures_ignored_on_s2s` | An S2S agent has [procedures](#procedures), which only cascade calls follow: the window goes before each caller turn, and a realtime model has no such point. Its calls run without them. Carries `procedures` and `provider` |
 
 Warnings are **derived on every read**, never stored, so an agent whose model
 moved out from under its pronunciations starts saying so without being edited.
@@ -196,7 +297,7 @@ Personalize agents per-call using `{{variable}}` placeholders:
 }
 ```
 
-Variables are rendered at call start via [call-init](/guides/call-init) or the API, in a [skill's](/guides/skills) instructions too. See [Server Events](/guides/server-events) for how to dynamically inject variables.
+Variables are rendered at call start via [call-init](/guides/call-init) or the API, in a [skill's](/guides/skills) instructions and a [procedure](#procedures) step's text too. See [Server Events](/guides/server-events) for how to dynamically inject variables.
 
 ## Pipeline Mode
 

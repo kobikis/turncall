@@ -1,6 +1,6 @@
 """Call repository - data access for calls and call events."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -422,6 +422,25 @@ async def list_payloads_by_call(
     by_call: dict[UUID, list[dict[str, Any]]] = {}
     for row in result.all():
         by_call.setdefault(row.call_id, []).append(row.payload)
+    return by_call
+
+
+async def list_typed_payloads_by_call(
+    session: AsyncSession, call_ids: list[UUID], event_types: Sequence[CallEventType]
+) -> dict[UUID, list[tuple[str, dict[str, Any]]]]:
+    """Several event types' `(event_type, payload)` for a page of calls, in
+    the order they happened across the types, one query."""
+    result = await session.execute(
+        select(CallEventRow.call_id, CallEventRow.event_type, CallEventRow.payload)
+        .where(
+            CallEventRow.call_id.in_(call_ids),
+            CallEventRow.event_type.in_([str(t) for t in event_types]),
+        )
+        .order_by(CallEventRow.call_id, CallEventRow.sequence_number)
+    )
+    by_call: dict[UUID, list[tuple[str, dict[str, Any]]]] = {}
+    for row in result.all():
+        by_call.setdefault(row.call_id, []).append((row.event_type, row.payload))
     return by_call
 
 

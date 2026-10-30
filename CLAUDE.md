@@ -783,8 +783,8 @@ Inbound call → resolve phone number → routing_target_type == "webhook"?
 
 Template variables (`{{name}}`, `\w+` only — no spaces, no dots; an unsent one
 stays literal) live on the call row as `metadata_json["template_variables"]`
-and render `system_prompt`, `first_message`, tool descriptions and
-`s2s.delegation.instructions`. A `handoff_to_agent` (tool or API) gives the
+and render `system_prompt`, `first_message`, tool descriptions,
+`s2s.delegation.instructions` and each procedure step's `text` (#447). A `handoff_to_agent` (tool or API) gives the
 target agent the same call's variables and call-init `knowledge_context`
 (`tool_bridge._as_this_call`), rendered then prepended as at the call's start.
 
@@ -1252,18 +1252,20 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
 
 - **Layers.** `domain/procedures.py` the shapes (permissive: an inline agent
   arrives past the API schema, and a broken graph is the build's to refuse
-  with a reason, #444) and `MOVE_TO_STEP`; `api/v1/schemas/procedures.py` the
+  with a reason, #444) and `MOVE_TO_STEP`; `domain/procedure_graph.py` the
+  graph rule; `api/v1/schemas/procedures.py` the
   strict schema (`AgentConfigSchema.procedures`); `domain/procedure_window.py`
   the pure window builder (`build_window(procedure, path, depth=)`, marker
   `[Procedure]`); `domain/procedure_state.py` the immutable per-call state
   (`ProcedureState`, `ProcedureRun(name, path)`) and the pure `move(state,
   procedure, to) -> MoveOutcome`; `orchestrator/procedures.py` the pipecat
-  side. No pipecat in the first four.
+  side. No pipecat in the first five.
 - **At build** (`pipeline_builder._assemble`, before `_with_skills` so a
   skill load keeps the tool): `with_procedures` adds `move_to_step` first in
   `tools` and puts a `CallProcedures` holder on the context
   (`CallContext.procedures`, every context starts with an empty one) with each
-  `start: "call"` procedure running at its start step. Skipped on S2S.
+  `start: "call"` procedure running at its start step. Skipped on S2S
+  (warned, below).
 - **The window.** `ProcedureWindowProcessor`, in every cascade pipeline right
   before the LLM (after the KB auto processor), puts one `developer` message
   right before the caller's turn via `turn_message.replace_turn_message`,
@@ -1295,10 +1297,86 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   from one. A tool's own `run_llm` (`load_skill`) is kept; a response with
   no move is pipecat's.
 
+- **The graph rule** (#444): `domain/procedure_graph.procedures_refusal`,
+  pure, first problem wins, `procedures[i] '<name>': step '<id>' ...`. Unique
+  procedure names and step ids, one start step, every move to an existing
+  step, every step reachable from the start, an `end` or `escalate` step,
+  `MAX_STEPS` (50), `MAX_WINDOW_DEPTH` (5); for an inline agent also the kind
+  and start-mode words the schema's Literals cover. Applied twice: the
+  `AgentConfigSchema.validate_procedure_graphs` validator (422
+  `validation_error`, also an eval `inline` target) and
+  `pipeline_builder._check_procedures`, before `with_procedures`, which raises
+  `ValueError` → `pipeline_error` + `error.raised` for a call-init inline
+  agent. The domain `AgentConfig` never raises on procedures (it is parsed
+  before the build): an entry that cannot be read is kept as
+  `Procedure(unreadable=<why>)` (`read_procedure`), which the rule names. A
+  new check is one function in `_CHECKS`. On S2S the build skips them (no
+  rule) logging `procedures_skipped: <message>` from
+  `config_warnings.procedures_on_s2s_warning`, the agent read's
+  `procedures_ignored_on_s2s`.
+- **What a call records** (#443). Each accepted move is a `procedure.step`
+  call event `{procedure, from, to, kind}` (`kind` the step reached), each
+  refused one a `procedure.refused` `{procedure, from, to}` (`from` null when
+  the procedure was not running): stored only, through `turn_metrics
+  .store_call_event`, none when `CallContext.records` is false (an eval).
+  `run_move_to_step` queues the write on the holder (`CallProcedures.record`:
+  each waits for the previous), so two moves in one response are logged in
+  the order made. `procedures` on the call read and `call.ended` is
+  `call_view.call_procedures`, folded from `PROCEDURE_EVENTS` read in one
+  ordered query (`call_repo.list_typed_payloads_by_call`; a new event type
+  joins the tuple and gets a branch in `_walked`): per procedure, in the order
+  each first appears, `{name, path, completed, ended_at, escalated_at,
+  refused_moves}` — `path` every step reached (the first event's `from`, then
+  each `to`, a move back included), `ended_at` the last, `completed` when it
+  is an `end` step, `escalated_at` it when an `escalate` one. A procedure that
+  never moved has no event and is not listed. `[]` with none; null once the
+  transcript or the events expired. Both events are transcript-class
+  (`retention.TRANSCRIPT_EVENTS`); `procedure`, `procedures` are redaction
+  structural fields and `from`/`to` identifiers on the two events. An
+  `on_request` start (#446) is a `procedure.step` with `from` null.
+- **Start modes, several procedures** (#446). `start: "on_request"`: not
+  running until the model moves it to its start step — `move` starts it
+  (`from_step` None, a new `ProcedureRun` appended; result `Started '<name>'.`
+  + the start step's text). Until then the prompt carries only
+  `## Procedures you can start` (`procedure_window.startable_section`: name,
+  description, start step id, never step text), appended to `system_prompt`
+  by `with_procedures` — static for the call, so it still lists one already
+  started. Any other move in a procedure not running is refused (`'<name>' is
+  not running`, plus `Start it at its start step '<id>'` and
+  `details.allowed: [<start id>]` for an `on_request` one); a `call` one not
+  running is never started by a move. Several may run at once, each its own
+  window in the one `[Procedure]` message; one not running shows no step.
+- **Step tools and variables** (#447). A step's `tool` is shown in the window
+  and its preview (`(check, tool: line_status)`); it is an ordinary agent tool,
+  dispatched and recorded like any other. At save it must be one of the
+  agent's `tools`, a built-in or `query_knowledge`
+  (the graph rule's `callable_tools=`, passed by `AgentConfigSchema` only,
+  never at build; 422
+  `procedures[i] '<name>': step '<id>' names tool '<x>', ...`); an agent with
+  `mcp_servers` is not checked (its tools are discovered at call start).
+  `template_renderer.render_agent_config` renders each step's `text` with the
+  call's `{{variables}}`, so the window, preview and move result show it.
+- **In an eval** (#449): `move_to_step` is never mocked
+  (`tool_mocks.NEVER_MOCKED`, beside `load_skill`): it runs under
+  `mock_only`, the procedure accepting or refusing it, recorded in
+  `tool_calls` with outcome `applied` (a refused move too, its result saying
+  so); a scenario's mock for it is ignored with a `mock_ignored` warning
+  (`run_warnings.warn_never_mocked`, which names what each ignored tool
+  changes). A move is a tool call, so a `function_call` expectation (`calls:`
+  with `{procedure, to}`) asserts the path, and an agent that skips a step
+  scores `failed`, never `errored`. No `procedure.*` events (`records` is
+  false). Tests: `tests/integration/test_eval_procedures.py`,
+  `tests/unit/test_eval_procedures.py`.
+
 Tests: `tests/unit/test_procedure_window.py`, `test_procedure_state.py`,
-`test_move_after_speech.py`, `tests/integration/test_procedures_api.py`,
+`test_procedure_graph.py`, `test_procedures_on_s2s.py`, `test_move_after_speech.py`,
+`test_procedure_events.py`, `test_call_view.py`,
+`tests/integration/test_procedures_api.py`,
 `tests/integration/test_harness_call_procedures.py`,
-`test_harness_call_procedure_moves.py`.
+`test_harness_call_procedure_rules.py`,
+`tests/integration/test_harness_call_procedure_steps.py`,
+`tests/integration/test_harness_call_procedure_record.py`,
+`tests/integration/test_harness_call_procedure_moves.py`.
 
 ## A/B Testing
 
@@ -1478,7 +1556,8 @@ and the janitor:
   `account_for_call`'s account), `recording_url`; `recording_status` →
   `expired` (enum value) where there was one, and `recording.ready`'s `*_url`
   fields nulled. Transcript: `TRANSCRIPT_EVENTS` (`transcript.*`,
-  `tool.called`/`tool.result`, `context.injected`), the call's
+  `tool.called`/`tool.result`, `context.injected`, `procedure.step`/
+  `procedure.refused`), the call's
   `tool_invocations`, `analysis_json`, and every other event's free-text
   fields (`redaction.text_fields`) nulled. Events: every other call event,
   but `recording.ready` stays while the recording does (deleted with it).
@@ -2003,8 +2082,8 @@ one target.
   refused and the iteration is `errored` naming it; `live` is the typed opt-in
   for read-only tools. What each iteration called lands in its results entry as
   `tool_calls`, each with its `outcome` (`mocked`, `refused`, `executed`, or
-  `applied` for `load_skill`, which is never mocked: it changes the agent under
-  test, #431 — see "Skills"). Mocks are the **scenario's**, never the
+  `applied` for `load_skill` and `move_to_step`, which are never mocked: they
+  change the agent under test, #431, #449 — see "Skills", "Procedures"). Mocks are the **scenario's**, never the
   run's: "the booking succeeds" and "the booking fails" are two tests.
 
 ### Writing a scenario that actually catches a provider regression
@@ -2346,7 +2425,7 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 `call.ended` payload: `status`, `ended_reason`, `from_number`, `to_number`, `direction`,
 `duration_ms`, `provider_call_sid`, `metadata`, `started_at`, `ended_at`,
 `recording_status`, `recording_url`, `summary`, `analysis`, `agent_name`,
-`agent_version`, `latency_summary`, `failovers` (`[{role, from, to, error}]`, `role` `stt`\|`llm`\|`tts`, #222/#223), `skills` (`[{skill, version, pinned, loaded}]`, every skill the call resolved, `[]` with none, #425), `retention` (`{recordings_days, transcripts_days, events_days}`, null = kept for good, #316), and `transcript` (`[{role, text, timestamp}]`).
+`agent_version`, `latency_summary`, `failovers` (`[{role, from, to, error}]`, `role` `stt`\|`llm`\|`tts`, #222/#223), `skills` (`[{skill, version, pinned, loaded}]`, every skill the call resolved, `[]` with none, #425), `procedures` (`[{name, path, completed, ended_at, escalated_at, refused_moves}]`, `[]` with none, null once its events expired, #443; see "Procedures"), `retention` (`{recordings_days, transcripts_days, events_days}`, null = kept for good, #316), and `transcript` (`[{role, text, timestamp}]`).
 
 `latency_summary` is derived from the call's `metrics.turn` events (#179):
 `{turns, user_to_bot, stages: {stt|llm|tts}, slowest_turn}`, each spread being
@@ -2362,14 +2441,15 @@ provider_call_id}`. Dispatched only — there is no event log to store it on.
 Stored-only call events — on the call's event log (`GET /v1/calls/{id}/events`),
 never sent to webhook subscribers, none in an eval: `metrics.turn` (#176),
 `delegation.completed` (#247), `avatar.unavailable` (#402, see "Video
-Avatar"), `voicemail.detected`, and the log's own
+Avatar"), `procedure.step` / `procedure.refused` (#443, see "Procedures"),
+`voicemail.detected`, and the log's own
 `call.ended` rows (the carrier's: Twilio's `completed`/`busy`/`no-answer`
 status callback, Telnyx's hangup; and the agent's hangup marker, source
 `control`). Subscribers get the comprehensive `call.ended` instead, which is
 sent and never stored.
 
 The call read (`GET /v1/calls[/{id}]`) carries the same derived fields —
-`ended_reason`, `agent_name`, `agent_version`, `latency_summary`, `failovers`, `skills` — from the same function,
+`ended_reason`, `agent_name`, `agent_version`, `latency_summary`, `failovers`, `skills`, `procedures` — from the same function,
 `services/call_view.py`, so the read and the webhook cannot disagree (#175).
 `ended_reason` is null on the read while the call is still live; agent fields
 are null for an inline agent and for a deleted agent row.
