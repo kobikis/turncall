@@ -50,9 +50,14 @@ cascade pipeline and no transport branch.
 `move_to_step` (`{procedure, to}`), is offered only to an agent with
 procedures and never listed in `tools`. A move the current step allows, or
 back to the previous step, is accepted: the state moves and the result
-carries the new step's text, since the inference that follows a tool result
-gets no fresh window. Anything else is refused: the result names the allowed
-moves and why, and the state and window stay put. The model judges the
+carries the new step's text and the step's own moves, since the inference
+that follows a tool result gets no fresh window — a step whose tool answers
+would otherwise leave the model not knowing it should move on (a live call
+confirmed a booking, stayed on the step, and confirmed it again on the next
+turn). A move to the current step is the model staying put (a caller asking
+to hear it again): not a refusal, and no event. Anything else is refused:
+the result names the allowed moves and why, and the state and window stay
+put. The model judges the
 condition; TurnCall checks only that the move is allowed. A move is checked
 and applied with nothing awaited in between, so a barge-in cancelling the
 tool cannot leave the state half moved.

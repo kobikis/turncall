@@ -1284,10 +1284,14 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   `run_move_to_step` checks and applies the move with no `await` in between,
   the holder's state replaced in one assignment (`CallProcedures.replace`,
   the only swap). A move from the current step or back to the previous one
-  is accepted (back pops the path); anything else is refused, the result
-  naming the allowed moves (`details.allowed`) and the window staying put.
-  The result is the `{success, message, details}` JSON the other built-ins
-  answer.
+  is accepted (back pops the path), its result giving the new step's text,
+  its tool and `Then move on: <its moves>` — a step tool's result comes with
+  no window, so this is how the model knows to move once the tool is done. A
+  move to the current step is the model staying put: `success: true`,
+  `details.stayed`, the allowed moves named, no event either way. Anything
+  else is refused, the result naming the allowed moves (`details.allowed`)
+  and the window staying put. The result is the `{success, message,
+  details}` JSON the other built-ins answer.
 - **Reaching an `end` or `escalate` step finishes the procedure**: it leaves
   `ProcedureState.runs` for `finished` (`_placed`), its window stops, the
   move's result says `The procedure is finished here.`, and every later move

@@ -216,18 +216,25 @@ def run_move_to_step(args: dict[str, Any], call_context: CallContext) -> MoveOut
         procedure=outcome.procedure,
         at=outcome.from_step,
         to=outcome.to_step,
-        verdict="accepted" if outcome.accepted else "refused",
+        verdict=_verdict(outcome),
     )
     _record_move(call_context, outcome)
     return outcome
+
+
+def _verdict(outcome: MoveOutcome) -> str:
+    if outcome.stayed:
+        return "stayed"
+    return "accepted" if outcome.accepted else "refused"
 
 
 def _record_move(call_context: CallContext, outcome: MoveOutcome) -> None:
     """A `procedure.step` `{procedure, from, to, kind}` for an accepted move
     (`kind` the step reached, which the call's `procedures` summary reads), a
     `procedure.refused` `{procedure, from, to}` for a refused one. Stored
-    only, identifiers only; nothing for a call with no row (an eval)."""
-    if not call_context.records:
+    only, identifiers only; nothing for a call with no row (an eval), nor
+    for a move that stayed where it was."""
+    if not call_context.records or outcome.stayed:
         return
     payload: dict[str, Any] = {
         "procedure": outcome.procedure,

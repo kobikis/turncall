@@ -104,6 +104,9 @@ class MoveOutcome:
     # The target step's kind, for an accepted move.
     kind: str | None
     result: str
+    # A move to the current step: the model staying there. Neither accepted
+    # nor refused, so neither event is recorded.
+    stayed: bool = False
 
 
 def move(state: ProcedureState, procedure: str, to: str) -> MoveOutcome:
@@ -133,6 +136,8 @@ def move(state: ProcedureState, procedure: str, to: str) -> MoveOutcome:
     if current is None or target is None:
         message = f"'{procedure}' has no step '{to}'. {_allowed_text(current, back)}"
         return _refused(state, procedure, run.current, to, message, current, back)
+    if to == run.current:
+        return _stayed(state, procedure, current, back)
     if to == back:
         moved = replace(run, path=run.path[:-1])
     elif any(m.to == to for m in current.moves):
@@ -150,7 +155,38 @@ def move(state: ProcedureState, procedure: str, to: str) -> MoveOutcome:
         from_step=run.current,
         to_step=to,
         kind=target.kind,
-        result=_result(True, _arrived(target), {"procedure": procedure, "step": to}),
+        result=_result(
+            True,
+            _arrived(target, _previous(moved)),
+            {"procedure": procedure, "step": to},
+        ),
+    )
+
+
+def _previous(run: ProcedureRun) -> str | None:
+    return run.path[-2] if len(run.path) > 1 else None
+
+
+def _stayed(
+    state: ProcedureState, procedure: str, current: ProcedureStep, back: str | None
+) -> MoveOutcome:
+    """A move to where the procedure already is: the model staying on the
+    step (a caller who asked to hear it again). Nothing moves; the result
+    says when to move on, so the model need not try again."""
+    message = (
+        f"Already at step '{current.id}': stay on it, and move only when one "
+        f"of its moves applies. {_allowed_text(current, back)}"
+    )
+    details = {"procedure": procedure, "step": current.id, "stayed": True}
+    return MoveOutcome(
+        accepted=False,
+        state=state,
+        procedure=procedure,
+        from_step=current.id,
+        to_step=current.id,
+        kind=None,
+        result=_result(True, message, details),
+        stayed=True,
     )
 
 
@@ -179,13 +215,24 @@ def _start(state: ProcedureState, graph: Procedure, to: str) -> MoveOutcome:
     )
 
 
-def _arrived(step: ProcedureStep) -> str:
+def _arrived(step: ProcedureStep, back: str | None = None) -> str:
+    """What the model reads on reaching `step`: what to do there and, since
+    a step tool's result comes with no window, where to move once done."""
     message = f"Now at step '{step.id}' ({step.kind}). Do now: {step.text}"
     if step.tool:
         message += f" Call {step.tool} at this step."
     if step.kind in ENDING_STEP_KINDS:
-        message += " The procedure is finished here."
+        return message + " The procedure is finished here."
+    if nexts := _next_text(step, back):
+        message += f" Then move on: {nexts}."
     return message
+
+
+def _next_text(step: ProcedureStep, back: str | None) -> str:
+    parts = [f"{m.to} (when {m.when})" for m in step.moves]
+    if back is not None:
+        parts.append(f"back to {back}")
+    return "; ".join(parts)
 
 
 def _allowed(current: ProcedureStep | None, back: str | None) -> list[str]:
@@ -196,12 +243,9 @@ def _allowed(current: ProcedureStep | None, back: str | None) -> list[str]:
 def _allowed_text(current: ProcedureStep | None, back: str | None) -> str:
     if current is None:
         return "No move is allowed from here."
-    parts = [f"{m.to} (when {m.when})" for m in current.moves]
-    if back is not None:
-        parts.append(f"back to {back}")
-    if not parts:
+    if not (parts := _next_text(current, back)):
         return f"No move is allowed from '{current.id}'."
-    return f"Allowed from '{current.id}': {'; '.join(parts)}."
+    return f"Allowed from '{current.id}': {parts}."
 
 
 def _refused(

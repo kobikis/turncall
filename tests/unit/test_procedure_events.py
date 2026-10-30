@@ -123,3 +123,21 @@ async def test_an_eval_stores_nothing(monkeypatch) -> None:
     assert stored == []
     # The moves themselves still apply: the eval follows the procedure.
     assert ctx.procedures.state.run("router").current == "restart"
+
+
+async def test_staying_on_a_step_stores_nothing(monkeypatch) -> None:
+    """A move to the current step is the model staying put: neither a step
+    in the path nor a refused move."""
+    stored: list[str] = []
+
+    async def store(_ctx: Any, event_type: str, _payload: dict[str, Any]) -> None:
+        stored.append(str(event_type))
+
+    monkeypatch.setattr(procedures, "store_call_event", store)
+    ctx = _context()
+
+    _moves(ctx, "lights", "restart")
+    await _settled()
+
+    assert stored == ["procedure.step"]
+    assert ctx.procedures.state.run("router").path == ("lights", "restart")

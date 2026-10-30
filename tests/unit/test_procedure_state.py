@@ -233,3 +233,52 @@ def test_a_procedure_started_at_an_ending_step_is_finished_at_once():
     assert outcome.accepted and outcome.kind == "end"
     assert outcome.state.run("billing") is None
     assert outcome.state.finished_run("billing").path == ("ask",)
+
+
+@pytest.mark.unit
+def test_an_accepted_move_says_where_the_step_goes_next():
+    """After a step's tool answers, the model gets no window (the context
+    does not end on the caller's turn), so the move's result is what tells it
+    where to go once the tool is done."""
+    outcome = move(_at("lights", "restart"), "no_internet", "after_restart")
+
+    message = json.loads(outcome.result)["message"]
+    assert "Call line_status at this step." in message
+    assert (
+        "Then move on: resolved (when the internet light is green); "
+        "technician (when the light is still red); back to restart."
+    ) in message
+
+
+@pytest.mark.unit
+def test_a_move_to_an_ending_step_names_no_next_move():
+    outcome = move(_at("lights", "restart", "after_restart"), "no_internet", "resolved")
+
+    message = json.loads(outcome.result)["message"]
+    assert "The procedure is finished here." in message
+    assert "Then move on" not in message
+
+
+@pytest.mark.unit
+def test_a_move_to_the_current_step_stays_without_a_refusal():
+    """The model reports a move to where it already is to mean "stay here"
+    (a caller who asked to repeat): no new step, no refusal, and a result
+    saying when to move on."""
+    state = _at("lights", "restart")
+
+    outcome = move(state, "no_internet", "restart")
+
+    assert outcome.stayed and not outcome.accepted
+    assert outcome.state is state
+    result = json.loads(outcome.result)
+    assert result["success"] is True
+    assert "Already at step 'restart'" in result["message"]
+    assert (
+        "after_restart (when the caller confirms they waited 2 minutes); back to lights"
+        in result["message"]
+    )
+    assert result["details"] == {
+        "procedure": "no_internet",
+        "step": "restart",
+        "stayed": True,
+    }
