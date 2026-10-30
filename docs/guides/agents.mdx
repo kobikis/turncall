@@ -142,6 +142,13 @@ moves and the result tells the model what to do at the new step. Anything
 else is refused, the result naming the moves that are allowed and why, and the
 procedure and its window stay where they were.
 
+A move adds no pause. When the model's reply already said something to the
+caller, reporting the move beside it costs no second model call: the next
+call is the caller's next turn, which sees the move's result (or its refusal)
+and the window at the new step. A move with nothing said beside it gets one
+model call so the caller is answered, and a move beside another tool, such
+as a step's lookup, gets one once both results are in.
+
 Procedures are part of the agent's config, so they version, publish, roll back
 and A/B-route with the agent, and a [call-init](/guides/call-init) inline
 agent can carry its own. Cascade voice calls only.

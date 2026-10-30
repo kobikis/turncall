@@ -61,3 +61,20 @@ def test_an_s2s_pipeline_has_no_window(mocker):
     processors = _processors(mocker, AgentConfig(pipeline_mode="s2s"), CallProcedures())
 
     assert not any(isinstance(p, ProcedureWindowProcessor) for p in processors)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("voicemail", [False, True], ids=["plain", "voicemail"])
+def test_the_move_rule_sits_right_after_the_llm(mocker, voicemail):
+    """#445: it has to see the response's text before the move's result,
+    whichever member of a failover group spoke."""
+    from pipecat.services.llm_service import LLMService
+
+    from turncall.orchestrator.procedures import MoveAfterSpeech
+
+    config = AgentConfig(voicemail_detection=VoicemailConfig(enabled=voicemail))
+    processors = _processors(mocker, config, CallProcedures())
+
+    rules = [i for i, p in enumerate(processors) if isinstance(p, MoveAfterSpeech)]
+    assert len(rules) == 1, processors
+    assert isinstance(processors[rules[0] - 1], LLMService)

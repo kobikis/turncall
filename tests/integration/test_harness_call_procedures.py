@@ -135,12 +135,16 @@ async def _call(app: Any, number: str) -> Any:
 async def test_the_window_follows_an_accepted_move(monkeypatch):
     given: list[Given] = []
     script = Script(
-        caller=("My internet is down.", "The red one, with the globe."),
+        caller=(
+            "My internet is down.",
+            "The red one, with the globe.",
+            "Okay, it's unplugged.",
+        ),
         agent=(
             _remembering(given, "Which lights are on?"),
-            # Speech and a move in one response, as a provider sends it.
+            # Speech and a move in one response, as a provider sends it: the
+            # whole turn, with no inference after the result (#445).
             _remembering(given, ("That's the internet light.", _move("restart"))),
-            _remembering(given, "Unplug it and give it two minutes."),
             _remembering(given, "Is it back?"),
         ),
     )
@@ -161,14 +165,14 @@ async def test_the_window_follows_an_accepted_move(monkeypatch):
         await _until(lambda: len(given) >= 1)
         await call.wait_for_agent_speech(2)
         await call.say(400)
-        await _until(lambda: len(given) >= 3)
+        await _until(lambda: len(given) >= 2)
         await call.wait_for_agent_speech(3)
         await call.say(400)
-        await _until(lambda: len(given) >= 4)
+        await _until(lambda: len(given) >= 3)
         await call.hang_up()
         await app.sink.wait_for("call.ended")
 
-    first, _moved, after_move, next_turn = given
+    first, _moved, next_turn = given
     # The first turn: the start step, one step ahead, nothing beyond.
     window = _window(first)
     assert "current step: lights (ask)" in window
@@ -184,7 +188,7 @@ async def test_the_window_follows_an_accepted_move(monkeypatch):
     assert "move_to_step" in first.tools
 
     # The move is accepted, and its result says what to do at the new step.
-    [result] = _tool_results(after_move)
+    [result] = _tool_results(next_turn)
     assert result["success"] is True
     assert "Have the caller restart the router and wait 2 minutes." in result["message"]
 

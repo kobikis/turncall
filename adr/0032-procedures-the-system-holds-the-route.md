@@ -57,6 +57,18 @@ condition; TurnCall checks only that the move is allowed. A move is checked
 and applied with nothing awaited in between, so a barge-in cancelling the
 tool cannot leave the state half moved.
 
+**A move beside speech costs no inference (#445).** The caller has already
+been answered, so the move's result asks for none; a move with no speech
+asks for one, so the caller always is. The decision is a processor right
+after the LLM, not the tool handler: the handler runs before the response's
+text has passed, and only a processor downstream of it sees the text and the
+results in the order the assistant aggregator reads them. It sets `run_llm`
+on every result of a response that reported a move — one inference after the
+last call settles, or none for speech and only moves — because pipecat's
+group rule ran the LLM twice when a move settled before a lookup beside it
+had reached the aggregator. Being after the LLM group, it holds whichever
+failover member answered.
+
 **Procedures are config.** They version, publish, roll back and A/B-route
 with the agent, and an inline agent (call-init, an eval target) carries its
 own with no lookup. The API schema is strict; the domain model is

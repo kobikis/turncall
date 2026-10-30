@@ -163,7 +163,7 @@ project's OpenAI key (its endpoint is the agent's own). No code reads
 
 Cascade (default):
 ```
-transport.input → STT → [VoicemailDetector] → user_agg (VAD + SmartTurnV3) → [KnowledgeRetrieval] → ProcedureWindow → LLM → TTS → [VM gate] → transport.output → asst_agg → observability
+transport.input → STT → [VoicemailDetector] → user_agg (VAD + SmartTurnV3) → [KnowledgeRetrieval] → ProcedureWindow → LLM → MoveAfterSpeech → TTS → [VM gate] → transport.output → asst_agg → observability
 ```
 
 S2S (`pipeline_mode: "s2s"`):
@@ -1280,10 +1280,25 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   pops the path); anything else is refused, the result naming the allowed
   moves (`details.allowed`) and the window staying put. The result is the
   `{success, message, details}` JSON the other built-ins answer.
+- **A move costs no extra inference** (#445). `MoveAfterSpeech`, right after
+  the LLM (the failover group) in every cascade pipeline, sets the `run_llm`
+  of each result in a response that reported a move: False until the
+  response's last call settles, then True, or False when the response spoke
+  (a non-blank `LLMTextFrame` the TTS reads) and held only moves. So speech
+  plus a move is one inference, a move alone gets one that answers the
+  caller, a refusal beside speech is read on the next turn's inference, and a
+  move beside a step's lookup is answered once, with both results in (pipecat's
+  group rule ran the LLM twice when the move settled before the lookup's
+  in-progress frame reached the aggregator). Decided after the LLM, not in
+  the handler, which runs before the text has passed; a SystemFrame can jump
+  data frames, so only the call list (`FunctionCallsStartedFrame`) is read
+  from one. A tool's own `run_llm` (`load_skill`) is kept; a response with
+  no move is pipecat's.
 
 Tests: `tests/unit/test_procedure_window.py`, `test_procedure_state.py`,
-`tests/integration/test_procedures_api.py`,
-`tests/integration/test_harness_call_procedures.py`.
+`test_move_after_speech.py`, `tests/integration/test_procedures_api.py`,
+`tests/integration/test_harness_call_procedures.py`,
+`test_harness_call_procedure_moves.py`.
 
 ## A/B Testing
 

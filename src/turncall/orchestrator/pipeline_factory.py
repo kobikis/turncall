@@ -1769,8 +1769,12 @@ def create_pipeline(
             )
 
     # The procedure window (#442), right after the KB passages: both go
-    # before the caller's turn, each replacing only its own.
-    from turncall.orchestrator.procedures import procedure_window_stage
+    # before the caller's turn, each replacing only its own. After the LLM,
+    # a move beside speech asks for no inference of its own (#445).
+    from turncall.orchestrator.procedures import (
+        move_after_speech_stage,
+        procedure_window_stage,
+    )
 
     # Knowledge base processor (auto mode)
     kb_processor = None
@@ -1825,6 +1829,7 @@ def create_pipeline(
             *([kb_processor] if kb_processor else []),
             *procedure_window_stage(call_context),
             llm,
+            *move_after_speech_stage(),
             *_hangup_gate(call_context),
             assistant_tap,
             tts,
@@ -1848,6 +1853,7 @@ def create_pipeline(
             *([kb_processor] if kb_processor else []),
             *procedure_window_stage(call_context),
             llm,
+            *move_after_speech_stage(),
             *_hangup_gate(call_context),
             assistant_tap,
             tts,

@@ -12,16 +12,26 @@ model sees a window.
   puts this turn's window right before the caller's turn, replacing the
   previous turn's (`turn_message.replace_turn_message`). One processor in the
   cascade pipeline, so every carrier and WebRTC get the same window.
+- `MoveAfterSpeech` sits right after the LLM: a move reported in a response
+  that already spoke asks for no inference of its own (#445).
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from pipecat.frames.frames import Frame, LLMContextFrame
+from pipecat.frames.frames import (
+    Frame,
+    FunctionCallResultFrame,
+    FunctionCallResultProperties,
+    FunctionCallsStartedFrame,
+    LLMContextFrame,
+    LLMFullResponseStartFrame,
+    LLMTextFrame,
+)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from turncall.domain.models import AgentConfig, ToolDefinition
@@ -155,3 +165,87 @@ def procedure_window_stage(call_context: CallContext) -> list[FrameProcessor]:
     """The window processor, in every cascade pipeline: a handoff can bring
     procedures to a call that started with none (#448)."""
     return [ProcedureWindowProcessor(call_context.procedures)]
+
+
+@dataclass
+class _Response:
+    """One response's calls, while any is unsettled."""
+
+    pending: set[str]
+    only_moves: bool
+
+
+class MoveAfterSpeech(FrameProcessor):
+    """Right after the LLM: a move reported beside speech asks for no
+    inference of its own (#445).
+
+    The caller has been answered, so a second inference after the result
+    would only add a pause, or a second reply. For a response that reported a
+    move, this decides each result's `run_llm`: False until the response's
+    last call settles, then True — or False when the response spoke and held
+    only moves. So a move with no speech is answered, and a move beside
+    another tool (a step's lookup) is answered once, with both results in.
+    pipecat's own rule (run after the group's last call) misses that: a move
+    settling before the lookup's in-progress frame reaches the aggregator ran
+    the LLM once for each. A result whose tool chose `run_llm` itself
+    (`load_skill`) keeps it, and a response with no move is pipecat's.
+
+    Decided here, not in the tool: the handler runs before this processor has
+    seen the response's text. Everything it reads arrives in order — the
+    response's `LLMTextFrame`s, then its results, the order the aggregator
+    reads them in — except the call list, a SystemFrame that can only arrive
+    earlier. After the LLM group, so the rule holds whichever `llm.failover`
+    member answered.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._spoke = False
+        self._responses: dict[str, _Response] = {}  # by each of its call ids
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if direction == FrameDirection.DOWNSTREAM:
+            frame = self._observe(frame)
+        await self.push_frame(frame, direction)
+
+    def _observe(self, frame: Frame) -> Frame:
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._spoke = False
+        elif isinstance(frame, LLMTextFrame):
+            self._spoke = self._spoke or (
+                bool(frame.text.strip()) and not frame.skip_tts
+            )
+        elif isinstance(frame, FunctionCallsStartedFrame):
+            self._start(frame)
+        elif isinstance(frame, FunctionCallResultFrame):
+            return self._settle(frame)
+        return frame
+
+    def _start(self, frame: FunctionCallsStartedFrame) -> None:
+        names = {c.function_name for c in frame.function_calls}
+        if MOVE_TO_STEP not in names:
+            return
+        response = _Response(
+            pending={c.tool_call_id for c in frame.function_calls},
+            only_moves=names == {MOVE_TO_STEP},
+        )
+        self._responses.update(dict.fromkeys(response.pending, response))
+
+    def _settle(self, frame: FunctionCallResultFrame) -> Frame:
+        properties = frame.properties or FunctionCallResultProperties()
+        response = self._responses.get(frame.tool_call_id)
+        if response is None or not properties.is_final:
+            return frame
+        del self._responses[frame.tool_call_id]
+        response.pending.discard(frame.tool_call_id)
+        if properties.run_llm is not None:
+            return frame  # the tool's own choice
+        last = not response.pending
+        run_llm = last and not (response.only_moves and self._spoke)
+        return replace(frame, properties=replace(properties, run_llm=run_llm))
+
+
+def move_after_speech_stage() -> list[FrameProcessor]:
+    """`MoveAfterSpeech`, in every cascade pipeline, as the window is."""
+    return [MoveAfterSpeech()]
