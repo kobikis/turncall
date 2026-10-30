@@ -468,7 +468,7 @@ class TestStartupCheck:
     def _session(**found: Any) -> AsyncMock:
         """What each startup query finds, by name; nothing elsewhere.
 
-        In order: project credential, Twilio token, webhook secret, server_url
+        In order: whether the schema is migrated, project credential, Twilio token, webhook secret, server_url
         secret, then a sample of documents from agents, calls, sms_sessions,
         eval_runs and eval_scenarios.
         """
@@ -485,7 +485,9 @@ class TestStartupCheck:
         ]
         assert set(found) <= set(order)
         session = AsyncMock()
-        session.scalar.side_effect = [found.get(name) for name in order]
+        session.scalar.side_effect = ["project_credentials"] + [
+            found.get(name) for name in order
+        ]
         return session
 
     @staticmethod
@@ -545,10 +547,9 @@ class TestStartupCheck:
 
     @pytest.mark.asyncio
     async def test_nothing_sealed_needs_no_key(self) -> None:
-        session = AsyncMock()
-        session.scalar.return_value = None
+        session = self._session()
         await credential_repo.ensure_readable(session, _settings())
-        assert session.scalar.await_count == 9
+        assert session.scalar.await_count == 10
 
     @pytest.mark.asyncio
     async def test_it_warns_when_the_key_is_unset(self, keyed) -> None:
@@ -556,10 +557,8 @@ class TestStartupCheck:
         seen: list[str] = []
         sink = logger.add(lambda m: seen.append(str(m)), level="WARNING")
         try:
-            session = AsyncMock()
-            session.scalar.return_value = None
-            await credential_repo.ensure_readable(session, _settings())
-            await credential_repo.ensure_readable(session, keyed)
+            await credential_repo.ensure_readable(self._session(), _settings())
+            await credential_repo.ensure_readable(self._session(), keyed)
         finally:
             logger.remove(sink)
         [warning] = seen

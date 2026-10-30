@@ -3,7 +3,11 @@ title: Changelog
 description: "Latest updates and improvements to TurnCall"
 ---
 
-<Update label="Unreleased" description="Unreleased" tags={["Feature"]}>
+<Update label="Unreleased" description="Unreleased" tags={["Fix"]}>
+
+- TurnCall starts on a database that has not been migrated yet. 2.1.0 stopped
+  at startup when its tables were missing, so on a first run the API container
+  exited before `make migrate` could run.
 
 </Update>
 
