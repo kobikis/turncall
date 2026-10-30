@@ -6,6 +6,7 @@ archived version. Every state move is a guarded UPDATE from the state it
 expects, so a concurrent move makes it return None rather than land twice.
 """
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -215,18 +216,21 @@ USING_STATES = ("draft", "published")
 
 
 async def agents_listing(
-    session: AsyncSession, project_id: UUID, name: str
+    session: AsyncSession, project_ids: Sequence[UUID], name: str
 ) -> list[AgentRow]:
-    """The project's draft and published agent versions whose `skills` list
-    `name`, by agent name then version."""
+    """The draft and published agent versions of `project_ids` whose `skills`
+    list `name`, by agent name, version, then project: the projects that
+    read a skill's project's skills (`skill_library.readers`, #434)."""
+    if not project_ids:
+        return []
     result = await session.execute(
         select(AgentRow)
         .where(
-            AgentRow.project_id == project_id,
+            AgentRow.project_id.in_(project_ids),
             AgentRow.state.in_(USING_STATES),
             AgentRow.config_blob["skills"].contains([{"skill": name}]),
         )
-        .order_by(AgentRow.name, AgentRow.version)
+        .order_by(AgentRow.name, AgentRow.version, AgentRow.project_id)
     )
     return list(result.scalars().all())
 

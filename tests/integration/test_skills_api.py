@@ -686,7 +686,13 @@ async def test_a_skill_in_use_is_not_deleted_and_an_unused_one_is(
     assert refused.json()["details"] == {
         "skill": "verify_identity",
         "agents": [
-            {"agent_id": support_id, "name": "support", "version": 1, "state": "draft"}
+            {
+                "agent_id": support_id,
+                "project_id": app.project_id,
+                "name": "support",
+                "version": 1,
+                "state": "draft",
+            }
         ],
     }
     assert deleted_unused.status_code == 200, deleted_unused.text
@@ -740,6 +746,7 @@ async def test_the_agents_using_a_skill_and_the_version_each_resolves_to(
     ]
     assert rows[1] == {
         "agent_id": support["id"],
+        "project_id": app.project_id,
         "agent_name": "support",
         "agent_version": 1,
         "agent_state": "draft",

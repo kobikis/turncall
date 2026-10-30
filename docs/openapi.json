@@ -5801,7 +5801,7 @@
           "skills"
         ],
         "summary": "List Skill Agents",
-        "description": "The project's draft and published agent versions listing the skill,\neach with the skill version it resolves to now \u2014 the pinned one for an\nentry that pins (#426), else the live published one. A name the project\nhas no version of is a 404.",
+        "description": "The draft and published agent versions listing the skill \u2014 the\nproject's own, and every project linked to it as a skill library (#434),\neach with its `project_id` \u2014 with the skill version each resolves to\nnow: the pinned one for an entry that pins (#426), else the live\npublished one. A name the project has no version of is a 404.",
         "operationId": "list_skill_agents_v1_skills__name__agents_get",
         "parameters": [
           {
@@ -6002,7 +6002,7 @@
           "skills"
         ],
         "summary": "Delete Skill",
-        "description": "Delete one version. A 409 naming the agents while any draft or\npublished agent version lists the skill: remove it from their `skills`\nfirst.",
+        "description": "Delete one version. A 409 naming the agents, and their projects,\nwhile any draft or published agent version reading this project's\nskills lists the skill \u2014 a linked project's too (#434): remove it from\ntheir `skills` first.",
         "operationId": "delete_skill_v1_skills__skill_id__delete",
         "parameters": [
           {

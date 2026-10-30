@@ -236,3 +236,89 @@ async def test_a_linked_projects_agents_are_checked_against_the_library(
         "library is gone"
     )
     assert own["name"] == "local_only"
+
+
+# --- who uses a library's skill (#434) ----------------------------------------
+
+
+async def test_a_librarys_skill_counts_the_agents_of_its_linked_projects(
+    monkeypatch,
+) -> None:
+    """The library's delete refusal and agents listing span every project
+    linked to it, naming each agent's project; archived versions still hold
+    nothing back. A project's own skills, once it is linked, are no agent's."""
+    async with (
+        run_app(
+            Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+        ) as app,
+        app.another_project("library") as (library, lib),
+    ):
+        v1 = await _publish(lib, _skill("verify"))
+        v2 = await _publish(lib, _skill("verify"))  # live; archives v1
+        own = await _publish(app.api, _skill("verify"))
+        mine = {**AGENT, "skills": [{"skill": "verify"}]}
+        assert (await app.link_skill_library(library)).status_code == 200
+        pinned = {**AGENT, "skills": [{"skill": "verify", "version_id": v1["id"]}]}
+        support = await app.api.post(
+            "/v1/agents", json={"name": "support", "config": pinned}
+        )
+        assert support.status_code == 201, support.text
+        # Published, then replaced by v2: v1 is archived and counts for nothing.
+        for _ in range(2):
+            made = await app.api.post(
+                "/v1/agents", json={"name": "billing", "config": mine}
+            )
+            assert made.status_code == 201, made.text
+            published = await app.api.post(
+                f"/v1/agents/{made.json()['data']['id']}/publish"
+            )
+            assert published.status_code == 200, published.text
+        billing = made.json()["data"]
+        librarians = await lib.post("/v1/agents", json={"name": "lib", "config": mine})
+        assert librarians.status_code == 201, librarians.text
+
+        listing = await lib.get("/v1/skills/verify/agents")
+        refused = await lib.delete(f"/v1/skills/{v2['id']}")
+        # The linked project's own `verify`: its agents read the library's.
+        own_listing = await app.api.get("/v1/skills/verify/agents")
+        own_deleted = await app.api.delete(f"/v1/skills/{own['id']}")
+
+    assert listing.status_code == 200, listing.text
+    rows = [
+        (r["agent_name"], r["agent_version"], r["agent_state"], r["project_id"])
+        for r in listing.json()["data"]
+    ]
+    assert rows == [
+        ("billing", 2, "published", app.project_id),
+        ("lib", 1, "draft", library),
+        ("support", 1, "draft", app.project_id),
+    ]
+    by_name = {r["agent_name"]: r for r in listing.json()["data"]}
+    assert (by_name["billing"]["resolved_skill_id"], by_name["billing"]["pinned"]) == (
+        v2["id"],
+        False,
+    )
+    assert (by_name["support"]["resolved_skill_id"], by_name["support"]["pinned"]) == (
+        v1["id"],
+        True,
+    )
+
+    assert refused.status_code == 409, refused.text
+    assert f"support v1 (draft, project {app.project_id})" in refused.json()["error"]
+    assert "lib v1 (draft)" in refused.json()["error"]
+    agents = refused.json()["details"]["agents"]
+    assert [(a["name"], a["version"], a["project_id"]) for a in agents] == [
+        ("billing", 2, app.project_id),
+        ("lib", 1, library),
+        ("support", 1, app.project_id),
+    ]
+    assert agents[0] == {
+        "agent_id": billing["id"],
+        "project_id": app.project_id,
+        "name": "billing",
+        "version": 2,
+        "state": "published",
+    }
+
+    assert own_listing.json()["data"] == []
+    assert own_deleted.status_code == 200, own_deleted.text

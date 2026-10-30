@@ -8,9 +8,12 @@ live and archives the current one. A published or archived version never
 changes. Every change is an audit log entry (`skill_state`).
 
 A version is deleted on its own (#428), and not while any draft or published
-agent version of the project lists the skill's name — whatever the version:
-an agent follows the live version, and publish and rollback can make any
-version of the name the live one. `GET /{name}/agents` lists those agents.
+agent version that reads the project's skills lists the skill's name —
+whatever the version: an agent follows the live version, and publish and
+rollback can make any version of the name the live one. The agents that read
+a project's skills are its own, unless it is linked to a skill library, and
+every linked project's when it is one (#434, `skill_library.readers`).
+`GET /{name}/agents` lists those agents, each with its `project_id`.
 """
 
 from typing import Annotated, Any
@@ -34,7 +37,7 @@ from turncall.api.v1.schemas.skills import (
 from turncall.auth import Auth, WriteAuth
 from turncall.domain.enums import AuditAction, AuditResource, SkillState
 from turncall.domain.models import SKILL_NAME_MAX, SKILL_NAME_PATTERN
-from turncall.services import audit_log
+from turncall.services import audit_log, skill_library
 from turncall.services.audit_log import AuditTrail
 from turncall.storage.models import SkillRow
 from turncall.storage.repositories import knowledge_repo, skill_repo
@@ -167,14 +170,16 @@ async def list_skill_agents(
     auth: Auth,
     session: DbSession,
 ) -> dict[str, Any]:
-    """The project's draft and published agent versions listing the skill,
-    each with the skill version it resolves to now — the pinned one for an
-    entry that pins (#426), else the live published one. A name the project
-    has no version of is a 404."""
+    """The draft and published agent versions listing the skill — the
+    project's own, and every project linked to it as a skill library (#434),
+    each with its `project_id` — with the skill version each resolves to
+    now: the pinned one for an entry that pins (#426), else the live
+    published one. A name the project has no version of is a 404."""
     if not await skill_repo.count_skills(session, auth.project_id, name=name):
         raise NotFoundError("Skill", name)
     live = await skill_repo.get_published(session, auth.project_id, name)
-    agents = await skill_repo.agents_listing(session, auth.project_id, name)
+    readers = await skill_library.readers(session, auth.project_id)
+    agents = await skill_repo.agents_listing(session, readers, name)
     pinned = (pinned_version_id(a.config_blob, name) for a in agents)
     pins = {pin for pin in pinned if pin is not None}
     versions = await skill_repo.get_by_ids(session, pins, project_id=auth.project_id)
@@ -286,23 +291,27 @@ async def rollback_skill(
 async def delete_skill(
     skill_id: UUID, auth: WriteAuth, session: DbSession, audit: Audit
 ) -> dict[str, Any]:
-    """Delete one version. A 409 naming the agents while any draft or
-    published agent version lists the skill: remove it from their `skills`
-    first."""
+    """Delete one version. A 409 naming the agents, and their projects,
+    while any draft or published agent version reading this project's
+    skills lists the skill — a linked project's too (#434): remove it from
+    their `skills` first."""
     existing = await _skill(session, skill_id, auth.project_id)
     # An agent save takes the same lock, so a save racing this delete either
     # lands first and is counted below, or reads the name without this version.
     await skill_repo.lock_name(session, auth.project_id, existing.name)
-    agents = await skill_repo.agents_listing(session, auth.project_id, existing.name)
+    readers = await skill_library.readers(session, auth.project_id)
+    agents = await skill_repo.agents_listing(session, readers, existing.name)
     if agents:
         raise ConflictError(
             f"Skill '{existing.name}' is listed by {len(agents)} agent "
-            f"version(s): {_named(agents)}. Remove it from their skills first.",
+            f"version(s): {_named(agents, auth.project_id)}. Remove it from "
+            "their skills first.",
             details={
                 "skill": existing.name,
                 "agents": [
                     {
                         "agent_id": str(a.id),
+                        "project_id": str(a.project_id),
                         "name": a.name,
                         "version": a.version,
                         "state": a.state,
@@ -325,5 +334,11 @@ async def delete_skill(
     return ok({"deleted": True})
 
 
-def _named(agents: list[Any]) -> str:
-    return ", ".join(f"{a.name} v{a.version} ({a.state})" for a in agents)
+def _named(agents: list[Any], project_id: UUID) -> str:
+    """Each agent version, and the project of one outside this project."""
+
+    def named(a: Any) -> str:
+        where = "" if a.project_id == project_id else f", project {a.project_id}"
+        return f"{a.name} v{a.version} ({a.state}{where})"
+
+    return ", ".join(named(a) for a in agents)

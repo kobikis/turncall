@@ -128,18 +128,20 @@ curl http://localhost:8090/v1/skills/verify_identity/agents \
 
 ```json
 [
-  {"agent_id": "...", "agent_name": "collections", "agent_version": 3, "agent_state": "published",
-   "skill": "verify_identity", "resolved_skill_id": "...", "resolved_version": 1, "pinned": true},
-  {"agent_id": "...", "agent_name": "support", "agent_version": 7, "agent_state": "draft",
-   "skill": "verify_identity", "resolved_skill_id": "...", "resolved_version": 2, "pinned": false}
+  {"agent_id": "...", "project_id": "...", "agent_name": "collections", "agent_version": 3,
+   "agent_state": "published", "skill": "verify_identity", "resolved_skill_id": "...",
+   "resolved_version": 1, "pinned": true},
+  {"agent_id": "...", "project_id": "...", "agent_name": "support", "agent_version": 7,
+   "agent_state": "draft", "skill": "verify_identity", "resolved_skill_id": "...",
+   "resolved_version": 2, "pinned": false}
 ]
 ```
 
-Every draft and published agent version of the project that lists the skill, by agent name and version, with the skill version it resolves to now and `pinned`: for a pinned entry its pinned version, for any other the live published one, or `null` when none is published. This is who a publish or a rollback reaches: every entry with `pinned: false`. An archived agent version, a deleted agent's included, is not listed. A name the project has no version of is a `404`.
+Every draft and published agent version of the project that lists the skill — and, for a [skill library](#a-skill-library), of every project linked to it — by agent name and version, with its `project_id`, the skill version it resolves to now and `pinned`: for a pinned entry its pinned version, for any other the live published one, or `null` when none is published. This is who a publish or a rollback reaches: every entry with `pinned: false`. An archived agent version, a deleted agent's included, is not listed. A name the project has no version of is a `404`. A project linked to a library lists none of its own skills' agents: its agents read the library's.
 
 ## Delete a skill
 
-`DELETE /v1/skills/{skill_id}` deletes one version. While any agent version listed above names the skill, it is a `409` whose `details.agents` names them (`agent_id`, `name`, `version`, `state`), whatever the version deleted, pinned or not: an agent following the live version can be moved to any version of the skill by a publish or rollback, and a pinned one runs its version on every call. Remove the skill from their `skills` first. A deleted version is gone from every read; the calls that ran it keep their record of it.
+`DELETE /v1/skills/{skill_id}` deletes one version. While any agent version listed above names the skill, it is a `409` whose `details.agents` names them (`agent_id`, `project_id`, `name`, `version`, `state`), a linked project's agents included, whatever the version deleted, pinned or not: an agent following the live version can be moved to any version of the skill by a publish or rollback, and a pinned one runs its version on every call. Remove the skill from their `skills` first. A deleted version is gone from every read; the calls that ran it keep their record of it.
 
 ## Load a skill on a call
 

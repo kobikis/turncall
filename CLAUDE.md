@@ -1018,13 +1018,14 @@ whose name is a built-in's, the agent's own tool's or an earlier listed skill's
 publish/rollback or skill publish: a later skill version's colliding tool is
 still dropped at resolution, and an archived agent rolled back over a deleted
 skill skips it. **Delete** is one version (`DELETE /v1/skills/{id}`, audited
-`deleted` via `change.gone()`), a 409 `{skill, agents: [{agent_id, name,
-version, state}]}` while any **draft or published** agent version lists the
+`deleted` via `change.gone()`), a 409 `{skill, agents: [{agent_id, project_id,
+name, version, state}]}` while any **draft or published** agent version
+reading the project's skills (a linked project's too, #434) lists the
 name — whatever the version, since publish/rollback can make any version live;
 archived agent versions (a deleted agent is archived) do not count, as for
 takeaways. `skill_repo.agents_listing` is that set (JSONB containment on
 `config_blob->'skills'`), also behind `GET /v1/skills/{name}/agents`: `[{agent_id,
-agent_name, agent_version, agent_state, skill, resolved_skill_id,
+project_id, agent_name, agent_version, agent_state, skill, resolved_skill_id,
 resolved_version, pinned}]` (a pinned entry resolves to its pin, null if the
 pin no longer runs; `SkillAgentResponse.from_rows` + `skill_repo.get_by_ids`),
 404 for a name with no version. An S2S agent with skills carries `skills_ignored_on_s2s` in the agent
@@ -1209,7 +1210,15 @@ re-read by id is a pin, so a version outside the source is skipped; the
 run's `skills_skipped` names the library), and a skill's KBs are checked
 against `source.project_id`, the project holding the skill
 (`resolve_skill_knowledge`), so a library skill's KBs are the library's.
-Tests:
+**Who uses a library's skill** (#434): `skill_library.readers(project)` —
+the projects whose agents resolve in it (itself unless linked, plus every
+live project linked to it) — is what `DELETE /v1/skills/{id}`'s 409 and
+`GET /v1/skills/{name}/agents` span (`skill_repo.agents_listing(session,
+project_ids, name)`, by name, version, project). Listing rows gain
+`project_id`; each 409 `details.agents` entry is `{agent_id, project_id,
+name, version, state}`, and the message names another project's agent as
+`name vN (state, project <id>)`. A linked project's own skills are listed by
+no agent. Tests:
 `tests/integration/test_skill_library.py`,
 `tests/integration/test_harness_call_skill_library.py` (KBs too),
 `test_chat_skills.py` and `test_eval_skills.py` (`in_library`).

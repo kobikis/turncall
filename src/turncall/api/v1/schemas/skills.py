@@ -196,6 +196,9 @@ class SkillAgentResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     agent_id: UUID
+    # The agent's project: the skill's own, or one linked to it as a skill
+    # library (#434, ADR-0031).
+    project_id: UUID
     agent_name: str
     agent_version: int
     agent_state: str
@@ -222,6 +225,7 @@ class SkillAgentResponse(BaseModel):
                 resolved = None
         return cls(
             agent_id=agent.id,
+            project_id=agent.project_id,
             agent_name=agent.name,
             agent_version=agent.version,
             agent_state=agent.state,
