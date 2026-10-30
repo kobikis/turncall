@@ -1252,18 +1252,20 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
 
 - **Layers.** `domain/procedures.py` the shapes (permissive: an inline agent
   arrives past the API schema, and a broken graph is the build's to refuse
-  with a reason, #444) and `MOVE_TO_STEP`; `api/v1/schemas/procedures.py` the
+  with a reason, #444) and `MOVE_TO_STEP`; `domain/procedure_graph.py` the
+  graph rule; `api/v1/schemas/procedures.py` the
   strict schema (`AgentConfigSchema.procedures`); `domain/procedure_window.py`
   the pure window builder (`build_window(procedure, path, depth=)`, marker
   `[Procedure]`); `domain/procedure_state.py` the immutable per-call state
   (`ProcedureState`, `ProcedureRun(name, path)`) and the pure `move(state,
   procedure, to) -> MoveOutcome`; `orchestrator/procedures.py` the pipecat
-  side. No pipecat in the first four.
+  side. No pipecat in the first five.
 - **At build** (`pipeline_builder._assemble`, before `_with_skills` so a
   skill load keeps the tool): `with_procedures` adds `move_to_step` first in
   `tools` and puts a `CallProcedures` holder on the context
   (`CallContext.procedures`, every context starts with an empty one) with each
-  `start: "call"` procedure running at its start step. Skipped on S2S.
+  `start: "call"` procedure running at its start step. Skipped on S2S
+  (warned, below).
 - **The window.** `ProcedureWindowProcessor`, in every cascade pipeline right
   before the LLM (after the KB auto processor), puts one `developer` message
   right before the caller's turn via `turn_message.replace_turn_message`,
@@ -1280,10 +1282,29 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   pops the path); anything else is refused, the result naming the allowed
   moves (`details.allowed`) and the window staying put. The result is the
   `{success, message, details}` JSON the other built-ins answer.
+- **The graph rule** (#444): `domain/procedure_graph.procedures_refusal`,
+  pure, first problem wins, `procedures[i] '<name>': step '<id>' ...`. Unique
+  procedure names and step ids, one start step, every move to an existing
+  step, every step reachable from the start, an `end` or `escalate` step,
+  `MAX_STEPS` (50), `MAX_WINDOW_DEPTH` (5); for an inline agent also the kind
+  and start-mode words the schema's Literals cover. Applied twice: the
+  `AgentConfigSchema.validate_procedure_graphs` validator (422
+  `validation_error`, also an eval `inline` target) and
+  `pipeline_builder._check_procedures`, before `with_procedures`, which raises
+  `ValueError` → `pipeline_error` + `error.raised` for a call-init inline
+  agent. The domain `AgentConfig` never raises on procedures (it is parsed
+  before the build): an entry that cannot be read is kept as
+  `Procedure(unreadable=<why>)` (`read_procedure`), which the rule names. A
+  new check is one function in `_CHECKS`. On S2S the build skips them (no
+  rule) logging `procedures_skipped: <message>` from
+  `config_warnings.procedures_on_s2s_warning`, the agent read's
+  `procedures_ignored_on_s2s`.
 
 Tests: `tests/unit/test_procedure_window.py`, `test_procedure_state.py`,
+`test_procedure_graph.py`, `test_procedures_on_s2s.py`,
 `tests/integration/test_procedures_api.py`,
-`tests/integration/test_harness_call_procedures.py`.
+`tests/integration/test_harness_call_procedures.py`,
+`test_harness_call_procedure_rules.py`.
 
 ## A/B Testing
 

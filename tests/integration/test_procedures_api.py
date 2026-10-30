@@ -156,3 +156,47 @@ async def test_move_to_step_is_not_listed_in_tools(monkeypatch) -> None:
         refused = await _agent(app, {**AGENT, "tools": [tool]})
 
     assert "offered automatically to an agent with procedures" in _refusal(refused)
+
+
+async def test_a_broken_graph_is_refused_at_create_and_update_naming_the_step(
+    monkeypatch,
+) -> None:
+    # #444: the graph rule runs at save, so the mistake is found here rather
+    # than on a call.
+    broken = procedure("router_down")
+    broken["steps"][1] = {
+        **broken["steps"][1],
+        "moves": [{"to": "technican", "when": "it is still red"}],
+    }
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        created = await _agent(app, {**AGENT, "procedures": [broken]})
+        sound = await _agent(app, {**AGENT, "procedures": [procedure()]})
+        assert sound.status_code == 201, sound.text
+        updated = await app.api.put(
+            f"/v1/agents/{sound.json()['data']['id']}",
+            json={"config": {**AGENT, "procedures": [procedure(), broken]}},
+        )
+
+    said = "step 'restart' moves to 'technican', which does not exist"
+    assert f"procedures[0] 'router_down': {said}" in _refusal(created)
+    assert f"procedures[1] 'router_down': {said}" in _refusal(updated)
+
+
+async def test_an_s2s_agents_read_says_its_procedures_are_ignored(monkeypatch):
+    s2s = {**AGENT, "pipeline_mode": "s2s", "s2s": {"provider": "google"}}
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        created = await _agent(app, {**s2s, "procedures": [procedure()]})
+        assert created.status_code == 201, created.text
+        read = await app.api.get(f"/v1/agents/{created.json()['data']['id']}")
+
+    [warning] = [
+        w
+        for w in read.json()["data"]["warnings"]
+        if w["code"] == "procedures_ignored_on_s2s"
+    ]
+    assert warning["procedures"] == ["no_internet"]
+    assert warning["provider"] == "google"

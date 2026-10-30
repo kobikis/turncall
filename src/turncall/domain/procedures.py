@@ -11,7 +11,9 @@ is the strict one.
 No pipecat here: the API schema imports this module.
 """
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 # The built-in that reports a move (#442). Offered by TurnCall to an agent
 # with procedures, never listed in its `tools`.
@@ -81,6 +83,10 @@ class Procedure(_Shape):
     # How many steps ahead the window previews.
     window_depth: int = DEFAULT_WINDOW_DEPTH
     steps: tuple[ProcedureStep, ...] = Field(default_factory=tuple)
+    # Why an inline agent's entry could not be read as a procedure at all,
+    # set by `AgentConfig`'s validator in its place: the build fails the call
+    # naming it (#444) rather than the call running without it.
+    unreadable: str | None = None
 
     def step(self, step_id: str) -> ProcedureStep | None:
         return next((s for s in self.steps if s.id == step_id), None)
@@ -88,3 +94,22 @@ class Procedure(_Shape):
     @property
     def start_step(self) -> ProcedureStep | None:
         return next((s for s in self.steps if s.start), None)
+
+
+def read_procedure(entry: Any) -> Procedure:
+    """An inline agent's procedures entry as a procedure, or, when it cannot
+    be read as one at all, a procedure marked `unreadable` with why — for the
+    build's rule to name (#444)."""
+    try:
+        return Procedure.model_validate(entry)
+    except ValidationError as exc:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        return Procedure(
+            name=name if isinstance(name, str) else "",
+            unreadable="; ".join(_problem(error) for error in exc.errors()),
+        )
+
+
+def _problem(error: Any) -> str:
+    where = ".".join(str(part) for part in error["loc"])
+    return f"{where}: {error['msg']}" if where else str(error["msg"])

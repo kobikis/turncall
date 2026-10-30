@@ -34,7 +34,8 @@ from turncall.domain.models import (
     RetentionConfig,
     resolve_delegation,
 )
-from turncall.domain.procedures import MOVE_TO_STEP
+from turncall.domain.procedure_graph import procedures_refusal
+from turncall.domain.procedures import MOVE_TO_STEP, Procedure
 from turncall.domain.providers import (
     AVATAR_PROVIDERS,
     LLM_PROVIDERS,
@@ -853,6 +854,14 @@ class AgentConfigSchema(BaseModel):
                 "with procedures; define them in `procedures` instead"
             )
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_procedure_graphs(self) -> "AgentConfigSchema":
+        # One rule, run here and at build for an inline agent (#444).
+        graphs = [Procedure.model_validate(p.model_dump()) for p in self.procedures]
+        if problem := procedures_refusal(graphs):
+            raise ValueError(problem)
         return self
 
     @model_validator(mode="after")

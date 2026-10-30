@@ -142,9 +142,31 @@ moves and the result tells the model what to do at the new step. Anything
 else is refused, the result naming the moves that are allowed and why, and the
 procedure and its window stay where they were.
 
+**Rules.** A procedure is checked when the agent is saved, so a mistake is a
+`422` naming the procedure and the step rather than something found on a call:
+
+- step ids are unique within the procedure, and procedure names within the agent;
+- exactly one step has `start: true`;
+- every move goes to a step that exists;
+- every step can be reached from the start step by its moves;
+- at least one step is of kind `end` or `escalate`;
+- at most 50 steps, and `window_depth` at most 5.
+
+```json
+{"success": false, "code": "validation_error", "error": "Validation error",
+ "details": {"errors": [{"msg": "Value error, procedures[0] 'no_internet': step 'after_restart' moves to 'technican', which does not exist", "...": "..."}]}}
+```
+
+A [call-init](/guides/call-init) inline agent skips that check, so the same
+rule runs when its call is built: a broken procedure, or an entry that is not
+a procedure at all, fails the call with `ended_reason: pipeline_error` and an
+`error.raised` event naming the problem — never a call that runs without it.
+
 Procedures are part of the agent's config, so they version, publish, roll back
 and A/B-route with the agent, and a [call-init](/guides/call-init) inline
-agent can carry its own. Cascade voice calls only.
+agent can carry its own. Cascade voice calls only: on an S2S agent they are
+skipped, said on its read (`procedures_ignored_on_s2s`, below) and in the
+build's log.
 
 ## Warnings on a Read
 
@@ -173,6 +195,7 @@ them would break working agents.
 | `pronunciations_ignored_on_s2s` | `pipeline_mode: "s2s"` has no TTS stage for the markup to apply to |
 | `knowledge_mode_unsupported` | A [knowledge base](/guides/s2s#knowledge-bases) is linked in `auto` mode to an S2S agent, which skips it: auto retrieval runs before each LLM turn, and a speech-to-speech model has no such point. Carries `modes` and `provider`. Link it in `tool` or `prompt` mode |
 | `skills_ignored_on_s2s` | An S2S agent lists [skills](/guides/skills), which only cascade calls load; its calls run without them. Carries `skills` and `provider` |
+| `procedures_ignored_on_s2s` | An S2S agent has [procedures](#procedures), which only cascade calls follow: the window goes before each caller turn, and a realtime model has no such point. Its calls run without them. Carries `procedures` and `provider` |
 
 Warnings are **derived on every read**, never stored, so an agent whose model
 moved out from under its pronunciations starts saying so without being edited.
