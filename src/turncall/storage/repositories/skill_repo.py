@@ -37,6 +37,18 @@ async def next_version(session: AsyncSession, project_id: UUID, name: str) -> in
     return (result.scalar_one() or 0) + 1
 
 
+async def tools_by_version(
+    session: AsyncSession, project_id: UUID, name: str
+) -> list[list[dict[str, Any]]]:
+    """Each version's tools, newest version first."""
+    result = await session.execute(
+        select(SkillRow.tools)
+        .where(SkillRow.project_id == project_id, SkillRow.name == name)
+        .order_by(SkillRow.version.desc())
+    )
+    return [list(tools) for tools in result.scalars().all()]
+
+
 async def create_skill(
     session: AsyncSession,
     *,

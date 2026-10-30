@@ -35,6 +35,7 @@ from turncall.api.v1.schemas.skills import (
     pinned_version_id,
 )
 from turncall.auth import Auth, WriteAuth
+from turncall.domain.config_secrets import MASK, keep_masked_tool_secrets
 from turncall.domain.enums import AuditAction, AuditResource, SkillState
 from turncall.domain.models import SKILL_NAME_MAX, SKILL_NAME_PATTERN
 from turncall.services import audit_log, skill_library
@@ -70,6 +71,36 @@ async def _check_knowledge_bases(
                     "knowledge_base_id": str(kb_id),
                 },
             )
+
+
+async def _keep_secrets(
+    session: AsyncSession,
+    project_id: UUID,
+    name: str,
+    tools: list[dict[str, Any]],
+    *,
+    first: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """A tool's secret sent back masked keeps the one its name holds: in
+    `first` (the draft being edited), else the name's newest version that has
+    it. A mask nothing fills is refused rather than stored."""
+    if not any(t.get("webhook_secret") == MASK for t in tools):
+        return tools
+    earlier = await skill_repo.tools_by_version(session, project_id, name)
+    kept, unfilled = keep_masked_tool_secrets(tools, [first or [], *earlier])
+    if unfilled:
+        index = unfilled[0]
+        raise ApiError(
+            status_code=422,
+            code=ErrorCode.VALIDATION_ERROR,
+            message=(
+                f"tools[{index}] {tools[index]['name']!r} webhook_secret is masked "
+                f"and no version of {name!r} holds a secret for that tool; "
+                "send the secret itself"
+            ),
+            details={"field": f"tools[{index}].webhook_secret"},
+        )
+    return kept
 
 
 async def _skill(session: AsyncSession, skill_id: UUID, project_id: UUID) -> SkillRow:
@@ -115,6 +146,7 @@ async def create_skill(
     content = body.model_dump(mode="json")
     await _check_knowledge_bases(session, auth.project_id, content["knowledge_bases"])
     await skill_repo.lock_name(session, auth.project_id, body.name)
+    tools = await _keep_secrets(session, auth.project_id, body.name, content["tools"])
     row = await skill_repo.create_skill(
         session,
         project_id=auth.project_id,
@@ -122,7 +154,7 @@ async def create_skill(
         version=await skill_repo.next_version(session, auth.project_id, body.name),
         description=content["description"],
         instructions=content["instructions"],
-        tools=content["tools"],
+        tools=tools,
         knowledge_bases=content["knowledge_bases"],
     )
     audit.record(
@@ -205,6 +237,17 @@ async def update_skill(
     if existing.state != SkillState.DRAFT.value:
         raise _not_in(existing, "edit", SkillState.DRAFT)
     values = body.values()
+    if "tools" in values:
+        values = {
+            **values,
+            "tools": await _keep_secrets(
+                session,
+                auth.project_id,
+                existing.name,
+                values["tools"],
+                first=list(existing.tools),
+            ),
+        }
     await _check_knowledge_bases(
         session, auth.project_id, values.get("knowledge_bases")
     )

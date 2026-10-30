@@ -1000,7 +1000,11 @@ GET  /v1/skills/{name}/agents         # draft + published agent versions listing
 
 `skills.tools` is `SealedTools`: webhook secrets sealed at rest and masked on
 read by the agent config's own rule for `tools` (`map_tools` /
-`sanitize_tools`), and sampled by the startup key check. Audited as
+`sanitize_tools`), and sampled by the startup key check. A tool sent back
+with its secret as the mask (`***`, all a read shows) keeps the secret its
+name holds — the draft's own, else the name's newest version with it
+(`config_secrets.keep_masked_tool_secrets`, `skills._keep_secrets`); a mask
+nothing fills is a 422 on `tools[i].webhook_secret`, never a stored `***`. Audited as
 `resource_type: skill` (`audit_log.skill_state`).
 
 **Safety at save** (#428). Agent create/update (`api/v1/agents._check_skills`,

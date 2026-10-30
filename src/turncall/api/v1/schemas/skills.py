@@ -26,7 +26,7 @@ from turncall.api.v1.schemas.agents import (
     InlineKnowledgeBaseSchema,
     ToolDefinitionSchema,
 )
-from turncall.domain.config_secrets import sanitize_tools
+from turncall.domain.config_secrets import MASK, sanitize_tools
 from turncall.domain.models import (
     BUILTIN_TOOL_NAMES,
     SKILL_NAME_MAX,
@@ -98,11 +98,31 @@ class _SkillContent(BaseModel):
     def _tools_by_name(cls, value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
         if value is None:
             return None
+        # A read masks each secret: one sent back as the mask means "keep
+        # it" (the endpoint fills it in), so the length rule skips it.
+        masked = {
+            i
+            for i, t in enumerate(value if isinstance(value, list) else ())
+            if isinstance(t, dict) and t.get("webhook_secret") == MASK
+        }
+        unmasked = (
+            [
+                {**t, "webhook_secret": None} if i in masked else t
+                for i, t in enumerate(value)
+            ]
+            if masked
+            else value
+        )
         try:
-            tools = handler(value)
+            tools = handler(unmasked)
         except ValidationError as exc:
             raise ValueError(_named(value, exc)) from None
-        return _check_tools(tools)
+        return _check_tools(
+            [
+                t.model_copy(update={"webhook_secret": MASK}) if i in masked else t
+                for i, t in enumerate(tools)
+            ]
+        )
 
     @field_validator("knowledge_bases", check_fields=False)
     @classmethod
