@@ -22,6 +22,7 @@ from loguru import logger
 
 from turncall.domain.enums import ToolExecutionMode
 from turncall.domain.models import BUILTIN_TOOL_NAMES, ToolDefinition
+from turncall.domain.procedures import MOVE_TO_STEP
 from turncall.services import call_control
 from turncall.services.skills import LOAD_SKILL
 from turncall.services.template_renderer import (
@@ -760,6 +761,11 @@ def _register_single_tool(
 
             result = await run_load_skill(dict(args), call_context, params)
             delivered = True
+        elif function_name == MOVE_TO_STEP:
+            # Checked and applied in one step, nothing awaited (#442).
+            from turncall.orchestrator.procedures import run_move_to_step
+
+            result = run_move_to_step(dict(args), call_context).result
         elif function_name in BUILTIN_TOOL_NAMES:
             execution = _execute_builtin(function_name, args, call_context)
             # A transfer takes the call away from this pipeline: the carrier

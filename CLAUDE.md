@@ -163,7 +163,7 @@ project's OpenAI key (its endpoint is the agent's own). No code reads
 
 Cascade (default):
 ```
-transport.input → STT → [VoicemailDetector] → user_agg (VAD + SmartTurnV3) → [KnowledgeRetrieval] → LLM → TTS → [VM gate] → transport.output → asst_agg → observability
+transport.input → STT → [VoicemailDetector] → user_agg (VAD + SmartTurnV3) → [KnowledgeRetrieval] → ProcedureWindow → LLM → TTS → [VM gate] → transport.output → asst_agg → observability
 ```
 
 S2S (`pipeline_mode: "s2s"`):
@@ -1240,6 +1240,51 @@ Key files: `api/v1/skills.py`, `api/v1/schemas/skills.py`,
 `tests/unit/test_skill_attachment_rules.py`, `tests/unit/test_text_skills.py`,
 `tests/unit/test_text_turn_refresh.py`.
 
+## Procedures
+
+A graph of steps an agent follows on a cascade voice call (PRD #417,
+ADR-0032): **the system holds the route, the model sees a window.**
+`config.procedures` = `[{name, description, start: call|on_request,
+window_depth, steps: [{id, kind: ask|instruct|check|escalate|end, text,
+start, tool, moves: [{to, when}], escalate: {transfer_call | handoff_to_agent}}]}]`
+— part of the agent config, so it versions, publishes, rolls back and
+A/B-routes with the agent, and a call-init inline agent carries its own.
+
+- **Layers.** `domain/procedures.py` the shapes (permissive: an inline agent
+  arrives past the API schema, and a broken graph is the build's to refuse
+  with a reason, #444) and `MOVE_TO_STEP`; `api/v1/schemas/procedures.py` the
+  strict schema (`AgentConfigSchema.procedures`); `domain/procedure_window.py`
+  the pure window builder (`build_window(procedure, path, depth=)`, marker
+  `[Procedure]`); `domain/procedure_state.py` the immutable per-call state
+  (`ProcedureState`, `ProcedureRun(name, path)`) and the pure `move(state,
+  procedure, to) -> MoveOutcome`; `orchestrator/procedures.py` the pipecat
+  side. No pipecat in the first four.
+- **At build** (`pipeline_builder._assemble`, before `_with_skills` so a
+  skill load keeps the tool): `with_procedures` adds `move_to_step` first in
+  `tools` and puts a `CallProcedures` holder on the context
+  (`CallContext.procedures`, every context starts with an empty one) with each
+  `start: "call"` procedure running at its start step. Skipped on S2S.
+- **The window.** `ProcedureWindowProcessor`, in every cascade pipeline right
+  before the LLM (after the KB auto processor), puts one `developer` message
+  right before the caller's turn via `turn_message.replace_turn_message`,
+  replacing the previous turn's: the current step and its text, the allowed
+  moves with their `when`, `← back to <previous>` (always allowed), a preview
+  up to `window_depth` ahead. The rest of the graph never enters the prompt.
+  The inference after a tool result gets no window (the context does not end
+  on the caller's turn), which is why an accepted move's result carries the
+  new step's text. Guard: `tests/unit/test_procedure_window_wiring.py`.
+- **`move_to_step`** (`{procedure, to}`; a built-in, never listed in `tools`
+  — a 422 there) runs `run_move_to_step` in `tool_bridge`: checked and applied
+  with no `await` in between, the holder's state replaced in one assignment.
+  A move from the current step or back to the previous one is accepted (back
+  pops the path); anything else is refused, the result naming the allowed
+  moves (`details.allowed`) and the window staying put. The result is the
+  `{success, message, details}` JSON the other built-ins answer.
+
+Tests: `tests/unit/test_procedure_window.py`, `test_procedure_state.py`,
+`tests/integration/test_procedures_api.py`,
+`tests/integration/test_harness_call_procedures.py`.
+
 ## A/B Testing
 
 Weighted traffic routing on phone numbers. Deterministic by caller number (SHA256 hash).
@@ -2178,6 +2223,7 @@ POST /v1/calls/{id}/analysis/rerun   # Re-run analysis (admin/developer key)
 | `handoff_to_agent` | Switch to another agent. Refused (422) on an `openai_live` S2S agent | `agent_id` (required), `reason`, `context` |
 | `send_dtmf` | Send keypad tones | `digits` (required) |
 | `load_skill` | Load one of the agent's skills (#424, see "Skills"): its instructions join the prompt and its tools the tool list, the context kept. Offered automatically to an agent with resolved skills, never listed in `tools` | `name` (required) |
+| `move_to_step` | Report a move in one of the agent's procedures (#442, see "Procedures"): accepted when the current step allows it or it goes back to the previous step, else refused naming the allowed moves. Offered automatically to a cascade agent with procedures, never listed in `tools` | `procedure`, `to` (both required) |
 | `do_not_call` | Suppress the caller's number (project-wide), record `call.opted_out`, end the call after the goodbye, like `end_call` (#228). Opt-in like every built-in: listed in `tools` or absent. A call with no E.164 caller (WebRTC) is refused and keeps running | none |
 
 ### Custom Webhook Tools

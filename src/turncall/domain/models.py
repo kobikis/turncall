@@ -30,6 +30,7 @@ from turncall.domain.enums import (
     ToolExecutionMode,
     ToolExecutionStatus,
 )
+from turncall.domain.procedures import Procedure
 
 
 class DomainModel(BaseModel):
@@ -137,6 +138,8 @@ BUILTIN_TOOL_NAMES = frozenset(
         # Offered by TurnCall itself to an agent with skills (#424), never
         # listed in its `tools`; a built-in so no skill or MCP tool takes it.
         "load_skill",
+        # Offered to an agent with procedures (#442), likewise never listed.
+        "move_to_step",
     }
 )
 
@@ -587,6 +590,36 @@ class AgentConfig(DomainModel):
                 high=high,
             )
         return min(max(value, low), high)
+
+    # Graphs of steps the agent follows on a cascade voice call (#442,
+    # ADR-0032). Only the shape is parsed here; whether a graph holds
+    # together is the build's rule (#444), which can say why.
+    procedures: list[Procedure] = Field(default_factory=list)
+
+    @field_validator("procedures", mode="before")
+    @classmethod
+    def _unreadable_procedures_are_skipped(cls, value: Any) -> list[Procedure]:
+        """An inline agent's config arrives from a call-init webhook, past
+        any API schema: an entry that cannot be read as a procedure at all
+        drops that procedure, never the call."""
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            logger.warning(
+                "procedure_skipped: procedures is not a list, call runs without them"
+            )
+            return []
+        usable = []
+        for entry in value:
+            try:
+                usable.append(Procedure.model_validate(entry))
+            except ValidationError as exc:
+                logger.warning(
+                    "procedure_skipped: unreadable procedures entry, call runs "
+                    "without it: {err}",
+                    err=str(exc),
+                )
+        return usable
 
     transport: str = "twilio"  # "twilio" | "webrtc" | "both"
     server_url: ServerUrlConfig = Field(default_factory=ServerUrlConfig)

@@ -28,6 +28,7 @@ from turncall.orchestrator.pipeline_factory import (
     CallContext,
     create_pipeline,
 )
+from turncall.orchestrator.procedures import with_procedures
 from turncall.orchestrator.tool_bridge import register_tools, remember_config_tools
 from turncall.services import drain
 from turncall.services.credentials import (
@@ -187,6 +188,9 @@ async def _assemble(
         session_factory, call_context.project_id, settings
     )
 
+    # Before the skills: a skill load rebuilds the tools from the config
+    # they start from, which must keep move_to_step.
+    config, call_context = with_procedures(config, call_context)
     config, call_context = await _with_skills(
         config,
         call_context,

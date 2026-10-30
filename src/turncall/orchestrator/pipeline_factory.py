@@ -59,6 +59,12 @@ def _no_skills_yet() -> Any:
     return no_skills(AgentConfig())
 
 
+def _no_procedures_yet() -> Any:
+    from turncall.orchestrator.procedures import no_procedures
+
+    return no_procedures()
+
+
 @dataclass(frozen=True)
 class CallContext:
     """Per-call context passed through the pipeline."""
@@ -86,6 +92,11 @@ class CallContext:
     # starts with an empty one, so a call whose agent has no skills still has
     # a holder for a handoff to swap the target agent's skills into (#427).
     skills: Any = field(default_factory=_no_skills_yet)
+    # The call's place in its procedures (#442):
+    # `orchestrator/procedures.CallProcedures`, set at build for an agent
+    # with procedures. Every context starts with an empty one, which the
+    # window processor reads every turn.
+    procedures: Any = field(default_factory=_no_procedures_yet)
 
     @property
     def is_eval(self) -> bool:
@@ -1757,6 +1768,10 @@ def create_pipeline(
                 call_id=str(call_context.call_id),
             )
 
+    # The procedure window (#442), right after the KB passages: both go
+    # before the caller's turn, each replacing only its own.
+    from turncall.orchestrator.procedures import procedure_window_stage
+
     # Knowledge base processor (auto mode)
     kb_processor = None
     if knowledge_base_attachments:
@@ -1808,6 +1823,7 @@ def create_pipeline(
             voicemail_detector.detector(),
             context_aggregator.user(),
             *([kb_processor] if kb_processor else []),
+            *procedure_window_stage(call_context),
             llm,
             *_hangup_gate(call_context),
             assistant_tap,
@@ -1830,6 +1846,7 @@ def create_pipeline(
             customer_tap,
             context_aggregator.user(),
             *([kb_processor] if kb_processor else []),
+            *procedure_window_stage(call_context),
             llm,
             *_hangup_gate(call_context),
             assistant_tap,

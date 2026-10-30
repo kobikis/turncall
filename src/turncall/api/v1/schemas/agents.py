@@ -22,6 +22,7 @@ from pydantic import (
 
 from turncall.api.v1.schemas import outbound_url
 from turncall.api.v1.schemas.knowledge import LinkKnowledgeBaseRequest
+from turncall.api.v1.schemas.procedures import ProcedureSchema
 from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
 from turncall.domain.models import (
@@ -33,6 +34,7 @@ from turncall.domain.models import (
     RetentionConfig,
     resolve_delegation,
 )
+from turncall.domain.procedures import MOVE_TO_STEP
 from turncall.domain.providers import (
     AVATAR_PROVIDERS,
     LLM_PROVIDERS,
@@ -809,6 +811,14 @@ class AgentConfigSchema(BaseModel):
             "unloads the one loaded longest ago, in the same switch"
         ),
     )
+    procedures: list[ProcedureSchema] = Field(
+        default_factory=list,
+        description=(
+            "Graphs of steps the agent follows (#417): the model is shown a "
+            "window of the current step each turn and reports each move with "
+            "move_to_step. Cascade voice only"
+        ),
+    )
     transport: str = Field(default="twilio", pattern=r"^(twilio|webrtc|both)$")
     server_url: ServerUrlConfigSchema = Field(default_factory=ServerUrlConfigSchema)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -829,6 +839,18 @@ class AgentConfigSchema(BaseModel):
             msg = (
                 f"tools: '{LOAD_SKILL}' is offered automatically to an agent "
                 "with skills; list skills in `skills` instead"
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def refuse_move_to_step_in_tools(self) -> "AgentConfigSchema":
+        # Offered by the platform to an agent with procedures (#442), built
+        # from them, as load_skill is from skills.
+        if any(t.name == MOVE_TO_STEP for t in self.tools):
+            msg = (
+                f"tools: '{MOVE_TO_STEP}' is offered automatically to an agent "
+                "with procedures; define them in `procedures` instead"
             )
             raise ValueError(msg)
         return self

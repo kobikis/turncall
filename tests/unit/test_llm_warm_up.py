@@ -15,6 +15,7 @@ from turncall.orchestrator.pipeline_factory import (
     _create_llm_service,
     _create_llm_stage,
 )
+from turncall.orchestrator.procedures import CallProcedures
 
 pytestmark = pytest.mark.unit
 
@@ -94,7 +95,10 @@ def test_create_pipeline_arms_it_only_when_asked(mocker, on: bool) -> None:
         config=AgentConfig(llm=LLMConfig(warm_up=on)),
         transport=mocker.MagicMock(),
         call_context=SimpleNamespace(
-            is_eval=False, call_id=uuid4(), session_factory=None
+            is_eval=False,
+            call_id=uuid4(),
+            session_factory=None,
+            procedures=CallProcedures(),
         ),
         credentials=creds("sk-test", deepgram="dg-test"),
         pipecat_settings=PipecatSettings(),

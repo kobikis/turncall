@@ -73,6 +73,79 @@ tool may share a name with a built-in, the agent's own tool or another listed
 skill's tool: saving the agent otherwise is a `422` naming both sides (see
 [Skills](/guides/skills#attach-skills-to-an-agent)).
 
+## Procedures
+
+A **procedure** is a graph of steps the agent follows on a call: diagnostic
+questions in order, checks the caller performs, the conditions that decide
+the next step, and where it ends. TurnCall holds the route; on every caller
+turn the model is shown only a **window** of it, and reports each move.
+
+```json
+"procedures": [
+  {
+    "name": "no_internet",
+    "description": "Caller has no internet connection at home",
+    "start": "call",
+    "window_depth": 1,
+    "steps": [
+      {"id": "lights", "kind": "ask", "start": true,
+       "text": "Ask which lights on the router are on and their colour.",
+       "moves": [
+         {"to": "restart", "when": "the internet light is red or orange"},
+         {"to": "resolved", "when": "all lights are green"}]},
+      {"id": "restart", "kind": "instruct",
+       "text": "Have the caller restart the router and wait 2 minutes.",
+       "moves": [{"to": "resolved", "when": "the caller confirms it is back"}]},
+      {"id": "resolved", "kind": "end", "text": "Confirm it works and close politely."}
+    ]
+  }
+]
+```
+
+| Field | Means |
+|-------|-------|
+| `name` | How the model names the procedure when it reports a move. Lowercase letters, digits and `_` |
+| `description` | When the procedure applies |
+| `start` | `call`: running from the first turn. `on_request`: the model starts it when it applies |
+| `window_depth` | How many steps ahead of the current one the model is shown (default 1, 0 for none) |
+| `steps[].id` | The step's id, which moves name |
+| `steps[].kind` | `ask`, `instruct`, `check`, `escalate` or `end` |
+| `steps[].text` | What the model should do at the step |
+| `steps[].start` | The step the procedure starts at |
+| `steps[].tool` | A tool the model should call at the step |
+| `steps[].moves` | The moves allowed from the step: `{to, when}`, `when` a plain-language condition the model judges |
+| `steps[].escalate` | What an `escalate` step does: `{"transfer_call": {...}}` (the [transfer tool's](/guides/tools) fields) or `{"handoff_to_agent": {"agent_id": "..."}}` |
+
+**The window.** Before each caller turn the model is given one message, right
+before the turn and replacing the previous turn's: the current step and what
+to do there, the allowed moves with their conditions, the move back to the
+previous step, and a preview of the steps up to `window_depth` ahead. The
+rest of the graph never enters the prompt.
+
+```text
+[Procedure]
+
+Procedure "no_internet" — current step: restart (instruct)
+  Do now: Have the caller restart the router and wait 2 minutes.
+  Allowed moves:
+    → resolved  when: the caller confirms it is back
+    ← back to lights  (always allowed)
+  Next steps (preview):
+    resolved (end): Confirm it works and close politely.
+  Report every move with move_to_step. Do not skip a step. If the caller's answer does not fit any move, ask again.
+```
+
+**Moves.** An agent with procedures is offered the built-in `move_to_step`
+(`{procedure, to}`); it is never listed in `tools` (a `422` there). A move the
+current step allows, or back to the previous step, is accepted: the procedure
+moves and the result tells the model what to do at the new step. Anything
+else is refused, the result naming the moves that are allowed and why, and the
+procedure and its window stay where they were.
+
+Procedures are part of the agent's config, so they version, publish, roll back
+and A/B-route with the agent, and a [call-init](/guides/call-init) inline
+agent can carry its own. Cascade voice calls only.
+
 ## Warnings on a Read
 
 `GET /v1/agents/{id}` returns a **`warnings`** list beside the config: things

@@ -47,6 +47,22 @@ NOT_CONSUMED: dict[str, str] = {
         )
         for name in ("recordings_days", "transcripts_days", "events_days")
     },
+    **{
+        name: (
+            "consumed, but by the pure window and move functions in "
+            "domain/procedure_window.py and domain/procedure_state.py, which "
+            "the call's procedure holder runs (#442)"
+        )
+        for name in (
+            "Procedure.window_depth",
+            "Procedure.steps",
+            "ProcedureStep.moves",
+            "ProcedureMove.when",
+        )
+    },
+    "ProcedureStep.escalate": (
+        "accepted and stored; reaching an escalate step runs it from #448"
+    ),
     "AgentConfig.analysis": (
         "consumed, but through the raw blob rather than the attribute: "
         "call_analysis_trigger rebuilds it with "
