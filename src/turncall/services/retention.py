@@ -22,7 +22,9 @@ everywhere keeps everything, as before retention existed. Three kinds:
   an error's text) is cleared with the transcript.
 - **events**: every other row on the call's event log. `ended_reason`, derived
   from them, is frozen onto the call row first, so the read still says how the
-  call ended; `latency_summary` and `failovers` go with them.
+  call ended; `latency_summary` and `failovers` go with them, and so does
+  `skills`' `loaded` (null after; the resolved versions are on the row and
+  stay, #425).
 
 The call row is never deleted: who called whom, when, for how long, its
 status and metadata stay, with `*_expired_at` saying what went and when.

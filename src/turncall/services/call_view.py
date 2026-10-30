@@ -36,17 +36,75 @@ class CallFacts:
     turn_metrics: tuple[dict[str, Any], ...] = ()
     # `provider.failover` payloads in the order they happened (#222).
     failovers: tuple[dict[str, Any], ...] = ()
+    # The skills the call resolved, `{id, skill, version, pinned}` in the agent's
+    # order (a handoff's target's after, #427), and its `skill.loaded`
+    # payloads in load order (#425).
+    resolved_skills: tuple[dict[str, Any], ...] = ()
+    skill_loads: tuple[dict[str, Any], ...] = ()
 
 
 # Call-init's inline agent, stored raw on the call (ADR-0017). It carries the
 # call's credentials — MCP headers, an inline `llm.api_key` — so it is read by
 # the pipeline and `config_for_call()` and never shown (#276).
 DYNAMIC_CONFIG = "dynamic_config"
+# The skills the call resolved (#425): `[{id, skill, version, pinned}]`
+# (`pinned` since #426; an entry without it was a live-following one), written by
+# the pipeline's build and appended to by a handoff for the target agent's
+# (#427), so the call stays explainable after a skill is published again.
+# Shown as `skills` (`call_skills`), not here.
+RESOLVED_SKILLS = "resolved_skills"
+# Keys only TurnCall writes: an outbound dial's `metadata` may not set them.
+RESERVED_METADATA = frozenset({DYNAMIC_CONFIG, RESOLVED_SKILLS})
 
 
 def public_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     """A call's metadata as the read and `call.ended` show it."""
-    return {k: v for k, v in (metadata or {}).items() if k != DYNAMIC_CONFIG}
+    return {k: v for k, v in (metadata or {}).items() if k not in RESERVED_METADATA}
+
+
+def resolved_skills(metadata: dict[str, Any] | None) -> tuple[dict[str, Any], ...]:
+    """The skills stored on a call row, each `{id, skill, version[, pinned]}`; anything
+    else under the key is skipped rather than shown."""
+    stored = (metadata or {}).get(RESOLVED_SKILLS)
+    if not isinstance(stored, list):
+        return ()
+    return tuple(
+        s
+        for s in stored
+        if isinstance(s, dict)
+        and isinstance(s.get("skill"), str)
+        and isinstance(s.get("version"), int)
+    )
+
+
+def call_skills(
+    resolved: tuple[dict[str, Any], ...],
+    loads: tuple[dict[str, Any], ...],
+    *,
+    events_kept: bool = True,
+) -> list[dict[str, Any]]:
+    """Every skill version the call resolved, in the agent's order (after a
+    handoff, the target agent's next): its version, whether the agent pinned
+    it (#426; an entry stored before pins existed reads false) and whether the
+    call loaded it at any point. A skill unloaded later (#427) still reads loaded;
+    its `skill.unloaded` event says when. Empty for a call with none.
+
+    A load matches by name and version: two agents of one call may resolve
+    two versions of a skill, and only the one loaded ran.
+
+    `loaded` is null once retention deleted the call's events (#316): the
+    loads they recorded are gone, and false would say the skill never ran.
+    """
+    loaded = {(load.get("skill"), load.get("version")) for load in loads}
+    return [
+        {
+            "skill": s["skill"],
+            "version": s["version"],
+            "pinned": s.get("pinned") is True,
+            "loaded": ((s["skill"], s["version"]) in loaded) if events_kept else None,
+        }
+        for s in resolved
+    ]
 
 
 _STAGES = ("stt", "llm", "tts")
@@ -147,6 +205,11 @@ def derived_fields(call: Any, facts: CallFacts) -> dict[str, Any]:
         "agent_version": facts.agent_version,
         "latency_summary": latency_summary(facts.turn_metrics),
         "failovers": list(facts.failovers),
+        "skills": call_skills(
+            facts.resolved_skills,
+            facts.skill_loads,
+            events_kept=getattr(call, "events_expired_at", None) is None,
+        ),
     }
 
 
@@ -164,6 +227,14 @@ async def load_call_facts(
     failovers = await call_repo.list_payloads_by_call(
         session, call_ids, CallEventType.PROVIDER_FAILOVER
     )
+    resolved = {c.id: resolved_skills(c.metadata_json) for c in calls}
+    skill_loads = (
+        await call_repo.list_payloads_by_call(
+            session, call_ids, CallEventType.SKILL_LOADED
+        )
+        if any(resolved.values())
+        else {}
+    )
     agent_ids = list({c.active_agent_id for c in calls if c.active_agent_id})
     agents = (
         await agent_repo.get_names_and_versions(session, agent_ids) if agent_ids else {}
@@ -177,6 +248,8 @@ async def load_call_facts(
             agent_version=agent[1] if agent else None,
             turn_metrics=tuple(turn_metrics.get(call.id, ())),
             failovers=tuple(failovers.get(call.id, ())),
+            resolved_skills=resolved[call.id],
+            skill_loads=tuple(skill_loads.get(call.id, ())),
         )
     return facts
 

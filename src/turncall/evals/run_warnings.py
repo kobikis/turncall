@@ -1,7 +1,8 @@
 """What the author of a run has to be told, that is not a verdict.
 
-Three things a run can only say in the run itself (#96, #119). None of them is
-a failure and none is an error: a mock that can never fire, a judge that is not
+Things a run can only say in the run itself (#96, #119). None of them is
+a failure and none is an error: a mock that can never fire (or is never used,
+#431), a judge that is not
 the one that decided this scenario's last verdict, and a worker older than the
 code it is running. They were worker log lines, which is the container's
 stdout — and nobody reading a run back has ever seen it.
@@ -12,6 +13,7 @@ fired, and each is safe to call on any run.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any
 from uuid import UUID
 
@@ -21,7 +23,11 @@ from turncall.evals.targets import ResolvedTarget
 
 
 def warn_unmatched_mocks(
-    tool_mocks: dict[str, Any], target: ResolvedTarget, *, run_id: UUID
+    tool_mocks: dict[str, Any],
+    target: ResolvedTarget,
+    *,
+    run_id: UUID,
+    skill_tools: Collection[str] = (),
 ) -> list[dict[str, Any]]:
     """Say so when a mock names a tool this run can never call.
 
@@ -38,6 +44,10 @@ def warn_unmatched_mocks(
     nobody. Advertising mocked-but-undiscovered tools to the model is the real
     fix, and needs a schema the mock does not carry today (#74's inline targets
     are the sanctioned way to give an eval a tool surface of its own).
+
+    `skill_tools` are the tools the run's resolved skills bring (#431): the
+    model is offered them once it loads the skill, so a mock naming one can
+    fire.
     """
     if not tool_mocks:
         return []
@@ -51,6 +61,7 @@ def warn_unmatched_mocks(
         {t.name for t in target.config.tools}
         | set(BUILTIN_TOOL_NAMES)
         | {KNOWLEDGE_TOOL_SCHEMA["name"]}
+        | set(skill_tools)
     )
     unmatched = sorted(set(tool_mocks) - known)
     if not unmatched:
@@ -81,6 +92,33 @@ def warn_unmatched_mocks(
             ),
             "tools": unmatched,
             "mcp_servers": servers,
+        }
+    ]
+
+
+def warn_never_mocked(tool_mocks: dict[str, Any]) -> list[dict[str, Any]]:
+    """Say so when a mock names a tool an eval never mocks (#431).
+
+    `load_skill` changes the agent under test — the skill's instructions and
+    tools join its prompt — and reaches nothing outside the eval, so it always
+    runs; a canned answer for it would test an agent that never gets the
+    skill. The mock is ignored rather than refused, for the reason a stale
+    mock is only warned about: failing a queued run over it helps nobody.
+    """
+    from turncall.services.tool_mocks import NEVER_MOCKED
+
+    ignored = sorted(set(tool_mocks) & NEVER_MOCKED)
+    if not ignored:
+        return []
+    return [
+        {
+            "code": "mock_ignored",
+            "message": (
+                f"the mock(s) for {', '.join(ignored)} were ignored: an eval "
+                "always runs load_skill, which changes the agent under test and "
+                "nothing outside it. Mock the skill's own tools instead."
+            ),
+            "tools": ignored,
         }
     ]
 

@@ -3,6 +3,7 @@
 Handles inbound SMS and programmatic chat messages:
 - Session creation / resumption / expiry
 - LLM message history assembly
+- The agent's skills, held across the session's messages (`text_skills`)
 - Response generation via llm_text
 - Webhook event dispatch
 """
@@ -23,13 +24,18 @@ from turncall.domain.session_state import is_session_expired
 from turncall.events.emit import Redacted, dispatch_project_event, redact
 from turncall.services.chat_tools import build_chat_tools
 from turncall.services.limits import admit_message
-from turncall.services.llm_text import complete_text
+from turncall.services.llm_text import TurnUpdate, complete_text
 from turncall.services.template_renderer import (
     check_variables,
     prepend_knowledge_context,
     render_agent_config,
 )
 from turncall.services.text_agent import TextAgent, resolve_text_agent
+from turncall.services.text_skills import (
+    SessionSkills,
+    persist_loads,
+    session_skills,
+)
 from turncall.storage.models import SmsSessionRow
 from turncall.storage.repositories import sms_message_repo, sms_session_repo
 from turncall.storage.repositories.agent_repo import get_agent_by_id
@@ -244,8 +250,17 @@ async def _process_chat_message(
     await _dispatch_chat_event(db, customer_event, session_row.id, project_id)
 
     # 4. Build LLM messages and generate reply
-    agent_config = for_session(agent_config, session_row.metadata_json or {})
-    system_prompt = agent_config.system_prompt
+    metadata = session_row.metadata_json or {}
+    variables = session_variables(agent_config, metadata)
+    agent_config = for_session(agent_config, metadata)
+    # Resolved on the session's first message, held by every later one (#430).
+    skills = await session_skills(
+        db,
+        project_id=project_id,
+        session_id=session_row.id,
+        config=agent_config,
+        variables=variables,
+    )
 
     # The project's keys, so a text turn runs on the account a voice call on
     # the same project would (ADR-0020): agent inline, project, platform.
@@ -256,14 +271,13 @@ async def _process_chat_message(
     # The agent's knowledge bases: `prompt` and `auto` go into the prompt
     # here, `tool` becomes `query_knowledge` with the turn's other tools.
     attachments = await _kb_attachments(db, project_id, agent_id, agent_config)
-    system_prompt = await _inject_kb_context(
+    kb_prompt = await _kb_prompt(
         db,
         attachments=attachments,
-        system_prompt=system_prompt,
         user_message=message,
         openai_api_key=credentials.api_key("openai"),
-        tool_names=[t.name for t in agent_config.tools],
     )
+    system_prompt = _turn_prompt(kb_prompt, agent_config, skills)
 
     llm_messages = await _build_llm_messages(db, session_row.id, system_prompt)
 
@@ -276,7 +290,16 @@ async def _process_chat_message(
         project_id=project_id,
         knowledge=[a for a in attachments if a.mode == "tool"],
         openai_api_key=credentials.api_key("openai"),
+        skills=skills,
     )
+
+    def refresh() -> TurnUpdate:
+        # A `load_skill` in one round reaches the next: the skill's section
+        # in the prompt, its tools among the tools.
+        return TurnUpdate(
+            _turn_prompt(kb_prompt, agent_config, skills), chat_tools.current()
+        )
+
     try:
         completion = await complete_text(
             agent_config.llm,
@@ -285,11 +308,13 @@ async def _process_chat_message(
             tools=chat_tools.schemas or None,
             execute_tool=chat_tools.execute,
             credentials=credentials,
+            refresh=refresh if skills is not None else None,
         )
     finally:
         await chat_tools.aclose()
 
-    # 5. Store agent reply
+    # 5. Store agent reply — and what the turn loaded, in the same commit.
+    await persist_loads(db, session_row.id, skills)
     agent_msg = await sms_message_repo.create_message(
         db,
         session_id=session_row.id,
@@ -401,26 +426,32 @@ def _merged_variables(
 async def _remember_variables(
     db: AsyncSession, session_row: SmsSessionRow, merged: dict[str, str]
 ) -> SmsSessionRow:
-    """Store the session's merged `{{variables}}`, when they changed."""
+    """Store the session's merged `{{variables}}`, when they changed — that
+    key alone, so a concurrent message's other keys (the skills it loaded,
+    #430) are not written back over."""
     metadata = session_row.metadata_json or {}
     if merged == metadata.get("template_variables"):
         return session_row
-    updated = await sms_session_repo.set_session_metadata(
-        db, session_row.id, {**metadata, "template_variables": merged}
+    updated = await sms_session_repo.merge_session_metadata(
+        db, session_row.id, {"template_variables": merged}
     )
     return updated or session_row
+
+
+def session_variables(config: AgentConfig, metadata: dict) -> dict[str, str]:
+    """The session's `{{variables}}`: its own over the agent's `metadata`."""
+    stored = metadata.get("template_variables")
+    return {
+        **{k: str(v) for k, v in config.metadata.items()},
+        **(stored if isinstance(stored, dict) else {}),
+    }
 
 
 def for_session(config: AgentConfig, metadata: dict) -> AgentConfig:
     """The agent as this session runs it: `{{variables}}` rendered, then
     call-init's `knowledge_context` prepended — a call's order. The agent's
     own `metadata` fills any name the session does not set."""
-    stored = metadata.get("template_variables")
-    variables = {
-        **{k: str(v) for k, v in config.metadata.items()},
-        **(stored if isinstance(stored, dict) else {}),
-    }
-    rendered = render_agent_config(config, variables)
+    rendered = render_agent_config(config, session_variables(config, metadata))
     knowledge_context = metadata.get("knowledge_context")
     if not isinstance(knowledge_context, str):
         return rendered
@@ -529,6 +560,49 @@ async def _kb_attachments(
     return await _inline_attachments(db, project_id, config)
 
 
+@dataclass(frozen=True)
+class _KbPrompt:
+    """What the agent's knowledge bases add to a turn's prompt: `lead` goes
+    before it (retrieved context, then `prompt`-mode documents), and the hints
+    for `modes` after it."""
+
+    lead: str = ""
+    modes: frozenset[str] = frozenset()
+
+    def around(
+        self, prompt: str, tool_names: Iterable[str], *, skill_search: bool = False
+    ) -> str:
+        """`prompt` with the KBs' parts. `skill_search`: a loaded skill has a
+        tool-mode KB, so `query_knowledge` is offered even if the agent has
+        none of its own (#429, #430)."""
+        from turncall.services.retrieval import knowledge_hints
+
+        if self.lead:
+            prompt = f"{self.lead}\n\n{prompt}"
+        modes = set(self.modes) | ({"tool"} if skill_search else set())
+        # Tell the model it has a KB even when this message retrieved nothing,
+        # so it doesn't deny having one (e.g. "use the attached file" matches
+        # nothing), and to search a `tool`-mode one before saying no — as
+        # build_knowledge_preamble does on a voice call.
+        hints = knowledge_hints(modes, tool_names)
+        return f"{prompt}\n\n{hints}" if hints else prompt
+
+
+def _turn_prompt(
+    kb: _KbPrompt, config: AgentConfig, skills: SessionSkills | None
+) -> str:
+    """The system prompt the turn runs on now: the agent's (with the session's
+    skills listed, and the loaded ones' sections) inside its KBs' parts."""
+    if skills is None:
+        return kb.around(config.system_prompt, [t.name for t in config.tools])
+    skilled = skills.config()
+    return kb.around(
+        skilled.system_prompt,
+        [t.name for t in skilled.tools],
+        skill_search=skills.searches(),
+    )
+
+
 async def _inject_kb_context(
     db: AsyncSession,
     *,
@@ -538,29 +612,47 @@ async def _inject_kb_context(
     openai_api_key: str,
     tool_names: Iterable[str] = (),
 ) -> str:
-    """Inject knowledge base context into system prompt for chat.
+    """Inject knowledge base context into system prompt for chat."""
+    kb = await _kb_prompt(
+        db,
+        attachments=attachments,
+        user_message=user_message,
+        openai_api_key=openai_api_key,
+    )
+    return kb.around(system_prompt, tool_names)
 
-    - prompt: Full document text prepended
-    - auto: Retrieval based on user message, context prepended
+
+async def _kb_prompt(
+    db: AsyncSession,
+    *,
+    attachments: list,
+    user_message: str,
+    openai_api_key: str,
+) -> _KbPrompt:
+    """What the agent's knowledge bases add to this turn's prompt, read once
+    per message (a skill loaded mid-turn reuses it):
+
+    - prompt: Full document text before the prompt
+    - auto: Retrieval based on user message, context before that
     - tool: nothing here — `query_knowledge` is offered with the turn's tools
       (`chat_tools`); the awareness hint covers it, as on a voice call
     """
     from turncall.services.retrieval import (
         format_retrieved_context,
         get_full_text_context,
-        knowledge_hints,
         retrieve,
     )
 
     if not attachments:
-        return system_prompt
+        return _KbPrompt()
 
+    lead: list[str] = []
     # Prompt mode: inject full document text
     prompt_kb_ids = [a.knowledge_base_id for a in attachments if a.mode == "prompt"]
     if prompt_kb_ids:
         full_text = await get_full_text_context(db, prompt_kb_ids)
         if full_text:
-            system_prompt = f"{full_text}\n\n{system_prompt}"
+            lead.insert(0, full_text)
 
     # Auto mode: retrieve based on user message
     auto_kb_ids = [a.knowledge_base_id for a in attachments if a.mode == "auto"]
@@ -575,18 +667,11 @@ async def _inject_kb_context(
             openai_api_key=openai_api_key,
         )
         if result.chunks:
-            context_text = format_retrieved_context(result)
-            system_prompt = f"{context_text}\n\n{system_prompt}"
+            lead.insert(0, format_retrieved_context(result))
 
-    # Tell the model it has a KB even when this message retrieved nothing, so it
-    # doesn't deny having one (e.g. "use the attached file" matches nothing),
-    # and to search a `tool`-mode one before saying no — as
-    # build_knowledge_preamble does on a voice call.
-    hints = knowledge_hints({a.mode for a in attachments}, tool_names)
-    if hints:
-        system_prompt = f"{system_prompt}\n\n{hints}"
-
-    return system_prompt
+    return _KbPrompt(
+        lead="\n\n".join(lead), modes=frozenset(a.mode for a in attachments)
+    )
 
 
 async def _inline_attachments(

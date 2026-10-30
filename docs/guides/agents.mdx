@@ -37,6 +37,7 @@ curl -X POST http://localhost:8090/v1/agents \
     "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"},
     "tools": [],
     "mcp_servers": [],
+    "skills": [{"skill": "verify_identity"}],
     "silence_timeout_ms": 800,
     "interruption_enabled": true,
     "smart_turn_detection": true,
@@ -57,6 +58,20 @@ curl -X POST http://localhost:8090/v1/agents \
   top-level `aws` block for region and credentials — one per agent, shared by
   both. See [AWS credentials](/guides/providers#credentials).
 </Note>
+
+`skills` names the project's [skills](/guides/skills) the agent may load
+mid-call. The model sees each one's name and description, and loads one with
+the built-in `load_skill` tool when the conversation needs it.
+`max_loaded_skills` (default 3, 1 to 10) caps how many it holds loaded at
+once; loading one more unloads the one loaded longest ago. An entry follows
+the skill's live published version, so a skill publish reaches the agent's
+next call without republishing it, unless the entry pins one with `version_id`
+(see [Pin a version](/guides/skills#pin-a-version)). Each name must have a
+published version in the project (a pin: a published or archived version of
+that skill), and no skill
+tool may share a name with a built-in, the agent's own tool or another listed
+skill's tool: saving the agent otherwise is a `422` naming both sides (see
+[Skills](/guides/skills#attach-skills-to-an-agent)).
 
 ## Warnings on a Read
 
@@ -84,6 +99,7 @@ them would break working agents.
 | `pronunciations_unreadable` | The resolved TTS provider and model will not read the markup, so those words are spoken as written |
 | `pronunciations_ignored_on_s2s` | `pipeline_mode: "s2s"` has no TTS stage for the markup to apply to |
 | `knowledge_mode_unsupported` | A [knowledge base](/guides/s2s#knowledge-bases) is linked in `auto` mode to an S2S agent, which skips it: auto retrieval runs before each LLM turn, and a speech-to-speech model has no such point. Carries `modes` and `provider`. Link it in `tool` or `prompt` mode |
+| `skills_ignored_on_s2s` | An S2S agent lists [skills](/guides/skills), which only cascade calls load; its calls run without them. Carries `skills` and `provider` |
 
 Warnings are **derived on every read**, never stored, so an agent whose model
 moved out from under its pronunciations starts saying so without being edited.
@@ -100,7 +116,7 @@ Personalize agents per-call using `{{variable}}` placeholders:
 }
 ```
 
-Variables are rendered at call start via [call-init](/guides/call-init) or the API. See [Server Events](/guides/server-events) for how to dynamically inject variables.
+Variables are rendered at call start via [call-init](/guides/call-init) or the API, in a [skill's](/guides/skills) instructions too. See [Server Events](/guides/server-events) for how to dynamically inject variables.
 
 ## Pipeline Mode
 

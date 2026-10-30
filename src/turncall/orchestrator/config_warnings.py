@@ -55,6 +55,7 @@ def config_warnings(
                 _respelling_warning(config),
                 _readability_warning(config),
                 knowledge_mode_warning(config, kb_modes),
+                skills_on_s2s_warning(config),
             )
             if warning is not None
         ]
@@ -88,6 +89,30 @@ def knowledge_mode_warning(
         ),
         "modes": ["auto"],
         "provider": provider,
+    }
+
+
+def skills_on_s2s_warning(config: AgentConfig) -> dict[str, Any] | None:
+    """Skills listed on an S2S agent (#428), which loads none.
+
+    A load changes the prompt and tools mid-call, and a realtime session reads
+    no such change after it starts on most providers. `skill_loader` skips the
+    skills on exactly this rule and logs this message, so the build and the
+    agent read cannot disagree.
+    """
+    if config.pipeline_mode != "s2s" or not config.skills:
+        return None
+    names = [ref.skill for ref in config.skills]
+    return {
+        "code": "skills_ignored_on_s2s",
+        "message": (
+            f"skills ({', '.join(names)}) are ignored on this S2S agent "
+            f"({config.s2s.provider}): a realtime session takes no prompt or "
+            "tool change mid-call, so calls run without them. Use "
+            "pipeline_mode='cascade' to load skills."
+        ),
+        "skills": names,
+        "provider": config.s2s.provider,
     }
 
 

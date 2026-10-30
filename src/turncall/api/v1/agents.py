@@ -20,9 +20,14 @@ from turncall.api.v1.schemas.agents import (
 from turncall.auth import Auth, AuthContext, WriteAuth
 from turncall.domain.enums import AuditAction, AuditResource
 from turncall.domain.models import RetentionConfig
-from turncall.services import audit_log, retention
+from turncall.services import audit_log, retention, skills
 from turncall.services.audit_log import AuditTrail
-from turncall.storage.repositories import agent_repo, ambience_repo, knowledge_repo
+from turncall.storage.repositories import (
+    agent_repo,
+    ambience_repo,
+    knowledge_repo,
+    skill_repo,
+)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -40,6 +45,32 @@ async def _check_ambience(
             code=ErrorCode.INVALID_AGENT_CONFIG,
             message=f"ambience.sound {sound} is not an ambience sound in this project",
             details={"field": "ambience.sound", "sound": str(sound)},
+        )
+
+
+async def _check_skills(
+    session: AsyncSession, project_id: UUID, config: AgentConfigSchema | None
+) -> None:
+    """The skills an agent lists must be live in the project — or, pinned,
+    name a published or archived version of that skill there (#426) — and
+    bring no tool whose name is taken (#428): checked against the version
+    each resolves to now, at save, rather than skipped or dropped on a call."""
+    if config is None or not config.skills:
+        return
+    names = {ref.skill for ref in config.skills}
+    # The lock a skill delete takes: a delete racing this save either lands
+    # first and is seen below, or waits and then sees this agent.
+    for name in sorted(names):
+        await skill_repo.lock_name(session, project_id, name)
+    refusal = await skills.attachment_refusal(
+        session, project_id, config.skills, [tool.name for tool in config.tools]
+    )
+    if refusal is not None:
+        raise ApiError(
+            status_code=422,
+            code=ErrorCode.INVALID_AGENT_CONFIG,
+            message=refusal.message,
+            details=refusal.details,
         )
 
 
@@ -185,6 +216,7 @@ async def create_agent(
     """Create a new draft agent."""
     _refuse_inline_knowledge_bases(body.config)
     await _check_ambience(session, auth.project_id, body.config)
+    await _check_skills(session, auth.project_id, body.config)
     before = await _retention_before(session, auth, {body.name})
     _refuse_written_retention(before, body.name, body.config.model_dump())
     next_version = await agent_repo.get_next_version(
@@ -281,6 +313,7 @@ async def update_agent(
 
     _refuse_inline_knowledge_bases(body.config)
     await _check_ambience(session, auth.project_id, body.config)
+    await _check_skills(session, auth.project_id, body.config)
     config_blob = body.config.model_dump() if body.config else existing.config_blob
     name = body.name or existing.name
     before = await _retention_before(session, auth, {existing.name, name})

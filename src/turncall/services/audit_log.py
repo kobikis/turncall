@@ -1,7 +1,7 @@
 """The audit log (#317, ADR-0024): what changed, by which API key.
 
-Every change made through the API to an agent, a project credential, a phone
-number, an API key or a project setting writes an entry, in the transaction of
+Every change made through the API to an agent, a skill, a project credential,
+a phone number, an API key or a project setting writes an entry, in the transaction of
 the change: a change rolled back leaves no entry, and a committed one always
 has one. Routes record through an `AuditTrail`, which the API hands them
 (`api/audit.py`) bound to the request's session. The trail holds its entries
@@ -37,7 +37,7 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session
 
-from turncall.domain.config_secrets import MASK, sanitize_config
+from turncall.domain.config_secrets import MASK, sanitize_config, sanitize_tools
 from turncall.domain.enums import AuditAction, AuditActor, AuditResource
 from turncall.storage.models import utc_now
 from turncall.storage.repositories import audit_repo
@@ -157,6 +157,21 @@ def agent_state(row: Any) -> State:
         "config": row.config_blob or {},
     }
     return State.of({**raw, "config": sanitize_config(raw["config"])}, raw)
+
+
+def skill_state(row: Any) -> State:
+    """A skill version (#423): its tools as the skill read masks them."""
+    raw = {
+        "name": row.name,
+        "version": row.version,
+        "state": row.state,
+        "published_at": row.published_at,
+        "description": row.description,
+        "instructions": row.instructions,
+        "tools": row.tools or [],
+        "knowledge_bases": row.knowledge_bases or [],
+    }
+    return State.of({**raw, "tools": sanitize_tools(raw["tools"])}, raw)
 
 
 def knowledge_base_link(row: Any) -> State:

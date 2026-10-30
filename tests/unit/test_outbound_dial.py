@@ -310,6 +310,16 @@ class TestRoute:
         dial.create.assert_not_awaited()
         dial.carrier.assert_not_awaited()
 
+    def test_a_client_cannot_hand_in_the_calls_skills(self, dial) -> None:
+        """#425: `metadata.resolved_skills` is the call's record of the skill
+        versions it ran, written by its build and read as `skills`."""
+        dial.body["metadata"] = {"resolved_skills": [{"skill": "x", "version": 1}]}
+        r = dial.post()
+        assert r.status_code == 422
+        assert "resolved_skills" in r.text
+        dial.create.assert_not_awaited()
+        dial.carrier.assert_not_awaited()
+
     def test_a_suppressed_number_is_refused_and_never_dialled(self, dial) -> None:
         dial.suppressed = True
         r = dial.post()

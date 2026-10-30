@@ -5536,6 +5536,598 @@
         }
       }
     },
+    "/v1/skills": {
+      "post": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Create Skill",
+        "description": "A new draft version of the named skill.",
+        "operationId": "create_skill_v1_skills_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSkillRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Skill V1 Skills Post"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "List Skills",
+        "description": "The project's skill versions, newest first; `name` lists one skill's\nversions, `state=published` the live ones.",
+        "operationId": "list_skills_v1_skills_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[a-z_][a-z0-9_]*$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(draft|published|archived)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Skills V1 Skills Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/skills/{name}/agents": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "List Skill Agents",
+        "description": "The project's draft and published agent versions listing the skill,\neach with the skill version it resolves to now \u2014 the pinned one for an\nentry that pins (#426), else the live published one. A name the project\nhas no version of is a 404.",
+        "operationId": "list_skill_agents_v1_skills__name__agents_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z_][a-z0-9_]*$",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Skill Agents V1 Skills  Name  Agents Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/skills/{skill_id}": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Get Skill",
+        "operationId": "get_skill_v1_skills__skill_id__get",
+        "parameters": [
+          {
+            "name": "skill_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Skill Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Skill V1 Skills  Skill Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Update Skill",
+        "description": "Edit a draft. A published or archived version is a 409: create a new\nversion instead.",
+        "operationId": "update_skill_v1_skills__skill_id__put",
+        "parameters": [
+          {
+            "name": "skill_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Skill Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSkillRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Skill V1 Skills  Skill Id  Put"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Delete Skill",
+        "description": "Delete one version. A 409 naming the agents while any draft or\npublished agent version lists the skill: remove it from their `skills`\nfirst.",
+        "operationId": "delete_skill_v1_skills__skill_id__delete",
+        "parameters": [
+          {
+            "name": "skill_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Skill Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Skill V1 Skills  Skill Id  Delete"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/skills/{skill_id}/publish": {
+      "post": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Publish Skill",
+        "description": "Make a draft the name's live version; the previous one is archived.",
+        "operationId": "publish_skill_v1_skills__skill_id__publish_post",
+        "parameters": [
+          {
+            "name": "skill_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Skill Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Publish Skill V1 Skills  Skill Id  Publish Post"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/skills/{skill_id}/rollback": {
+      "post": {
+        "tags": [
+          "skills"
+        ],
+        "summary": "Rollback Skill",
+        "description": "Restore an archived version as the name's live one; the current live\nversion is archived.",
+        "operationId": "rollback_skill_v1_skills__skill_id__rollback_post",
+        "parameters": [
+          {
+            "name": "skill_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Skill Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Rollback Skill V1 Skills  Skill Id  Rollback Post"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/ambience-sounds": {
       "post": {
         "tags": [
@@ -8355,6 +8947,22 @@
             "type": "array",
             "title": "Knowledge Bases"
           },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/SkillRefSchema"
+            },
+            "type": "array",
+            "title": "Skills",
+            "description": "Skills the model may load mid-call with load_skill, each by name. Cascade voice only; the call runs each skill's live published version, or the version an entry pins with version_id"
+          },
+          "max_loaded_skills": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Max Loaded Skills",
+            "description": "How many skills a call may hold loaded at once. Loading one more unloads the one loaded longest ago, in the same switch",
+            "default": 3
+          },
           "transport": {
             "type": "string",
             "pattern": "^(twilio|webrtc|both)$",
@@ -8519,7 +9127,8 @@
           "credential",
           "phone_number",
           "api_key",
-          "project"
+          "project",
+          "skill"
         ],
         "title": "AuditResource",
         "description": "What an audit log entry is about (#317, ADR-0024)."
@@ -9442,6 +10051,52 @@
           "name"
         ],
         "title": "CreateProjectRequest"
+      },
+      "CreateSkillRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z_][a-z0-9_]*$",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Description"
+          },
+          "instructions": {
+            "type": "string",
+            "maxLength": 128000,
+            "minLength": 1,
+            "title": "Instructions"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/ToolDefinitionSchema"
+            },
+            "type": "array",
+            "title": "Tools"
+          },
+          "knowledge_bases": {
+            "items": {
+              "$ref": "#/components/schemas/InlineKnowledgeBaseSchema"
+            },
+            "type": "array",
+            "title": "Knowledge Bases"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "instructions"
+        ],
+        "title": "CreateSkillRequest",
+        "description": "A new draft: version 1 of a new name, or the next version of one the\nproject has."
       },
       "CreateTakeawayRequest": {
         "properties": {
@@ -10992,6 +11647,38 @@
         "title": "SetRoutingWeightsRequest",
         "description": "Request to set A/B routing weights on a phone number."
       },
+      "SkillRefSchema": {
+        "properties": {
+          "skill": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z_][a-z0-9_]*$",
+            "title": "Skill",
+            "description": "The name of one of the project's skills"
+          },
+          "version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Id",
+            "description": "Pin one version of the skill, by its id: the agent runs that version, published or archived, whatever is published later. Omitted or null, the agent follows the live published version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "skill"
+        ],
+        "title": "SkillRefSchema",
+        "description": "A skill the agent may load mid-call (#424), by name. The call runs the\nskill's live published version, resolved when the call starts \u2014 or, with\n`version_id` (#426), exactly that version."
+      },
       "SuccessEvaluationSchema": {
         "properties": {
           "enabled": {
@@ -11487,6 +12174,68 @@
         ],
         "title": "UpdatePhoneNumberRequest",
         "description": "In-place update of a binding's routing/SMS config.\n\nThe number's identity (carrier, SID, E.164) and its server_url_secret are\nstable \u2014 call-init endpoints keep verifying with the same secret across\nedits. `carrier` may be sent but must be the number's own (null = it)."
+      },
+      "UpdateSkillRequest": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1024,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
+          "tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ToolDefinitionSchema"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tools"
+          },
+          "knowledge_bases": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/InlineKnowledgeBaseSchema"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Knowledge Bases"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "UpdateSkillRequest",
+        "description": "A draft's content; a field left out is kept. The name is not here: it\nis what the versions share."
       },
       "UpdateTakeawayRequest": {
         "properties": {

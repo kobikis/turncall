@@ -128,7 +128,16 @@ class TTSConfig(DomainModel):
 # Tools TurnCall implements itself. Every one resolves through call_control
 # against a live call_id, which is why the text channels can't offer them.
 BUILTIN_TOOL_NAMES = frozenset(
-    {"end_call", "transfer_call", "handoff_to_agent", "send_dtmf", "do_not_call"}
+    {
+        "end_call",
+        "transfer_call",
+        "handoff_to_agent",
+        "send_dtmf",
+        "do_not_call",
+        # Offered by TurnCall itself to an agent with skills (#424), never
+        # listed in its `tools`; a built-in so no skill or MCP tool takes it.
+        "load_skill",
+    }
 )
 
 
@@ -340,6 +349,32 @@ class KnowledgeBaseAttachment(DomainModel):
     tool_description: str | None = None  # LLM instruction (tool mode only)
 
 
+# A skill's name is what the model passes to `load_skill`, so it is shaped like
+# a tool name (#423).
+SKILL_NAME_PATTERN = r"^[a-z_][a-z0-9_]*$"
+SKILL_NAME_MAX = 64
+
+
+class SkillRef(DomainModel):
+    """A skill an agent may load (#424): the name of one of its project's
+    skills, resolved when a call's pipeline is built.
+
+    Without `version_id` the call runs the skill's live published version, so
+    a publish or a rollback reaches the agent's next call with no agent
+    publish. With it (#426, ADR-0030) the call runs exactly that version of
+    the skill — published or archived — whatever was published since.
+    """
+
+    skill: str
+    version_id: UUID | None = None
+
+
+# How many skills a call may hold loaded at once (#427): loading one past the
+# cap unloads the one loaded longest ago, in the same switch.
+DEFAULT_MAX_LOADED_SKILLS = 3
+MAX_LOADED_SKILLS_RANGE = (1, 10)
+
+
 # A century: past it, a number of days is a typo for "keep it", which is null.
 MAX_RETENTION_DAYS = 36500
 
@@ -495,6 +530,63 @@ class AgentConfig(DomainModel):
                     err=str(exc),
                 )
         return usable
+
+    # The skills the agent may load mid-call (#424). Resolved once per call,
+    # against the call's project; one that is missing or unpublished is a
+    # warning and a skipped skill, never a failed call.
+    skills: list[SkillRef] = Field(default_factory=list)
+
+    @field_validator("skills", mode="before")
+    @classmethod
+    def _unusable_skills_are_skipped(cls, value: Any) -> list[SkillRef]:
+        """An inline agent's config arrives from a call-init webhook, past any
+        API schema: a malformed entry drops that skill, never the call."""
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            logger.warning(
+                "skill_skipped: skills is not a list, call runs without them"
+            )
+            return []
+        usable = []
+        for entry in value:
+            try:
+                usable.append(SkillRef.model_validate(entry))
+            except ValidationError as exc:
+                logger.warning(
+                    "skill_skipped: unusable skills entry, call runs without it: {err}",
+                    err=str(exc),
+                )
+        return usable
+
+    # At most this many loaded at once (#427); the one loaded longest ago
+    # makes room for the next.
+    max_loaded_skills: int = DEFAULT_MAX_LOADED_SKILLS
+
+    @field_validator("max_loaded_skills", mode="before")
+    @classmethod
+    def _unusable_cap_is_the_default(cls, value: Any) -> int:
+        """Past the API schema (a call-init inline agent), a cap that is not a
+        whole number is the default and one out of range is clamped into it:
+        a bad cap must not fail the call."""
+        low, high = MAX_LOADED_SKILLS_RANGE
+        if value is None:
+            return DEFAULT_MAX_LOADED_SKILLS
+        if isinstance(value, bool) or not isinstance(value, int):
+            logger.warning(
+                "max_loaded_skills_unusable: {value!r}, the call uses {default}",
+                value=value,
+                default=DEFAULT_MAX_LOADED_SKILLS,
+            )
+            return DEFAULT_MAX_LOADED_SKILLS
+        if not low <= value <= high:
+            logger.warning(
+                "max_loaded_skills_clamped: {value} is outside {low}-{high}",
+                value=value,
+                low=low,
+                high=high,
+            )
+        return min(max(value, low), high)
 
     transport: str = "twilio"  # "twilio" | "webrtc" | "both"
     server_url: ServerUrlConfig = Field(default_factory=ServerUrlConfig)

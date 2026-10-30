@@ -12,6 +12,7 @@ import asyncio
 import dataclasses
 import json
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 from uuid import UUID
 
@@ -20,11 +21,12 @@ from loguru import logger
 from turncall.domain.enums import ToolExecutionMode
 from turncall.domain.models import BUILTIN_TOOL_NAMES, ToolDefinition
 from turncall.services import call_control
+from turncall.services.skills import LOAD_SKILL
 from turncall.services.template_renderer import (
     prepend_knowledge_context,
     render_agent_config,
 )
-from turncall.services.tool_mocks import EXECUTED, intercept
+from turncall.services.tool_mocks import intercept
 from turncall.services.tool_webhook import invocation_record, post_tool_webhook
 
 if TYPE_CHECKING:
@@ -223,7 +225,7 @@ def recorded_tool(name: str, handler: Any, call_context: CallContext) -> Any:
             text = result if isinstance(result, str) else json.dumps(result)
             if call_context.tool_mocks is not None:
                 # A `live` eval: the search really ran, and the run says so.
-                call_context.tool_mocks.record(name, args, text, outcome=EXECUTED)
+                call_context.tool_mocks.ran(name, args, text)
             if not call_context.records:
                 return  # no `calls` row behind an eval (ADR-0018) or the demo
             latency_ms = int((time.perf_counter() - started) * 1000)
@@ -316,18 +318,51 @@ class PreparedHandoff(NamedTuple):
 
     Carrying the built frames rather than just the config is the point: the
     switch is committed to the database *before* the pipeline is touched, so
-    anything that can wait or raise has to have happened already.
+    anything that can wait or raise has to have happened already. `skills`
+    is the target agent's (`skill_loader.CallSkills`, none loaded), resolved
+    here for the same reason and swapped into the call by the apply step
+    (#427); `config` is then the target's with its skills' list and
+    `load_skill`.
     """
 
     name: str
     config: AgentConfig
     frames: tuple[Any, ...]
+    skills: Any | None = None
 
 
-def _build_handoff_frames(config: AgentConfig) -> tuple[Any, Any]:
-    """Build the two frames that carry a handoff, marked uninterruptible.
+@dataclass(frozen=True)
+class SwitchInputs:
+    """What the call's prompt and tools were built from besides its config,
+    for a switch that keeps them: the knowledge preamble, the tools discovered
+    or added at build (MCP, then `query_knowledge`), and whether the LLM is a
+    BYOM one that reads its tools from the prompt instead.
 
-    Called before the switch is committed, where raising is still safe.
+    A handoff passes none: the target agent's prompt and tools are its own,
+    and MCP is not reconnected mid-call. A skill load (#424) passes the
+    call's, so loading a skill takes nothing away.
+    """
+
+    knowledge_preamble: str = ""
+    extra_tools: tuple[ToolDefinition, ...] = ()
+    byom: bool = False
+
+
+# A handoff's: the target agent's config and nothing else.
+_NO_INPUTS = SwitchInputs()
+
+
+def build_switch_frames(
+    config: AgentConfig, inputs: SwitchInputs = _NO_INPUTS
+) -> tuple[Any, Any]:
+    """Build the two frames that switch the call to `config`'s prompt and
+    tools, marked uninterruptible.
+
+    Called before anything is committed, where raising is still safe. A
+    handoff builds them for its target agent; nothing here is handoff-specific.
+    `inputs` are built the way `create_pipeline` builds them, so a switch that
+    passes the call's own reproduces the call's prompt and tools around
+    `config`'s.
     """
     from pipecat.frames.frames import LLMSetToolsFrame, LLMUpdateSettingsFrame
     from pipecat.processors.aggregators.llm_context import NOT_GIVEN
@@ -343,9 +378,14 @@ def _build_handoff_frames(config: AgentConfig) -> tuple[Any, Any]:
     # it the old way would send both prompts: the OpenAI adapter prepends
     # system_instruction to the context messages, so the previous agent's
     # instructions would survive the handoff.
+    system_instruction = _build_system_instruction(
+        config,
+        inject_tools_prompt=inputs.byom,
+        knowledge_preamble=inputs.knowledge_preamble,
+    )
     prompt_frame = _mark_uninterruptible(
         LLMUpdateSettingsFrame(
-            delta=LLMSettings(system_instruction=_build_system_instruction(config)),
+            delta=LLMSettings(system_instruction=system_instruction),
             # A failover backup (#222) must take over as the new agent too.
             reach_inactive_services=True,
         )
@@ -353,8 +393,11 @@ def _build_handoff_frames(config: AgentConfig) -> tuple[Any, Any]:
     # Tools live in two places: the handler registry and the advertised
     # schema. Moving only the prompt left the model believing it was the new
     # agent while still holding the previous one's tools, and none of its own.
-    # NOT_GIVEN clears the set when the target defines none.
-    tools_schema = _build_tools_schema(config)
+    # NOT_GIVEN clears the set when the target defines none, and for a BYOM
+    # LLM, whose tools are in its prompt and never advertised (as at build).
+    tools_schema = (
+        None if inputs.byom else _build_tools_schema(config, list(inputs.extra_tools))
+    )
     tools_frame = _mark_uninterruptible(
         LLMSetToolsFrame(tools=tools_schema if tools_schema is not None else NOT_GIVEN)
     )
@@ -426,7 +469,12 @@ async def _prepare_handoff(
                 AgentConfig.model_validate(target.config_blob),
             )
 
-        frames = _build_handoff_frames(config)
+        from turncall.orchestrator.skill_loader import prepare_handoff_skills
+
+        # The target's skills, resolved as at a call's start: I/O, so here,
+        # before the commit — never in the apply step (#427).
+        skills, config = await prepare_handoff_skills(config, call_context)
+        frames = build_switch_frames(config)
     except Exception:
         logger.exception("handoff_context: failed to prepare the handoff")
         return None
@@ -441,7 +489,46 @@ async def _prepare_handoff(
             servers=[s.name for s in config.mcp_servers],
         )
 
-    return PreparedHandoff(name=target.name, config=config, frames=frames)
+    return PreparedHandoff(
+        name=target.name, config=config, frames=frames, skills=skills
+    )
+
+
+async def apply_switch(
+    config: AgentConfig,
+    frames: tuple[Any, ...],
+    call_context: CallContext,
+    params: Any,
+    *,
+    clear_context: bool,
+) -> None:
+    """Switch the running pipeline to `config`'s prompt and tools. Atomically.
+
+    `frames` are `build_switch_frames(config)`, built by the caller along with
+    everything else that can wait or raise, before anything was committed.
+    What is left cannot suspend — `queue_frame` puts onto an unbounded
+    asyncio.Queue, which never yields — so an interruption is delivered either
+    before this or after it, never through it.
+
+    Whether the conversation so far survives is the caller's choice: a handoff
+    clears it, since the target agent starts over.
+
+    Adding an `await`, or anything that can raise, reopens the half-applied
+    state the `interruptible=False` flag cannot reach: a frame that was never
+    built cannot survive a drain. `test_handoff_switch_is_atomic.py` fails if
+    it happens.
+    """
+    if clear_context:
+        params.context.set_messages([])
+    if config.tools:
+        from turncall.orchestrator.llm_failover import FailoverLLM
+
+        # Every member of a failover group (#222), not only the one answering.
+        register_tools(
+            FailoverLLM.group_of(params.llm), list(config.tools), call_context
+        )
+    for frame in frames:
+        await params.pipeline_worker.queue_frame(frame)
 
 
 async def _apply_handoff_context(
@@ -449,28 +536,19 @@ async def _apply_handoff_context(
     call_context: CallContext,
     params: Any,
 ) -> None:
-    """Switch the running pipeline to the target agent. Atomically.
+    """Switch the running pipeline to the target agent, over a cleared context.
 
     Everything that can wait or raise happened in `_prepare_handoff`, before
-    the switch was committed. What is left cannot suspend — `queue_frame` puts
-    onto an unbounded asyncio.Queue, which never yields — so an interruption
-    is delivered either before this or after it, never through it.
-
-    Adding an `await`, or anything that can raise, reopens the half-applied
-    state the `interruptible=False` flag cannot reach: a frame that was never
-    built cannot survive a drain. `test_handoff_switch_is_atomic.py` fails if
-    it happens.
+    the switch was committed; `apply_switch` is the part that must not
+    suspend, and nothing here may either — the skills swap included (#427):
+    from here the call's skills are the target agent's, none loaded.
     """
-    params.context.set_messages([])
-    if prepared.config.tools:
-        from turncall.orchestrator.llm_failover import FailoverLLM
-
-        # Every member of a failover group (#222), not only the one answering.
-        register_tools(
-            FailoverLLM.group_of(params.llm), list(prepared.config.tools), call_context
-        )
-    for frame in prepared.frames:
-        await params.pipeline_worker.queue_frame(frame)
+    await apply_switch(
+        prepared.config, prepared.frames, call_context, params, clear_context=True
+    )
+    holder = getattr(call_context, "skills", None)
+    if holder is not None and prepared.skills is not None:
+        holder.adopt(prepared.skills)
 
     logger.info(
         "handoff_context: switched system instruction to agent '{name}'",
@@ -545,6 +623,12 @@ async def run_handoff(
         return HandoffOutcome(_NOT_PREPARED, None)
     result = await _execute_builtin("handoff_to_agent", args, call_context)
     switched = await _complete_handoff(prepared, result, call_context, params)
+    if switched and prepared.skills is not None and prepared.skills.available:
+        from turncall.orchestrator.skill_loader import record_resolution
+
+        # After the switch, off its path: the call read lists the target's
+        # skill versions beside the first agent's (#427).
+        _spawn(record_resolution(call_context, prepared.skills.available))
     return HandoffOutcome(result, prepared if switched else None)
 
 
@@ -633,6 +717,14 @@ def _register_single_tool(
             # anything that waits or raises after that commit is a window where
             # the record says handed off and the pipeline never switched. #144.
             result = (await run_handoff(dict(args), call_context, params)).result
+        elif function_name == LOAD_SKILL:
+            # Adds a skill's prompt section and tools without clearing the
+            # context, and asks for the model's next inference itself, after
+            # the switch (#424): so it delivers its own result.
+            from turncall.orchestrator.skill_loader import run_load_skill
+
+            result = await run_load_skill(dict(args), call_context, params)
+            delivered = True
         elif function_name in BUILTIN_TOOL_NAMES:
             execution = _execute_builtin(function_name, args, call_context)
             # A transfer takes the call away from this pipeline: the carrier
@@ -667,10 +759,9 @@ def _register_single_tool(
         if not delivered:
             await params.result_callback(result)
         if call_context.tool_mocks is not None:
-            # A `live` eval: the tool really ran, and the run's record says so.
-            call_context.tool_mocks.record(
-                function_name, args, result, outcome=EXECUTED
-            )
+            # The tool really ran — a `live` eval, or `load_skill`, which an
+            # eval never mocks (#431) — and the run's record says so.
+            call_context.tool_mocks.ran(function_name, args, result)
         if call_context.records:
             # No `calls` row behind an eval (ADR-0018), so
             # `tool_invocations.call_id` has nothing to point at and the write

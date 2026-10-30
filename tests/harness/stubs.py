@@ -27,8 +27,10 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     TTSAudioRawFrame,
 )
+from pipecat.processors.aggregators.llm_context import NOT_GIVEN
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
+from pipecat.services.settings import LLMSettings
 from pipecat.services.stt_service import STTService
 from pipecat.services.tts_service import TTSService
 from pipecat.utils.time import time_now_iso8601
@@ -125,8 +127,11 @@ class StubSTT(STTService):
 class StubLLM(LLMService):
     """Answers its n-th inference with the script's n-th reply."""
 
-    def __init__(self, replies: Sequence[Reply]) -> None:
-        super().__init__()
+    def __init__(self, replies: Sequence[Reply], system_instruction: str = "") -> None:
+        # The agent's prompt as the pipeline factory hands it to every LLM, so
+        # `Given` shows it from the first inference.
+        settings = LLMSettings(system_instruction=system_instruction or NOT_GIVEN)
+        super().__init__(settings=settings)
         self._replies = iter(replies)
         self._calls = 0
 
@@ -228,8 +233,8 @@ def install_stub_providers(script: Script, set_attr: Setter = setattr) -> None:
     def stt(*_args: Any, **_kwargs: Any) -> StubSTT:
         return StubSTT(script.caller)
 
-    def llm(*_args: Any, **_kwargs: Any) -> StubLLM:
-        return StubLLM(script.agent)
+    def llm(*_args: Any, system_instruction: str = "", **_kwargs: Any) -> StubLLM:
+        return StubLLM(script.agent, system_instruction)
 
     def tts(*_args: Any, **_kwargs: Any) -> StubTTS:
         return StubTTS(ms_per_word=script.tts_ms_per_word)

@@ -31,7 +31,7 @@ Changing an agent's retention needs an admin key too, since it overrides the pro
 
 - **Recordings**: the call's audio in your object storage (local or S3), the copy on your Twilio account if it recorded the call too (see below), and `recording_url` on the call. `recording_status` becomes `expired`, and the call's `recording.ready` event loses its URLs: `recording_url`, `twilio_recording_url` and any other `*_url` field are set to `null`.
 - **Transcripts**: what was said and what was made from it. The `transcript.final` lines, the `tool.result` events and the call's tool invocations (a tool's arguments and result come from the conversation), `context.injected` messages, and the post-call analysis, which includes the summary, `structured_data` and takeaways. Other events can quote the conversation too, so every field of theirs that holds free text is set to `null` at the same time: a `call.agent_handoff`'s `reason` and `context_payload`, a `call.transferred`'s `reason` and `transfer_message`, the digits of `dtmf.sent`, and the error text of `error.raised` and `provider.failover`. These are the fields [redaction](/guides/redaction) analyses. The events themselves stay until the events kind expires, because `ended_reason` depends on them.
-- **Events**: every other event on the call's event log: lifecycle and carrier events, `metrics.turn`, `provider.failover`, `error.raised` and the rest. `recording.ready` is the exception: it names the recording, so it stays as long as the recording does, and is deleted with the recording if the other events went first.
+- **Events**: every other event on the call's event log: lifecycle and carrier events, `metrics.turn`, `provider.failover`, `skill.loaded`, `skill.unloaded`, `error.raised` and the rest. `recording.ready` is the exception: it names the recording, so it stays as long as the recording does, and is deleted with the recording if the other events went first.
 
 ## What stays
 
@@ -43,7 +43,7 @@ After a kind expires, its reads return nothing for it:
 |---------|------|
 | Recording | `recording_url` is `null`, `recording_status` is `expired`, `GET /v1/calls/{id}/recording` is `404` |
 | Transcript | `GET /v1/calls/{id}/transcript` has no entries and an `expired_at`; `analysis` is `null`, `GET /v1/calls/{id}/analysis` answers `status: "expired"`, and a re-run is a `409`; the call's tool invocations are gone |
-| Events | `GET /v1/calls/{id}/events` returns what is left of the transcript kind, or nothing; `latency_summary` is `null` and `failovers` empty |
+| Events | `GET /v1/calls/{id}/events` returns what is left of the transcript kind, or nothing; `latency_summary` is `null`, `failovers` empty, and each of `skills` has `loaded: null` (its versions stay) |
 
 `ended_reason` is worked out from the events, so it is saved on the call before they are deleted, and the read keeps saying how the call ended.
 

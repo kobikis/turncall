@@ -7,7 +7,11 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from turncall.api.v1.schemas import E164_PATTERN
-from turncall.services.call_view import DYNAMIC_CONFIG, public_metadata
+from turncall.services.call_view import (
+    DYNAMIC_CONFIG,
+    RESOLVED_SKILLS,
+    public_metadata,
+)
 
 
 class CreateOutboundCallRequest(BaseModel):
@@ -25,7 +29,24 @@ class CreateOutboundCallRequest(BaseModel):
             raise ValueError(
                 f"metadata.{DYNAMIC_CONFIG} is reserved: the call runs agent_id"
             )
+        if RESOLVED_SKILLS in value:
+            # The record of what the call's skills resolved to (#425), which
+            # the call's build writes and the read derives `skills` from.
+            raise ValueError(f"metadata.{RESOLVED_SKILLS} is reserved")
         return value
+
+
+class CallSkill(BaseModel):
+    """One skill a call resolved at its start (#425)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    skill: str
+    version: int
+    # The agent pinned this version rather than following the live one (#426).
+    pinned: bool = False
+    # Whether the call loaded it; null once the call's events expired (#316).
+    loaded: bool | None
 
 
 class CallResponse(BaseModel):
@@ -56,6 +77,9 @@ class CallResponse(BaseModel):
     latency_summary: dict[str, Any] | None = None
     # `{role, from, to, error}` per provider failover, in order (#222).
     failovers: list[dict[str, Any]] = []
+    # Every skill the call resolved, in the agent's order (#425); empty when
+    # the agent has none.
+    skills: list[CallSkill] = []
     # When retention deleted each kind of the call's data (#316), null = kept.
     recording_expired_at: datetime | None = None
     transcript_expired_at: datetime | None = None

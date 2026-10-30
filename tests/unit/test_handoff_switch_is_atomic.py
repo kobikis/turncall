@@ -479,3 +479,434 @@ async def test_a_handoff_that_could_not_be_prepared_is_never_committed():
             await _api_handoff(_params([]))({"agent_id": str(uuid4())})
 
     committed.assert_not_awaited()
+
+
+# --- The switch itself (#422) ------------------------------------------------
+# `apply_switch` is the prompt-and-tools switch the handoff is built on, with
+# clearing the context left to its caller. The tests above reach it through the
+# handoff, which always clears; these pin it directly, both ways, so an `await`
+# added inside it fails whichever caller it is.
+
+
+def _switch_args(config: AgentConfig):
+    from turncall.orchestrator.tool_bridge import build_switch_frames
+
+    return config, build_switch_frames(config)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("clear_context", [True, False])
+async def test_the_extracted_switch_completes_within_one_scheduling_slice(
+    clear_context,
+):
+    from turncall.orchestrator.tool_bridge import apply_switch
+
+    queue: list = []
+    with patch("turncall.orchestrator.tool_bridge.register_tools"):
+        task = asyncio.create_task(
+            apply_switch(
+                *_switch_args(AgentConfig(tools=[_tool("refund")])),
+                _context(),
+                _params(queue),
+                clear_context=clear_context,
+            )
+        )
+        await asyncio.sleep(0)
+        done = task.done()
+        await task
+
+    assert done, "the prompt-and-tools switch suspended partway through"
+    assert len(queue) == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancelling_a_switch_that_keeps_the_context_is_all_or_nothing():
+    """Without the clear, the first mutation is registering the tools — so
+    that is where the caller barges in."""
+    from turncall.orchestrator.tool_bridge import apply_switch
+
+    queue: list = []
+    params = _params(queue)
+    holder: list[asyncio.Task] = []
+    registered: list[bool] = []
+
+    def register_and_interrupt(*_a, **_k):
+        registered.append(True)
+        holder[0].cancel()
+
+    with patch(
+        "turncall.orchestrator.tool_bridge.register_tools",
+        new=register_and_interrupt,
+    ):
+        holder.append(
+            asyncio.create_task(
+                apply_switch(
+                    *_switch_args(AgentConfig(tools=[_tool("refund")])),
+                    _context(),
+                    params,
+                    clear_context=False,
+                )
+            )
+        )
+        await asyncio.gather(*holder, return_exceptions=True)
+
+    assert (len(queue), bool(registered)) in {(0, False), (2, True)}, (
+        f"half-applied: {len(queue)} frame(s) queued, tools registered="
+        f"{bool(registered)}"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_switch_that_keeps_the_context_leaves_the_conversation_alone():
+    from turncall.orchestrator.tool_bridge import apply_switch
+
+    queue: list = []
+    params = _params(queue)
+    with patch("turncall.orchestrator.tool_bridge.register_tools") as register:
+        await apply_switch(
+            *_switch_args(AgentConfig(tools=[_tool("refund")])),
+            _context(),
+            params,
+            clear_context=False,
+        )
+
+    params.context.set_messages.assert_not_called()
+    assert [t.name for t in register.call_args.args[1]] == ["refund"]
+    assert all(f.interruptible is False for f in queue)
+    assert len(queue) == 2
+
+
+# --- Loading a skill (#424) ----------------------------------------------------
+# A load applies its own switch, over the context as it is: `apply_load` is
+# `apply_switch` plus recording what is loaded. Pinned the same way, so an
+# `await` added between the two fails here.
+
+
+def _prepared_load():
+    from uuid import uuid4 as _id
+
+    from turncall.orchestrator.skill_loader import CallSkills, prepare_load
+    from turncall.orchestrator.tool_bridge import SwitchInputs
+    from turncall.services.skills import ResolvedSkill
+
+    skill = ResolvedSkill(
+        id=_id(),
+        name="explain_bill",
+        version=2,
+        description="When the bill changed.",
+        instructions="Compare the invoices.",
+        tools=(_tool("get_invoices"),),
+    )
+    skills = CallSkills(
+        base=AgentConfig(system_prompt="You are Maya."),
+        available=(skill,),
+        switch=SwitchInputs(),
+    )
+    return skills, prepare_load(skills, skill)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_skill_load_completes_within_one_scheduling_slice():
+    from turncall.orchestrator.skill_loader import apply_load
+
+    skills, prepared = _prepared_load()
+    queue: list = []
+    params = _params(queue)
+    with patch("turncall.orchestrator.tool_bridge.register_tools"):
+        task = asyncio.create_task(apply_load(prepared, skills, _context(), params))
+        await asyncio.sleep(0)
+        done = task.done()
+        await task
+
+    assert done, "the skill load suspended partway through"
+    assert len(queue) == 2
+    assert skills.loaded == prepared.loaded
+    params.context.set_messages.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancelling_a_skill_load_once_it_has_begun_is_all_or_nothing():
+    from turncall.orchestrator.skill_loader import apply_load
+
+    skills, prepared = _prepared_load()
+    queue: list = []
+    holder: list[asyncio.Task] = []
+
+    def register_and_interrupt(*_a, **_k):
+        holder[0].cancel()
+
+    with patch(
+        "turncall.orchestrator.tool_bridge.register_tools",
+        new=register_and_interrupt,
+    ):
+        holder.append(
+            asyncio.create_task(
+                apply_load(prepared, skills, _context(), _params(queue))
+            )
+        )
+        await asyncio.gather(*holder, return_exceptions=True)
+
+    assert (len(queue), bool(skills.loaded)) in {(0, False), (2, True)}, (
+        f"half-applied: {len(queue)} frame(s) queued, loaded={skills.loaded}"
+    )
+
+
+# --- The limit and a handoff's skills (#427) ----------------------------------
+# A load past `max_loaded_skills` unloads the oldest in the same switch, and a
+# handoff swaps the target's skills into the call inside its apply step. Both
+# are pinned the same way: one scheduling slice, all or nothing under cancel.
+
+
+def _prepared_load_past_the_cap():
+    from uuid import uuid4 as _id
+
+    from turncall.orchestrator.skill_loader import CallSkills, prepare_load
+    from turncall.orchestrator.tool_bridge import SwitchInputs
+    from turncall.services.skills import ResolvedSkill
+
+    def skill(name):
+        return ResolvedSkill(
+            id=_id(),
+            name=name,
+            version=1,
+            description=f"When {name}.",
+            instructions=f"Do {name}.",
+            tools=(_tool(f"{name}_tool"),),
+        )
+
+    old, new = skill("verify"), skill("explain_bill")
+    skills = CallSkills(
+        base=AgentConfig(system_prompt="You are Maya.", max_loaded_skills=1),
+        available=(old, new),
+        switch=SwitchInputs(),
+        loaded=(old,),
+    )
+    prepared = prepare_load(skills, new)
+    assert prepared.unloaded == (old,) and prepared.loaded == (new,)
+    return skills, prepared
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_unload_and_a_load_complete_within_one_scheduling_slice():
+    from turncall.orchestrator.skill_loader import apply_load
+
+    skills, prepared = _prepared_load_past_the_cap()
+    queue: list = []
+    with patch("turncall.orchestrator.tool_bridge.register_tools"):
+        task = asyncio.create_task(
+            apply_load(prepared, skills, _context(), _params(queue))
+        )
+        await asyncio.sleep(0)
+        done = task.done()
+        await task
+
+    assert done, "the unload-and-load switch suspended partway through"
+    assert len(queue) == 2 and skills.loaded == prepared.loaded
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancelling_an_unload_and_load_once_begun_is_all_or_nothing():
+    from turncall.orchestrator.skill_loader import apply_load
+
+    skills, prepared = _prepared_load_past_the_cap()
+    before = skills.loaded
+    queue: list = []
+    holder: list[asyncio.Task] = []
+
+    def register_and_interrupt(*_a, **_k):
+        holder[0].cancel()
+
+    with patch(
+        "turncall.orchestrator.tool_bridge.register_tools",
+        new=register_and_interrupt,
+    ):
+        holder.append(
+            asyncio.create_task(
+                apply_load(prepared, skills, _context(), _params(queue))
+            )
+        )
+        await asyncio.gather(*holder, return_exceptions=True)
+
+    assert (len(queue), skills.loaded) in [
+        (0, before),
+        (2, prepared.loaded),
+    ], f"half-applied: {len(queue)} frame(s) queued, loaded={skills.loaded}"
+
+
+def _handoff_with_skills():
+    """A call holding one loaded skill, and a prepared handoff to a target
+    with skills of its own."""
+    from uuid import uuid4 as _id
+
+    from turncall.orchestrator.skill_loader import CallSkills
+    from turncall.orchestrator.tool_bridge import (
+        PreparedHandoff,
+        SwitchInputs,
+        build_switch_frames,
+    )
+    from turncall.services.skills import ResolvedSkill
+
+    def skill(name):
+        return ResolvedSkill(
+            id=_id(),
+            name=name,
+            version=1,
+            description=f"When {name}.",
+            instructions=f"Do {name}.",
+            tools=(),
+        )
+
+    first = skill("explain_bill")
+    call_skills = CallSkills(
+        base=AgentConfig(system_prompt="You are Maya."),
+        available=(first,),
+        switch=SwitchInputs(),
+        loaded=(first,),
+    )
+    target = CallSkills(
+        base=AgentConfig(system_prompt="You are billing."),
+        available=(skill("verify"),),
+        switch=SwitchInputs(),
+    )
+    config = target.config()
+    prepared = PreparedHandoff("Billing", config, build_switch_frames(config), target)
+    context = _context()
+    context.skills = call_skills
+    return context, prepared, target
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_handoff_switch_with_its_skills_completes_within_one_slice():
+    from turncall.orchestrator.tool_bridge import _apply_handoff_context
+
+    context, prepared, target = _handoff_with_skills()
+    queue: list = []
+    with patch("turncall.orchestrator.tool_bridge.register_tools"):
+        task = asyncio.create_task(
+            _apply_handoff_context(prepared, context, _params(queue))
+        )
+        await asyncio.sleep(0)
+        done = task.done()
+        await task
+
+    assert done, "the handoff switch suspended partway through its skills swap"
+    assert len(queue) == 2
+    assert context.skills.available == target.available
+    assert context.skills.loaded == () and context.skills.base is target.base
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancelling_a_handoff_with_skills_once_begun_is_all_or_nothing():
+    from turncall.orchestrator.tool_bridge import _apply_handoff_context
+
+    context, prepared, target = _handoff_with_skills()
+    before = context.skills.available
+    queue: list = []
+    params = _params(queue)
+    holder: list[asyncio.Task] = []
+
+    def clear_and_interrupt(_messages):
+        holder[0].cancel()
+
+    params.context.set_messages = clear_and_interrupt
+    with patch("turncall.orchestrator.tool_bridge.register_tools"):
+        holder.append(
+            asyncio.create_task(_apply_handoff_context(prepared, context, params))
+        )
+        await asyncio.gather(*holder, return_exceptions=True)
+
+    assert (len(queue), context.skills.available) in [
+        (0, before),
+        (2, target.available),
+    ], f"half-applied: {len(queue)} frame(s), skills={context.skills.available}"
+
+
+# --- A skill's knowledge bases (#429) -----------------------------------------
+# A load of a skill with tool-mode KBs also registers `query_knowledge` in its
+# apply step. The handler and the KB text were built before it (resolution,
+# `prepare_load`); the registration is a plain assignment. Pinned the same way.
+
+
+def _prepared_load_with_knowledge(context):
+    from uuid import uuid4 as _id
+
+    from turncall.orchestrator.skill_loader import CallSkills, prepare_load
+    from turncall.orchestrator.tool_bridge import SwitchInputs
+    from turncall.services.skill_knowledge import SkillKnowledge
+    from turncall.services.skills import ResolvedSkill
+
+    skill = ResolvedSkill(
+        id=_id(),
+        name="explain_bill",
+        version=1,
+        description="When the bill changed.",
+        instructions="Compare the invoices.",
+        tools=(),
+        knowledge=SkillKnowledge(
+            text="[Knowledge Base Context] fees",
+            search=({"knowledge_base_id": _id(), "mode": "tool"},),
+        ),
+    )
+    skills = CallSkills(
+        base=AgentConfig(system_prompt="You are Maya."),
+        available=(skill,),
+        switch=SwitchInputs(),
+    )
+    prepared = prepare_load(skills, skill, context)
+    assert prepared.knowledge is not None
+    return skills, prepared
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_load_that_brings_a_search_completes_within_one_slice():
+    from turncall.orchestrator.skill_loader import apply_load
+
+    context = _context()
+    skills, prepared = _prepared_load_with_knowledge(context)
+    queue: list = []
+    params = _params(queue)
+    task = asyncio.create_task(apply_load(prepared, skills, context, params))
+    await asyncio.sleep(0)
+    done = task.done()
+    await task
+
+    assert done, "the skill load suspended partway through"
+    assert len(queue) == 2
+    assert skills.loaded == prepared.loaded
+    params.llm.register_function.assert_any_call(
+        "query_knowledge", prepared.knowledge.handler
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cancelling_a_load_that_brings_a_search_is_all_or_nothing():
+    from turncall.orchestrator.skill_loader import apply_load
+
+    context = _context()
+    skills, prepared = _prepared_load_with_knowledge(context)
+    queue: list = []
+    params = _params(queue)
+    holder: list[asyncio.Task] = []
+
+    def register_and_interrupt(name, *_a, **_k):
+        if name == "query_knowledge":
+            holder[0].cancel()
+
+    params.llm.register_function.side_effect = register_and_interrupt
+    holder.append(asyncio.create_task(apply_load(prepared, skills, context, params)))
+    await asyncio.gather(*holder, return_exceptions=True)
+
+    assert (len(queue), bool(skills.loaded)) in {(0, False), (2, True)}, (
+        f"half-applied: {len(queue)} frame(s) queued, loaded={skills.loaded}"
+    )

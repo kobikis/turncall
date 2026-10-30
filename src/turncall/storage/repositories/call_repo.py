@@ -5,7 +5,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, literal, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.domain.carriers import DEFAULT_CARRIER
@@ -109,6 +110,47 @@ async def update_call_status(
         stmt = stmt.where(CallRow.status.not_in(_ENDED))
     result = await session.execute(stmt.values(**values).returning(CallRow))
     return result.scalar_one_or_none()
+
+
+async def merge_call_metadata(
+    session: AsyncSession, call_id: UUID, values: dict[str, Any]
+) -> None:
+    """Set top-level keys of a call's `metadata_json`, leaving the rest as
+    it is in the database: one `||` in the statement, never a read-modify-
+    write of a copy another writer may have changed since."""
+    await session.execute(
+        update(CallRow)
+        .where(CallRow.id == call_id)
+        .values(metadata_json=CallRow.metadata_json.op("||")(literal(values, JSONB)))
+        .execution_options(synchronize_session=False)
+    )
+
+
+async def append_call_metadata_list(
+    session: AsyncSession,
+    call_id: UUID,
+    key: str,
+    entries: list[dict[str, Any]],
+    *,
+    unique_by: str,
+) -> None:
+    """Append `entries` to the list under `metadata_json[key]`, skipping one
+    whose `unique_by` value the list already holds. The row is locked for the
+    read, so two appends cannot lose each other's entries; every other key is
+    set with `merge_call_metadata`'s `||`. The caller commits."""
+    stored = (
+        await session.execute(
+            select(CallRow.metadata_json).where(CallRow.id == call_id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    current = (stored or {}).get(key)
+    kept = (
+        [e for e in current if isinstance(e, dict)] if isinstance(current, list) else []
+    )
+    seen = {e.get(unique_by) for e in kept}
+    added = [e for e in entries if e.get(unique_by) not in seen]
+    if added:
+        await merge_call_metadata(session, call_id, {key: [*kept, *added]})
 
 
 # A call in one of these is over: no stream may start one again.

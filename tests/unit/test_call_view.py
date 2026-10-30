@@ -88,3 +88,85 @@ def test_latency_summary_omits_a_stage_no_turn_had():
 
 def test_no_turns_is_null_not_zeros():
     assert derived_fields(_call(), CallFacts())["latency_summary"] is None
+
+
+# --- skills (#425) -----------------------------------------------------------
+
+_RESOLVED = (
+    {"id": "a", "skill": "verify_identity", "version": 2},
+    {"id": "b", "skill": "explain_bill", "version": 1},
+)
+
+
+def test_every_resolved_skill_is_listed_loaded_or_not():
+    facts = CallFacts(
+        resolved_skills=_RESOLVED,
+        skill_loads=({"skill": "verify_identity", "version": 2},),
+    )
+    assert derived_fields(_call(), facts)["skills"] == [
+        {"skill": "verify_identity", "version": 2, "pinned": False, "loaded": True},
+        {"skill": "explain_bill", "version": 1, "pinned": False, "loaded": False},
+    ]
+
+
+def test_pinned_reads_from_the_stored_entry_and_defaults_to_false():
+    """#426: an entry stored before pins existed has no `pinned`, and was a
+    live-following skill."""
+    facts = CallFacts(
+        resolved_skills=(
+            {"id": "a", "skill": "verify_identity", "version": 1, "pinned": True},
+            {"id": "b", "skill": "explain_bill", "version": 1},
+            {"id": "c", "skill": "promise", "version": 3, "pinned": "yes"},
+        ),
+    )
+    assert [s["pinned"] for s in derived_fields(_call(), facts)["skills"]] == [
+        True,
+        False,
+        False,
+    ]
+
+
+def test_a_load_marks_only_the_version_that_ran():
+    """#427: after a handoff the call may hold two versions of one skill, the
+    first agent's and the target's. A load is matched by name and version."""
+    facts = CallFacts(
+        resolved_skills=(
+            {"id": "a", "skill": "explain_bill", "version": 1},
+            {"id": "c", "skill": "explain_bill", "version": 2},
+        ),
+        skill_loads=({"skill": "explain_bill", "version": 2},),
+    )
+    assert [s["loaded"] for s in derived_fields(_call(), facts)["skills"]] == [
+        False,
+        True,
+    ]
+
+
+def test_a_call_with_no_skills_lists_none():
+    assert derived_fields(_call(), CallFacts())["skills"] == []
+
+
+def test_loaded_is_unknown_once_the_events_expired():
+    call = SimpleNamespace(status="completed", ended_at=ENDED, events_expired_at=ENDED)
+    facts = CallFacts(resolved_skills=_RESOLVED)
+    assert [s["loaded"] for s in derived_fields(call, facts)["skills"]] == [
+        None,
+        None,
+    ]
+
+
+def test_the_stored_resolution_is_read_defensively():
+    from turncall.services.call_view import (
+        RESOLVED_SKILLS,
+        public_metadata,
+        resolved_skills,
+    )
+
+    metadata = {
+        RESOLVED_SKILLS: [*_RESOLVED, "junk", {"skill": "x"}],
+        "template_variables": {"a": "b"},
+    }
+    assert resolved_skills(metadata) == _RESOLVED
+    assert resolved_skills({RESOLVED_SKILLS: "junk"}) == ()
+    # Shown as `skills`, never in the metadata too.
+    assert public_metadata(metadata) == {"template_variables": {"a": "b"}}

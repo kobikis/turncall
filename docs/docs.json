@@ -62,6 +62,7 @@
                 "group": "Operate",
                 "pages": [
                   "guides/agent-versioning",
+                  "guides/skills",
                   "guides/ab-testing",
                   "guides/post-call-analysis",
                   "guides/takeaways",
@@ -238,6 +239,19 @@
               "GET /v1/knowledge-bases/{kb_id}/documents/{doc_id}",
               "DELETE /v1/knowledge-bases/{kb_id}/documents/{doc_id}",
               "POST /v1/knowledge-bases/{kb_id}/search"
+            ]
+          },
+          {
+            "group": "Skills",
+            "pages": [
+              "POST /v1/skills",
+              "GET /v1/skills",
+              "GET /v1/skills/{skill_id}",
+              "PUT /v1/skills/{skill_id}",
+              "POST /v1/skills/{skill_id}/publish",
+              "POST /v1/skills/{skill_id}/rollback",
+              "DELETE /v1/skills/{skill_id}",
+              "GET /v1/skills/{name}/agents"
             ]
           },
           {

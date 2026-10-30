@@ -65,6 +65,8 @@ Every delivery is one envelope:
 | `call.transferred` / `transfer.answered` | A transfer started / the transfer target answered |
 | `call.agent_handoff` | The call moved to another agent |
 | `provider.failover` | An STT, LLM or TTS moved to its backup |
+| `skill.loaded` | The model loaded one of the agent's [skills](/guides/skills): `{skill, version, reason}` |
+| `skill.unloaded` | A load past `max_loaded_skills` unloaded the skill loaded longest ago: `{skill, version, reason: "limit"}` |
 | `error.raised` | A stage failed; the payload says which and why |
 | `call.customer_silent` / `call.max_duration_reached` / `call.opted_out` | The idle guard, the duration cap, or a do-not-call request ended the call |
 | `dtmf.sent` / `context.injected` | Keypad tones sent / a message added to the live call |
@@ -79,6 +81,8 @@ Every delivery is one envelope:
 `metrics.turn`, `delegation.completed` and `avatar.unavailable` (why a call's video Avatar did not show; see [Video Avatar](/guides/video-avatar)) are stored on the call's event log (`GET /v1/calls/{id}/events`) and never delivered.
 
 Tool calls go to each tool's own `webhook_url` — see [Tools](/guides/tools).
+
+`call.ended` carries `skills`, every skill the call resolved with its version, whether the agent pinned it and whether it was loaded (an empty list when the agent has none), as the call read does. See [Skills](/guides/skills#what-a-call-records).
 
 `call.ended` carries the call's `retention`: how many days its recording, transcript and events are kept, `null` for good. See [Retention](/guides/retention).
 

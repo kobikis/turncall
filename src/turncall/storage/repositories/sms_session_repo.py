@@ -5,7 +5,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import case, func, select, text, update
+from sqlalchemy import case, func, literal, select, text, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -62,16 +63,34 @@ async def create_session(
     return row
 
 
-async def set_session_metadata(
-    session: AsyncSession,
-    session_id: UUID,
-    metadata_json: dict,
+async def lock_session_metadata(
+    session: AsyncSession, session_id: UUID
+) -> dict[str, Any]:
+    """A session's metadata, its row locked until the caller's transaction
+    ends: the read of a read-modify-write two messages of one session may run
+    at once (the skills it loaded, #430)."""
+    stored = (
+        await session.execute(
+            select(SmsSessionRow.metadata_json)
+            .where(SmsSessionRow.id == session_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    return stored if isinstance(stored, dict) else {}
+
+
+async def merge_session_metadata(
+    session: AsyncSession, session_id: UUID, values: dict[str, Any]
 ) -> SmsSessionRow | None:
-    """Replace a session's metadata (its template variables, for one)."""
+    """Set top-level keys of a session's metadata, leaving the rest as it is
+    in the database: one `||`, never a write of a copy another message may
+    have changed since. The caller commits."""
     result = await session.execute(
         update(SmsSessionRow)
         .where(SmsSessionRow.id == session_id)
-        .values(metadata_json=metadata_json)
+        .values(
+            metadata_json=SmsSessionRow.metadata_json.op("||")(literal(values, JSONB))
+        )
         .returning(SmsSessionRow)
     )
     return result.scalar_one_or_none()

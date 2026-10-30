@@ -10,11 +10,13 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SerializerFunctionWrapHandler,
     ValidationError,
     ValidationInfo,
     computed_field,
     field_serializer,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -24,6 +26,10 @@ from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
 from turncall.domain.models import (
     BUILTIN_TOOL_NAMES,
+    DEFAULT_MAX_LOADED_SKILLS,
+    MAX_LOADED_SKILLS_RANGE,
+    SKILL_NAME_MAX,
+    SKILL_NAME_PATTERN,
     RetentionConfig,
     resolve_delegation,
 )
@@ -36,6 +42,7 @@ from turncall.domain.providers import (
 )
 from turncall.orchestrator import grok_voice, xai_config
 from turncall.orchestrator.deepgram_flux import MIXED_FLUX_GROUP, mixes_flux
+from turncall.services.skills import LOAD_SKILL
 
 
 def _refuse_nested_failover(entries: list[Any]) -> None:
@@ -255,6 +262,41 @@ class ToolDefinitionSchema(BaseModel):
             msg = f"Non-built-in tool '{self.name}' requires a webhook_url"
             raise ValueError(msg)
         return self
+
+
+class SkillRefSchema(BaseModel):
+    """A skill the agent may load mid-call (#424), by name. The call runs the
+    skill's live published version, resolved when the call starts — or, with
+    `version_id` (#426), exactly that version."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skill: str = Field(
+        ...,
+        min_length=1,
+        max_length=SKILL_NAME_MAX,
+        pattern=SKILL_NAME_PATTERN,
+        description="The name of one of the project's skills",
+    )
+    version_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Pin one version of the skill, by its id: the agent runs that "
+            "version, published or archived, whatever is published later. "
+            "Omitted or null, the agent follows the live published version"
+        ),
+    )
+
+    @model_serializer(mode="wrap")
+    def _as_stored(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # config_blob is JSONB and model_dump() is python-mode, so the id is a
+        # string; an unpinned entry is stored as it always was, `{"skill"}`.
+        data: dict[str, Any] = handler(self)
+        if self.version_id is None:
+            data.pop("version_id", None)
+        else:
+            data["version_id"] = str(self.version_id)
+        return data
 
 
 class GuardrailsSchema(BaseModel):
@@ -750,6 +792,23 @@ class AgentConfigSchema(BaseModel):
     knowledge_bases: list[InlineKnowledgeBaseSchema] = Field(
         default_factory=list, exclude=True
     )
+    skills: list[SkillRefSchema] = Field(
+        default_factory=list,
+        description=(
+            "Skills the model may load mid-call with load_skill, each by name. "
+            "Cascade voice only; the call runs each skill's live published "
+            "version, or the version an entry pins with version_id"
+        ),
+    )
+    max_loaded_skills: int = Field(
+        default=DEFAULT_MAX_LOADED_SKILLS,
+        ge=MAX_LOADED_SKILLS_RANGE[0],
+        le=MAX_LOADED_SKILLS_RANGE[1],
+        description=(
+            "How many skills a call may hold loaded at once. Loading one more "
+            "unloads the one loaded longest ago, in the same switch"
+        ),
+    )
     transport: str = Field(default="twilio", pattern=r"^(twilio|webrtc|both)$")
     server_url: ServerUrlConfigSchema = Field(default_factory=ServerUrlConfigSchema)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -759,6 +818,18 @@ class AgentConfigSchema(BaseModel):
         names = [t.name for t in self.tools]
         if len(names) != len(set(names)):
             msg = "Tool names must be unique within an agent"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def refuse_load_skill_in_tools(self) -> "AgentConfigSchema":
+        # Offered by the platform to an agent with skills (#424), built from
+        # them; listed by hand it would be a load_skill with nothing to load.
+        if any(t.name == LOAD_SKILL for t in self.tools):
+            msg = (
+                f"tools: '{LOAD_SKILL}' is offered automatically to an agent "
+                "with skills; list skills in `skills` instead"
+            )
             raise ValueError(msg)
         return self
 

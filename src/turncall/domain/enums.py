@@ -43,6 +43,12 @@ class AgentState(StrEnum):
     ARCHIVED = "archived"  # Superseded by a newer published version
 
 
+# A skill version (#423) moves through an agent version's states, by the same
+# rules: a draft is edited, publish makes it live and archives the previous
+# live version of its name, rollback restores an archived one.
+SkillState = AgentState
+
+
 class ToolExecutionStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
@@ -121,6 +127,12 @@ class CallEventType(StrEnum):
     # A provider stopped being usable and the call moved to its backup (#222).
     PROVIDER_FAILOVER = "provider.failover"
 
+    # Skills (#425): a skill's instructions and tools added to the live call,
+    # and taken off it again (#427's limit; nothing sends it yet). Stored and
+    # dispatched; identifiers only (`{skill, version, reason}`).
+    SKILL_LOADED = "skill.loaded"
+    SKILL_UNLOADED = "skill.unloaded"
+
     # SMS / Chat
     SESSION_CREATED = "session.created"
     SESSION_UPDATED = "session.updated"
@@ -194,6 +206,7 @@ class AuditResource(StrEnum):
     PHONE_NUMBER = "phone_number"
     API_KEY = "api_key"
     PROJECT = "project"
+    SKILL = "skill"
 
 
 class AuditAction(StrEnum):

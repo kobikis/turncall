@@ -40,6 +40,7 @@ from turncall.domain.config_secrets import (
     map_dynamic_config,
     map_inline_target,
     map_secrets,
+    map_tools,
 )
 
 PREFIX = "tcs1:"
@@ -197,6 +198,15 @@ class SealedAgentConfig(_SealedJSONB):
 
     def _walk(self, value: Any, fn: Callable[[str], str]) -> Any:
         return map_secrets(value, fn)
+
+
+class SealedTools(_SealedJSONB):
+    """skills.tools (#423): a tool list, sealed as an agent config's `tools`."""
+
+    cache_ok = True  # read off each class's own __dict__, never inherited
+
+    def _walk(self, value: Any, fn: Callable[[str], str]) -> Any:
+        return map_tools(value, fn)
 
 
 class SealedTarget(_SealedJSONB):

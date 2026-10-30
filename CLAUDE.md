@@ -498,6 +498,8 @@ row's keys.
 - Expired after 24h inactivity (lazy on lookup + background cleanup every 15 min)
 - Over the project's `messages_per_minute` (#226): not stored, no LLM; Chat API `429`, SMS/WhatsApp unanswered (see "Limits")
 - Webhook events: `session.created`, `session.updated`, `session.deleted`, `chat.created`
+- The agent's skills (#430): resolved once per session, loaded ones kept in its metadata across messages (`services/text_skills.py`; see "Skills")
+- Metadata writes merge one key (`sms_session_repo.merge_session_metadata`, `||`), so `variables` and loaded skills from concurrent messages don't overwrite each other
 
 ### Phone Number Config
 - `sms_enabled: true` on bind → auto-configures Twilio SMS webhook
@@ -932,6 +934,12 @@ agent read says the same — `config_warnings.knowledge_mode_warning` is the one
 rule both use. The links live outside the config, so the agent endpoints load
 their modes (`knowledge_repo.kb_modes_by_agent`, one query per page).
 
+### Skills
+
+A skill's own KBs (#429) apply only once it is loaded: `prompt` text in its
+prompt section, `tool` through the same `query_knowledge`, `auto` warned and
+skipped. See "Skills".
+
 ### Inline agents
 
 An agent with no row — call-init `agent`, an eval `inline` target — names its
@@ -947,7 +955,10 @@ Requires PostgreSQL with `pgvector` extension (`CREATE EXTENSION IF NOT EXISTS v
 
 ## Agent Versioning
 
-Linear version model with auto-promotion. Each published version is immutable.
+Linear version model with auto-promotion. Each published version is immutable
+— its own config. The skills it follows are not: an unpinned `skills` entry
+runs the skill's live version, so a skill publish or rollback changes a
+published agent's next call (see "Skills", ADR-0030).
 
 ### Lifecycle
 
@@ -962,6 +973,220 @@ States: `draft` → `published` → `archived`
 ### Key Files
 - `api/v1/agents.py` — Publish with auto-archive + auto-promote, versions, rollback
 - `storage/repositories/agent_repo.py` — `archive_previous_published()`, `update_phone_number_routing()`, `list_versions()`
+
+## Skills
+
+A project's versioned capabilities (#421; the resource is #423): `name`
+(tool-name shaped, `^[a-z_][a-z0-9_]*$`, ≤64, shared by the versions and never
+edited), `description` (when to use it), `instructions`, `tools` (the agent's
+`ToolDefinitionSchema` and rules; a refusal names `tools[i] '<name>'`; a
+built-in's name is refused) and `knowledge_bases` (the link fields, each a KB
+of the project). Each row of `skills` is a version, with the agent lifecycle
+above: create is a draft (the next version of an existing name), `PUT` edits a
+draft only (409 otherwise), publish archives the name's other published
+version, rollback restores an archived one and archives the live one. Writes
+to one name serialize on an advisory lock (`skill_repo.lock_name`).
+
+```
+POST /v1/skills                       # draft vN of `name`
+GET  /v1/skills                       # ?name= ?state= ?page= ?limit= (≤200), newest first
+GET  /v1/skills/{id}
+PUT  /v1/skills/{id}                  # draft only; fields sent replace, the rest kept
+POST /v1/skills/{id}/publish
+POST /v1/skills/{id}/rollback
+DELETE /v1/skills/{id}                # one version; 409 naming the agents while any lists the name
+GET  /v1/skills/{name}/agents         # draft + published agent versions listing it, the version each resolves to
+```
+
+`skills.tools` is `SealedTools`: webhook secrets sealed at rest and masked on
+read by the agent config's own rule for `tools` (`map_tools` /
+`sanitize_tools`), and sampled by the startup key check. Audited as
+`resource_type: skill` (`audit_log.skill_state`).
+
+**Safety at save** (#428). Agent create/update (`api/v1/agents._check_skills`,
+beside `_check_ambience`) refuse with a 422 `invalid_agent_config` from
+`services/skills.attachment_refusal`, checked against the version each entry
+resolves to now (live published): a name with no published version (draft-only
+included: a call resolves published only — "has no published version", vs "is
+not a skill" for a name never created), a name listed twice, and a skill tool
+whose name is a built-in's, the agent's own tool's or an earlier listed skill's
+(`tool_collision`, pure; the message names both sides, `skills[1]
+'explain_bill' tool 'get_invoices' collides with the agent's own tool
+'get_invoices'`, details `{field, skill, tool, collides_with}`).
+`AgentConfigSchema` refuses `load_skill` in `tools`. The save takes
+`lock_name` for each listed name, as a delete does. Not re-checked on agent
+publish/rollback or skill publish: a later skill version's colliding tool is
+still dropped at resolution, and an archived agent rolled back over a deleted
+skill skips it. **Delete** is one version (`DELETE /v1/skills/{id}`, audited
+`deleted` via `change.gone()`), a 409 `{skill, agents: [{agent_id, name,
+version, state}]}` while any **draft or published** agent version lists the
+name — whatever the version, since publish/rollback can make any version live;
+archived agent versions (a deleted agent is archived) do not count, as for
+takeaways. `skill_repo.agents_listing` is that set (JSONB containment on
+`config_blob->'skills'`), also behind `GET /v1/skills/{name}/agents`: `[{agent_id,
+agent_name, agent_version, agent_state, skill, resolved_skill_id,
+resolved_version, pinned}]` (a pinned entry resolves to its pin, null if the
+pin no longer runs; `SkillAgentResponse.from_rows` + `skill_repo.get_by_ids`),
+404 for a name with no version. An S2S agent with skills carries `skills_ignored_on_s2s` in the agent
+read's `warnings` (`config_warnings.skills_on_s2s_warning`), and the build skips
+them logging the same message at warning level (`skills_skipped`).
+
+**On a call** (#424, cascade voice; text: below, #430): an agent's `skills: [{"skill":
+"<name>"}]` resolve once at build (`pipeline_builder._with_skills` →
+`skill_loader.resolve_call_skills` → `services/skills.resolve_skills`), each to
+its live published version in the call's project (or its pin, below), instructions and tool
+descriptions rendered with the call row's `template_variables`. A missing or
+unpublished name is a warning and a skipped skill; so is everything on S2S and
+on a call with no database (the demo). The result rides on
+`CallContext.skills` (`CallSkills`: `base` config, `available`
+`ResolvedSkill`s with id/name/version, `switch` inputs, `loaded` in load
+order) — what #425 records. The call runs `skilled_config(base, available,
+loaded)`: the prompt gains `## Skills you can load` (name: description) and
+each loaded skill's `## Skill: <name> (v<N>)`; tools are `load_skill`, the
+agent's own, then loaded skills' in load order, and MCP/`query_knowledge`
+follow as `extra_tools` — every consumer keeps the first of a name, so that
+order is the precedence in what is advertised and what runs. A skill tool
+named like an agent tool or built-in is dropped at resolution. No skills = the
+config unchanged, no I/O. `load_skill` (`BUILTIN_TOOL_NAMES`, never listed in
+`tools`) runs `skill_loader.run_load_skill`: `prepare_load` builds the config
+and `build_switch_frames(config, CallSkills.switch)` — the call's own
+preamble, MCP + KB tools and BYOM choice, so a load takes nothing away — then
+`apply_load` = `apply_switch(clear_context=False)` + `loaded`, with nothing to
+wait on (`test_handoff_switch_is_atomic.py`). Its result runs no LLM; its
+`on_context_updated` queues an `LLMRunFrame` behind the switch's frames, so the
+next inference sees the skill. An unknown name answers so and applies nothing.
+
+**A skill's knowledge bases** (#429): read at resolution, never at a load
+(`services/skill_knowledge.resolve_skill_knowledge`, from `resolve_skills`;
+each KB re-checked against the call's project, a miss a warning and a skipped
+attachment) onto `ResolvedSkill.knowledge` (`SkillKnowledge(text, search)`).
+`prompt` text is appended to the skill's `## Skill:` section
+(`loaded_section`). `tool` attachments are searched by `query_knowledge`:
+`CallSkills.searched()` = the agent's own tool-mode attachments
+(`own_knowledge`, `()` after a handoff) + the loaded skills', read when the
+model calls it, so an unload stops searching them. `prepare_load` builds the
+handler (`knowledge_processor.searching_knowledge_tool`, recorded like the
+build's, key `CallSkills.embedding_key` — why `_assemble` now loads
+credentials before `_with_skills`) and `knowledge_switch` adds the tool and
+the awareness + tool hints to the preamble only when the call offers no
+`query_knowledge` yet (hints already there kept once); `apply_load` registers
+it on the failover group (sync, replaces the build's own-KB handler). Not
+offered when a config tool or an MCP tool has the name. `auto` is accepted at
+save, warned on every skill read (`SkillResponse.warnings`,
+`skill_knowledge.auto_mode_warning`, code `knowledge_mode_unsupported`,
+`knowledge_base_ids`) and skipped with a warning at resolution. Tests:
+`tests/integration/test_harness_call_skill_knowledge.py`,
+`tests/unit/test_skill_knowledge.py`.
+
+**The limit, the no-op, a handoff** (#427): `max_loaded_skills` (default 3,
+API 1-10 else 422; an inline agent's bad value is clamped / defaulted, never a
+failed call) caps `loaded`: `prepare_load` builds the config with the skills
+loaded longest ago dropped (`PreparedLoad.unloaded`), so the unload and the
+load are one switch, one `apply_load`. A skill already loaded answers "already
+loaded" (`details.already_loaded`) before `prepare_load`: no frames, no event,
+an ordinary result. Every `CallContext` starts with an empty `CallSkills`
+(`skill_loader.no_skills`), so a handoff always has a holder: `_prepare_handoff`
+resolves the target's skills (`prepare_handoff_skills` → `resolve_call_skills`,
+same rules as at a call's start, `SwitchInputs()` like the handoff itself) and
+builds the target's skilled config before the commit; `_apply_handoff_context`
+swaps them in after `apply_switch` with `CallSkills.adopt` (plain assignments).
+The target's list and `load_skill` are advertised iff it resolved skills, none
+loaded; a stale `load_skill` after a handoff finds the target's skills, so it
+answers "no skill named" and applies nothing of the first agent's.
+
+**What a call records** (#425): the resolution is saved at build
+(`skill_loader.record_resolution`, from `_with_skills`) as
+`metadata_json["resolved_skills"]` = `[{id, skill, version, pinned}]`, and again for a
+handoff's target, spawned after the switch (#427): appended by
+`call_repo.append_call_metadata_list` (row locked, an `id` already there
+skipped); hidden from `metadata` on the
+read and `call.ended` (`call_view.RESERVED_METADATA`) and a 422 in an outbound
+dial's `metadata`. Each load is a `skill.loaded` call event `{skill, version,
+reason}` (reason `load_skill`), each unload for the cap a `skill.unloaded`
+(reason `limit`, logged before its load), stored + dispatched through
+`emit_call_event` from one task spawned right after `apply_load`
+(`record_skill_events`), never inside it. `skills` on
+the call read and `call.ended` is `call_view.call_skills`: every resolved
+skill version `{skill, version, pinned, loaded}` (the first agent's, then a handoff
+target's), `[]` with none; `loaded` means loaded at any point in the call,
+matched by name and version (an unload is visible only as its event), and is
+null once the call's events expired (#316). Only when `CallContext.records` — an eval
+records neither. `skill`, `skills` are redaction structural fields; `reason`
+is an identifier on the two `skill.*` events.
+
+**Pins and the live version** (#426, ADR-0030 — which relaxes "a published
+agent version is immutable"). `SkillRef.version_id` (domain and
+`SkillRefSchema`; stored only when set, so an unpinned entry stays
+`{"skill"}`) pins a skill **version id** — an id, not a number, since a
+rollback makes an old number live again. Without one an entry follows the
+live published version: a skill publish or rollback reaches every follower's
+next call with no agent publish (resolution is per call; a running call never
+changes). A pin resolves to exactly that row, **published or archived** (the
+next publish archives it); never a draft. One rule, `services/skills
+.pin_refusal(name, row)`, decides both sides: at save (`attachment_refusal`,
+422 `skills[i] '<name>' version_id '<id>' is not a version of a skill in this
+project` — nonexistent or another project's — / `is a version of '<other>',
+not of '<name>'` / `is a draft (vN); pin a published or archived version`,
+details `{field: "skills[i].version_id", skill, version_id}`; collisions are
+checked against the pinned version's tools) and at resolution (a warning and
+a skipped skill, for an inline agent or a stale pin). `ResolvedSkill.pinned`
+rides into the record and `call_skills`; an entry stored before #426 has no
+`pinned` and reads false. Delete still 409s any version of a listed name,
+pinned or not.
+
+**In a text conversation** (#430, Chat API, SMS, WhatsApp text — all through
+`sms_chat._process_chat_message`): `services/text_skills.session_skills`
+resolves the agent's skills on the session's first message with skills
+(`resolve_skills`, pins honoured; the session's `{{variables}}`) and stores
+`metadata_json["resolved_skills"]` (`skills.resolution_entries`, a call row's
+shape); every later message re-reads **those versions by id** (as pins, the
+stored `pinned` kept), for the names the agent still lists, rendered with the
+variables as they stand — a mid-session publish reaches the next session. The
+turn runs `SessionSkills.config()` (= `skilled_config`): the prompt section,
+`load_skill` first in `chat_tools` (the one built-in text offers), then agent
+tools, loaded skills' tools, MCP, `query_knowledge` (own tool-mode links +
+loaded skills' search, `skill_knowledge.searched_attachments`, read at each
+call; a loaded skill's search adds the tool hint). `SessionSkills.load` is
+pure: the cap (`skills.after_load`), already-loaded and unknown answers
+(`skills.*_result`) are voice's own functions. A load reaches the turn's next
+round through `complete_text(refresh=)` (`llm_text.TurnUpdate`: every dialect
+replaces the first system message and the tools after each tool round) and
+the session through `text_skills.persist_loads`, before the reply is stored,
+same commit: the turn's loads replayed onto `metadata_json["loaded_skills"]`
+(names, load order) under `sms_session_repo.lock_session_metadata` (`FOR
+UPDATE`) and written by `merge_session_metadata` (`||`, one key) — two
+concurrent messages keep both loads; the resolution write takes the same lock
+(in a savepoint, so a failure is a warning and a turn without skills). A
+failed reply stores no load. Recorded: the `load_skill` `tool_invocations` row
+and `loaded_skills`; no `skill.*` events (a session has no event log), no
+session-read field. A new session starts empty.
+
+**Inline agents and evals** (#431): a call-init inline agent's `skills`
+resolve against the call's project exactly like a stored agent's (a name the
+project lacks is a `skill_skipped` warning, the call starts without it). An
+eval run resolves its target's skills **once**, in `_plan_run`
+(`evals/skills.resolve_run_skills`, the run's project, no `{{variables}}`,
+inline targets included): `resolved_config["resolved_skills"]` =
+`[{id, skill, version, pinned}]` (only when the agent lists skills; `[]` when
+none resolved), and every iteration runs those versions pinned
+(`SkillRef.version_id`), what did not resolve dropped. Run warnings:
+`skills_skipped` (names that did not resolve), `skills_ignored_on_s2s`.
+`load_skill` is **never mocked** (`tool_mocks.NEVER_MOCKED`, checked first in
+`intercept`): it changes the agent under test and reaches nothing outside, so
+it runs under `mock_only`, is recorded in `tool_calls` with outcome
+`applied`, and a scenario's mock for it is ignored with a `mock_ignored`
+warning. Skill tools are mocked and fail closed like any tool, and
+`warn_unmatched_mocks` counts resolved skills' tools as callable.
+
+Key files: `api/v1/skills.py`, `api/v1/schemas/skills.py`,
+`storage/repositories/skill_repo.py`, `services/skills.py`,
+`services/skill_knowledge.py`, `services/text_skills.py`,
+`orchestrator/skill_loader.py`, `evals/skills.py`. Tests: `tests/integration/test_skills_api.py`,
+`tests/integration/test_harness_call_skills.py`,
+`tests/integration/test_chat_skills.py`, `tests/integration/test_eval_skills.py`,
+`tests/unit/test_skills_on_a_call.py`, `tests/unit/test_eval_skills.py`,
+`tests/unit/test_skill_attachment_rules.py`, `tests/unit/test_text_skills.py`,
+`tests/unit/test_text_turn_refresh.py`.
 
 ## A/B Testing
 
@@ -1171,15 +1396,15 @@ and the janitor:
 
 ## Audit log
 
-Every change through the API to agents, project credentials, phone numbers,
-API keys and project settings is an entry in `audit_log` (#317, ADR-0024):
+Every change through the API to agents, skills, project credentials, phone
+numbers, API keys and project settings is an entry in `audit_log` (#317, ADR-0024):
 api key (or `actor: platform` for the bootstrap), resource, action, `changes`
 (RFC 6901 JSON Pointer → before/after), `request_id`. `GET /v1/audit-log`,
 admin key, newest first, filters `resource_type`/`resource_id`/`action`/
 `request_id`/`since`/`until`, `cursor`/`next_cursor` paging.
 
-- **Adding a mutating route** under `/v1/agents`, `/v1/credentials`,
-  `/v1/phone-numbers`, `/v1/api-keys` or `/v1/projects`? It takes `audit:
+- **Adding a mutating route** under `/v1/agents`, `/v1/skills`,
+  `/v1/credentials`, `/v1/phone-numbers`, `/v1/api-keys` or `/v1/projects`? It takes `audit:
   Audit` (`api/audit.py`; `PlatformAudit` on a platform-key route) and
   records once per resource it changed, the primary one first: `with
   audit.change(resource, id, action, state, row) as change:` around the write
@@ -1192,8 +1417,8 @@ admin key, newest first, filters `resource_type`/`resource_id`/`action`/
   (500, rolled back), **whoever commits** — DbSession, or a route that
   commits itself before a side effect (credentials, redaction). The first
   entry's id is `X-TurnCall-Audit-Id` and every entry's `request_id`.
-- **States** (`services/audit_log`): `agent_state`, `phone_number_state`,
-  `api_key_state`, `credential_state`, `project_state`,
+- **States** (`services/audit_log`): `agent_state`, `skill_state`,
+  `phone_number_state`, `api_key_state`, `credential_state`, `project_state`,
   `knowledge_base_link`, or `fields(...)` for a part. `public` (the masked
   read) is what is written; `raw` is only compared. A new secret on one of
   these resources must be masked in its state, as a new agent-config secret
@@ -1652,7 +1877,9 @@ one target.
   nor a fail and never counts toward a rate. No `score` column —
   `passed_count`/`failed_count` out of `iterations`.
 - **Three snapshots per run**: `resolved_config`, `resolved_scenario`,
-  `harness_config`. ADR-0017's rule one level out.
+  `harness_config`. ADR-0017's rule one level out. `resolved_config` carries
+  `resolved_skills` for an agent listing skills (#431), resolved once for the
+  run and run pinned by every iteration.
 - **An eval has no `calls` row.** `CallContext.eval_run_id` / `.is_eval` gates
   every call-scoped side effect — status writes, call_events, transcript taps,
   `tool_invocations` (there is no row to hang them off), and `call.ended`
@@ -1663,7 +1890,9 @@ one target.
   MCP, built-in and `query_knowledge` alike. Under `mock_only` (the default) a tool with no mock is
   refused and the iteration is `errored` naming it; `live` is the typed opt-in
   for read-only tools. What each iteration called lands in its results entry as
-  `tool_calls`, each marked `mocked`. Mocks are the **scenario's**, never the
+  `tool_calls`, each with its `outcome` (`mocked`, `refused`, `executed`, or
+  `applied` for `load_skill`, which is never mocked: it changes the agent under
+  test, #431 — see "Skills"). Mocks are the **scenario's**, never the
   run's: "the booking succeeds" and "the booking fails" are two tests.
 
 ### Writing a scenario that actually catches a provider regression
@@ -1896,6 +2125,7 @@ POST /v1/calls/{id}/analysis/rerun   # Re-run analysis (admin/developer key)
 | `transfer_call` | Transfer to phone number (cold/warm) | `target_number` (required), `transfer_mode`, `transfer_message`, `briefing`, `fallback_message`, `reason` |
 | `handoff_to_agent` | Switch to another agent. Refused (422) on an `openai_live` S2S agent | `agent_id` (required), `reason`, `context` |
 | `send_dtmf` | Send keypad tones | `digits` (required) |
+| `load_skill` | Load one of the agent's skills (#424, see "Skills"): its instructions join the prompt and its tools the tool list, the context kept. Offered automatically to an agent with resolved skills, never listed in `tools` | `name` (required) |
 | `do_not_call` | Suppress the caller's number (project-wide), record `call.opted_out`, end the call after the goodbye, like `end_call` (#228). Opt-in like every built-in: listed in `tools` or absent. A call with no E.164 caller (WebRTC) is refused and keeps running | none |
 
 ### Custom Webhook Tools
@@ -1952,7 +2182,7 @@ Connect agents to MCP servers for auto-discovered tools. Tools are fetched at ca
 
 Tool names are flat and unique: precedence is built-in > agent `tools` > MCP (server order — claimed serially after a concurrent discovery round, so the agent's config decides, not which server answered first); a collision is skipped + logged. That order is enforced twice — in what gets advertised (`_build_tools_schema`) *and* in what actually runs (`tool_bridge`, `chat_tools`), which have to agree. `handoff_to_agent` swaps the prompt and the target's `tools` (via `LLMSetToolsFrame`) but does **not** re-connect MCP servers mid-call. Both of those frames are queued with `interruptible = False`, so a caller talking over the handoff lands before it or after it, never through the middle — the half-applied state (previous agent's prompt and tools, cleared context, new handlers underneath) raised nothing and logged nothing. The flag only covers the **drain**; an interruption also cancels a sync tool's task, and a frame that was never built cannot survive a drain. So the handoff is prepare-then-apply: `_prepare_handoff` does all of the I/O **and** builds both frames **before** `call_control.handoff_to_agent` commits `status=HANDED_OFF` + `active_agent_id`, and `_apply_handoff_context` then applies the switch with nothing left to wait on and nothing left that can raise (a raise after the commit is the same divergence with a deterministic trigger). `_complete_handoff` gates that on the switch actually committing — applying one the database refused is the same bug upside down — a DB round-trip *after* that commit left the call record handed off while the live pipeline kept the previous agent, logged nowhere, since `CancelledError` slips past `except Exception` (#144). Narrow by design: spoken frames are *supposed* to be dropped on barge-in. `test_handoff_survives_interruption.py` pins the drain half (both frames surviving, a spoken one still dropped, the flag not spreading); `test_handoff_switch_is_atomic.py` pins the cancellation half, and fails if an `await` reappears in the switch.
 
-Tools run on voice **and** text, on every LLM provider — OpenAI-compatible (`tools`/`tool_calls`), Anthropic (`input_schema` + tool_use/tool_result blocks) and Bedrock Converse (`toolSpec`/`toolUse`/`toolResult`) each have their own dialect in `llm_text.py`. Built-ins are voice-only — all four resolve through `call_control` against a live `call_id`. `query_knowledge` is not a built-in and runs on both: a text turn offers it for the agent's `tool`-mode knowledge bases (`chat_tools._knowledge_search`, over `services/retrieval.query_knowledge`, the same search the voice handler runs), last, so an agent tool of that name keeps it. Calls within one round run concurrently. Text turns cap at `_MAX_TOOL_ROUNDS` (5), then re-ask with the tools withheld so a reply always goes out.
+Tools run on voice **and** text, on every LLM provider — OpenAI-compatible (`tools`/`tool_calls`), Anthropic (`input_schema` + tool_use/tool_result blocks) and Bedrock Converse (`toolSpec`/`toolUse`/`toolResult`) each have their own dialect in `llm_text.py`. Built-ins are voice-only — they resolve through `call_control` against a live `call_id` — except `load_skill`, which a text turn offers to an agent with skills (#430, see "Skills"). `query_knowledge` is not a built-in and runs on both: a text turn offers it for the agent's `tool`-mode knowledge bases and loaded skills' (`chat_tools._search`, over `services/retrieval.query_knowledge`, the same search the voice handler runs), last, so an agent tool of that name keeps it. Calls within one round run concurrently. Text turns cap at `_MAX_TOOL_ROUNDS` (5), then re-ask with the tools withheld so a reply always goes out.
 
 ### Tool Invocation Recording
 All tool calls (webhook + MCP + builtin, and `query_knowledge` via `tool_bridge.recorded_tool` on voice) are recorded in `tool_invocations` with input, output, status, latency_ms, and dispatched as `tool.result` events.
@@ -2003,7 +2233,7 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 `call.ended` payload: `status`, `ended_reason`, `from_number`, `to_number`, `direction`,
 `duration_ms`, `provider_call_sid`, `metadata`, `started_at`, `ended_at`,
 `recording_status`, `recording_url`, `summary`, `analysis`, `agent_name`,
-`agent_version`, `latency_summary`, `failovers` (`[{role, from, to, error}]`, `role` `stt`\|`llm`\|`tts`, #222/#223), `retention` (`{recordings_days, transcripts_days, events_days}`, null = kept for good, #316), and `transcript` (`[{role, text, timestamp}]`).
+`agent_version`, `latency_summary`, `failovers` (`[{role, from, to, error}]`, `role` `stt`\|`llm`\|`tts`, #222/#223), `skills` (`[{skill, version, pinned, loaded}]`, every skill the call resolved, `[]` with none, #425), `retention` (`{recordings_days, transcripts_days, events_days}`, null = kept for good, #316), and `transcript` (`[{role, text, timestamp}]`).
 
 `latency_summary` is derived from the call's `metrics.turn` events (#179):
 `{turns, user_to_bot, stages: {stt|llm|tts}, slowest_turn}`, each spread being
@@ -2026,7 +2256,7 @@ status callback, Telnyx's hangup; and the agent's hangup marker, source
 sent and never stored.
 
 The call read (`GET /v1/calls[/{id}]`) carries the same derived fields —
-`ended_reason`, `agent_name`, `agent_version`, `latency_summary`, `failovers` — from the same function,
+`ended_reason`, `agent_name`, `agent_version`, `latency_summary`, `failovers`, `skills` — from the same function,
 `services/call_view.py`, so the read and the webhook cannot disagree (#175).
 `ended_reason` is null on the read while the call is still live; agent fields
 are null for an inline agent and for a deleted agent row.
