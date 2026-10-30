@@ -11,6 +11,8 @@ is the strict one.
 No pipecat here: the API schema imports this module.
 """
 
+from collections.abc import Iterable, Sequence
+
 from pydantic import BaseModel, ConfigDict, Field
 
 # The built-in that reports a move (#442). Offered by TurnCall to an agent
@@ -88,3 +90,23 @@ class Procedure(_Shape):
     @property
     def start_step(self) -> ProcedureStep | None:
         return next((s for s in self.steps if s.start), None)
+
+
+def step_tool_refusal(
+    procedures: Sequence[Procedure], callable_tools: Iterable[str]
+) -> str | None:
+    """Why a step's `tool` cannot be called, naming the step, or None (#447).
+
+    `callable_tools` is every name the agent can call: its own tools and the
+    built-ins. A step names one of them; it is never a tool of its own.
+    """
+    known = frozenset(callable_tools)
+    for i, procedure in enumerate(procedures):
+        for step in procedure.steps:
+            if step.tool is not None and step.tool not in known:
+                return (
+                    f"procedures[{i}] '{procedure.name}': step '{step.id}' names "
+                    f"tool '{step.tool}', which is not one of the agent's tools "
+                    "or a built-in"
+                )
+    return None

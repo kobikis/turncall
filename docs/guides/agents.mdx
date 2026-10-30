@@ -142,6 +142,44 @@ moves and the result tells the model what to do at the new step. Anything
 else is refused, the result naming the moves that are allowed and why, and the
 procedure and its window stay where they were.
 
+**Start modes and several procedures.** An agent can carry several
+procedures, such as one per fault family. A `start: "call"` one runs from the
+first turn. A `start: "on_request"` one lets the agent handle general
+questions and run the procedure only when it applies: until it starts, the
+prompt names it with its description and its start step's id, and no step's
+text:
+
+```text
+## Procedures you can start
+When one applies, start it with move_to_step(procedure=<its name>, to=<its start step>); its steps are then shown to you one at a time.
+- no_internet: Caller has no internet connection at home (start step: lights)
+- reset_password: Caller forgot the password to their account (start step: identify)
+```
+
+The model starts one with `move_to_step` to its start step; the result says
+what to do there, and from the next turn its window is shown. A move in a
+procedure that is not running is otherwise refused with the reason (an
+`on_request` one's names its start step). The model is never shown the steps
+of a procedure that is not running, and when several run, each has its own
+window in the one message.
+
+**Step tools and variables.** A step's `tool` names a tool the model should
+call at that point, so an API check happens where it belongs and its result
+informs the next move. The window says so, at the step and in the preview
+(`after_restart (check, tool: line_status)`). It is one of the agent's own
+`tools` (or a built-in, or `query_knowledge`) and runs like any other: it
+reaches its webhook and is recorded in the call's tool invocations. Naming a
+tool the agent does not have is a `422` naming the procedure and the step; an
+agent with `mcp_servers` is not checked, since its MCP tools are only known
+once a call connects. A step's `text` renders the call's
+[template variables](#template-variables) like the rest of the config:
+
+```json
+{"id": "after_restart", "kind": "check", "tool": "line_status",
+ "text": "Check the line status for {{account_id}}.",
+ "moves": [{"to": "resolved", "when": "the line is fine"}]}
+```
+
 Procedures are part of the agent's config, so they version, publish, roll back
 and A/B-route with the agent, and a [call-init](/guides/call-init) inline
 agent can carry its own. Cascade voice calls only.
@@ -229,7 +267,7 @@ Personalize agents per-call using `{{variable}}` placeholders:
 }
 ```
 
-Variables are rendered at call start via [call-init](/guides/call-init) or the API, in a [skill's](/guides/skills) instructions too. See [Server Events](/guides/server-events) for how to dynamically inject variables.
+Variables are rendered at call start via [call-init](/guides/call-init) or the API, in a [skill's](/guides/skills) instructions and a [procedure](#procedures) step's text too. See [Server Events](/guides/server-events) for how to dynamically inject variables.
 
 ## Pipeline Mode
 

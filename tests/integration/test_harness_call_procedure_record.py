@@ -9,7 +9,6 @@ providers, a fake carrier.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import pytest
@@ -19,30 +18,12 @@ from tests.integration.test_harness_call_procedures import (
     NO_INTERNET,
     _call,
     _move,
+    _procedure_events,
     _remembering,
     _until,
 )
 
 pytestmark = pytest.mark.integration
-
-
-async def _procedure_events(
-    app: Any, call_id: str, *, at_least: int, timeout: float = 10.0
-) -> list[tuple[str, dict[str, Any]]]:
-    """The call's `procedure.*` events in log order, once there are
-    `at_least` of them (or the timeout passed)."""
-    deadline = asyncio.get_running_loop().time() + timeout
-    while True:
-        response = await app.api.get(f"/v1/calls/{call_id}/events")
-        assert response.status_code == 200, response.text
-        events = [
-            (e["event_type"], e["payload"])
-            for e in response.json()["data"]
-            if e["event_type"].startswith("procedure.")
-        ]
-        if len(events) >= at_least or asyncio.get_running_loop().time() > deadline:
-            return events
-        await asyncio.sleep(0.05)
 
 
 async def test_the_path_taken_is_on_the_event_log_and_in_the_summary(monkeypatch):

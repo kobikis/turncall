@@ -97,26 +97,29 @@ def warn_unmatched_mocks(
 
 
 def warn_never_mocked(tool_mocks: dict[str, Any]) -> list[dict[str, Any]]:
-    """Say so when a mock names a tool an eval never mocks (#431).
+    """Say so when a mock names a tool an eval never mocks (#431, #449).
 
-    `load_skill` changes the agent under test — the skill's instructions and
-    tools join its prompt — and reaches nothing outside the eval, so it always
-    runs; a canned answer for it would test an agent that never gets the
-    skill. The mock is ignored rather than refused, for the reason a stale
-    mock is only warned about: failing a queued run over it helps nobody.
+    `load_skill` and `move_to_step` change the agent under test — a skill's
+    instructions and tools join its prompt, a procedure moves to another step
+    — and reach nothing outside the eval, so they always run; a canned answer
+    for one would test an agent that never gets the skill, or whose moves
+    nothing checks. The mock is ignored rather than refused, for the reason a
+    stale mock is only warned about: failing a queued run over it helps nobody.
     """
     from turncall.services.tool_mocks import NEVER_MOCKED
 
-    ignored = sorted(set(tool_mocks) & NEVER_MOCKED)
+    ignored = sorted(set(tool_mocks) & NEVER_MOCKED.keys())
     if not ignored:
         return []
+    changes = "; ".join(f"{name} {NEVER_MOCKED[name]}" for name in ignored)
     return [
         {
             "code": "mock_ignored",
             "message": (
                 f"the mock(s) for {', '.join(ignored)} were ignored: an eval "
-                "always runs load_skill, which changes the agent under test and "
-                "nothing outside it. Mock the skill's own tools instead."
+                f"always runs them ({changes}), as they change the agent under "
+                "test and nothing outside it. Mock the tools they lead to "
+                "instead."
             ),
             "tools": ignored,
         }

@@ -29,7 +29,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from turncall.domain.enums import CallEventType
 from turncall.domain.models import AgentConfig, ToolDefinition
 from turncall.domain.procedure_state import MoveOutcome, ProcedureState, move
-from turncall.domain.procedure_window import WINDOW_MARKER
+from turncall.domain.procedure_window import WINDOW_MARKER, startable_section
 from turncall.domain.procedures import MOVE_TO_STEP, Procedure
 from turncall.orchestrator.turn_message import replace_turn_message
 from turncall.orchestrator.turn_metrics import store_call_event
@@ -89,8 +89,11 @@ def with_procedures(
     logger.info(
         "procedures_running: {names}", names=[r.name for r in holder.state.runs]
     )
+    update: dict[str, Any] = {"tools": tools}
+    if (section := startable_section(config.procedures)) is not None:
+        update["system_prompt"] = f"{config.system_prompt}\n\n{section}"
     return (
-        config.model_copy(update={"tools": tools}),
+        config.model_copy(update=update),
         replace(call_context, procedures=holder),
     )
 
@@ -102,7 +105,9 @@ def move_to_step_tool(procedures: Sequence[Procedure]) -> ToolDefinition:
         description=(
             "Report a move in a procedure, as its window allows: to one of the "
             "allowed moves when its condition holds, or back to the previous "
-            "step. A move that is not allowed is refused with the reason."
+            "step. A procedure under 'Procedures you can start' is started by a "
+            "move to its start step. A move that is not allowed is refused "
+            "with the reason."
         ),
         parameters_schema={
             "type": "object",

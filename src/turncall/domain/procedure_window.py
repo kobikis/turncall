@@ -20,6 +20,13 @@ _RULES = (
     "caller's answer does not fit any move, ask again."
 )
 
+STARTABLE_HEADING = "## Procedures you can start"
+STARTABLE_HINT = (
+    "When one applies, start it with "
+    f"{MOVE_TO_STEP}(procedure=<its name>, to=<its start step>); its steps "
+    "are then shown to you one at a time."
+)
+
 
 def build_window(procedure: Procedure, path: Sequence[str], *, depth: int) -> str:
     """The window at `path[-1]`, having come by `path`."""
@@ -40,6 +47,20 @@ def window_message(windows: Sequence[str]) -> str:
     """One context message for every procedure running: the marker, then
     each window."""
     return "\n\n".join([WINDOW_MARKER, *(w for w in windows if w)])
+
+
+def startable_section(procedures: Sequence[Procedure]) -> str | None:
+    """The prompt section naming the `on_request` procedures the model can
+    start (#446): each one's name, description and start step id — never a
+    step's text, which only its window shows once it runs. None with none."""
+    lines = [
+        f"- {p.name}: {p.description} (start step: {start.id})"
+        for p in procedures
+        if p.start == "on_request" and (start := p.start_step) is not None
+    ]
+    if not lines:
+        return None
+    return "\n".join([STARTABLE_HEADING, STARTABLE_HINT, *lines])
 
 
 def _kind(step: ProcedureStep) -> str:

@@ -783,8 +783,8 @@ Inbound call → resolve phone number → routing_target_type == "webhook"?
 
 Template variables (`{{name}}`, `\w+` only — no spaces, no dots; an unsent one
 stays literal) live on the call row as `metadata_json["template_variables"]`
-and render `system_prompt`, `first_message`, tool descriptions and
-`s2s.delegation.instructions`. A `handoff_to_agent` (tool or API) gives the
+and render `system_prompt`, `first_message`, tool descriptions,
+`s2s.delegation.instructions` and each procedure step's `text` (#447). A `handoff_to_agent` (tool or API) gives the
 target agent the same call's variables and call-init `knowledge_context`
 (`tool_bridge._as_this_call`), rendered then prepended as at the call's start.
 
@@ -1298,12 +1298,46 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   never moved has no event and is not listed. `[]` with none; null once the
   transcript or the events expired. Both events are transcript-class
   (`retention.TRANSCRIPT_EVENTS`); `procedure`, `procedures` are redaction
-  structural fields and `from`/`to` identifiers on the two events.
+  structural fields and `from`/`to` identifiers on the two events. An
+  `on_request` start (#446) is a `procedure.step` with `from` null.
+- **Start modes, several procedures** (#446). `start: "on_request"`: not
+  running until the model moves it to its start step — `move` starts it
+  (`from_step` None, a new `ProcedureRun` appended; result `Started '<name>'.`
+  + the start step's text). Until then the prompt carries only
+  `## Procedures you can start` (`procedure_window.startable_section`: name,
+  description, start step id, never step text), appended to `system_prompt`
+  by `with_procedures` — static for the call, so it still lists one already
+  started. Any other move in a procedure not running is refused (`'<name>' is
+  not running`, plus `Start it at its start step '<id>'` and
+  `details.allowed: [<start id>]` for an `on_request` one); a `call` one not
+  running is never started by a move. Several may run at once, each its own
+  window in the one `[Procedure]` message; one not running shows no step.
+- **Step tools and variables** (#447). A step's `tool` is shown in the window
+  and its preview (`(check, tool: line_status)`); it is an ordinary agent tool,
+  dispatched and recorded like any other. At save it must be one of the
+  agent's `tools`, a built-in or `query_knowledge`
+  (`procedures.step_tool_refusal`, applied in `AgentConfigSchema`; 422
+  `procedures[i] '<name>': step '<id>' names tool '<x>', ...`); an agent with
+  `mcp_servers` is not checked (its tools are discovered at call start).
+  `template_renderer.render_agent_config` renders each step's `text` with the
+  call's `{{variables}}`, so the window, preview and move result show it.
+- **In an eval** (#449): `move_to_step` is never mocked
+  (`tool_mocks.NEVER_MOCKED`, beside `load_skill`): it runs under
+  `mock_only`, the procedure accepting or refusing it, recorded in
+  `tool_calls` with outcome `applied` (a refused move too, its result saying
+  so); a scenario's mock for it is ignored with a `mock_ignored` warning
+  (`run_warnings.warn_never_mocked`, which names what each ignored tool
+  changes). A move is a tool call, so a `function_call` expectation (`calls:`
+  with `{procedure, to}`) asserts the path, and an agent that skips a step
+  scores `failed`, never `errored`. No `procedure.*` events (`records` is
+  false). Tests: `tests/integration/test_eval_procedures.py`,
+  `tests/unit/test_eval_procedures.py`.
 
 Tests: `tests/unit/test_procedure_window.py`, `test_procedure_state.py`,
 `test_procedure_events.py`, `test_call_view.py`,
 `tests/integration/test_procedures_api.py`,
 `tests/integration/test_harness_call_procedures.py`,
+`tests/integration/test_harness_call_procedure_steps.py`,
 `tests/integration/test_harness_call_procedure_record.py`.
 
 ## A/B Testing
@@ -2010,8 +2044,8 @@ one target.
   refused and the iteration is `errored` naming it; `live` is the typed opt-in
   for read-only tools. What each iteration called lands in its results entry as
   `tool_calls`, each with its `outcome` (`mocked`, `refused`, `executed`, or
-  `applied` for `load_skill`, which is never mocked: it changes the agent under
-  test, #431 — see "Skills"). Mocks are the **scenario's**, never the
+  `applied` for `load_skill` and `move_to_step`, which are never mocked: they
+  change the agent under test, #431, #449 — see "Skills", "Procedures"). Mocks are the **scenario's**, never the
   run's: "the booking succeeds" and "the booking fails" are two tests.
 
 ### Writing a scenario that actually catches a provider regression
