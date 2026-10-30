@@ -50,6 +50,11 @@ and is not part of this repository's history.
   cannot link a library of its own. Deleting a library skill an agent in a
   linked project lists is a `409` naming that agent and its project, and `GET
   /v1/skills/{name}/agents` lists them too.
+- **`PIPECAT_VAD_MIN_VOLUME`**, Silero's minimum volume for the deployment
+  (0-1; unset keeps pipecat's 0.6). The volume is smoothed over ~130 ms, so at
+  0.6 a short "yes" or "no" often never started a turn, which then closed on
+  pipecat's 5 s stop timeout. Replaying two calls, 0.4 detected 14 and 15
+  caller utterances where 0.6 detected 10 and 13.
 
 ### Changed
 
