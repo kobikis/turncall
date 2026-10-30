@@ -272,8 +272,8 @@ async def test_tools_follow_the_agent_rules_and_a_refusal_names_the_tool(
             ],
             "short_secret": [_tool("get_invoices", webhook_secret="short")],
             "bad_name": [_tool("Get-Invoices")],
-            "duplicate": [_tool("get_invoices"), _tool("get_invoices")],
-            "builtin": [_tool("end_call")],
+            "duplicate": [_tool(), _tool("get_invoices"), _tool("get_invoices")],
+            "builtin": [_tool(), _tool("end_call")],
         }
         refusals = {}
         for case, tools in cases.items():
@@ -298,8 +298,9 @@ async def test_tools_follow_the_agent_rules_and_a_refusal_names_the_tool(
     assert "webhook_url" in refusals["no_webhook"]
     assert "tools[0] 'get_invoices' webhook_secret" in refusals["short_secret"]
     assert "tools[0] 'Get-Invoices' name" in refusals["bad_name"]
-    assert "unique" in refusals["duplicate"] and "get_invoices" in refusals["duplicate"]
-    assert "'end_call' is a built-in" in refusals["builtin"]
+    # Each names the tool as the other refusals do, so a form can mark the row.
+    assert "tools[2] 'get_invoices' name: is also tools[1]'s" in refusals["duplicate"]
+    assert "tools[1] 'end_call' name: is a built-in" in refusals["builtin"]
     assert "tools[0] 'get_invoices' webhook_url" in str(edit.json()["details"])
     assert unknown_field.status_code == 422, unknown_field.text
     assert bad_name.status_code == 422, bad_name.text

@@ -64,18 +64,26 @@ def _named(raw: Any, exc: ValidationError) -> str:
 
 
 def _check_tools(tools: list[ToolDefinitionSchema]) -> list[ToolDefinitionSchema]:
-    names = [t.name for t in tools]
-    duplicates = sorted({n for n in names if names.count(n) > 1})
-    if duplicates:
-        msg = f"tool names must be unique within a skill: {', '.join(duplicates)}"
-        raise ValueError(msg)
-    builtins = sorted(set(names) & BUILTIN_TOOL_NAMES)
-    if builtins:
-        msg = (
-            f"tool {builtins[0]!r} is a built-in: a skill's tools are webhook "
-            "tools, and a built-in outranks every skill tool"
-        )
-        raise ValueError(msg)
+    """Names unique within the skill and none a built-in's. Each refusal is a
+    line naming its tool (`tools[2] 'x' name: ...`), as `_named` writes a
+    schema's, so a client can mark the row it is about."""
+    first: dict[str, int] = {}
+    lines = []
+    for i, tool in enumerate(tools):
+        where = f"tools[{i}] {tool.name!r} name"
+        if tool.name in BUILTIN_TOOL_NAMES:
+            lines.append(
+                f"{where}: is a built-in: a skill's tools are webhook tools, "
+                "and a built-in outranks every skill tool"
+            )
+        elif tool.name in first:
+            lines.append(
+                f"{where}: is also tools[{first[tool.name]}]'s, and tool names "
+                "must be unique within a skill"
+            )
+        first.setdefault(tool.name, i)
+    if lines:
+        raise ValueError("; ".join(lines))
     return tools
 
 
