@@ -435,6 +435,9 @@ class PipecatSettings(BaseSettings):
 
     vad_enabled: bool = True
     vad_confidence_threshold: float = 0.6
+    # Silero's minimum volume; None leaves pipecat's 0.6. Measured against a
+    # smoothed volume that lags a short word, so 0.6 misses many a "yes".
+    vad_min_volume: float | None = Field(default=None, ge=0.0, le=1.0)
     audio_sample_rate: int = 8000
     audio_channels: int = 1
     session_timeout_seconds: int = 3600

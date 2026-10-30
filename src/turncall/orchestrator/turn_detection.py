@@ -118,14 +118,17 @@ def s2s_vad_turn_strategies() -> UserTurnStrategies:
 
 
 def silero_vad(*, sample_rate: int, stop_secs: float, pipecat_settings: Any) -> Any:
-    """Silero with the deployment's `PIPECAT_VAD_CONFIDENCE_THRESHOLD`: every VAD
-    a call builds comes from here, so none can quietly drop the setting."""
+    """Silero with the deployment's `PIPECAT_VAD_CONFIDENCE_THRESHOLD` and
+    `PIPECAT_VAD_MIN_VOLUME`: every VAD a call builds comes from here, so none
+    can quietly drop either setting."""
     from pipecat.audio.vad.silero import SileroVADAnalyzer
     from pipecat.audio.vad.vad_analyzer import VADParams
 
     confidence = getattr(pipecat_settings, "vad_confidence_threshold", None)
+    min_volume = getattr(pipecat_settings, "vad_min_volume", None)
     params = VADParams(
         stop_secs=stop_secs,
         **({"confidence": confidence} if confidence is not None else {}),
+        **({"min_volume": min_volume} if min_volume is not None else {}),
     )
     return SileroVADAnalyzer(sample_rate=sample_rate, params=params)

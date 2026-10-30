@@ -24,6 +24,10 @@ link is set by the platform (the builder), not by a project's API keys, and the
 linked project uses the library's skills instead of its own. A library skill
 can't be deleted while an agent in any linked project uses it.
 
+**`PIPECAT_VAD_MIN_VOLUME`.** Sets how loud speech must be before it starts the
+caller's turn. Unset keeps pipecat's 0.6, at which a short "yes" or "no" is
+often missed and answered only after five seconds; 0.4 catches most of them.
+
 ## Changed
 
 - **OpenAI's default model is `gpt-5.4-mini`**: an `openai` agent that names no

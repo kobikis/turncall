@@ -104,6 +104,49 @@ class TestConfidenceThreshold:
 
 
 @pytest.mark.unit
+class TestMinVolume:
+    """Pipecat's 0.6 minimum volume is read off a smoothed volume that takes
+    about 130 ms to rise, so a short "yes" or "no" ended before it crossed the
+    line: no turn start, and the turn closed on the 5 s stop timeout. Replaying
+    two calls, 0.4 caught 14 and 15 caller utterances where 0.6 caught 10
+    and 13."""
+
+    def test_the_platform_setting_reaches_the_analyzer(self) -> None:
+        analyzer = _build_vad_analyzer(
+            AgentConfig(),
+            sample_rate=8000,
+            pipecat_settings=SimpleNamespace(
+                vad_confidence_threshold=None, vad_min_volume=0.4
+            ),
+        )
+
+        assert _params(analyzer).min_volume == 0.4
+
+    def test_unset_keeps_pipecats_default(self) -> None:
+        from pipecat.audio.vad.vad_analyzer import VAD_MIN_VOLUME
+
+        analyzer = _build_vad_analyzer(
+            AgentConfig(),
+            sample_rate=8000,
+            pipecat_settings=SimpleNamespace(
+                vad_confidence_threshold=None, vad_min_volume=None
+            ),
+        )
+
+        assert _params(analyzer).min_volume == VAD_MIN_VOLUME
+
+    @pytest.mark.parametrize("value", ["-0.1", "1.5"])
+    def test_out_of_range_is_refused(self, monkeypatch, value) -> None:
+        from pydantic import ValidationError
+
+        from turncall.config.settings import PipecatSettings
+
+        monkeypatch.setenv("PIPECAT_VAD_MIN_VOLUME", value)
+        with pytest.raises(ValidationError):
+            PipecatSettings()
+
+
+@pytest.mark.unit
 def test_the_sample_rate_still_gets_through() -> None:
     """Twilio is 8k and WebRTC 16k; the wrong one is silent-audio territory.
 
