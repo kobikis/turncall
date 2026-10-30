@@ -249,7 +249,9 @@
               "GET /v1/skills/{skill_id}",
               "PUT /v1/skills/{skill_id}",
               "POST /v1/skills/{skill_id}/publish",
-              "POST /v1/skills/{skill_id}/rollback"
+              "POST /v1/skills/{skill_id}/rollback",
+              "DELETE /v1/skills/{skill_id}",
+              "GET /v1/skills/{name}/agents"
             ]
           },
           {
