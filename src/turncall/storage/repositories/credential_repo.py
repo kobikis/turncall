@@ -10,7 +10,7 @@ from uuid import UUID
 
 from cryptography.fernet import InvalidToken
 from loguru import logger
-from sqlalchemy import Text, cast, delete, func, select, type_coerce
+from sqlalchemy import Text, cast, delete, func, select, text, type_coerce
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -177,6 +177,11 @@ async def ensure_readable(session: AsyncSession, settings: Settings) -> None:
     warn_if_no_key(settings)
     if settings.credentials.encryption_key:
         fernet(settings)  # malformed is an error whether or not rows exist
+    # Not migrated yet (a first run starts the API before `make migrate`): no
+    # tables, so no secrets to read.
+    if await session.scalar(text("SELECT to_regclass('project_credentials')")) is None:
+        logger.warning("startup_unmigrated_database: run the migrations")
+        return
     # Phone numbers' own Twilio tokens are sealed with the same key.
     for column in (
         ProjectCredentialRow.ciphertext,
