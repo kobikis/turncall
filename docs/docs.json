@@ -113,6 +113,7 @@
               "PUT /v1/projects/{project_id}/limits",
               "PUT /v1/projects/{project_id}/redaction",
               "PUT /v1/projects/{project_id}/retention",
+              "PUT /v1/projects/{project_id}/skill-library",
               "DELETE /v1/projects/{project_id}"
             ]
           },
