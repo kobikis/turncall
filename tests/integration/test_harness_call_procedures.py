@@ -365,6 +365,25 @@ PASSWORD = {
 ON_REQUEST = {**NO_INTERNET, "start": "on_request"}
 
 
+async def _procedure_events(
+    app: Any, call_id: str, *, at_least: int, timeout: float = 10.0
+) -> list[tuple[str, dict[str, Any]]]:
+    """The call's `procedure.*` events in log order (#443), once there are
+    `at_least` of them (or the timeout passed): written off the tool's path."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        response = await app.api.get(f"/v1/calls/{call_id}/events")
+        assert response.status_code == 200, response.text
+        events = [
+            (e["event_type"], e["payload"])
+            for e in response.json()["data"]
+            if e["event_type"].startswith("procedure.")
+        ]
+        if len(events) >= at_least or asyncio.get_running_loop().time() > deadline:
+            return events
+        await asyncio.sleep(0.05)
+
+
 def _prompt(given: Given) -> str:
     return next((m["content"] for m in given if m["role"] == "system"), "")
 
@@ -377,7 +396,8 @@ async def test_an_on_request_procedure_runs_once_the_model_starts_it(monkeypatch
     """#446. Before the start the model has each procedure's name and
     description, never a step; a move in one not running is refused unless
     it starts it; once started, its window is at its start step — and the
-    other procedure's steps are never shown."""
+    other procedure's steps are never shown. The start is recorded as a step
+    from nowhere (#443)."""
     given: list[Given] = []
     script = Script(
         caller=("What are your hours?", "My internet is down.", "The red one."),
@@ -407,8 +427,9 @@ async def test_an_on_request_procedure_runs_once_the_model_starts_it(monkeypatch
             await call.say(400)
             await _until(lambda n=inferences: len(given) >= n)
             await call.wait_for_agent_speech(turn)
+        events = await _procedure_events(app, call.call_id, at_least=2)
         await call.hang_up()
-        await app.sink.wait_for("call.ended")
+        ended = await app.sink.wait_for("call.ended")
 
     before, refusing, starting, after_start, next_turn = given
     # Before: names and descriptions and how to start; no step, no window.
@@ -445,3 +466,25 @@ async def test_an_on_request_procedure_runs_once_the_model_starts_it(monkeypatch
     for each in given:
         for step in PASSWORD["steps"]:
             assert step["text"] not in _shown(each), step["id"]
+
+    # The refused move and the start, neither from a step.
+    assert events == [
+        (
+            "procedure.refused",
+            {"procedure": "no_internet", "from": None, "to": "power"},
+        ),
+        (
+            "procedure.step",
+            {"procedure": "no_internet", "from": None, "to": "lights", "kind": "ask"},
+        ),
+    ]
+    assert ended["payload"]["procedures"] == [
+        {
+            "name": "no_internet",
+            "path": ["lights"],
+            "completed": False,
+            "ended_at": "lights",
+            "escalated_at": None,
+            "refused_moves": 1,
+        }
+    ]

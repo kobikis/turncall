@@ -7,7 +7,8 @@ model sees a window.
   procedures, on a cascade call, gets `move_to_step` and a running state.
 - `run_move_to_step` is the tool: a move is checked and applied with nothing
   awaited in between, so a barge-in cancelling the tool cannot leave the
-  state half moved.
+  state half moved. Each move is recorded on the call's event log (#443),
+  in the order made, off the tool's path.
 - `ProcedureWindowProcessor` sits between the user aggregator and the LLM and
   puts this turn's window right before the caller's turn, replacing the
   previous turn's (`turn_message.replace_turn_message`). One processor in the
@@ -16,7 +17,8 @@ model sees a window.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Coroutine, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -24,14 +26,20 @@ from loguru import logger
 from pipecat.frames.frames import Frame, LLMContextFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
+from turncall.domain.enums import CallEventType
 from turncall.domain.models import AgentConfig, ToolDefinition
 from turncall.domain.procedure_state import MoveOutcome, ProcedureState, move
 from turncall.domain.procedure_window import WINDOW_MARKER, startable_section
 from turncall.domain.procedures import MOVE_TO_STEP, Procedure
 from turncall.orchestrator.turn_message import replace_turn_message
+from turncall.orchestrator.turn_metrics import store_call_event
 
 if TYPE_CHECKING:
     from turncall.orchestrator.pipeline_factory import CallContext
+
+
+# Event writes still running, kept referenced: asyncio holds only a weak one.
+_WRITING: set[asyncio.Task[None]] = set()
 
 
 class CallProcedures:
@@ -41,6 +49,23 @@ class CallProcedures:
 
     def __init__(self, state: ProcedureState | None = None) -> None:
         self.state = state or ProcedureState()
+        self._last_write: asyncio.Task[None] | None = None
+
+    def record(self, write: Coroutine[Any, Any, None]) -> None:
+        """Run `write` in the background once the previous one is done, so
+        the call's log keeps the moves in the order they were made: two moves
+        in one response run concurrently, and either write may be slower."""
+        previous = self._last_write
+
+        async def in_turn() -> None:
+            if previous is not None:
+                await asyncio.wait({previous})
+            await write
+
+        task = asyncio.create_task(in_turn())
+        _WRITING.add(task)
+        task.add_done_callback(_WRITING.discard)
+        self._last_write = task
 
 
 def no_procedures() -> CallProcedures:
@@ -118,7 +143,28 @@ def run_move_to_step(args: dict[str, Any], call_context: CallContext) -> MoveOut
         to=outcome.to_step,
         verdict="accepted" if outcome.accepted else "refused",
     )
+    _record_move(call_context, outcome)
     return outcome
+
+
+def _record_move(call_context: CallContext, outcome: MoveOutcome) -> None:
+    """A `procedure.step` `{procedure, from, to, kind}` for an accepted move
+    (`kind` the step reached, which the call's `procedures` summary reads), a
+    `procedure.refused` `{procedure, from, to}` for a refused one. Stored
+    only, identifiers only; nothing for a call with no row (an eval)."""
+    if not call_context.records:
+        return
+    payload: dict[str, Any] = {
+        "procedure": outcome.procedure,
+        "from": outcome.from_step,
+        "to": outcome.to_step,
+    }
+    if outcome.accepted:
+        event_type = CallEventType.PROCEDURE_STEP
+        payload["kind"] = outcome.kind
+    else:
+        event_type = CallEventType.PROCEDURE_REFUSED
+    call_context.procedures.record(store_call_event(call_context, event_type, payload))
 
 
 class ProcedureWindowProcessor(FrameProcessor):

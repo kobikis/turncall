@@ -206,6 +206,46 @@ agent can carry its own. Cascade voice calls only: on an S2S agent they are
 skipped, said on its read (`procedures_ignored_on_s2s`, below) and in the
 build's log.
 
+### What a call records
+
+Every move is on the call's event log (`GET /v1/calls/{id}/events`), in the
+order it was made: a `procedure.step` for a move the procedure allowed, a
+`procedure.refused` for one it refused. They are stored, never sent to
+webhook subscribers, and an eval run records none.
+
+```json
+{"event_type": "procedure.step",    "payload": {"procedure": "no_internet", "from": "lights",        "to": "restart",       "kind": "instruct"}}
+{"event_type": "procedure.refused", "payload": {"procedure": "no_internet", "from": "restart",       "to": "after_restart"}}
+{"event_type": "procedure.step",    "payload": {"procedure": "no_internet", "from": "restart",       "to": "after_restart", "kind": "check"}}
+{"event_type": "procedure.step",    "payload": {"procedure": "no_internet", "from": "after_restart", "to": "resolved",      "kind": "end"}}
+```
+
+The call read and `call.ended` both carry `procedures`, worked out from those
+events, so the two always agree:
+
+```json
+"procedures": [{
+  "name": "no_internet",
+  "path": ["lights", "restart", "after_restart", "resolved"],
+  "completed": true,
+  "ended_at": "resolved",
+  "escalated_at": null,
+  "refused_moves": 1
+}]
+```
+
+| Field | Meaning |
+|-------|---------|
+| `path` | Every step reached, in order, a move back included |
+| `ended_at` | The last step reached |
+| `completed` | `true` when `ended_at` is an `end` step |
+| `escalated_at` | `ended_at`, when it is an `escalate` step; otherwise `null` |
+| `refused_moves` | How many moves were refused |
+
+A procedure is listed once it moved or had a move refused. The list is empty
+for a call that followed none, and `null` once [retention](/guides/retention)
+deleted the call's transcript: the moves go with it.
+
 ## Warnings on a Read
 
 `GET /v1/agents/{id}` returns a **`warnings`** list beside the config: things
