@@ -540,14 +540,30 @@ def _create_llm_service(
         )
 
     if provider == "openai":
+        from turncall.services.openai_models import chat_params
+
+        # A call can gain tools mid-call (a skill, a handoff, MCP), so it is
+        # read as having them. services/openai_models.py.
+        params = chat_params(
+            model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning_effort=effort,
+            tools=True,
+        )
+        for dropped in params.dropped:
+            logger.warning("openai_param_dropped: {dropped}", dropped=dropped)
+        sampling = (
+            {} if params.temperature is None else {"temperature": params.temperature}
+        )
         return OpenAILLMService(
             api_key=credentials.api_key("openai", config.llm.api_key),
             settings=OpenAILLMService.Settings(
                 model=model,
                 **si,
-                extra=_openai_extra_body(effort),
-                temperature=temperature,
-                max_tokens=max_tokens,
+                extra=_openai_extra_body(params.reasoning_effort),
+                max_completion_tokens=params.max_completion_tokens,
+                **sampling,
             ),
         )
 
