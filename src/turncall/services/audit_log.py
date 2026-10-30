@@ -235,7 +235,7 @@ def project_state(row: Any) -> State:
     from turncall.api.v1.schemas.projects import ProjectResponse
 
     public = ProjectResponse.from_row(row).model_dump(
-        include={"name", "limits", "redaction", "retention"}
+        include={"name", "limits", "redaction", "retention", "skill_library"}
     )
     return State.of({**public, "deleted_at": getattr(row, "deleted_at", None)})
 

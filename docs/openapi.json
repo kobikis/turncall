@@ -549,6 +549,87 @@
         }
       }
     },
+    "/v1/projects/{project_id}/skill-library": {
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Set Project Skill Library",
+        "description": "Link the project to a skill library (#432, ADR-0031): another project\nwhose skills it resolves from then on, instead of its own \u2014 its library\nis the only place its agents' skill names are looked up. `null` unlinks\nit. Requires the platform credential (X-Platform-Key): no API key, admin\nincluded, can make its project read another's skills. A 422 for the\nproject itself, a project that is missing or deleted, a project linked\nto a library of its own, or linking a project other projects read from\n(no chains). Applies to the next call, message or save; a call already\nrunning keeps the skills it resolved.",
+        "operationId": "set_project_skill_library_v1_projects__project_id__skill_library_put",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "x-platform-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Platform-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectSkillLibrary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Set Project Skill Library V1 Projects  Project Id  Skill Library Put"
+                }
+              }
+            },
+            "headers": {
+              "X-TurnCall-Audit-Id": {
+                "description": "The id of the audit log entry for this request's primary resource. Every entry the request wrote (a publish also archives versions and re-points numbers) carries it as `request_id`: `GET /v1/audit-log?request_id=<this id>` returns them all.",
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/api-keys": {
       "post": {
         "tags": [
@@ -5720,7 +5801,7 @@
           "skills"
         ],
         "summary": "List Skill Agents",
-        "description": "The project's draft and published agent versions listing the skill,\neach with the skill version it resolves to now \u2014 the pinned one for an\nentry that pins (#426), else the live published one. A name the project\nhas no version of is a 404.",
+        "description": "The draft and published agent versions listing the skill \u2014 the\nproject's own, and every project linked to it as a skill library (#434),\neach with its `project_id` \u2014 with the skill version each resolves to\nnow: the pinned one for an entry that pins (#426), else the live\npublished one. A name the project has no version of is a 404.",
         "operationId": "list_skill_agents_v1_skills__name__agents_get",
         "parameters": [
           {
@@ -5921,7 +6002,7 @@
           "skills"
         ],
         "summary": "Delete Skill",
-        "description": "Delete one version. A 409 naming the agents while any draft or\npublished agent version lists the skill: remove it from their `skills`\nfirst.",
+        "description": "Delete one version. A 409 naming the agents, and their projects,\nwhile any draft or published agent version reading this project's\nskills lists the skill \u2014 a linked project's too (#434): remove it from\ntheir `skills` first.",
         "operationId": "delete_skill_v1_skills__skill_id__delete",
         "parameters": [
           {
@@ -9114,6 +9195,7 @@
           "limits_set",
           "redaction_set",
           "retention_set",
+          "skill_library_set",
           "purchased",
           "released"
         ],
@@ -11013,6 +11095,30 @@
           "viewer"
         ],
         "title": "ProjectRole"
+      },
+      "ProjectSkillLibrary": {
+        "properties": {
+          "library_project_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Library Project Id",
+            "description": "The skill library's project id, or null to unlink. Required: a PUT naming nothing must not unlink the project"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "library_project_id"
+        ],
+        "title": "ProjectSkillLibrary",
+        "description": "The project whose skills this project resolves (#432, ADR-0031): its\nskill library, the only place its agents' skill names are looked up.\nNull = none, the project's own skills. Set only with the platform\ncredential."
       },
       "RegisterToolRequest": {
         "properties": {

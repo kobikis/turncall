@@ -3,7 +3,8 @@
 A skill version names knowledge bases the way an inline agent does
 (`KnowledgeBaseAttachment`, checked against the project at save, #423). They
 are resolved with the skill, once, when the call's skills are (#424): each KB
-checked against the call's project again — a KB deleted since the save is a
+checked again against the project that holds the skill — the call's own, or
+its skill library (#433, ADR-0031) — a KB deleted since the save is a
 warning and a skipped attachment — and `prompt`-mode documents read then, so
 loading the skill later costs no I/O.
 
@@ -99,7 +100,8 @@ async def resolve_skill_knowledge(
     skill: str,
     knowledge_bases: Sequence[Any],
 ) -> SkillKnowledge:
-    """`knowledge_bases` of the skill named `skill` as a call applies them.
+    """`knowledge_bases` of the skill named `skill` as a call applies them;
+    `project_id` is the project that holds the skill (a library's, #433).
 
     Best-effort, like the agent's own KBs: an attachment that does not parse,
     a KB that is no longer the project's, an `auto` one, or a failed read is a
@@ -120,7 +122,7 @@ async def resolve_skill_knowledge(
             if kb is None:
                 logger.warning(
                     "skill_knowledge_base_skipped: {kb} of skill {skill} is not a "
-                    "knowledge base in the project",
+                    "knowledge base in the skill's project",
                     kb=str(att.knowledge_base_id),
                     skill=skill,
                 )

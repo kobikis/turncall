@@ -130,7 +130,7 @@ def main() -> None:
                     "model": "nova-3-general",
                     "language": "en",
                 },
-                "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+                "llm": {"provider": "openai", "model": "gpt-5.4-mini"},
                 "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"},
                 "tools": [
                     {
@@ -421,7 +421,7 @@ def main() -> None:
                     "model": "nova-3-general",
                     "language": "en",
                 },
-                "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+                "llm": {"provider": "openai", "model": "gpt-5.4-mini"},
                 "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"},
                 "silence_timeout_ms": 1200,
                 "interruption_enabled": True,

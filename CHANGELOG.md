@@ -40,6 +40,32 @@ and is not part of this repository's history.
   skill's (#426, #428). Deleting a skill version an agent lists is a `409`
   naming the agents. Skills are cascade only: an S2S agent carries a
   `skills_ignored_on_s2s` warning and runs without them.
+- **A skill library** (#432–#434, ADR-0031). A project can resolve its
+  skills from one other project, set and cleared only with the platform
+  credential: `PUT /v1/projects/{id}/skill-library` `{"library_project_id"}`
+  (`null` unlinks), shown as `skill_library` on the project read. It replaces
+  the project's own skills rather than falling back to them, and every
+  resolution goes through it: stored and inline agents, handoffs, text
+  sessions, eval runs, pins, and a library skill's knowledge bases. A library
+  cannot link a library of its own. Deleting a library skill an agent in a
+  linked project lists is a `409` naming that agent and its project, and `GET
+  /v1/skills/{name}/agents` lists them too.
+
+### Changed
+
+- **OpenAI's default model is `gpt-5.4-mini`.** An `openai` agent that names
+  no model runs it, and so do an OpenAI eval judge that names none and
+  knowledge-base enrichment. OpenAI shuts `gpt-4o-mini` down on 2027-01-14. An
+  agent whose config names `gpt-4o-mini` keeps it until you change it.
+
+### Fixed
+
+- **An OpenAI model is sent only the settings it takes.** A reasoning effort on
+  `gpt-4o`/`gpt-4.1`, `max_tokens` on the gpt-5 family, a temperature on a
+  model that is reasoning, `minimal` on gpt-5.1 and later, and an effort beside
+  tools on gpt-5.4 and later each ended the call on its first reply with a 400.
+  TurnCall now sends `max_completion_tokens`, leaves out what the model refuses
+  and logs `openai_param_dropped` (`services/openai_models.py`).
 
 ## [2.1.1]
 

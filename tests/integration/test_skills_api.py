@@ -272,8 +272,8 @@ async def test_tools_follow_the_agent_rules_and_a_refusal_names_the_tool(
             ],
             "short_secret": [_tool("get_invoices", webhook_secret="short")],
             "bad_name": [_tool("Get-Invoices")],
-            "duplicate": [_tool("get_invoices"), _tool("get_invoices")],
-            "builtin": [_tool("end_call")],
+            "duplicate": [_tool(), _tool("get_invoices"), _tool("get_invoices")],
+            "builtin": [_tool(), _tool("end_call")],
         }
         refusals = {}
         for case, tools in cases.items():
@@ -298,8 +298,9 @@ async def test_tools_follow_the_agent_rules_and_a_refusal_names_the_tool(
     assert "webhook_url" in refusals["no_webhook"]
     assert "tools[0] 'get_invoices' webhook_secret" in refusals["short_secret"]
     assert "tools[0] 'Get-Invoices' name" in refusals["bad_name"]
-    assert "unique" in refusals["duplicate"] and "get_invoices" in refusals["duplicate"]
-    assert "'end_call' is a built-in" in refusals["builtin"]
+    # Each names the tool as the other refusals do, so a form can mark the row.
+    assert "tools[2] 'get_invoices' name: is also tools[1]'s" in refusals["duplicate"]
+    assert "tools[1] 'end_call' name: is a built-in" in refusals["builtin"]
     assert "tools[0] 'get_invoices' webhook_url" in str(edit.json()["details"])
     assert unknown_field.status_code == 422, unknown_field.text
     assert bad_name.status_code == 422, bad_name.text
@@ -686,7 +687,13 @@ async def test_a_skill_in_use_is_not_deleted_and_an_unused_one_is(
     assert refused.json()["details"] == {
         "skill": "verify_identity",
         "agents": [
-            {"agent_id": support_id, "name": "support", "version": 1, "state": "draft"}
+            {
+                "agent_id": support_id,
+                "project_id": app.project_id,
+                "name": "support",
+                "version": 1,
+                "state": "draft",
+            }
         ],
     }
     assert deleted_unused.status_code == 200, deleted_unused.text
@@ -740,6 +747,7 @@ async def test_the_agents_using_a_skill_and_the_version_each_resolves_to(
     ]
     assert rows[1] == {
         "agent_id": support["id"],
+        "project_id": app.project_id,
         "agent_name": "support",
         "agent_version": 1,
         "agent_state": "draft",

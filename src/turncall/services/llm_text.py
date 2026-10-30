@@ -570,6 +570,38 @@ def _openai_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return [{"type": "function", "function": t} for t in tools or []]
 
 
+def _sampling(config: LLMConfig, *, tools: bool) -> dict[str, Any]:
+    """Temperature, token limit and reasoning effort. On `openai`, what the
+    model takes (services/openai_models.py); elsewhere as configured."""
+    if config.provider != "openai":
+        body: dict[str, Any] = {
+            "temperature": config.temperature,
+            "max_tokens": config.max_tokens,
+        }
+        if config.reasoning_effort:
+            # OpenAI-compatible reasoning models and Grok's (xai, which the
+            # API refuses `minimal` for); ignored when unset.
+            body["reasoning_effort"] = config.reasoning_effort
+        return body
+    from turncall.services.openai_models import chat_params
+
+    params = chat_params(
+        config.model,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+        reasoning_effort=config.reasoning_effort,
+        tools=tools,
+    )
+    for dropped in params.dropped:
+        logger.warning("openai_param_dropped: {dropped}", dropped=dropped)
+    body = {"max_completion_tokens": params.max_completion_tokens}
+    if params.temperature is not None:
+        body["temperature"] = params.temperature
+    if params.reasoning_effort:
+        body["reasoning_effort"] = params.reasoning_effort
+    return body
+
+
 async def _complete_text_openai(
     config: LLMConfig,
     messages: list[dict[str, Any]],
@@ -595,13 +627,8 @@ async def _complete_text_openai(
         "model": config.model,
         # Copied: the loop appends to this, and the caller's history is theirs.
         "messages": list(messages),
-        "temperature": config.temperature,
-        "max_tokens": config.max_tokens,
+        **_sampling(config, tools=bool(tools)),
     }
-    if config.reasoning_effort:
-        # OpenAI reasoning models (o-series/gpt-5) and Grok's (xai, which
-        # the API refuses `minimal` for); ignored when unset.
-        body["reasoning_effort"] = config.reasoning_effort
     if config.provider == "openrouter" and config.fallback_models:
         # OpenRouter's `models` array — tried in order, primary first.
         body["models"] = [config.model, *config.fallback_models]

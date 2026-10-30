@@ -3,7 +3,7 @@ title: Changelog
 description: "Latest updates and improvements to TurnCall"
 ---
 
-<Update label="Unreleased" description="Unreleased" tags={["Feature"]}>
+<Update label="Unreleased" description="Unreleased" tags={["Feature", "Update", "Fix"]}>
 
 ## Added
 
@@ -17,6 +17,26 @@ skill's published version, so publishing a skill reaches the agents using it on
 their next call, or it can pin a version. Skills work on voice calls (cascade),
 chat, SMS and WhatsApp text, call-init inline agents and evals, and each call
 records which skills it loaded. See [Skills](/guides/skills).
+
+**A shared skill library.** A project can take its skills from one other
+project, so a set of skills is written once and used by several projects. The
+link is set by the platform (the builder), not by a project's API keys, and the
+linked project uses the library's skills instead of its own. A library skill
+can't be deleted while an agent in any linked project uses it.
+
+## Changed
+
+- **OpenAI's default model is `gpt-5.4-mini`**: an `openai` agent that names no
+  model runs it, and so do an eval judge on OpenAI that names none and
+  knowledge-base enrichment. OpenAI shuts `gpt-4o-mini` down on 2027-01-14. An
+  agent whose config names `gpt-4o-mini` keeps it until you change it.
+
+## Fixed
+
+- **An OpenAI model is sent only the settings it takes**: a reasoning effort
+  on `gpt-4o-mini`, `max_tokens` on the gpt-5 family, and a reasoning effort
+  beside tools on `gpt-5.4` each ended the call on its first reply. TurnCall
+  now leaves out what the model refuses and logs `openai_param_dropped`.
 
 </Update>
 

@@ -343,3 +343,62 @@ async def test_two_messages_at_once_lose_neither_load(monkeypatch, llm):
         "verify_identity_tool",
         "explain_bill_tool",
     }
+
+
+async def test_a_linked_project_loads_its_librarys_skill_on_text(monkeypatch, llm):
+    """#433: a text session in a project linked to a skill library resolves
+    the agent's skills there, loads one, and keeps it on the next message."""
+
+    class _Library:
+        def __init__(self, api: Any) -> None:
+            self.api = api
+
+    async with (
+        Backend(variables={}) as backend,
+        run_app(
+            SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+        ) as app,
+        app.another_project("library") as (library, lib),
+    ):
+        skill = await _publish_skill(
+            _Library(lib),
+            {
+                **_skill_body("explain_bill", backend.url),
+                "description": BILL,
+                "instructions": "Compare the last two invoices.",
+                "tools": [_tool("get_invoices", f"{backend.url}/invoices")],
+            },
+        )
+        assert (await app.link_skill_library(library)).status_code == 200
+        agent_id = await app.create_agent(
+            {**HARNESS_AGENT, "skills": [{"skill": "explain_bill"}]}
+        )
+        llm.script = [
+            [("load_skill", {"name": "explain_bill"})],
+            [("get_invoices", {})],
+            REPLY,
+        ]
+        first = await app.api.post(
+            "/v1/chat", json={"agent_id": agent_id, "message": "Why is it higher?"}
+        )
+        session_id = first.json()["data"]["session_id"]
+        llm.script = ["And it is due on the 15th."]
+        second = await app.api.post(
+            "/v1/chat",
+            json={"agent_id": agent_id, "session_id": session_id, "message": "Due?"},
+        )
+
+    assert [r.status_code for r in (first, second)] == [201] * 2
+    before, loaded, _answered, later = llm.rounds
+    assert f"- explain_bill: {BILL}" in before.prompt
+    assert before.tools == ["load_skill"]
+    assert "## Skill: explain_bill (v1)\nCompare the last two invoices." in (
+        loaded.prompt
+    )
+    assert loaded.tools == ["load_skill", "get_invoices"]
+    assert llm.results[0]["details"] == {"skill": "explain_bill", "version": 1}
+    assert [path for path, _ in backend.requests] == ["/invoices"]
+    # The next message holds the library's version without loading it again.
+    assert "## Skill: explain_bill (v1)" in later.prompt
+    assert later.tools == ["load_skill", "get_invoices"]
+    assert skill["version"] == 1

@@ -20,7 +20,7 @@ from turncall.api.v1.schemas.agents import (
 from turncall.auth import Auth, AuthContext, WriteAuth
 from turncall.domain.enums import AuditAction, AuditResource
 from turncall.domain.models import RetentionConfig
-from turncall.services import audit_log, retention, skills
+from turncall.services import audit_log, retention, skill_library, skills
 from turncall.services.audit_log import AuditTrail
 from turncall.storage.repositories import (
     agent_repo,
@@ -51,19 +51,23 @@ async def _check_ambience(
 async def _check_skills(
     session: AsyncSession, project_id: UUID, config: AgentConfigSchema | None
 ) -> None:
-    """The skills an agent lists must be live in the project — or, pinned,
-    name a published or archived version of that skill there (#426) — and
-    bring no tool whose name is taken (#428): checked against the version
-    each resolves to now, at save, rather than skipped or dropped on a call."""
+    """The skills an agent lists must be live where the project's skills come
+    from — itself, or its skill library (#432) — or, pinned, name a
+    published or archived version of that skill there (#426) — and bring no
+    tool whose name is taken (#428): checked against the version each
+    resolves to now, at save, rather than skipped or dropped on a call."""
     if config is None or not config.skills:
         return
+    source = await skill_library.skill_source(session, project_id)
     names = {ref.skill for ref in config.skills}
-    # The lock a skill delete takes: a delete racing this save either lands
-    # first and is seen below, or waits and then sees this agent.
-    for name in sorted(names):
-        await skill_repo.lock_name(session, project_id, name)
+    # The lock a skill delete takes, in the project holding the skill: a
+    # delete racing this save either lands first and is seen below, or waits
+    # and then sees this agent.
+    if source.project_id is not None:
+        for name in sorted(names):
+            await skill_repo.lock_name(session, source.project_id, name)
     refusal = await skills.attachment_refusal(
-        session, project_id, config.skills, [tool.name for tool in config.tools]
+        session, source, config.skills, [tool.name for tool in config.tools]
     )
     if refusal is not None:
         raise ApiError(

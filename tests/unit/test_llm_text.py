@@ -150,6 +150,36 @@ class TestCompleteText:
         assert "reasoning_effort" not in mock_client.post.call_args.kwargs["json"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "effort", "sent"),
+        [
+            # What each answers 400 for: services/openai_models.py.
+            ("gpt-4o-mini", "low", {"temperature": 0.7}),
+            ("gpt-5-mini", "low", {"reasoning_effort": "low"}),
+            ("gpt-5.4-mini", None, {"temperature": 0.7}),
+        ],
+    )
+    async def test_openai_is_sent_what_its_model_takes(self, model, effort, sent):
+        config = LLMConfig(
+            provider="openai", model=model, api_key="k", reasoning_effort=effort
+        )
+        mock_response = httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "ok"}}], "usage": {}},
+            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+        )
+        with patch("turncall.services.llm_text.get_http_client") as mock_get:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_get.return_value = mock_client
+            await complete_text(config, [{"role": "user", "content": "hi"}])
+
+        body = mock_client.post.call_args.kwargs["json"]
+        sampling = {"temperature", "max_tokens", "reasoning_effort"}
+        assert {k: v for k, v in body.items() if k in sampling} == sent
+        assert body["max_completion_tokens"] == 1024
+
+    @pytest.mark.asyncio
     async def test_handles_missing_usage(self) -> None:
         config = LLMConfig(provider="ollama", model="llama3", api_key="test")
         messages = [{"role": "user", "content": "Hi"}]

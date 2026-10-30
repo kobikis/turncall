@@ -285,7 +285,7 @@ Two things to know before you wire it up:
 ```json
 {
   "stt": {"provider": "deepgram", "model": "nova-3-general"},
-  "llm": {"provider": "openai", "model": "gpt-4o-mini", "temperature": 0.7, "max_tokens": 1024},
+  "llm": {"provider": "openai", "model": "gpt-5.4-mini", "temperature": 0.7, "max_tokens": 1024},
   "tts": {"provider": "elevenlabs", "voice": "your-voice-id"}
 }
 ```

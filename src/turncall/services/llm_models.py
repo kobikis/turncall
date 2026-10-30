@@ -27,7 +27,11 @@ from __future__ import annotations
 _LEGACY_OPENAI_SENTINEL = "gpt-4o-mini"
 
 _LLM_DEFAULTS: dict[str, str] = {
-    "openai": "gpt-4o-mini",
+    # Not gpt-4o-mini, which OpenAI shuts down on 2027-01-14. gpt-5.4-mini
+    # reasons only when asked (its default effort is none), so it answers a
+    # voice turn without a thinking delay, and takes every setting TurnCall
+    # sends it (services/openai_models.py).
+    "openai": "gpt-5.4-mini",
     "anthropic": "claude-sonnet-5",
     # pipecat's own default for its Google service, and the fastest current
     # Flash that still takes the `minimal` thinking level pipecat sets for a

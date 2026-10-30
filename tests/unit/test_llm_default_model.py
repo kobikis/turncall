@@ -21,7 +21,7 @@ from turncall.services.llm_models import model_is_required, resolve_llm_model
 @pytest.mark.unit
 class TestProvidersWithAHouseModel:
     def test_openai_keeps_its_own(self) -> None:
-        assert resolve_llm_model("openai", "") == "gpt-4o-mini"
+        assert resolve_llm_model("openai", "") == "gpt-5.4-mini"
 
     def test_anthropic_gets_a_claude_model(self) -> None:
         assert "claude" in resolve_llm_model("anthropic", "")

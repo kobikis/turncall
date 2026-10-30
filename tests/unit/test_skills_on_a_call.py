@@ -18,6 +18,7 @@ from uuid import uuid4
 import pytest
 
 from turncall.domain.models import AgentConfig, SkillRef, ToolDefinition
+from turncall.services.skill_library import SkillSource
 from turncall.services.skills import (
     ResolvedSkill,
     _as_resolved,
@@ -26,6 +27,18 @@ from turncall.services.skills import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _own_skills():
+    """Every project here reads its own skills: the skill library (#432) is
+    covered over the running app."""
+
+    async def own(_session, project_id):
+        return SkillSource(project_id)
+
+    with patch("turncall.services.skills.skill_source", new=own):
+        yield
 
 
 def _tool(name: str, url: str = "http://x/hook", description: str = "d"):

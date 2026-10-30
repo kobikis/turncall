@@ -28,7 +28,7 @@ from turncall.orchestrator.pipeline_factory import (
     CallContext,
     create_pipeline,
 )
-from turncall.orchestrator.tool_bridge import register_tools
+from turncall.orchestrator.tool_bridge import register_tools, remember_config_tools
 from turncall.services import drain
 from turncall.services.credentials import (
     Credentials,
@@ -234,7 +234,10 @@ async def _assemble(
 
         for proc in pipeline.processors_with_metrics():
             if isinstance(proc, LLMService):
-                register_tools(FailoverLLM.group_of(proc), all_tools, call_context)
+                group = FailoverLLM.group_of(proc)
+                register_tools(group, all_tools, call_context)
+                # What a later switch may take away: these, never MCP's.
+                remember_config_tools(group, config.tools)
                 break
 
     return CallSession(

@@ -222,7 +222,7 @@ SUPPORTED_EMBEDDING_MODELS = frozenset(
 # enrich the first N chunks (the rest keep the filename prefix).
 _ENRICH_DOC_CHARS = 24_000
 _ENRICH_MAX_CHUNKS = 60
-_ENRICH_MODEL = "gpt-4o-mini"
+_ENRICH_MODEL = "gpt-5.4-mini"
 
 _ENRICH_PROMPT = (
     "Here is a document named {filename!r}:\n<document>\n{doc}\n</document>\n\n"
@@ -260,7 +260,7 @@ async def enrich_chunks(
             async with sem:
                 resp = await client.chat.completions.create(
                     model=_ENRICH_MODEL,
-                    max_tokens=120,
+                    max_completion_tokens=120,
                     messages=[
                         {
                             "role": "user",

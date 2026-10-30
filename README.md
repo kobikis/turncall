@@ -45,7 +45,7 @@ curl -X POST http://localhost:8090/v1/agents -H "Authorization: Bearer tc_..." -
   "config": {
     "first_message": "Thanks for calling Acme — how can I help?",
     "system_prompt": "You are Acme'"'"'s receptionist. Be brief and warm.",
-    "llm":  {"provider": "openai",   "model": "gpt-4o-mini"},
+    "llm":  {"provider": "openai",   "model": "gpt-5.4-mini"},
     "stt":  {"provider": "deepgram", "model": "nova-3-general"},
     "tts":  {"provider": "cartesia", "model": "sonic-3.6"},
     "tools": [{"name": "transfer_call"}]
@@ -197,7 +197,7 @@ Every endpoint: **[docs.turncall.io/api-reference](https://docs.turncall.io/api-
     "system_prompt": "You are a dental clinic receptionist...",
     "first_message": "Thank you for calling! How can I help?",
     "stt": {"provider": "deepgram", "model": "nova-3-general"},
-    "llm": {"provider": "openai", "model": "gpt-4o-mini", "temperature": 0.7, "max_tokens": 1024},
+    "llm": {"provider": "openai", "model": "gpt-5.4-mini", "temperature": 0.7, "max_tokens": 1024},
     "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"},
     "tools": [
       {"name": "transfer_call", "description": "Transfer to agent", "parameters_schema": {...}},

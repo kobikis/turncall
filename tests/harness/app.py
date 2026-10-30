@@ -152,6 +152,34 @@ class Harness:
         assert response.json()["data"]["twilio_webhooks_configured"] is True
         return e164
 
+    @asynccontextmanager
+    async def another_project(
+        self, name: str = "other"
+    ) -> AsyncIterator[tuple[str, httpx.AsyncClient]]:
+        """A second project on the same app — a skill library, say — and a
+        client on its admin key. Purged afterwards."""
+        project_id, key = await _bootstrap(self.api, name)
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                headers={"Authorization": f"Bearer {key}"},
+                timeout=10,
+            ) as client:
+                yield project_id, client
+        finally:
+            await _delete_project(project_id)
+
+    async def link_skill_library(
+        self, library_id: str | None, project_id: str | None = None
+    ) -> httpx.Response:
+        """Link a project (the harness's own by default) to a skill library,
+        or unlink it, with the platform credential (#432)."""
+        return await self.api.put(
+            f"/v1/projects/{project_id or self.project_id}/skill-library",
+            json={"library_project_id": library_id},
+            headers={"X-Platform-Key": PLATFORM_KEY},
+        )
+
     async def post_call_settled(self, *, timeout: float = 20.0) -> None:
         """Wait until no post-call processing or webhook delivery is left in
         the app, so a test can count what a call sent, not what arrived first
@@ -330,16 +358,16 @@ async def run_app(
         get_settings.cache_clear()
 
 
-async def _bootstrap(http: httpx.AsyncClient) -> tuple[str, str]:
+async def _bootstrap(http: httpx.AsyncClient, name: str = "harness") -> tuple[str, str]:
     """A project and its first (admin) key, the way the builder makes them."""
     headers = {"X-Platform-Key": PLATFORM_KEY}
-    project = await http.post("/v1/projects", json={"name": "harness"}, headers=headers)
+    project = await http.post("/v1/projects", json={"name": name}, headers=headers)
     assert project.status_code == 201, project.text
     project_id = project.json()["data"]["id"]
     key = await http.post(
         "/v1/api-keys",
         params={"project_id": project_id},
-        json={"name": "harness", "role": "admin"},
+        json={"name": name, "role": "admin"},
         headers=headers,
     )
     assert key.status_code == 201, key.text

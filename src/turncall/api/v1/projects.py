@@ -17,11 +17,12 @@ from turncall.api.v1.schemas.projects import (
     ProjectRedaction,
     ProjectResponse,
     ProjectRetention,
+    ProjectSkillLibrary,
 )
 from turncall.auth import AdminAuth, Auth, PlatformKey
 from turncall.config import get_settings
 from turncall.domain.enums import AuditAction, AuditResource
-from turncall.services import audit_log, redaction
+from turncall.services import audit_log, redaction, skill_library
 from turncall.storage.repositories import project_repo
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -192,6 +193,58 @@ async def set_project_retention(
         events_days=body.events_days,
     )
     return ok(ProjectResponse.from_row(row))
+
+
+@router.put("/{project_id}/skill-library", dependencies=[PlatformKey])
+async def set_project_skill_library(
+    project_id: UUID,
+    body: ProjectSkillLibrary,
+    session: DbSession,
+    audit: PlatformAudit,
+) -> dict:
+    """Link the project to a skill library (#432, ADR-0031): another project
+    whose skills it resolves from then on, instead of its own — its library
+    is the only place its agents' skill names are looked up. `null` unlinks
+    it. Requires the platform credential (X-Platform-Key): no API key, admin
+    included, can make its project read another's skills. A 422 for the
+    project itself, a project that is missing or deleted, a project linked
+    to a library of its own, or linking a project other projects read from
+    (no chains). Applies to the next call, message or save; a call already
+    running keeps the skills it resolved."""
+    library_id = body.library_project_id
+    # Every link change, one at a time: two checked at once could chain.
+    await project_repo.lock_skill_library_links(session)
+    row = await _project(session, project_id)
+    if library_id is not None:
+        refusal = await skill_library.link_refusal(session, project_id, library_id)
+        if refusal is not None:
+            raise ApiError(
+                status_code=422,
+                code=ErrorCode.VALIDATION_ERROR,
+                message=refusal,
+                details={
+                    "field": "library_project_id",
+                    "library_project_id": str(library_id),
+                },
+            )
+    with audit.change(
+        AuditResource.PROJECT,
+        project_id,
+        AuditAction.SKILL_LIBRARY_SET,
+        audit_log.project_state,
+        row,
+        project_id=project_id,
+    ) as change:
+        updated = await project_repo.set_skill_library(session, project_id, library_id)
+        if updated is None:
+            raise NotFoundError("Project", str(project_id))
+        change.to(updated)
+    logger.info(
+        "project_skill_library_set",
+        project_id=str(project_id),
+        library_project_id=str(library_id) if library_id else None,
+    )
+    return ok(ProjectResponse.from_row(updated))
 
 
 @router.delete("/{project_id}")

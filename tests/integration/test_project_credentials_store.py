@@ -176,7 +176,10 @@ async def test_startup_check_opens_the_secrets_sealed_at_rest(factory, settings)
         {"system_prompt": "hi", "llm": {"provider": "openai", "api_key": "sk-x"}},
         lambda v: seal(v, settings),
     )
+    # One transaction, rolled back: the check sees only these rows, never a
+    # row another test committed under a key of its own.
     async with factory() as session:
+        await _only_what_the_test_adds(session)
         await session.execute(
             text(
                 "INSERT INTO webhook_subscriptions"
@@ -193,17 +196,13 @@ async def test_startup_check_opens_the_secrets_sealed_at_rest(factory, settings)
             ),
             {"id": uuid.uuid4(), "pid": pid, "config": json.dumps(config)},
         )
-        await session.commit()
-    unset = SimpleNamespace(credentials=SimpleNamespace(encryption_key=""))
-    other = SimpleNamespace(
-        credentials=SimpleNamespace(encryption_key=Fernet.generate_key().decode())
-    )
-    async with factory() as session:
+        unset = SimpleNamespace(credentials=SimpleNamespace(encryption_key=""))
         with pytest.raises(credential_repo.CredentialKeyError):
             await credential_repo.ensure_readable(session, unset)
         with pytest.raises(credential_repo.CredentialKeyError, match="rotated"):
-            await credential_repo.ensure_readable(session, other)
+            await credential_repo.ensure_readable(session, _other_key())
         await credential_repo.ensure_readable(session, settings)
+        await session.rollback()
 
 
 async def _only_what_the_test_adds(session) -> None:

@@ -7,8 +7,9 @@ filters it out, so nothing (auth, GET, list) sees a soft-deleted project.
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from turncall.storage.models import ProjectRow, utc_now
 
@@ -87,6 +88,58 @@ async def set_retention(
     return row
 
 
+async def lock_skill_library_links(session: AsyncSession) -> None:
+    """Serialize every change to a skill library link for the transaction:
+    two links checked at once (A to B, B to C) would each see no chain and
+    together make one."""
+    await session.execute(
+        select(func.pg_advisory_xact_lock(func.hashtext("skill-library-links")))
+    )
+
+
+async def set_skill_library(
+    session: AsyncSession, project_id: UUID, library_id: UUID | None
+) -> ProjectRow | None:
+    """Link a live project to a skill library (#432), or unlink it (None)."""
+    row = await get_project_by_id(session, project_id)
+    if row is None:
+        return None
+    row.skill_library_id = library_id
+    await session.flush()
+    await session.refresh(row)
+    return row
+
+
+async def skill_library_of(
+    session: AsyncSession, project_id: UUID
+) -> tuple[UUID, bool] | None:
+    """The project's skill library and whether it is live (not soft-deleted),
+    or None for a project linked to none."""
+    library = aliased(ProjectRow)
+    result = await session.execute(
+        select(ProjectRow.skill_library_id, library.deleted_at)
+        .outerjoin(library, library.id == ProjectRow.skill_library_id)
+        .where(ProjectRow.id == project_id)
+    )
+    found = result.one_or_none()
+    if found is None or found[0] is None:
+        return None
+    return found[0], found[1] is None
+
+
+async def projects_linked_to(session: AsyncSession, library_id: UUID) -> list[UUID]:
+    """The live projects whose skill library is `library_id`."""
+    result = await session.execute(
+        select(ProjectRow.id)
+        .where(
+            ProjectRow.skill_library_id == library_id,
+            ProjectRow.deleted_at.is_(None),
+        )
+        .order_by(ProjectRow.created_at, ProjectRow.id)
+    )
+    return list(result.scalars().all())
+
+
 async def list_projects(
     session: AsyncSession,
     *,
@@ -106,8 +159,6 @@ async def list_projects(
 
 async def count_projects(session: AsyncSession) -> int:
     """Count live projects."""
-    from sqlalchemy import func
-
     result = await session.execute(
         select(func.count(ProjectRow.id)).where(ProjectRow.deleted_at.is_(None))
     )

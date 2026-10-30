@@ -79,7 +79,7 @@ def main() -> None:
                     "Be professional and helpful."
                 ),
                 "first_message": "Hello! How can I help you today?",
-                "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+                "llm": {"provider": "openai", "model": "gpt-5.4-mini"},
                 "mcp_servers": [
                     {
                         "name": "crm-tools",

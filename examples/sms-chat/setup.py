@@ -122,7 +122,7 @@ def main() -> None:
                 "first_message": ("Hi! Thanks for texting Acme Corp. How can I help?"),
                 "llm": {
                     "provider": "openai",
-                    "model": "gpt-4o-mini",
+                    "model": "gpt-5.4-mini",
                     "temperature": 0.7,
                     "max_tokens": 256,
                 },

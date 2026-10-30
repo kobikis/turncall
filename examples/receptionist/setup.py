@@ -236,7 +236,7 @@ def main() -> None:
                     "model": "ink-whisper",
                     "language": "en",
                 },
-                "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+                "llm": {"provider": "openai", "model": "gpt-5.4-mini"},
                 "tts": {
                     "provider": "cartesia",
                     "model": "sonic-3.6",

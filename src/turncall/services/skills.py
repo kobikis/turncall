@@ -2,7 +2,9 @@
 the prompt and tools a model is given for them.
 
 A call resolves its agent's skills once, when its pipeline is built: each name
-to the skill's live published version in the call's project — or, for an entry
+to the skill's live published version in the project its skills come from —
+the call's own, or the skill library it is linked to (#432, ADR-0031,
+`skill_library.skill_source`) — or, for an entry
 that pins one (#426, ADR-0030), to exactly that version, published or archived
 — its instructions and tool descriptions rendered with the call's
 `{{variables}}`. Until a skill is
@@ -19,8 +21,9 @@ both what the model is shown and what runs follow it. A skill tool that takes
 the name of an agent tool or a built-in is dropped at resolution.
 
 What an agent may list is checked when it is saved (#428,
-`attachment_refusal`): every name must have a live published version (a pin:
-must name a published or archived version of that skill in the project), and
+`attachment_refusal`): every name must have a live published version in the
+project's skill source (a pin: must name a published or archived version of
+that skill there), and
 no tool of those versions may share a name with a built-in, the agent's own
 tool or another listed skill's. The drop at resolution stays for what changes
 after the save: a skill version published later, or a stored agent from
@@ -57,6 +60,7 @@ from turncall.services.skill_knowledge import (
     SkillKnowledge,
     resolve_skill_knowledge,
 )
+from turncall.services.skill_library import SkillSource, skill_source
 from turncall.services.template_renderer import render_template
 
 LOAD_SKILL = "load_skill"
@@ -95,13 +99,25 @@ async def resolve_skills(
     taken_tool_names: Collection[str],
 ) -> tuple[ResolvedSkill, ...]:
     """Each named skill's version, in the agent's order: the pinned one for an
-    entry with `version_id` (#426), else the live published one.
+    entry with `version_id` (#426), else the live published one — looked up
+    where `project_id`'s skills come from: its skill library when it is
+    linked to one, else itself (#432).
 
     A name with nothing published, a pin that names no version of the skill
-    in the project (or a draft), or a version that cannot be read, is a
-    warning and a skipped skill: a stale skill name must not take calls down.
-    A name listed twice is resolved once.
+    there (or a draft), a library that is gone, or a version that cannot be
+    read, is a warning and a skipped skill: a stale skill name must not take
+    calls down. A name listed twice is resolved once.
     """
+    if not refs:
+        return ()
+    source = await skill_source(session, project_id)
+    if source.project_id is None:
+        logger.warning(
+            "skills_skipped: the project's skill library is gone, the "
+            "conversation runs without {skills}",
+            skills=[ref.skill for ref in refs],
+        )
+        return ()
     resolved: list[ResolvedSkill] = []
     seen: set[str] = set()
     for ref in refs:
@@ -110,12 +126,14 @@ async def resolve_skills(
             continue
         seen.add(ref.skill)
         try:
-            row = await _version_for(session, project_id, ref)
+            row = await _version_for(session, source, ref)
             if row is None:
                 continue
+            # Checked against the project that holds the skill (#433): a
+            # library skill's KBs are the library's.
             knowledge = await resolve_skill_knowledge(
                 session,
-                project_id,
+                source.project_id,
                 row.name,
                 getattr(row, "knowledge_bases", None) or [],
             )
@@ -136,22 +154,26 @@ async def resolve_skills(
 
 
 async def _version_for(
-    session: AsyncSession, project_id: UUID, ref: SkillRef
+    session: AsyncSession, source: SkillSource, ref: SkillRef
 ) -> Any | None:
     """The skill version `ref` runs, or None (logged) when there is none."""
     from turncall.storage.repositories import skill_repo
 
+    assert source.project_id is not None  # a gone library resolves nothing
     if ref.version_id is None:
-        row = await skill_repo.get_published(session, project_id, ref.skill)
+        row = await skill_repo.get_published(session, source.project_id, ref.skill)
         if row is None:
             logger.warning(
-                "skill_skipped: no published version of {skill} in the "
-                "project, call runs without it",
+                "skill_skipped: no published version of {skill} in {where}, "
+                "call runs without it",
                 skill=ref.skill,
+                where=source.where,
             )
         return row
-    row = await skill_repo.get_by_id(session, ref.version_id, project_id=project_id)
-    why = pin_refusal(ref.skill, row)
+    row = await skill_repo.get_by_id(
+        session, ref.version_id, project_id=source.project_id
+    )
+    why = pin_refusal(ref.skill, row, where=source.where)
     if why is not None:
         logger.warning(
             "skill_skipped: pinned version {version_id} {why}, call runs "
@@ -164,13 +186,16 @@ async def _version_for(
     return row
 
 
-def pin_refusal(name: str, row: Any | None) -> str | None:
+def pin_refusal(
+    name: str, row: Any | None, *, where: str = "this project"
+) -> str | None:
     """Why a pin on skill `name` cannot run the version `row` (looked up by
-    id in the agent's project), or None if it can. A pin runs a published or
-    an archived version — the pin is what keeps an agent on a version after
-    the next publish archives it — never a draft, which can still change."""
+    id where the agent's skills come from, `where`), or None if it can. A pin
+    runs a published or an archived version — the pin is what keeps an agent
+    on a version after the next publish archives it — never a draft, which
+    can still change."""
     if row is None:
-        return "is not a version of a skill in this project"
+        return f"is not a version of a skill in {where}"
     if row.name != name:
         return f"is a version of '{row.name}', not of '{name}'"
     if row.state == SkillState.DRAFT.value:
@@ -243,18 +268,20 @@ class Ref(Protocol):
 
 async def attachment_refusal(
     session: AsyncSession,
-    project_id: UUID,
+    source: SkillSource,
     refs: Sequence[Ref],
     agent_tool_names: Sequence[str],
 ) -> AttachmentRefusal | None:
     """Why `refs` cannot be an agent's skills, or None if they can.
 
-    Each entry must resolve to what a call would run: its pinned version
-    (#426) — a published or archived version of that skill in the project —
-    or, unpinned, a live published version; a name with only drafts is
-    refused like one never created, as a call would skip it. Then the tools
-    of those versions must not collide (`tool_collision`). A name listed
-    twice is refused too, pinned or not: a call holds one version of a skill.
+    Checked in `source`, where the agent's project resolves skills: itself,
+    or its skill library (#432). Each entry must resolve to what a call would
+    run: its pinned version (#426) — a published or archived version of that
+    skill there — or, unpinned, a live published version; a name with only
+    drafts is refused like one never created, as a call would skip it. Then
+    the tools of those versions must not collide (`tool_collision`). A name
+    listed twice is refused too, pinned or not: a call holds one version of a
+    skill. A library that is gone holds no skill.
     """
     from turncall.storage.repositories import skill_repo
 
@@ -269,18 +296,22 @@ async def attachment_refusal(
                 {"field": f"skills[{index}]", "skill": name},
             )
         first_index[name] = index
+        if source.project_id is None:
+            return _library_gone(index, name)
         if ref.version_id is not None:
             row = await skill_repo.get_by_id(
-                session, ref.version_id, project_id=project_id
+                session, ref.version_id, project_id=source.project_id
             )
-            why = pin_refusal(name, row)
+            why = pin_refusal(name, row, where=source.where)
             if row is None or why is not None:
                 return _bad_pin(index, name, ref.version_id, why or "")
         else:
-            row = await skill_repo.get_published(session, project_id, name)
+            row = await skill_repo.get_published(session, source.project_id, name)
             if row is None:
-                drafts = await skill_repo.count_skills(session, project_id, name=name)
-                return _unknown(index, name, has_versions=drafts > 0)
+                drafts = await skill_repo.count_skills(
+                    session, source.project_id, name=name
+                )
+                return _unknown(index, name, source, has_versions=drafts > 0)
         tools = tuple(str(t.get("name", "")) for t in row.tools or [])
         attached.append(Attached(index, name, tools))
     return tool_collision(agent_tool_names, attached)
@@ -297,14 +328,24 @@ def _bad_pin(index: int, name: str, version_id: UUID, why: str) -> AttachmentRef
     )
 
 
-def _unknown(index: int, name: str, *, has_versions: bool) -> AttachmentRefusal:
+def _unknown(
+    index: int, name: str, source: SkillSource, *, has_versions: bool
+) -> AttachmentRefusal:
     why = (
-        "has no published version in this project; publish one first"
+        f"has no published version in {source.where}; publish one first"
         if has_versions
-        else "is not a skill in this project"
+        else f"is not a skill in {source.where}"
     )
     return AttachmentRefusal(
         f"skills[{index}] '{name}' {why}",
+        {"field": f"skills[{index}]", "skill": name, "published": False},
+    )
+
+
+def _library_gone(index: int, name: str) -> AttachmentRefusal:
+    return AttachmentRefusal(
+        f"skills[{index}] '{name}' cannot be resolved: this project's skill "
+        "library is gone",
         {"field": f"skills[{index}]", "skill": name, "published": False},
     )
 

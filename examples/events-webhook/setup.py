@@ -67,7 +67,7 @@ def _setup_project(
                     "You are a helpful support agent. Be professional and concise."
                 ),
                 "first_message": "Hello! How can I help you today?",
-                "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+                "llm": {"provider": "openai", "model": "gpt-5.4-mini"},
                 "analysis": {
                     "enabled": True,
                     "summary_enabled": True,

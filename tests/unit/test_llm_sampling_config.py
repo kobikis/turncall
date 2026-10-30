@@ -16,16 +16,17 @@ def _agent_config(**llm_kwargs: object) -> AgentConfig:
 
 @pytest.mark.unit
 class TestCascadeSamplingSettings:
-    def test_openai_receives_temperature_and_max_tokens(self) -> None:
+    def test_openai_receives_temperature_and_max_completion_tokens(self) -> None:
+        # max_completion_tokens: the gpt-5 family refuses max_tokens.
         config = _agent_config(provider="openai", temperature=1.3, max_tokens=256)
         svc = _create_llm_service(config, creds("sk-test"))
         assert svc._settings.temperature == 1.3
-        assert svc._settings.max_tokens == 256
+        assert svc._settings.max_completion_tokens == 256
 
     def test_defaults_applied_as_stored(self) -> None:
         svc = _create_llm_service(_agent_config(provider="openai"), creds("sk-test"))
         assert svc._settings.temperature == 0.7
-        assert svc._settings.max_tokens == 1024
+        assert svc._settings.max_completion_tokens == 1024
 
     def test_anthropic_receives_settings(self) -> None:
         """max_tokens only — see TestAnthropicTemperature for why the
@@ -82,7 +83,7 @@ class TestClassifierOverride:
     def test_max_tokens_override_wins(self) -> None:
         config = _agent_config(provider="openai", max_tokens=4096)
         svc = _create_llm_service(config, creds("sk-test"), max_tokens=16)
-        assert svc._settings.max_tokens == 16
+        assert svc._settings.max_completion_tokens == 16
 
 
 @pytest.mark.unit
@@ -93,6 +94,30 @@ class TestReasoningEffort:
         )
         svc = _create_llm_service(config, creds("sk-test"))
         assert svc._settings.extra == {"extra_body": {"reasoning_effort": "high"}}
+
+    def test_openai_sends_no_effort_to_a_model_that_does_not_reason(self) -> None:
+        # gpt-4o-mini answers 400 "Unrecognized request argument supplied:
+        # reasoning_effort", which ended the call on its first reply.
+        config = _agent_config(
+            provider="openai", model="gpt-4o-mini", reasoning_effort="low"
+        )
+        svc = _create_llm_service(config, creds("sk-test"))
+        assert svc._settings.extra == {}
+        assert svc._settings.temperature == 0.7
+
+    def test_openai_sends_no_temperature_to_a_model_that_always_reasons(
+        self,
+    ) -> None:
+        config = _agent_config(provider="openai", model="gpt-5-mini")
+        svc = _create_llm_service(config, creds("sk-test"))
+        assert not isinstance(svc._settings.temperature, float)  # not given
+
+    def test_gpt_5_4_gets_no_effort_since_a_call_has_tools(self) -> None:
+        config = _agent_config(
+            provider="openai", model="gpt-5.4-mini", reasoning_effort="low"
+        )
+        svc = _create_llm_service(config, creds("sk-test"))
+        assert svc._settings.extra == {}
 
     def test_openai_omits_when_unset(self) -> None:
         svc = _create_llm_service(_agent_config(provider="openai"), creds("sk-test"))

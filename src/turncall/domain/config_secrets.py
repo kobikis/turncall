@@ -87,6 +87,30 @@ def sanitize_tools(tools: Any) -> Any:
     return sanitize_config({"tools": tools})["tools"]
 
 
+def keep_masked_tool_secrets(
+    tools: list[dict[str, Any]], earlier: list[list[dict[str, Any]]]
+) -> tuple[list[dict[str, Any]], list[int]]:
+    """A tool sent back with its `webhook_secret` as `MASK` keeps the secret
+    its name holds in `earlier` (tool lists, the first one that has it wins):
+    a client that read a skill saw only the mask, so the mask means
+    "unchanged". Returns the tools and the indexes no earlier list could fill.
+    """
+    known: dict[str, str] = {}
+    for listed in reversed(earlier):
+        for tool in listed:
+            secret = tool.get("webhook_secret")
+            if secret and secret != MASK:
+                known[tool["name"]] = secret
+    kept = [
+        {**t, "webhook_secret": known.get(t["name"], MASK)}
+        if t.get("webhook_secret") == MASK
+        else t
+        for t in tools
+    ]
+    unfilled = [i for i, t in enumerate(kept) if t.get("webhook_secret") == MASK]
+    return kept, unfilled
+
+
 def _mask_llm(llm: dict[str, Any]) -> dict[str, Any]:
     out = {**llm}
     if out.get("api_key") is not None:

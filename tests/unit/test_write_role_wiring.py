@@ -57,6 +57,9 @@ NOT_KEYED: dict[tuple[str, str], str] = {
     # ADR-0011. A project key cannot create projects or mint keys this way.
     ("POST", "/v1/projects"): "platform key",
     ("POST", "/v1/api-keys"): "platform key",
+    # A project's skill library (#432, ADR-0031): only the platform may make a
+    # project read another project's skills.
+    ("PUT", "/v1/projects/{project_id}/skill-library"): "platform key",
 }
 
 

@@ -5,7 +5,8 @@ rather than inside one pipeline:
 
 - **Resolved once per session.** The first message of a session whose agent
   lists skills resolves them (`skills.resolve_skills`: pins honoured, the live
-  published version otherwise, in the session's project) and stores the
+  published version otherwise, where the session's project reads its
+  skills: itself, or its skill library, #433) and stores the
   versions in the session's metadata under `resolved_skills`, the shape a
   call's row keeps (`skills.resolution_entries`). Every later message runs
   those same versions, re-read by id, so a publish mid-session does not change
