@@ -17,13 +17,13 @@ Entries are append-only. Nothing in the API updates or deletes one, and they are
 | `credential` | store or replace, delete (`/v1/credentials/{provider}`) | `created`, `updated`, `deleted` |
 | `phone_number` | bind, update, unbind; set and clear A/B routing; buy and release a number | `created`, `updated`, `deleted`, `routing_set`, `routing_cleared`, `purchased`, `released`; `updated` for a number a publish or rollback re-pointed |
 | `api_key` | create (the first key and later ones), revoke | `created`, `revoked` |
-| `project` | create, set limits, redaction or retention, delete | `created`, `limits_set`, `redaction_set`, `retention_set`, `deleted` |
+| `project` | create, set limits, redaction or retention, link a [skill library](/guides/skills#a-skill-library), delete | `created`, `limits_set`, `redaction_set`, `retention_set`, `skill_library_set`, `deleted` |
 
 A request that changes several things writes an entry for each, and every one of them carries the same `request_id`. Publishing version 2 of an agent whose version 1 is live writes three: version 2 `published`, version 1 `archived`, and the number that pointed at version 1 `updated`.
 
 Every successful request on these routes writes at least one entry, even one that changed nothing: deleting a credential that is not there writes a `deleted` entry with no changes. A request that fails writes none.
 
-The project and its first API key are created with the platform credential (`X-Platform-Key`), not an API key. Their entries have `actor: "platform"` and `api_key_id: null`. Every other entry has `actor: "api_key"` and the key's id.
+The project and its first API key are created with the platform credential (`X-Platform-Key`), not an API key, and so is a project's link to a skill library. Their entries have `actor: "platform"` and `api_key_id: null`. Every other entry has `actor: "api_key"` and the key's id.
 
 ## What changed
 

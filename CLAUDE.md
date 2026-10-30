@@ -1178,8 +1178,38 @@ it runs under `mock_only`, is recorded in `tool_calls` with outcome
 warning. Skill tools are mocked and fail closed like any tool, and
 `warn_unmatched_mocks` counts resolved skills' tools as callable.
 
+**A skill library** (#432, ADR-0031): `projects.skill_library_id`
+(migration `b7d1f3a9c5e2`, FK `ON DELETE SET NULL`, so a purged library
+unlinks its projects) names one other project whose skills this one resolves
+**instead of** its own — never as a fallback. Set and cleared **only** with
+the platform credential: `PUT /v1/projects/{id}/skill-library`
+`{"library_project_id": <uuid> | null}` (field required; an API key, admin
+included, is a 401), audited `project`/`skill_library_set` by `actor:
+platform`, shown on the project read as `skill_library: {library_project_id}`
+(`ProjectSkillLibrary`, `audit_log.project_state`). 422
+(`services/skill_library.link_refusal`, `details {field:
+"library_project_id", library_project_id}`): the project itself, a missing or
+soft-deleted project, a library linked itself, linking a project others read
+from — one level deep; link changes serialize on an advisory lock
+(`project_repo.lock_skill_library_links`). **One rule**,
+`skill_library.skill_source(session, project_id)` → `SkillSource(project_id,
+library)`: the library when linked, else itself; `project_id` None for a
+soft-deleted library. `resolve_skills` reads it once per resolution (no-op
+with no refs), so every resolution — stored agent, call-init inline agent,
+handoff target, text session, eval run — goes through it, and a pin
+(`get_by_id(project_id=source)`) resolves only to a version there; a gone
+library or a name it lacks is a `skill_skipped` warning. `_check_skills`
+takes the source too: `attachment_refusal(session, source, ...)` with
+messages saying "in this project's skill library" (`SkillSource.where`, also
+`pin_refusal(where=)`), a gone library a 422 (`cannot be resolved: this
+project's skill library is gone`), and `lock_name` taken in the **source**
+project, which a library's skill delete also takes. Tests:
+`tests/integration/test_skill_library.py`,
+`tests/integration/test_harness_call_skill_library.py`.
+
 Key files: `api/v1/skills.py`, `api/v1/schemas/skills.py`,
 `storage/repositories/skill_repo.py`, `services/skills.py`,
+`services/skill_library.py`,
 `services/skill_knowledge.py`, `services/text_skills.py`,
 `orchestrator/skill_loader.py`, `evals/skills.py`. Tests: `tests/integration/test_skills_api.py`,
 `tests/integration/test_harness_call_skills.py`,

@@ -272,6 +272,33 @@ The call read (`GET /v1/calls/{id}` and the list) and `call.ended` carry `skills
 
 An eval run records neither (its own record is `resolved_config`, above). Skill names, versions and reasons are identifiers, never [redacted](/guides/redaction). `skill.loaded` and `skill.unloaded` are in the events kind of [retention](/guides/retention); once a call's events expire, `loaded` is `null`, and the versions stay.
 
+## A skill library
+
+A project can read its skills from another project, its **skill library**, so agents in several projects share one set of skills. Only the platform credential links a project to a library or unlinks it:
+
+```bash
+curl -X PUT http://localhost:8090/v1/projects/{project_id}/skill-library \
+  -H "X-Platform-Key: $PLATFORM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"library_project_id": "<library project id>"}'
+```
+
+`{"library_project_id": null}` unlinks it; the field is required, so an empty body is a `422` rather than an unlink. The response is the project, which shows the link as `skill_library` on every read:
+
+```json
+"skill_library": {"library_project_id": "<library project id>"}
+```
+
+An API key, admin included, is refused (`401`): a link lets one project read another's skills, so only the platform, which created both, may make one. The link is refused with a `422` for the project itself, a project that does not exist or is deleted, a library that is itself linked, and a project other projects already read from: a library is one level deep. Each change is an [audit log](/guides/audit-log) entry on the linked project, `action: "skill_library_set"`, by `actor: "platform"`.
+
+A linked project's skills come **only** from its library. Its own skills are not consulted, never as a fallback: one name means one skill for every agent that reads from the library. So, in a linked project:
+
+- **Saving an agent** checks its `skills` against the library: a name the library has no published version of, a tool collision with the library version's tools, and a pin on a version that is not one of the library's are the `422`s [above](#attach-skills-to-an-agent), saying "in this project's skill library".
+- **A call** resolves the agent's skills in the library: a stored agent, a [call-init inline agent](#call-init-inline-agents) and a handoff's target alike. A name the library does not hold, or a pin outside it, is a warning and a skipped skill; the call starts either way.
+- **A library that is deleted** holds no skills: a call skips them with a warning, and a save that lists one is a `422`. A library that is purged unlinks its projects, which then read their own skills again.
+
+A call's record is the same as for a project's own skills: `skills` on the call read names the library's versions.
+
 ## Audit
 
 Every create, edit, publish, rollback and delete is an [audit log](/guides/audit-log) entry with `resource_type: "skill"`. A publish or rollback also writes an `archived` entry for the version it took out of service.

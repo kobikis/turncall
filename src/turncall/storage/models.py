@@ -91,6 +91,20 @@ class ProjectRow(Base):
         Integer, nullable=True
     )
     retention_events_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The skill library (#432, ADR-0031): the project whose skills this one
+    # resolves, instead of its own; null = its own. Set only with the platform
+    # credential. A purged library unlinks it (SET NULL).
+    skill_library_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_projects_skill_library_id",
+            "skill_library_id",
+            postgresql_where=text("skill_library_id IS NOT NULL"),
+        ),
+    )
 
 
 class ApiKeyRow(Base):

@@ -232,6 +232,7 @@ class AuditAction(StrEnum):
     LIMITS_SET = "limits_set"
     REDACTION_SET = "redaction_set"
     RETENTION_SET = "retention_set"
+    SKILL_LIBRARY_SET = "skill_library_set"
     PURCHASED = "purchased"
     RELEASED = "released"
 

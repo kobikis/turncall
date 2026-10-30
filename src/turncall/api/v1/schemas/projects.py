@@ -123,6 +123,26 @@ class ProjectRetention(RetentionConfig):
         )
 
 
+class ProjectSkillLibrary(BaseModel):
+    """The project whose skills this project resolves (#432, ADR-0031): its
+    skill library, the only place its agents' skill names are looked up.
+    Null = none, the project's own skills. Set only with the platform
+    credential."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    library_project_id: UUID | None = Field(
+        description=(
+            "The skill library's project id, or null to unlink. Required: a "
+            "PUT naming nothing must not unlink the project"
+        ),
+    )
+
+    @classmethod
+    def from_row(cls, row: Any) -> "ProjectSkillLibrary":
+        return cls(library_project_id=getattr(row, "skill_library_id", None))
+
+
 class ProjectResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -133,6 +153,7 @@ class ProjectResponse(BaseModel):
     limits: ProjectLimits
     redaction: ProjectRedaction
     retention: ProjectRetention
+    skill_library: ProjectSkillLibrary
 
     @classmethod
     def from_row(cls, row: Any) -> "ProjectResponse":
@@ -144,4 +165,5 @@ class ProjectResponse(BaseModel):
             limits=ProjectLimits.from_row(row),
             redaction=ProjectRedaction.from_row(row),
             retention=ProjectRetention.from_row(row),
+            skill_library=ProjectSkillLibrary.from_row(row),
         )
