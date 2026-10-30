@@ -101,7 +101,7 @@ python3 setup.py --api-key tc_YOUR_KEY --events "*"
   Summary: The call was initiated by the customer who had a few questions...
   Success: fail — The call did not progress to address specific issues.
   Sentiment: neutral (satisfaction: neutral)
-  Model: gpt-4o-mini (3711ms)
+  Model: gpt-5.4-mini (3711ms)
 ```
 
 ## call.ended Payload
@@ -129,7 +129,7 @@ The comprehensive `call.ended` event includes everything:
       "summary": "...",
       "success_evaluation": {"score": "fail", "reason": "..."},
       "sentiment": {"overall": "neutral", "customer_satisfaction": "neutral"},
-      "model": "gpt-4o-mini",
+      "model": "gpt-5.4-mini",
       "duration_ms": 3711
     }
   }

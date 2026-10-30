@@ -48,7 +48,7 @@ AID=$(curl -fsS -X POST "$BASE/v1/agents" \
       "system_prompt": "You are a friendly receptionist. Keep replies short and natural.",
       "first_message": "Thanks for calling! How can I help?",
       "stt": {"provider": "deepgram", "model": "nova-3-general"},
-      "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+      "llm": {"provider": "openai", "model": "gpt-5.4-mini"},
       "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"}
     }
   }' | json "['data']['id']")

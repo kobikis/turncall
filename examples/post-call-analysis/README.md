@@ -45,7 +45,7 @@ All data is included in a single comprehensive `call.ended` webhook:
         "professionalism": {"score": 9, "reason": "Very courteous"},
         "problem_solving": {"score": 8, "reason": "Quick resolution"}
       },
-      "model": "gpt-4o-mini",
+      "model": "gpt-5.4-mini",
       "duration_ms": 2350
     }
   }

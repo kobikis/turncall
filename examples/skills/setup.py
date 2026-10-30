@@ -194,7 +194,7 @@ AGENT_CONFIG = {
 PROVIDERS = {
     "openai": {
         "stt": {"provider": "deepgram", "model": "nova-3-general", "language": "en"},
-        "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+        "llm": {"provider": "openai", "model": "gpt-5.4-mini"},
         "tts": {"provider": "deepgram", "voice": "aura-2-helena-en"},
     },
     # One XAI_API_KEY for all three; each role's default model and voice.

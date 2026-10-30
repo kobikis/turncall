@@ -93,7 +93,7 @@ def main() -> None:
                 "Be professional, empathetic, and solution-oriented."
             ),
             "first_message": "Hello! Welcome to TechCorp support. How can I help you today?",
-            "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+            "llm": {"provider": "openai", "model": "gpt-5.4-mini"},
             "analysis": {
                 "enabled": True,
                 "summary_enabled": True,
@@ -222,7 +222,7 @@ def main() -> None:
            "problem_solving": {{"score": 8, "reason": "Quick resolution"}},
            "communication": {{"score": 9, "reason": "Clear explanations"}}
          }},
-         "model": "gpt-4o-mini",
+         "model": "gpt-5.4-mini",
          "duration_ms": 2350,
          "analyzed_at": "2026-04-17T10:00:00Z"
        }}

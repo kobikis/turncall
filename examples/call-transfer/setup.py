@@ -98,7 +98,7 @@ def main() -> None:
                     "case no one answers."
                 ),
                 "first_message": "Thanks for calling TechCorp, how can I help?",
-                "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+                "llm": {"provider": "openai", "model": "gpt-5.4-mini"},
             },
         },
         headers=headers,

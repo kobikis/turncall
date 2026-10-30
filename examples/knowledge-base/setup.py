@@ -273,7 +273,7 @@ def main() -> None:
                     "say so rather than guessing."
                 ),
                 "first_message": "Hi! I'm the Acme Corp support agent. How can I help you today?",
-                "llm": {"provider": "openai", "model": "gpt-4o-mini"},
+                "llm": {"provider": "openai", "model": "gpt-5.4-mini"},
                 "stt": {
                     "provider": "deepgram",
                     "model": "nova-3-general",

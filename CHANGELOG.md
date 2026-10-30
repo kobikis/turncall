@@ -11,6 +11,22 @@ and is not part of this repository's history.
 
 ## [Unreleased]
 
+### Changed
+
+- **OpenAI's default model is `gpt-5.4-mini`.** An `openai` agent that names
+  no model runs it, and so do an OpenAI eval judge that names none and
+  knowledge-base enrichment. OpenAI shuts `gpt-4o-mini` down on 2027-01-14. An
+  agent whose config names `gpt-4o-mini` keeps it until you change it.
+
+### Fixed
+
+- **An OpenAI model is sent only the settings it takes.** A reasoning effort on
+  `gpt-4o`/`gpt-4.1`, `max_tokens` on the gpt-5 family, a temperature on a
+  model that is reasoning, `minimal` on gpt-5.1 and later, and an effort beside
+  tools on gpt-5.4 and later each ended the call on its first reply with a 400.
+  TurnCall now sends `max_completion_tokens`, leaves out what the model refuses
+  and logs `openai_param_dropped` (`services/openai_models.py`).
+
 ## [2.1.0]
 
 Avatars on speech-to-speech calls, xAI Grok across every role, Telnyx and
