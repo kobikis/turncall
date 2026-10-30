@@ -27,9 +27,11 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 from pipecat.frames.frames import (
     Frame,
+    FunctionCallCancelFrame,
     FunctionCallResultFrame,
     FunctionCallResultProperties,
     FunctionCallsStartedFrame,
+    InterruptionFrame,
     LLMContextFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
@@ -277,7 +279,9 @@ class MoveAfterSpeech(FrameProcessor):
     pipecat's own rule (run after the group's last call) misses that: a move
     settling before the lookup's in-progress frame reaches the aggregator ran
     the LLM once for each. A result whose tool chose `run_llm` itself
-    (`load_skill`) keeps it, and a response with no move is pipecat's.
+    (`load_skill`) keeps it, and a response with no move is pipecat's. A
+    call cancelled by a barge-in is waited on no more, so it never holds a
+    sibling's result at `run_llm=False`.
 
     Decided here, not in the tool: the handler runs before this processor has
     seen the response's text. Everything it reads arrives in order — the
@@ -295,10 +299,15 @@ class MoveAfterSpeech(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if direction == FrameDirection.DOWNSTREAM:
-            frame = self._observe(frame)
+            self._observe(frame)
         await self.push_frame(frame, direction)
 
-    def _observe(self, frame: Frame) -> Frame:
+    @property
+    def unsettled(self) -> int:
+        """Calls of a response with a move still waiting to settle."""
+        return len(self._responses)
+
+    def _observe(self, frame: Frame) -> None:
         if isinstance(frame, LLMFullResponseStartFrame):
             self._spoke = False
         elif isinstance(frame, LLMTextFrame):
@@ -308,8 +317,13 @@ class MoveAfterSpeech(FrameProcessor):
         elif isinstance(frame, FunctionCallsStartedFrame):
             self._start(frame)
         elif isinstance(frame, FunctionCallResultFrame):
-            return self._settle(frame)
-        return frame
+            self._settle(frame)
+        elif isinstance(frame, FunctionCallCancelFrame):
+            self._forget(frame.tool_call_id)
+        elif isinstance(frame, InterruptionFrame):
+            # pipecat cancels the sync calls (each a FunctionCallCancelFrame)
+            # and lets an async one finish: its result is then pipecat's.
+            self._responses.clear()
 
     def _start(self, frame: FunctionCallsStartedFrame) -> None:
         names = {c.function_name for c in frame.function_calls}
@@ -321,18 +335,25 @@ class MoveAfterSpeech(FrameProcessor):
         )
         self._responses.update(dict.fromkeys(response.pending, response))
 
-    def _settle(self, frame: FunctionCallResultFrame) -> Frame:
+    def _settle(self, frame: FunctionCallResultFrame) -> None:
+        """Decide the result's `run_llm` on the frame itself: rebuilding it
+        would give observers a new frame (a new id, no metadata)."""
         properties = frame.properties or FunctionCallResultProperties()
         response = self._responses.get(frame.tool_call_id)
         if response is None or not properties.is_final:
-            return frame
-        del self._responses[frame.tool_call_id]
-        response.pending.discard(frame.tool_call_id)
+            return
+        self._forget(frame.tool_call_id)
         if properties.run_llm is not None:
-            return frame  # the tool's own choice
+            return  # the tool's own choice
         last = not response.pending
         run_llm = last and not (response.only_moves and self._spoke)
-        return replace(frame, properties=replace(properties, run_llm=run_llm))
+        frame.properties = replace(properties, run_llm=run_llm)
+
+    def _forget(self, tool_call_id: str) -> None:
+        """A call settled or cancelled: its response waits on it no more."""
+        response = self._responses.pop(tool_call_id, None)
+        if response is not None:
+            response.pending.discard(tool_call_id)
 
 
 def move_after_speech_stage() -> list[FrameProcessor]:

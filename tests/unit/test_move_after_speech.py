@@ -10,10 +10,12 @@ off each result: `properties.run_llm`.
 
 import pytest
 from pipecat.frames.frames import (
+    FunctionCallCancelFrame,
     FunctionCallFromLLM,
     FunctionCallResultFrame,
     FunctionCallResultProperties,
     FunctionCallsStartedFrame,
+    InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
@@ -175,3 +177,56 @@ async def test_other_properties_survive():
     [result] = [f for f in down if isinstance(f, FunctionCallResultFrame)]
     assert result.properties.run_llm is False
     assert result.properties.on_context_updated is updated
+
+
+async def test_the_result_keeps_its_identity():
+    # Decided in place: a rebuilt frame would be a new frame to every
+    # observer, with a new id and none of the original's metadata.
+    sent = _result(MOVE, "m1")
+    sent.metadata["mark"] = "kept"
+    frames = [*_response("Okay."), _started((MOVE, "m1")), sent]
+    down, _up = await run_test(MoveAfterSpeech(), frames_to_send=frames)
+    [result] = [f for f in down if isinstance(f, FunctionCallResultFrame)]
+    assert result.id == sent.id
+    assert result.metadata == {"mark": "kept"}
+    assert result.properties.run_llm is False
+
+
+async def test_a_cancelled_sibling_does_not_hold_the_last_result():
+    # A barge-in cancels the lookup; the async tool settles after it and is
+    # then the response's last call, so it asks for the inference.
+    frames = [
+        *_response(),
+        _started((MOVE, "m1"), ("router_status", "t1"), ("slow_lookup", "a1")),
+        _result(MOVE, "m1"),
+        FunctionCallCancelFrame(function_name="router_status", tool_call_id="t1"),
+        _result("slow_lookup", "a1"),
+    ]
+    assert await _run_llm(frames) == {"m1": False, "a1": True}
+
+
+async def test_an_interruption_forgets_the_unsettled_calls():
+    # What is still unsettled after a barge-in is pipecat's to decide, and
+    # nothing is kept for a call that will never settle.
+    processor = MoveAfterSpeech()
+    frames = [
+        *_response(),
+        _started((MOVE, "m1"), ("router_status", "t1")),
+        InterruptionFrame(),
+        _result("router_status", "t1"),
+    ]
+    down, _up = await run_test(processor, frames_to_send=frames)
+    [result] = [f for f in down if isinstance(f, FunctionCallResultFrame)]
+    assert result.properties is None
+    assert processor.unsettled == 0
+
+
+async def test_a_cancelled_call_is_forgotten():
+    processor = MoveAfterSpeech()
+    frames = [
+        *_response(),
+        _started((MOVE, "m1")),
+        FunctionCallCancelFrame(function_name=MOVE, tool_call_id="m1"),
+    ]
+    await run_test(processor, frames_to_send=frames)
+    assert processor.unsettled == 0
