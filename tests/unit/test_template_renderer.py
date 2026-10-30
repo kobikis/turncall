@@ -89,6 +89,37 @@ class TestRenderAgentConfig:
         rendered = render_agent_config(config, {"name": "Eve"})
         assert rendered.first_message is None
 
+    def test_renders_each_procedure_steps_text(self) -> None:
+        # #447: the window and its preview read the step's text.
+        config = AgentConfig(
+            procedures=[
+                {
+                    "name": "no_internet",
+                    "steps": [
+                        {
+                            "id": "check",
+                            "kind": "check",
+                            "start": True,
+                            "tool": "line_status",
+                            "text": "Check the line for {{account_id}}.",
+                            "moves": [{"to": "done", "when": "the line is fine"}],
+                        },
+                        {"id": "done", "kind": "end", "text": "Thank {{name}}."},
+                    ],
+                }
+            ],
+        )
+        rendered = render_agent_config(config, {"account_id": "ACC-4471"})
+        [procedure] = rendered.procedures
+        check, done = procedure.steps
+        assert check.text == "Check the line for ACC-4471."
+        assert check.tool == "line_status"
+        # An unsent variable stays literal, as everywhere else.
+        assert done.text == "Thank {{name}}."
+        assert (
+            config.procedures[0].steps[0].text == "Check the line for {{account_id}}."
+        )
+
 
 @pytest.mark.unit
 class TestForSession:

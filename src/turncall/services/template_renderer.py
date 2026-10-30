@@ -12,6 +12,7 @@ Example:
 import re
 
 from turncall.domain.models import AgentConfig
+from turncall.domain.procedures import Procedure
 
 VARIABLE_PATTERN = re.compile(r"\{\{(\w+)\}\}")
 
@@ -58,6 +59,7 @@ def render_agent_config(
     - first_message
     - tool descriptions
     - s2s.delegation.instructions (the delegate's prompt, when it replaces it)
+    - each procedure step's text (#447), so the window and its preview show it
     """
     if not variables:
         return config
@@ -80,6 +82,7 @@ def render_agent_config(
         "system_prompt": rendered_system_prompt,
         "first_message": rendered_first_message,
         "tools": rendered_tools,
+        "procedures": [_render_steps(p, variables) for p in config.procedures],
     }
     delegation = config.s2s.delegation
     if delegation is not None and delegation.instructions:
@@ -95,6 +98,14 @@ def render_agent_config(
             }
         )
     return config.model_copy(update=update)
+
+
+def _render_steps(procedure: Procedure, variables: dict[str, str]) -> Procedure:
+    steps = tuple(
+        step.model_copy(update={"text": render_template(step.text, variables)})
+        for step in procedure.steps
+    )
+    return procedure.model_copy(update={"steps": steps})
 
 
 def prepend_knowledge_context(

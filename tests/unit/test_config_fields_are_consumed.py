@@ -55,7 +55,6 @@ NOT_CONSUMED: dict[str, str] = {
         )
         for name in (
             "Procedure.window_depth",
-            "Procedure.steps",
             "ProcedureStep.moves",
             "ProcedureMove.when",
         )

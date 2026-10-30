@@ -20,7 +20,7 @@ No pipecat here: the API schema imports this module.
 """
 
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 from turncall.domain.procedures import START_MODES, STEP_KINDS, Procedure
 
@@ -36,8 +36,18 @@ ENDING_KINDS = ("end", "escalate")
 Check = Callable[[Procedure], str | None]
 
 
-def procedures_refusal(procedures: Sequence[Procedure]) -> str | None:
-    """The first thing wrong with an agent's procedures, or None."""
+def procedures_refusal(
+    procedures: Sequence[Procedure], *, callable_tools: Iterable[str] | None = None
+) -> str | None:
+    """The first thing wrong with an agent's procedures, or None.
+
+    `callable_tools`, when the caller knows them, is every name the agent can
+    call, and each step's `tool` must be one (#447). The API passes them for
+    an agent with no MCP server; the build passes none.
+    """
+    checks = _CHECKS
+    if callable_tools is not None:
+        checks = (*checks, _step_tools_in(frozenset(callable_tools)))
     seen: set[str] = set()
     for index, procedure in enumerate(procedures):
         where = f"procedures[{index}]" + (
@@ -46,7 +56,7 @@ def procedures_refusal(procedures: Sequence[Procedure]) -> str | None:
         if procedure.name in seen:
             return f"{where}: another procedure is already named '{procedure.name}'"
         seen.add(procedure.name)
-        for check in _CHECKS:
+        for check in checks:
             if (problem := check(procedure)) is not None:
                 return f"{where}: {problem}"
     return None
@@ -141,6 +151,22 @@ def _all_reachable(procedure: Procedure) -> str | None:
     if unreached is None:
         return None
     return f"step '{unreached}' cannot be reached from the start step '{start.id}'"
+
+
+def _step_tools_in(callable_tools: frozenset[str]) -> Check:
+    """A step's `tool` is one the agent can call (#447): its own tools and
+    the built-ins. A step names one of them; it is never a tool of its own."""
+
+    def check(procedure: Procedure) -> str | None:
+        for step in procedure.steps:
+            if step.tool is not None and step.tool not in callable_tools:
+                return (
+                    f"step '{step.id}' names tool '{step.tool}', which is not "
+                    "one of the agent's tools or a built-in"
+                )
+        return None
+
+    return check
 
 
 # In order: each check may rely on the ones before it having passed.

@@ -167,6 +167,24 @@ def test_two_procedures_with_one_name():
     )
 
 
+def test_a_step_tool_the_agent_cannot_call():
+    # #447: checked only when the caller knows what the agent can call (the
+    # API, for an agent with no MCP server).
+    with_tool = _procedure(
+        [
+            _step("lights", "check", start=True, tool="line_stats", moves=_to("done")),
+            _step("done", "end"),
+        ]
+    )
+
+    assert procedures_refusal([with_tool]) is None
+    assert procedures_refusal([with_tool], callable_tools={"line_stats"}) is None
+    assert procedures_refusal([with_tool], callable_tools={"line_status"}) == (
+        "procedures[0] 'no_internet': step 'lights' names tool 'line_stats', "
+        "which is not one of the agent's tools or a built-in"
+    )
+
+
 def test_the_refusal_names_the_procedure_by_its_index():
     other = _procedure(
         [_step("ask", start=True, moves=_to("nowhere")), _step("end", "end")],

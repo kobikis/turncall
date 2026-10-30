@@ -23,12 +23,15 @@ mockable, and refused unmocked.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 from loguru import logger
 
 from turncall.config.settings import get_settings
+from turncall.domain.procedures import MOVE_TO_STEP
 from turncall.services.tool_webhook import cap_tool_result
 
 # What happened to one tool call, for the iteration's record.
@@ -38,8 +41,16 @@ REFUSED = "refused"  # no mock under `mock_only`: nothing ran, the run is errore
 APPLIED = "applied"  # never mocked: it changed the agent under test, nothing else
 
 # Tools that act on the agent under test and nothing else, so an eval runs
-# them whatever its mocks and policy say (#431).
-NEVER_MOCKED = frozenset({"load_skill"})
+# them whatever its mocks and policy say: each name with what it changes, for
+# the run's warning when a scenario mocks one anyway. `load_skill` (#431) adds
+# a skill to the agent; `move_to_step` (#449) moves it in a procedure, so a
+# canned "accepted" would hide the very skip a procedure eval is there to catch.
+NEVER_MOCKED: Mapping[str, str] = MappingProxyType(
+    {
+        "load_skill": "loads a skill into the agent",
+        MOVE_TO_STEP: "moves the agent through its procedure",
+    }
+)
 
 
 def encode_mock(response: Any) -> str:
