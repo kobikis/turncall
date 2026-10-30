@@ -129,9 +129,11 @@ async def resolve_skills(
             row = await _version_for(session, source, ref)
             if row is None:
                 continue
+            # Checked against the project that holds the skill (#433): a
+            # library skill's KBs are the library's.
             knowledge = await resolve_skill_knowledge(
                 session,
-                project_id,
+                source.project_id,
                 row.name,
                 getattr(row, "knowledge_bases", None) or [],
             )

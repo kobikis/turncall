@@ -10,8 +10,10 @@ and every iteration runs those versions, pinned. A skill that does not resolve
 is left out of the run and said so in the run's warnings, as on a call it is a
 warning and a skipped skill.
 
-Resolved in the run's project, for every target form an inline one included,
-with no `{{variables}}`: an eval has no call row to hold any.
+Resolved in the run's project — or, for a project linked to a skill library,
+in the library (#433, ADR-0031: `resolve_skills` reads the project's source) —
+for every target form an inline one included, with no `{{variables}}`: an
+eval has no call row to hold any.
 """
 
 from __future__ import annotations
@@ -104,11 +106,12 @@ def _skills_skipped(names: list[str]) -> dict[str, Any]:
     return {
         "code": "skills_skipped",
         "message": (
-            f"{len(names)} skill(s) did not resolve in the project and the run "
+            f"{len(names)} skill(s) did not resolve and the run "
             "went without them: "
             + ", ".join(names)
             + ". A skill needs a published version (or a pin on a published or "
-            "archived one) in the run's project."
+            "archived one) in the run's project, or in its skill library when "
+            "it is linked to one."
         ),
         "skills": names,
     }

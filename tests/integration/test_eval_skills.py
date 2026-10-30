@@ -81,8 +81,15 @@ def _agent(*, loads: bool):
 
 
 async def _run(
-    factory, monkeypatch, *, loads: bool, mocks: dict[str, Any]
+    factory,
+    monkeypatch,
+    *,
+    loads: bool,
+    mocks: dict[str, Any],
+    in_library: bool = False,
 ) -> tuple[Any, SkillRow]:
+    """`in_library`: the skill is held by a skill library the run's project
+    is linked to (#433), not by the project itself."""
     install_stub_providers(
         Script(agent=(_agent(loads=loads),) * 12), monkeypatch.setattr
     )
@@ -91,10 +98,16 @@ async def _run(
     )
     async with factory() as session:
         project = ProjectRow(name=f"eval-skills-{uuid4().hex[:8]}")
+        holder = project
+        if in_library:
+            holder = ProjectRow(name=f"eval-skills-library-{uuid4().hex[:8]}")
+            session.add(holder)
+            await session.flush()
+            project.skill_library_id = holder.id
         session.add(project)
         await session.flush()
         skill = SkillRow(
-            project_id=project.id,
+            project_id=holder.id,
             name="explain_bill",
             version=1,
             state="published",
@@ -170,6 +183,28 @@ async def test_a_run_that_loads_the_skill_passes_and_records_its_version(
     assert warnings["mock_ignored"]["tools"] == ["load_skill"]
     # A skill's tool is one the run can call: its mock is not unmatched.
     assert "mock_matches_no_tool" not in warnings
+
+
+async def test_a_run_in_a_linked_project_records_the_librarys_versions(
+    factory, monkeypatch
+):
+    """#433: the run's project reads its skills from its library, so the
+    run resolves, records and loads the library's version."""
+    run, skill = await _run(
+        factory,
+        monkeypatch,
+        loads=True,
+        mocks={"get_invoices": INVOICES},
+        in_library=True,
+    )
+
+    assert run.status == EvalRunStatus.PASSED.value, (run.error, run.results)
+    assert run.resolved_config["resolved_skills"] == [
+        {"id": str(skill.id), "skill": "explain_bill", "version": 1, "pinned": False}
+    ]
+    [entry] = run.results
+    outcomes = [(c["tool_name"], c["outcome"]) for c in entry["tool_calls"]]
+    assert outcomes == [("load_skill", "applied"), ("get_invoices", "mocked")]
 
 
 async def test_a_run_whose_agent_never_loads_the_skill_fails(factory, monkeypatch):

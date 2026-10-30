@@ -1203,9 +1203,16 @@ takes the source too: `attachment_refusal(session, source, ...)` with
 messages saying "in this project's skill library" (`SkillSource.where`, also
 `pin_refusal(where=)`), a gone library a 422 (`cannot be resolved: this
 project's skill library is gone`), and `lock_name` taken in the **source**
-project, which a library's skill delete also takes. Tests:
+project, which a library's skill delete also takes. Text sessions and
+eval runs go through `resolve_skills` unchanged (#433: a session's
+re-read by id is a pin, so a version outside the source is skipped; the
+run's `skills_skipped` names the library), and a skill's KBs are checked
+against `source.project_id`, the project holding the skill
+(`resolve_skill_knowledge`), so a library skill's KBs are the library's.
+Tests:
 `tests/integration/test_skill_library.py`,
-`tests/integration/test_harness_call_skill_library.py`.
+`tests/integration/test_harness_call_skill_library.py` (KBs too),
+`test_chat_skills.py` and `test_eval_skills.py` (`in_library`).
 
 Key files: `api/v1/skills.py`, `api/v1/schemas/skills.py`,
 `storage/repositories/skill_repo.py`, `services/skills.py`,

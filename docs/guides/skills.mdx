@@ -295,6 +295,8 @@ A linked project's skills come **only** from its library. Its own skills are not
 
 - **Saving an agent** checks its `skills` against the library: a name the library has no published version of, a tool collision with the library version's tools, and a pin on a version that is not one of the library's are the `422`s [above](#attach-skills-to-an-agent), saying "in this project's skill library".
 - **A call** resolves the agent's skills in the library: a stored agent, a [call-init inline agent](#call-init-inline-agents) and a handoff's target alike. A name the library does not hold, or a pin outside it, is a warning and a skipped skill; the call starts either way.
+- **A text conversation** ([below](#skills-in-a-text-conversation)) and an **[eval run](#skills-in-evals)** resolve the agent's skills in the library too: a session loads the library's skills and keeps them across messages, and a run records the library's versions in `resolved_config.resolved_skills`.
+- **A skill's knowledge bases** belong to the project that holds the skill: a library skill's `knowledge_bases` are the library's, and its `prompt`-mode documents and `tool`-mode search reach the linked project's calls and conversations once it is loaded.
 - **A library that is deleted** holds no skills: a call skips them with a warning, and a save that lists one is a `422`. A library that is purged unlinks its projects, which then read their own skills again.
 
 A call's record is the same as for a project's own skills: `skills` on the call read names the library's versions.

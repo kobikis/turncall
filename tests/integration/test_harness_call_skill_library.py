@@ -254,3 +254,78 @@ class _Api:
 
     def __init__(self, api: Any) -> None:
         self.api = api
+
+
+# --- a library skill's knowledge bases (#433) ---------------------------------
+
+
+async def test_a_library_skills_knowledge_bases_are_the_librarys(monkeypatch):
+    """A skill's knowledge bases are checked against the project that holds
+    the skill: the library's KBs reach a linked project's call, its
+    `prompt`-mode documents in the skill's section and its `tool`-mode one
+    searched through `query_knowledge`."""
+    from tests.integration.test_harness_call_skill_knowledge import (
+        LATE_FEES,
+        ROAMING,
+        _embeddings,
+        _kb,
+        _tool_results,
+    )
+
+    after: list[Given] = []
+    searched: list[Given] = []
+    script = Script(
+        caller=(SAID,),
+        agent=(
+            ToolCall("load_skill", {"name": "explain_bill"}),
+            _remembering(after, ToolCall("query_knowledge", {"query": "roaming"})),
+            _remembering(searched, "Roaming is three euros a day."),
+        ),
+    )
+    monkeypatch.setattr(
+        "turncall.services.document_ingestion.generate_embeddings", _embeddings
+    )
+    async with (
+        run_app(
+            script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+        ) as app,
+        app.another_project("library") as (library, lib),
+    ):
+        faq = await _kb(_Api(lib), "billing_faq", LATE_FEES)
+        tariffs = await _kb(_Api(lib), "tariffs", ROAMING)
+        await _publish_skill(
+            _Api(lib),
+            {
+                "name": "explain_bill",
+                "description": BILL,
+                "instructions": "Compare the last two invoices.",
+                "knowledge_bases": [
+                    {"knowledge_base_id": faq, "mode": "prompt"},
+                    {
+                        "knowledge_base_id": tariffs,
+                        "mode": "tool",
+                        "tool_description": "Search the tariff sheet",
+                    },
+                ],
+            },
+        )
+        assert (await app.link_skill_library(library)).status_code == 200
+        number = await app.bind_number(
+            await app.create_agent(
+                {
+                    **HARNESS_AGENT,
+                    "first_message": "Hello.",
+                    "skills": [{"skill": "explain_bill"}],
+                }
+            )
+        )
+        await _one_call(app, number)
+
+    [loaded] = after
+    prompt = _prompt(loaded)
+    section = prompt[prompt.index("## Skill: explain_bill (v1)") :]
+    assert LATE_FEES in section
+    assert loaded.tools == ["load_skill", "query_knowledge"]
+    [answered] = searched
+    [result] = [r for r in _tool_results(answered) if "Knowledge Base Context" in r]
+    assert ROAMING in result
