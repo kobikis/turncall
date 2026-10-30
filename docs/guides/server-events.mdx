@@ -78,7 +78,7 @@ Every delivery is one envelope:
 | `eval.run.started` / `eval.run.completed` | Eval runs |
 | `campaign.started` / `campaign.completed` / `campaign.cancelled` | Campaigns |
 
-`metrics.turn`, `delegation.completed`, `avatar.unavailable` (why a call's video Avatar did not show; see [Video Avatar](/guides/video-avatar)) and a [procedure](/guides/agents#procedures)'s moves are stored on the call's event log (`GET /v1/calls/{id}/events`) and never delivered. A move the procedure allowed is a `procedure.step` `{procedure, from, to, kind}`, where `kind` is the kind of the step it reached; a move it refused is a `procedure.refused` `{procedure, from, to}`; a procedure a handoff ended before it reached an `end` or `escalate` step is a `procedure.left` `{procedure, from, reason}`, `from` the step it was left at and `reason` `handoff`.
+`metrics.turn`, `delegation.completed`, `avatar.unavailable` (why a call's video Avatar did not show; see [Video Avatar](/guides/video-avatar)) and a [procedure](/guides/agents#procedures)'s moves are stored on the call's event log (`GET /v1/calls/{id}/events`) and never delivered. A move the procedure allowed is a `procedure.step` `{procedure, from, to, kind}`, where `kind` is the kind of the step it reached, and a procedure's start is one with `from` `null`; a move it refused is a `procedure.refused` `{procedure, from, to}`; a procedure a handoff ended before it reached an `end` or `escalate` step is a `procedure.left` `{procedure, from, reason}`, `from` the step it was left at and `reason` `handoff`.
 
 Tool calls go to each tool's own `webhook_url` — see [Tools](/guides/tools).
 

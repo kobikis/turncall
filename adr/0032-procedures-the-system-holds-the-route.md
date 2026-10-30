@@ -57,6 +57,25 @@ condition; TurnCall checks only that the move is allowed. A move is checked
 and applied with nothing awaited in between, so a barge-in cancelling the
 tool cannot leave the state half moved.
 
+**An `end` or `escalate` step finishes the procedure.** Reaching one takes the
+procedure out of the running set: its window stops and every later move in
+it, a move back included, is refused as finished. Without that a move back
+from an `end` step would turn a completed procedure into one that is not, and
+an escalation already transferred or handed off could be walked back on the
+record while the call itself could not be. An escalate step's action is the
+tool's own (`transfer_call` with its fields, the briefing included, or
+`handoff_to_agent`), run through the path that tool takes; the window names
+the escalate move as the way out when the procedure cannot resolve the
+problem, since a model shown only the condition tends to keep trying.
+
+**What a call records is derived from its events.** Each procedure started
+is a `procedure.step` from nowhere to its start step — a `start: "call"` one
+as the call starts, a handoff target's as the handoff applies, an
+`on_request` one when the model starts it — then each move, refused move and
+handoff that left it, in order. The call's `procedures` summary is folded
+from those events alone, so a procedure the caller never got past the first
+step of is still listed, at its start.
+
 **A move beside speech costs no inference (#445).** The caller has already
 been answered, so the move's result asks for none; a move with no speech
 asks for one, so the caller always is. The decision is a processor right

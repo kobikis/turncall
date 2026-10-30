@@ -1247,6 +1247,8 @@ ADR-0032): **the system holds the route, the model sees a window.**
 `config.procedures` = `[{name, description, start: call|on_request,
 window_depth, steps: [{id, kind: ask|instruct|check|escalate|end, text,
 start, tool, moves: [{to, when}], escalate: {transfer_call | handoff_to_agent}}]}]`
+(kind, start and transfer mode are `domain/enums` `StepKind`,
+`ProcedureStart`, `TransferMode`)
 — part of the agent config, so it versions, publishes, rolls back and
 A/B-routes with the agent, and a call-init inline agent carries its own.
 
@@ -1264,24 +1266,35 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   skill load keeps the tool): `with_procedures` adds `move_to_step` first in
   `tools` and puts a `CallProcedures` holder on the context
   (`CallContext.procedures`, every context starts with an empty one) with each
-  `start: "call"` procedure running at its start step. Skipped on S2S
-  (warned, below).
+  `start: "call"` procedure running at its start step, each start recorded
+  (below). Skipped on S2S (warned, below).
 - **The window.** `ProcedureWindowProcessor`, in every cascade pipeline right
   before the LLM (after the KB auto processor), puts one `developer` message
   right before the caller's turn via `turn_message.replace_turn_message`,
   replacing the previous turn's: the current step and its text, the allowed
   moves with their `when`, `← back to <previous>` (always allowed), a preview
-  up to `window_depth` ahead. The rest of the graph never enters the prompt.
+  up to `window_depth` ahead, and — when a move from here reaches an
+  `escalate` step — `If the procedure cannot resolve the caller's problem,
+  escalate: move to <id>.` The rest of the graph never enters the prompt.
   The inference after a tool result gets no window (the context does not end
   on the caller's turn), which is why an accepted move's result carries the
   new step's text. Guard: `tests/unit/test_procedure_window_wiring.py`.
 - **`move_to_step`** (`{procedure, to}`; a built-in, never listed in `tools`
-  — a 422 there) runs `run_move_to_step` in `tool_bridge`: checked and applied
-  with no `await` in between, the holder's state replaced in one assignment.
-  A move from the current step or back to the previous one is accepted (back
-  pops the path); anything else is refused, the result naming the allowed
-  moves (`details.allowed`) and the window staying put. The result is the
-  `{success, message, details}` JSON the other built-ins answer.
+  — a 422 there) runs `procedure_escalation.run_move` from `tool_bridge`:
+  `run_move_to_step` checks and applies the move with no `await` in between,
+  the holder's state replaced in one assignment (`CallProcedures.replace`,
+  the only swap). A move from the current step or back to the previous one
+  is accepted (back pops the path); anything else is refused, the result
+  naming the allowed moves (`details.allowed`) and the window staying put.
+  The result is the `{success, message, details}` JSON the other built-ins
+  answer.
+- **Reaching an `end` or `escalate` step finishes the procedure**: it leaves
+  `ProcedureState.runs` for `finished` (`_placed`), its window stops, the
+  move's result says `The procedure is finished here.`, and every later move
+  on it — a move back included — is refused (`'<name>' is finished: it ended
+  at step '<id>'`, `details.allowed: []`), so `completed` / `escalated_at`
+  cannot be undone. A finished `on_request` procedure is not started again.
+  A procedure started at an ending step is finished at once.
 - **A move costs no extra inference** (#445). `MoveAfterSpeech`, right after
   the LLM (the failover group) in every cascade pipeline, sets the `run_llm`
   of each result in a response that reported a move: False until the
@@ -1295,7 +1308,11 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   the handler, which runs before the text has passed; a SystemFrame can jump
   data frames, so only the call list (`FunctionCallsStartedFrame`) is read
   from one. A tool's own `run_llm` (`load_skill`) is kept; a response with
-  no move is pipecat's.
+  no move is pipecat's. The result's properties are set on the frame itself
+  (a rebuilt frame would be a new id to observers). A call cancelled by a
+  barge-in (`FunctionCallCancelFrame`) is waited on no more, and an
+  `InterruptionFrame` forgets every unsettled call, so a sibling's result is
+  never held at `run_llm=False`.
 
 - **The graph rule** (#444): `domain/procedure_graph.procedures_refusal`,
   pure, first problem wins, `procedures[i] '<name>': step '<id>' ...`. Unique
@@ -1305,7 +1322,9 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   exactly one action and no other step one (#448, `_escalations`); for an
   inline agent also the kind and start-mode words the schema's Literals cover,
   and an escalation's E.164 target, transfer mode and agent-id UUID. Applied twice: the
-  `AgentConfigSchema.validate_procedure_graphs` validator (422
+  `AgentConfigSchema.validate_procedures` validator
+  (`schemas/procedures.procedures_refusal_at_api`, which also refuses
+  `move_to_step` in `tools`; 422
   `validation_error`, also an eval `inline` target) and
   `pipeline_builder._check_procedures`, before `with_procedures`, which raises
   `ValueError` → `pipeline_error` + `error.raised` for a call-init inline
@@ -1316,7 +1335,10 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   rule) logging `procedures_skipped: <message>` from
   `config_warnings.procedures_on_s2s_warning`, the agent read's
   `procedures_ignored_on_s2s`.
-- **What a call records** (#443). Each accepted move is a `procedure.step`
+- **What a call records** (#443). Each procedure started is a
+  `procedure.step` from null to its start step — a `start: "call"` one at
+  build (`with_procedures`) and a handoff target's (`leave_procedures`),
+  through the holder, `_record_starts`. Each accepted move is a `procedure.step`
   call event `{procedure, from, to, kind}` (`kind` the step reached), each
   refused one a `procedure.refused` `{procedure, from, to}` (`from` null when
   the procedure was not running): stored only, through `turn_metrics
@@ -1331,7 +1353,8 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   refused_moves}` — `path` every step reached (the first event's `from`, then
   each `to`, a move back included), `ended_at` the last, `completed` when it
   is an `end` step, `escalated_at` it when an `escalate` one. A procedure that
-  never moved has no event and is not listed. `[]` with none; null once the
+  started and never moved is listed (`path: [<start>]`, not completed); an
+  `on_request` one never started is not. `[]` with none; null once the
   transcript or the events expired. The events (and #448's `procedure.left`)
   are transcript-class
   (`retention.TRANSCRIPT_EVENTS`); `procedure`, `procedures` are redaction
@@ -1362,8 +1385,11 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   call's `{{variables}}`, so the window, preview and move result show it.
 - **Escalation** (#448, `orchestrator/procedure_escalation.py`). An accepted
   move onto an `escalate` step runs its action from the `move_to_step`
-  branch (`run_escalation`, after `run_move_to_step`): `escalate
-  .transfer_call` (the `transfer_call` tool's fields) through
+  branch (`run_escalation`, after `run_move_to_step`; the step's action is
+  `StepEscalation.action()`, `(tool, arguments)`, also what the graph rule and
+  `_check_escalations` read): `escalate.transfer_call` (the `transfer_call`
+  tool's fields, `briefing` a text or `{"from_summary": true}` as the tool
+  takes it) through
   `_execute_builtin("transfer_call")`, shielded as the tool is, so it works —
   and is refused, `UnsupportedCarrierAction` — wherever the tool does;
   `escalate.handoff_to_agent` (`{agent_id, reason?, context?}`) through
@@ -1372,7 +1398,8 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   result}`. In an eval the action goes through `tool_mocks.intercept` under
   its tool's name (mocked, or refused under `mock_only`). The summary reads
   `completed: false, escalated_at: <step>` from the `procedure.step` alone.
-  At save, `api/v1/agents._check_escalations` 422s (`invalid_agent_config`)
+  At save, `api/v1/agents._check_escalations` 422s (`invalid_agent_config`,
+  `details.field` `procedures[i].steps[j].escalate.handoff_to_agent.agent_id`)
   a handoff to an agent not in the project; an inline agent's is refused at
   the call (`_prepare_handoff` is project-scoped).
 - **A handoff ends the procedures** (#448): every handoff — an escalate
@@ -1381,12 +1408,13 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   `running_procedures` (the build's transform: `move_to_step`, the startable
   section, its `call` procedures at their start) before its skills, into
   `PreparedHandoff.procedures`; `_apply_handoff_context` calls
-  `leave_procedures`, which sets the **existing** holder's `state` (the
-  window processor holds that holder) to the target's in one assignment and
+  `leave_procedures`, which replaces the **existing** holder's state (the
+  window processor holds that holder) with the target's in one assignment,
   queues a `procedure.left` `{procedure, from, reason: "handoff"}` on the
-  holder for each run not at an `end`/`escalate` step. Nothing awaited
+  holder for each procedure still running (a finished one is not), then the
+  target's starts. Nothing awaited
   (`test_handoff_switch_is_atomic.py`). In the summary a left procedure ends
-  where it was left (`path` opened by `from` if it never moved), not completed.
+  where it was left, not completed.
 - **In an eval** (#449): `move_to_step` is never mocked
   (`tool_mocks.NEVER_MOCKED`, beside `load_skill`): it runs under
   `mock_only`, the procedure accepting or refusing it, recorded in
