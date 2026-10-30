@@ -34,7 +34,7 @@ from turncall.domain.models import (
     RetentionConfig,
     resolve_delegation,
 )
-from turncall.domain.procedures import MOVE_TO_STEP
+from turncall.domain.procedures import MOVE_TO_STEP, Procedure, step_tool_refusal
 from turncall.domain.providers import (
     AVATAR_PROVIDERS,
     LLM_PROVIDERS,
@@ -44,6 +44,7 @@ from turncall.domain.providers import (
 )
 from turncall.orchestrator import grok_voice, xai_config
 from turncall.orchestrator.deepgram_flux import MIXED_FLUX_GROUP, mixes_flux
+from turncall.services.retrieval import KNOWLEDGE_TOOL_SCHEMA
 from turncall.services.skills import LOAD_SKILL
 
 
@@ -853,6 +854,23 @@ class AgentConfigSchema(BaseModel):
                 "with procedures; define them in `procedures` instead"
             )
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def refuse_unknown_step_tools(self) -> "AgentConfigSchema":
+        # A step's tool is one the agent can call (#447). An MCP server's are
+        # discovered at call start, so an agent with one is not checked here;
+        # `query_knowledge` comes from KB links the config does not hold.
+        if self.mcp_servers:
+            return self
+        callable_tools = {
+            *(t.name for t in self.tools),
+            *BUILTIN_TOOL_NAMES,
+            KNOWLEDGE_TOOL_SCHEMA["name"],
+        }
+        procedures = [Procedure.model_validate(p.model_dump()) for p in self.procedures]
+        if problem := step_tool_refusal(procedures, callable_tools):
+            raise ValueError(problem)
         return self
 
     @model_validator(mode="after")

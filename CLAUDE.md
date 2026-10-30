@@ -783,8 +783,8 @@ Inbound call → resolve phone number → routing_target_type == "webhook"?
 
 Template variables (`{{name}}`, `\w+` only — no spaces, no dots; an unsent one
 stays literal) live on the call row as `metadata_json["template_variables"]`
-and render `system_prompt`, `first_message`, tool descriptions and
-`s2s.delegation.instructions`. A `handoff_to_agent` (tool or API) gives the
+and render `system_prompt`, `first_message`, tool descriptions,
+`s2s.delegation.instructions` and each procedure step's `text` (#447). A `handoff_to_agent` (tool or API) gives the
 target agent the same call's variables and call-init `knowledge_context`
 (`tool_bridge._as_this_call`), rendered then prepended as at the call's start.
 
@@ -1280,10 +1280,20 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   pops the path); anything else is refused, the result naming the allowed
   moves (`details.allowed`) and the window staying put. The result is the
   `{success, message, details}` JSON the other built-ins answer.
+- **Step tools and variables** (#447). A step's `tool` is shown in the window
+  and its preview (`(check, tool: line_status)`); it is an ordinary agent tool,
+  dispatched and recorded like any other. At save it must be one of the
+  agent's `tools`, a built-in or `query_knowledge`
+  (`procedures.step_tool_refusal`, applied in `AgentConfigSchema`; 422
+  `procedures[i] '<name>': step '<id>' names tool '<x>', ...`); an agent with
+  `mcp_servers` is not checked (its tools are discovered at call start).
+  `template_renderer.render_agent_config` renders each step's `text` with the
+  call's `{{variables}}`, so the window, preview and move result show it.
 
 Tests: `tests/unit/test_procedure_window.py`, `test_procedure_state.py`,
 `tests/integration/test_procedures_api.py`,
-`tests/integration/test_harness_call_procedures.py`.
+`tests/integration/test_harness_call_procedures.py`,
+`tests/integration/test_harness_call_procedure_steps.py`.
 
 ## A/B Testing
 
