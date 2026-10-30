@@ -11,6 +11,46 @@ and is not part of this repository's history.
 
 ## [Unreleased]
 
+### Added
+
+- **Skills** (#421–#431). A skill is a project's versioned capability: a
+  `name`, a `description` saying when to use it, `instructions`, `tools` and
+  `knowledge_bases`. `/v1/skills` creates, edits (drafts only), publishes,
+  rolls back and deletes versions with the agent lifecycle, and `GET
+  /v1/skills/{name}/agents` lists the agent versions that use one. An agent
+  lists skills in `skills: [{"skill": "<name>"}]`; each runs its live published
+  version, or the version pinned by `version_id` (ADR-0030: a skill publish
+  reaches an unpinned agent's next call with no agent publish). A call
+  advertises the skills' names and descriptions and offers the `load_skill`
+  built-in. Loading one adds its instructions to the prompt and its tools and
+  `prompt`/`tool` knowledge bases to the call, keeping the context;
+  `max_loaded_skills` (default 3) unloads the oldest. A handoff resolves the
+  target's skills.
+- **What a call records about its skills** (#425). `skill.loaded` and
+  `skill.unloaded` call events, and `skills` on the call read and `call.ended`
+  (`[{skill, version, pinned, loaded}]`, `[]` with none).
+- **Skills in text conversations, inline agents and evals** (#430, #431). Chat,
+  SMS and WhatsApp text offer `load_skill` and keep loaded skills across the
+  session's messages; a call-init inline agent's skills resolve against the
+  call's project; an eval run resolves its target's skills once and runs those
+  versions in every iteration. `load_skill` is never mocked.
+- Saving an agent refuses (`422`) a skill with no published version, a skill
+  listed twice, a pin that is not a version of that skill, and a skill tool
+  whose name collides with a built-in, the agent's own tool or another listed
+  skill's (#426, #428). Deleting a skill version an agent lists is a `409`
+  naming the agents. Skills are cascade only: an S2S agent carries a
+  `skills_ignored_on_s2s` warning and runs without them.
+- **A skill library** (#432–#434, ADR-0031). A project can resolve its
+  skills from one other project, set and cleared only with the platform
+  credential: `PUT /v1/projects/{id}/skill-library` `{"library_project_id"}`
+  (`null` unlinks), shown as `skill_library` on the project read. It replaces
+  the project's own skills rather than falling back to them, and every
+  resolution goes through it: stored and inline agents, handoffs, text
+  sessions, eval runs, pins, and a library skill's knowledge bases. A library
+  cannot link a library of its own. Deleting a library skill an agent in a
+  linked project lists is a `409` naming that agent and its project, and `GET
+  /v1/skills/{name}/agents` lists them too.
+
 ### Changed
 
 - **OpenAI's default model is `gpt-5.4-mini`.** An `openai` agent that names
