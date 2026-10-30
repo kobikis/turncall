@@ -75,6 +75,10 @@ class TurnCallXAISTT(XAIKeyRefusal, XAISTTService):
         return f"{url}&{urlencode(self._url_params)}"
 
 
+# Nothing xAI sends once the call is ending is read.
+_CLOSE_TIMEOUT_SECS = 0.25
+
+
 def create_xai_stt(
     *,
     api_key: str,
@@ -94,6 +98,9 @@ def create_xai_stt(
         sample_rate=sample_rate,
         settings=TurnCallXAISTT.Settings(model=model, language=language, **settings),
         url_params=[("keyterm", term) for term in keyterms] + url_extra,
+        # xAI never answers the close handshake: pipecat's 2 s default held
+        # every call's end that long after the goodbye.
+        ws_close_timeout=_CLOSE_TIMEOUT_SECS,
     )
 
 

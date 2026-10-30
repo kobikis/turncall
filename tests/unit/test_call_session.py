@@ -264,6 +264,19 @@ class TestProviderError:
         assert mark_ended.await_args.kwargs["status"] == "failed"
         trigger.assert_called_once()  # call.ended still goes out
 
+    async def test_an_error_after_the_caller_left_is_not_the_calls(self) -> None:
+        """A browser that hangs up while audio is still queued (the goodbye's
+        tail, the ambience) leaves the output transport writing to nobody, and
+        pipecat 1.14 reports that as a permanent error. The caller ended the
+        call; it did not fail."""
+        cs = _make_call_session(uuid4())
+        cs.caller_left()
+        with patch.object(cs, "_log_event", AsyncMock()) as log_event:
+            await cs._on_pipeline_error(self._frame(usable=False))
+        log_event.assert_not_awaited()
+        assert cs._error is None
+        assert cs.pipeline_errors  # still noted for an eval's report
+
     async def test_a_recoverable_error_is_not_recorded(self) -> None:
         cs = _make_call_session(uuid4())
         with patch.object(cs, "_log_event", AsyncMock()) as log_event:

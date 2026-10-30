@@ -125,6 +125,9 @@ class CallSession:
         # access check, say) leaves the pipeline running and silent; an eval
         # then fails on "no response" with nothing saying why.
         self.pipeline_errors: list[str] = []
+        # The caller hung up. What the pipeline reports after that, while it
+        # winds down, is not why the call ended.
+        self._caller_left = False
 
     @property
     def call_id(self) -> UUID:
@@ -241,6 +244,7 @@ class CallSession:
         @self._transport.event_handler("on_client_disconnected")  # type: ignore[attr-defined]
         async def _end_pipeline_on_disconnect(*_args: object) -> None:
             logger.info("client_disconnected", call_id=str(self.call_id))
+            self.caller_left()
             if self._task is not None:
                 await self._task.cancel()
 
@@ -372,6 +376,10 @@ class CallSession:
                 )
             )
 
+    def caller_left(self) -> None:
+        """The caller hung up: the call ends complete, whatever breaks next."""
+        self._caller_left = True
+
     async def _on_pipeline_error(self, frame: ErrorFrame) -> None:
         """Record an error that ends the pipeline, so the call is finalized as
         failed with the reason on its event log (ADR-0008)."""
@@ -382,6 +390,13 @@ class CallSession:
             and len(self.pipeline_errors) < _MAX_PIPELINE_ERRORS
         ):
             self.pipeline_errors.append(noted)
+        if self._caller_left:
+            # Audio still queued for a peer that is gone: pipecat 1.14's
+            # output write times out and reports it as permanent.
+            logger.info(
+                "error_after_caller_left", call_id=str(self.call_id), error=noted
+            )
+            return
         if not (frame.fatal or (processor is not None and not processor.is_usable)):
             return
         error = readable_error(frame.error)

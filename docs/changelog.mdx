@@ -37,6 +37,11 @@ can't be deleted while an agent in any linked project uses it.
   on `gpt-4o-mini`, `max_tokens` on the gpt-5 family, and a reasoning effort
   beside tools on `gpt-5.4` each ended the call on its first reply. TurnCall
   now leaves out what the model refuses and logs `openai_param_dropped`.
+- **A browser call the caller hangs up is no longer recorded as failed**: an
+  error the pipeline reports after the caller left, such as audio that can no
+  longer be written to the browser, is logged instead of failing the call.
+- **An agent on xAI speech-to-text hangs up about 2 s sooner** after its
+  goodbye: TurnCall no longer waits for xAI to answer the websocket close.
 
 </Update>
 
