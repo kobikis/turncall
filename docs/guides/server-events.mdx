@@ -78,11 +78,13 @@ Every delivery is one envelope:
 | `eval.run.started` / `eval.run.completed` | Eval runs |
 | `campaign.started` / `campaign.completed` / `campaign.cancelled` | Campaigns |
 
-`metrics.turn`, `delegation.completed` and `avatar.unavailable` (why a call's video Avatar did not show; see [Video Avatar](/guides/video-avatar)) are stored on the call's event log (`GET /v1/calls/{id}/events`) and never delivered.
+`metrics.turn`, `delegation.completed`, `avatar.unavailable` (why a call's video Avatar did not show; see [Video Avatar](/guides/video-avatar)) and a [procedure](/guides/agents#procedures)'s moves are stored on the call's event log (`GET /v1/calls/{id}/events`) and never delivered. A move the procedure allowed is a `procedure.step` `{procedure, from, to, kind}`, where `kind` is the kind of the step it reached; a move it refused is a `procedure.refused` `{procedure, from, to}`.
 
 Tool calls go to each tool's own `webhook_url` — see [Tools](/guides/tools).
 
 `call.ended` carries `skills`, every skill the call resolved with its version, whether the agent pinned it and whether it was loaded (an empty list when the agent has none), as the call read does. See [Skills](/guides/skills#what-a-call-records).
+
+`call.ended` carries `procedures`, what the call did of each procedure, as the call read does. See [Procedures](/guides/agents#what-a-call-records).
 
 `call.ended` carries the call's `retention`: how many days its recording, transcript and events are kept, `null` for good. See [Retention](/guides/retention).
 

@@ -1280,10 +1280,31 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   pops the path); anything else is refused, the result naming the allowed
   moves (`details.allowed`) and the window staying put. The result is the
   `{success, message, details}` JSON the other built-ins answer.
+- **What a call records** (#443). Each accepted move is a `procedure.step`
+  call event `{procedure, from, to, kind}` (`kind` the step reached), each
+  refused one a `procedure.refused` `{procedure, from, to}` (`from` null when
+  the procedure was not running): stored only, through `turn_metrics
+  .store_call_event`, none when `CallContext.records` is false (an eval).
+  `run_move_to_step` queues the write on the holder (`CallProcedures.record`:
+  each waits for the previous), so two moves in one response are logged in
+  the order made. `procedures` on the call read and `call.ended` is
+  `call_view.call_procedures`, folded from `PROCEDURE_EVENTS` read in one
+  ordered query (`call_repo.list_typed_payloads_by_call`; a new event type
+  joins the tuple and gets a branch in `_walked`): per procedure, in the order
+  each first appears, `{name, path, completed, ended_at, escalated_at,
+  refused_moves}` — `path` every step reached (the first event's `from`, then
+  each `to`, a move back included), `ended_at` the last, `completed` when it
+  is an `end` step, `escalated_at` it when an `escalate` one. A procedure that
+  never moved has no event and is not listed. `[]` with none; null once the
+  transcript or the events expired. Both events are transcript-class
+  (`retention.TRANSCRIPT_EVENTS`); `procedure`, `procedures` are redaction
+  structural fields and `from`/`to` identifiers on the two events.
 
 Tests: `tests/unit/test_procedure_window.py`, `test_procedure_state.py`,
+`test_procedure_events.py`, `test_call_view.py`,
 `tests/integration/test_procedures_api.py`,
-`tests/integration/test_harness_call_procedures.py`.
+`tests/integration/test_harness_call_procedures.py`,
+`tests/integration/test_harness_call_procedure_record.py`.
 
 ## A/B Testing
 
@@ -1463,7 +1484,8 @@ and the janitor:
   `account_for_call`'s account), `recording_url`; `recording_status` →
   `expired` (enum value) where there was one, and `recording.ready`'s `*_url`
   fields nulled. Transcript: `TRANSCRIPT_EVENTS` (`transcript.*`,
-  `tool.called`/`tool.result`, `context.injected`), the call's
+  `tool.called`/`tool.result`, `context.injected`, `procedure.step`/
+  `procedure.refused`), the call's
   `tool_invocations`, `analysis_json`, and every other event's free-text
   fields (`redaction.text_fields`) nulled. Events: every other call event,
   but `recording.ready` stays while the recording does (deleted with it).
@@ -2331,7 +2353,7 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 `call.ended` payload: `status`, `ended_reason`, `from_number`, `to_number`, `direction`,
 `duration_ms`, `provider_call_sid`, `metadata`, `started_at`, `ended_at`,
 `recording_status`, `recording_url`, `summary`, `analysis`, `agent_name`,
-`agent_version`, `latency_summary`, `failovers` (`[{role, from, to, error}]`, `role` `stt`\|`llm`\|`tts`, #222/#223), `skills` (`[{skill, version, pinned, loaded}]`, every skill the call resolved, `[]` with none, #425), `retention` (`{recordings_days, transcripts_days, events_days}`, null = kept for good, #316), and `transcript` (`[{role, text, timestamp}]`).
+`agent_version`, `latency_summary`, `failovers` (`[{role, from, to, error}]`, `role` `stt`\|`llm`\|`tts`, #222/#223), `skills` (`[{skill, version, pinned, loaded}]`, every skill the call resolved, `[]` with none, #425), `procedures` (`[{name, path, completed, ended_at, escalated_at, refused_moves}]`, `[]` with none, null once its events expired, #443; see "Procedures"), `retention` (`{recordings_days, transcripts_days, events_days}`, null = kept for good, #316), and `transcript` (`[{role, text, timestamp}]`).
 
 `latency_summary` is derived from the call's `metrics.turn` events (#179):
 `{turns, user_to_bot, stages: {stt|llm|tts}, slowest_turn}`, each spread being
@@ -2347,14 +2369,15 @@ provider_call_id}`. Dispatched only — there is no event log to store it on.
 Stored-only call events — on the call's event log (`GET /v1/calls/{id}/events`),
 never sent to webhook subscribers, none in an eval: `metrics.turn` (#176),
 `delegation.completed` (#247), `avatar.unavailable` (#402, see "Video
-Avatar"), `voicemail.detected`, and the log's own
+Avatar"), `procedure.step` / `procedure.refused` (#443, see "Procedures"),
+`voicemail.detected`, and the log's own
 `call.ended` rows (the carrier's: Twilio's `completed`/`busy`/`no-answer`
 status callback, Telnyx's hangup; and the agent's hangup marker, source
 `control`). Subscribers get the comprehensive `call.ended` instead, which is
 sent and never stored.
 
 The call read (`GET /v1/calls[/{id}]`) carries the same derived fields —
-`ended_reason`, `agent_name`, `agent_version`, `latency_summary`, `failovers`, `skills` — from the same function,
+`ended_reason`, `agent_name`, `agent_version`, `latency_summary`, `failovers`, `skills`, `procedures` — from the same function,
 `services/call_view.py`, so the read and the webhook cannot disagree (#175).
 `ended_reason` is null on the read while the call is still live; agent fields
 are null for an inline agent and for a deleted agent row.
