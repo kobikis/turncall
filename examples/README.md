@@ -40,7 +40,7 @@ about a minute.
 | [`call-transfer`](call-transfer/) | Cold and warm transfer, including the operator briefing |
 | [`events-webhook`](events-webhook/) | Receive and verify every event TurnCall emits |
 | [`eval-tool-mock`](eval-tool-mock/) | An eval that books nothing: tool mocks, and why they fail closed |
-| [`skills`](skills/) | Capabilities the agent loads mid-conversation: versioned skills, the load limit, text and voice |
+| [`skills`](skills/) | Skills the agent loads mid-conversation: versioned, the load limit, text and voice |
 
 ## Channels
 

@@ -333,7 +333,9 @@ async def test_metrics_turn_records_the_turn_end_flux_decided(mocker) -> None:
     )
 
     [turn] = written
-    assert 500 <= turn["turn_end_ms"] < 1500
+    # 500 ms of sleeps between the frames; the clock reads each frame as it is
+    # observed, so a loaded run can come in a few ms under it.
+    assert 450 <= turn["turn_end_ms"] < 1500
     assert turn["user_to_bot_ms"] >= turn["turn_end_ms"]
 
 

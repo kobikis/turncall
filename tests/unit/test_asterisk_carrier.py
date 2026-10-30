@@ -157,6 +157,9 @@ class TestATransferIsColdOnly:
             patch.object(
                 call_control, "_carrier_adapter", AsyncMock(return_value=adapter)
             ),
+            # Parked only with a public URL, which an earlier test's settings
+            # may still carry: not what this test is about, and needs Redis.
+            patch("turncall.services.transfer.store_transfer_intent", AsyncMock()),
         ):
             result = await call_control.transfer_call(
                 AsyncMock(),

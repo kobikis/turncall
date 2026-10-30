@@ -7,6 +7,12 @@ import sys
 from pathlib import Path
 
 import pytest
+
+# Never the developer's .env, here or in a process a test starts (alembic, a
+# second server, a campaign worker): its keys and URLs made a local run differ
+# from CI's. Set before turncall is imported, which reads it at import.
+os.environ["TURNCALL_NO_DOTENV"] = "1"
+
 from fastapi.testclient import TestClient
 
 from turncall.app import create_app
@@ -14,9 +20,7 @@ from turncall.config.settings import Settings
 
 # A webhook subscription, a number's server_url or an agent's api_key cannot
 # be written without CREDENTIAL_ENCRYPTION_KEY (#338), so every test gets one.
-# Fixed, not generated, so a row one run leaves in a shared test database is
-# still readable by the next; a developer's own key wins, as their database
-# may hold rows sealed under it.
+# A key already in the environment wins.
 TEST_ENCRYPTION_KEY = "dHVybmNhbGwgdGVzdHM6IHNlY3JldHMgYXQgcmVzdC4="
 if not os.environ.get("CREDENTIAL_ENCRYPTION_KEY"):
     os.environ["CREDENTIAL_ENCRYPTION_KEY"] = TEST_ENCRYPTION_KEY
@@ -182,6 +186,16 @@ def _logs_redacted_as_in_the_app():
     telemetry_redaction.use(None)
 
 
+@pytest.fixture(autouse=True)
+def _settings_read_afresh():
+    """Every test starts on settings read from the environment as it stands:
+    a test that set env with monkeypatch and read settings while it was set
+    (the harness's PUBLIC_BASE_URL) otherwise left them cached for the next."""
+    from turncall.config.settings import get_settings
+
+    get_settings.cache_clear()
+
+
 def pytest_sessionfinish(session, exitstatus) -> None:
     """Stop the redaction worker, which the harness keeps across apps
     (`run_app`), once every test is done."""
@@ -190,24 +204,30 @@ def pytest_sessionfinish(session, exitstatus) -> None:
         redaction.shutdown()
 
 
+# A run without xdist is one worker of its own: the last Redis database, so
+# it meets neither the developer's (0) nor an xdist worker's (1, 2, ...).
+SINGLE_WORKER, SINGLE_WORKER_REDIS_DB = "main", 15
+
+
 def pytest_configure(config) -> None:
-    """Under pytest-xdist, give each worker a database and a Redis database of
-    its own, so tests running side by side never meet: a campaign worker or a
-    sweep in one sees every project in its database, not only its test's."""
+    """Give each pytest-xdist worker, or the one process of a run without it,
+    a fresh database and a Redis database of its own, so tests never meet each
+    other or the developer's stack: a campaign worker or a sweep sees every
+    project in its database, and a local stack's workers claim what the tests
+    queue in theirs."""
     worker = os.environ.get("PYTEST_XDIST_WORKER")
-    if worker is None:
-        return
     from turncall.config.settings import get_settings
 
     base = os.environ.get(
         "DATABASE_URL",
         "postgresql+asyncpg://turncall:turncall@localhost:5432/turncall",
     )
-    if (own := _worker_database(base, worker)) is not None:
+    if (own := _worker_database(base, worker or SINGLE_WORKER)) is not None:
         os.environ["DATABASE_URL"] = own
     redis = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
     # gw0 -> 1, gw1 -> 2, ...: database 0 stays the developer's own.
-    os.environ["REDIS_URL"] = f"{redis.rsplit('/', 1)[0]}/{int(worker[2:]) + 1}"
+    db = SINGLE_WORKER_REDIS_DB if worker is None else int(worker[2:]) + 1
+    os.environ["REDIS_URL"] = f"{redis.rsplit('/', 1)[0]}/{db}"
     get_settings.cache_clear()
 
 

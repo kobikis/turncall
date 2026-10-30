@@ -1,5 +1,6 @@
 """Application settings loaded from environment variables."""
 
+import os
 from enum import StrEnum
 from functools import lru_cache
 
@@ -16,8 +17,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from turncall.domain.enums import EvalModelProvider
 
+# The developer's .env, read unless TURNCALL_NO_DOTENV=1: the test suite sets
+# it, for itself and every process it starts, so a local run sees what CI sees.
+READ_DOTENV = os.environ.get("TURNCALL_NO_DOTENV") != "1"
+
 # Load .env before settings construction (nested models need os.environ)
-load_dotenv()
+if READ_DOTENV:
+    load_dotenv()
 
 
 class Environment(StrEnum):
@@ -523,7 +529,7 @@ class Settings(BaseSettings):
     """Root settings aggregating all config sections."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=".env" if READ_DOTENV else None,
         env_file_encoding="utf-8",
         extra="ignore",
     )
