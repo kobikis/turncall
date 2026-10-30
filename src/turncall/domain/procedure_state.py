@@ -73,6 +73,7 @@ class MoveOutcome:
     accepted: bool
     state: ProcedureState
     procedure: str
+    # None when the move started the procedure (#446).
     from_step: str | None
     to_step: str
     # The target step's kind, for an accepted move.
@@ -82,18 +83,17 @@ class MoveOutcome:
 
 def move(state: ProcedureState, procedure: str, to: str) -> MoveOutcome:
     """Move `procedure` to step `to`: one of the current step's moves, or
-    back to the previous step. Anything else is refused, naming what is
-    allowed."""
+    back to the previous step — or, for an `on_request` procedure not yet
+    running, its start step, which starts it. Anything else is refused,
+    naming what is allowed."""
     run = state.run(procedure)
     graph = state.procedure(procedure)
+    if graph is not None and run is None:
+        return _start(state, graph, to)
     if graph is None or run is None:
         names = [r.name for r in state.runs]
-        reason = (
-            f"'{procedure}' is not running"
-            if graph is not None
-            else f"There is no procedure named '{procedure}'"
-        )
-        return _refused(state, procedure, None, to, f"{reason}. Running: {names}.")
+        message = f"There is no procedure named '{procedure}'. Running: {names}."
+        return _refused(state, procedure, None, to, message)
     current = graph.step(run.current)
     target = graph.step(to)
     back = run.path[-2] if len(run.path) > 1 else None
@@ -118,6 +118,35 @@ def move(state: ProcedureState, procedure: str, to: str) -> MoveOutcome:
         to_step=to,
         kind=target.kind,
         result=_result(True, _arrived(target), {"procedure": procedure, "step": to}),
+    )
+
+
+def _start(state: ProcedureState, graph: Procedure, to: str) -> MoveOutcome:
+    """A move in a procedure not running: the model starting an `on_request`
+    one (#446), at its start step and from nowhere. Any other move in it is
+    refused, naming the start."""
+    start = graph.start_step if graph.start == "on_request" else None
+    if start is None or to != start.id:
+        names = [r.name for r in state.runs]
+        how = f" Start it at its start step '{start.id}'." if start else ""
+        message = f"'{graph.name}' is not running.{how} Running: {names}."
+        return _refused(state, graph.name, None, to, message, start_at=start)
+    started = ProcedureState(
+        procedures=state.procedures,
+        runs=(*state.runs, ProcedureRun(graph.name, (start.id,))),
+    )
+    return MoveOutcome(
+        accepted=True,
+        state=started,
+        procedure=graph.name,
+        from_step=None,
+        to_step=start.id,
+        kind=start.kind,
+        result=_result(
+            True,
+            f"Started '{graph.name}'. {_arrived(start)}",
+            {"procedure": graph.name, "step": start.id},
+        ),
     )
 
 
@@ -152,8 +181,11 @@ def _refused(
     message: str,
     current: ProcedureStep | None = None,
     back: str | None = None,
+    *,
+    start_at: ProcedureStep | None = None,
 ) -> MoveOutcome:
-    details = {"procedure": procedure, "at": at, "allowed": _allowed(current, back)}
+    allowed = [start_at.id] if start_at is not None else _allowed(current, back)
+    details = {"procedure": procedure, "at": at, "allowed": allowed}
     return MoveOutcome(
         accepted=False,
         state=state,

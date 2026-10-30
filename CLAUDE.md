@@ -1299,6 +1299,18 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   rule) logging `procedures_skipped: <message>` from
   `config_warnings.procedures_on_s2s_warning`, the agent read's
   `procedures_ignored_on_s2s`.
+- **Start modes, several procedures** (#446). `start: "on_request"`: not
+  running until the model moves it to its start step — `move` starts it
+  (`from_step` None, a new `ProcedureRun` appended; result `Started '<name>'.`
+  + the start step's text). Until then the prompt carries only
+  `## Procedures you can start` (`procedure_window.startable_section`: name,
+  description, start step id, never step text), appended to `system_prompt`
+  by `with_procedures` — static for the call, so it still lists one already
+  started. Any other move in a procedure not running is refused (`'<name>' is
+  not running`, plus `Start it at its start step '<id>'` and
+  `details.allowed: [<start id>]` for an `on_request` one); a `call` one not
+  running is never started by a move. Several may run at once, each its own
+  window in the one `[Procedure]` message; one not running shows no step.
 - **Step tools and variables** (#447). A step's `tool` is shown in the window
   and its preview (`(check, tool: line_status)`); it is an ordinary agent tool,
   dispatched and recorded like any other. At save it must be one of the
