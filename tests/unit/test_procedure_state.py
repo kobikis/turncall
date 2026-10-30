@@ -282,3 +282,38 @@ def test_a_move_to_the_current_step_stays_without_a_refusal():
         "step": "restart",
         "stayed": True,
     }
+
+
+@pytest.mark.unit
+def test_a_previous_step_that_is_also_a_move_is_named_once():
+    graph = Procedure.model_validate(
+        {
+            "name": "booking",
+            "steps": [
+                {
+                    "id": "date",
+                    "kind": "ask",
+                    "start": True,
+                    "text": "Ask the day.",
+                    "moves": [{"to": "time", "when": "a day is chosen"}],
+                },
+                {
+                    "id": "time",
+                    "kind": "ask",
+                    "text": "Ask the time.",
+                    "moves": [
+                        {"to": "done", "when": "a time is chosen"},
+                        {"to": "date", "when": "the caller changes the day"},
+                    ],
+                },
+                {"id": "done", "kind": "end", "text": "Close."},
+            ],
+        }
+    )
+    state = ProcedureState.at_call_start((graph,))
+
+    arrived = move(state, "booking", "time")
+    refused = move(arrived.state, "booking", "nowhere")
+
+    assert "back to date" not in json.loads(arrived.result)["message"]
+    assert json.loads(refused.result)["details"]["allowed"] == ["done", "date"]

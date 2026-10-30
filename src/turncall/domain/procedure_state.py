@@ -230,14 +230,14 @@ def _arrived(step: ProcedureStep, back: str | None = None) -> str:
 
 def _next_text(step: ProcedureStep, back: str | None) -> str:
     parts = [f"{m.to} (when {m.when})" for m in step.moves]
-    if back is not None:
+    if back is not None and back not in {m.to for m in step.moves}:
         parts.append(f"back to {back}")
     return "; ".join(parts)
 
 
 def _allowed(current: ProcedureStep | None, back: str | None) -> list[str]:
     moves = [m.to for m in current.moves] if current is not None else []
-    return [*moves, back] if back is not None else moves
+    return [*moves, back] if back is not None and back not in moves else moves
 
 
 def _allowed_text(current: ProcedureStep | None, back: str | None) -> str:
