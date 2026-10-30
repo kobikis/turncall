@@ -3,7 +3,7 @@
   "info": {
     "title": "TurnCall",
     "description": "Production voice agent platform API",
-    "version": "2.1.0"
+    "version": "2.1.1"
   },
   "paths": {
     "/health": {

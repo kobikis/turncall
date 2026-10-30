@@ -11,6 +11,11 @@ and is not part of this repository's history.
 
 ## [Unreleased]
 
+## [2.1.1]
+
+A fix for a first run: 2.1.0 would not start on a database that had not been
+migrated yet.
+
 ### Fixed
 
 - **TurnCall starts on a database that has not been migrated yet.** 2.1.0's
