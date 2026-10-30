@@ -334,7 +334,7 @@ def test_an_escalation_an_inline_agent_got_wrong():
     )
     assert procedures_refusal([bad_mode]) == (
         "procedures[0] 'no_internet': step 'technician' transfers with mode "
-        "'hot'; it must be one of cold, warm"
+        "'hot'; it must be one of warm, cold"
     )
     assert procedures_refusal([bad_number]) == (
         "procedures[0] 'no_internet': step 'technician' transfers to "

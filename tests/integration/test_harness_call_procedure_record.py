@@ -66,16 +66,18 @@ async def test_the_path_taken_is_on_the_event_log_and_in_the_summary(monkeypatch
             await call.wait_for_agent_speech(turn)
 
         # Written off the tool's path: wait for them.
-        events = await _procedure_events(app, call.call_id, at_least=4)
+        events = await _procedure_events(app, call.call_id, at_least=5)
         await call.hang_up()
         ended = await app.sink.wait_for("call.ended")
         read = (await app.api.get(f"/v1/calls/{call.call_id}")).json()["data"]
 
-    def step(frm: str, to: str, kind: str) -> tuple[str, dict[str, Any]]:
+    def step(frm: str | None, to: str, kind: str) -> tuple[str, dict[str, Any]]:
         payload = {"procedure": "no_internet", "from": frm, "to": to, "kind": kind}
         return ("procedure.step", payload)
 
     assert events == [
+        # Started with the call, from nowhere.
+        step(None, "lights", "ask"),
         step("lights", "restart", "instruct"),
         (
             "procedure.refused",
@@ -130,6 +132,47 @@ async def test_a_procedure_left_part_way_is_not_completed(monkeypatch):
     assert procedure["path"] == ["lights", "restart"]
     assert procedure["completed"] is False
     assert procedure["ended_at"] == "restart"
+
+
+async def test_a_procedure_that_never_moved_is_in_the_summary(monkeypatch):
+    # It ran from the first turn: the call followed it, even if the caller
+    # never got past the first step.
+    script = Script(caller=("Hi.",), agent=("Which lights are on?",))
+    async with run_app(
+        script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        number = await app.bind_number(
+            await app.create_agent(
+                {
+                    **HARNESS_AGENT,
+                    "first_message": "Hello.",
+                    "procedures": [NO_INTERNET],
+                }
+            )
+        )
+        call = await _call(app, number)
+        await call.say(400)
+        await call.wait_for_agent_speech(2)
+        events = await _procedure_events(app, call.call_id, at_least=1)
+        await call.hang_up()
+        ended = await app.sink.wait_for("call.ended")
+
+    assert events == [
+        (
+            "procedure.step",
+            {"procedure": "no_internet", "from": None, "to": "lights", "kind": "ask"},
+        )
+    ]
+    assert ended["payload"]["procedures"] == [
+        {
+            "name": "no_internet",
+            "path": ["lights"],
+            "completed": False,
+            "ended_at": "lights",
+            "escalated_at": None,
+            "refused_moves": 0,
+        }
+    ]
 
 
 async def test_a_call_with_no_procedures_records_none(monkeypatch):

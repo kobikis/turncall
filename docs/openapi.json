@@ -11051,12 +11051,7 @@
             "default": ""
           },
           "start": {
-            "type": "string",
-            "enum": [
-              "call",
-              "on_request"
-            ],
-            "title": "Start",
+            "$ref": "#/components/schemas/ProcedureStart",
             "description": "call: running from the first turn. on_request: the model starts it when it applies",
             "default": "call"
           },
@@ -11084,6 +11079,15 @@
         ],
         "title": "ProcedureSchema"
       },
+      "ProcedureStart": {
+        "type": "string",
+        "enum": [
+          "call",
+          "on_request"
+        ],
+        "title": "ProcedureStart",
+        "description": "When a procedure runs (#417): from the call's first turn, or once the\nmodel starts it (#446)."
+      },
       "ProcedureStepSchema": {
         "properties": {
           "id": {
@@ -11094,15 +11098,7 @@
             "title": "Id"
           },
           "kind": {
-            "type": "string",
-            "enum": [
-              "ask",
-              "instruct",
-              "check",
-              "escalate",
-              "end"
-            ],
-            "title": "Kind",
+            "$ref": "#/components/schemas/StepKind",
             "description": "ask a question, instruct the caller, check something (a tool may help), escalate (transfer or hand off), or end the procedure"
           },
           "text": {
@@ -12015,6 +12011,18 @@
         "title": "StepEscalationSchema",
         "description": "What an `escalate` step does: a transfer or a handoff."
       },
+      "StepKind": {
+        "type": "string",
+        "enum": [
+          "ask",
+          "instruct",
+          "check",
+          "escalate",
+          "end"
+        ],
+        "title": "StepKind",
+        "description": "What a procedure step asks of the agent (#417)."
+      },
       "SuccessEvaluationSchema": {
         "properties": {
           "enabled": {
@@ -12250,12 +12258,7 @@
             "title": "Target Number"
           },
           "transfer_mode": {
-            "type": "string",
-            "enum": [
-              "cold",
-              "warm"
-            ],
-            "title": "Transfer Mode",
+            "$ref": "#/components/schemas/TransferMode",
             "default": "cold"
           },
           "transfer_message": {
@@ -12277,10 +12280,14 @@
                 "maxLength": 4000
               },
               {
+                "$ref": "#/components/schemas/BriefingSummary"
+              },
+              {
                 "type": "null"
               }
             ],
-            "title": "Briefing"
+            "title": "Briefing",
+            "description": "Spoken to the operator on a warm transfer: a text, or {\"from_summary\": true} for a summary of the call so far"
           },
           "fallback_message": {
             "anyOf": [
@@ -12314,6 +12321,14 @@
         ],
         "title": "TransferEscalationSchema",
         "description": "The `transfer_call` tool's fields."
+      },
+      "TransferMode": {
+        "type": "string",
+        "enum": [
+          "warm",
+          "cold"
+        ],
+        "title": "TransferMode"
       },
       "UpdateAgentRequest": {
         "properties": {

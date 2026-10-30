@@ -17,9 +17,11 @@ from turncall.api.v1.schemas.agents import (
     CreateAgentRequest,
     UpdateAgentRequest,
 )
+from turncall.api.v1.schemas.procedures import domain_procedures
 from turncall.auth import Auth, AuthContext, WriteAuth
 from turncall.domain.enums import AuditAction, AuditResource
 from turncall.domain.models import RetentionConfig
+from turncall.domain.procedures import HANDOFF_TO_AGENT
 from turncall.services import audit_log, retention, skill_library, skills
 from turncall.services.audit_log import AuditTrail
 from turncall.storage.repositories import (
@@ -86,28 +88,31 @@ async def _check_escalations(
     call that needed it."""
     if config is None:
         return
-    for index, procedure in enumerate(config.procedures):
-        for step in procedure.steps:
-            handoff = step.escalate.handoff_to_agent if step.escalate else None
-            if handoff is None:
+    for index, procedure in enumerate(domain_procedures(config.procedures)):
+        for at, step in enumerate(procedure.steps):
+            action = step.escalate.action() if step.escalate else None
+            if action is None or action[0] != HANDOFF_TO_AGENT:
                 continue
+            agent_id = action[1]["agent_id"]
             agent = await agent_repo.get_agent_by_id(
-                session, UUID(handoff.agent_id), project_id=project_id
+                session, UUID(agent_id), project_id=project_id
             )
             if agent is not None:
                 continue
-            field = f"procedures[{index}]"
             raise ApiError(
                 status_code=422,
                 code=ErrorCode.INVALID_AGENT_CONFIG,
                 message=(
-                    f"{field} '{procedure.name}': step '{step.id}' hands off "
-                    f"to '{handoff.agent_id}', which is not an agent in this "
+                    f"procedures[{index}] '{procedure.name}': step '{step.id}' "
+                    f"hands off to '{agent_id}', which is not an agent in this "
                     "project"
                 ),
                 details={
-                    "field": f"{field}.steps.escalate.handoff_to_agent.agent_id",
-                    "agent_id": handoff.agent_id,
+                    "field": (
+                        f"procedures[{index}].steps[{at}].escalate."
+                        f"{HANDOFF_TO_AGENT}.agent_id"
+                    ),
+                    "agent_id": agent_id,
                 },
             )
 

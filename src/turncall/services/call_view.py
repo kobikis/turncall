@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from turncall.domain.call_state import infer_ended_reason, is_active_state
-from turncall.domain.enums import CallEventType, CallStatus
+from turncall.domain.enums import CallEventType, CallStatus, StepKind
 from turncall.storage.repositories import agent_repo, call_repo
 
 if TYPE_CHECKING:
@@ -134,9 +134,9 @@ class ProcedureWalk:
         return {
             "name": self.name,
             "path": list(self.path),
-            "completed": self.last_kind == "end",
+            "completed": self.last_kind == StepKind.END,
             "ended_at": ended_at,
-            "escalated_at": ended_at if self.last_kind == "escalate" else None,
+            "escalated_at": (ended_at if self.last_kind == StepKind.ESCALATE else None),
             "refused_moves": self.refused_moves,
         }
 

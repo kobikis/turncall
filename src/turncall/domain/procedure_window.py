@@ -9,6 +9,7 @@ the visited path and the depth, so every carrier and WebRTC get the same text.
 
 from collections.abc import Sequence
 
+from turncall.domain.enums import ProcedureStart, StepKind
 from turncall.domain.procedures import MOVE_TO_STEP, Procedure, ProcedureStep
 
 # What the window's context message starts with, so the next turn finds it
@@ -39,8 +40,25 @@ def build_window(procedure: Procedure, path: Sequence[str], *, depth: int) -> st
         *_moves(current, path),
         *_preview(procedure, current, depth),
         f"  {_RULES}",
+        *_escalation(procedure, current),
     ]
     return "\n".join(lines)
+
+
+def _escalation(procedure: Procedure, current: ProcedureStep) -> list[str]:
+    """When a move from here escalates, the line saying when to take it: a
+    model told only the condition tends to keep trying instead."""
+    targets = [
+        m.to
+        for m in current.moves
+        if (step := procedure.step(m.to)) is not None and step.kind == StepKind.ESCALATE
+    ]
+    if not targets:
+        return []
+    return [
+        "  If the procedure cannot resolve the caller's problem, escalate: "
+        f"move to {' or '.join(targets)}."
+    ]
 
 
 def window_message(windows: Sequence[str]) -> str:
@@ -56,7 +74,7 @@ def startable_section(procedures: Sequence[Procedure]) -> str | None:
     lines = [
         f"- {p.name}: {p.description} (start step: {start.id})"
         for p in procedures
-        if p.start == "on_request" and (start := p.start_step) is not None
+        if p.start == ProcedureStart.ON_REQUEST and (start := p.start_step) is not None
     ]
     if not lines:
         return None

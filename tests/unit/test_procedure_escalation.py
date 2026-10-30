@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from turncall.domain.procedure_state import ProcedureState, move
-from turncall.domain.procedures import Procedure
+from turncall.domain.procedures import Procedure, StepEscalation
 from turncall.orchestrator.procedure_escalation import escalation_of, run_escalation
 from turncall.services.tool_mocks import ToolMocks
 
@@ -58,6 +58,28 @@ def test_only_a_move_onto_an_escalate_step_escalates():
     )
     assert escalation_of(move(state, "no_internet", "done")) is None
     assert escalation_of(move(state, "no_internet", "nowhere")) is None
+
+
+def test_a_step_escalation_is_one_action_with_the_tools_arguments():
+    warm = {
+        "target_number": "+15550009999",
+        "transfer_mode": "warm",
+        "briefing": {"from_summary": True},
+    }
+    one = StepEscalation.model_validate({"transfer_call": warm})
+    literal = StepEscalation.model_validate(
+        {"transfer_call": {**warm, "briefing": "Router is dead."}}
+    )
+    both = StepEscalation.model_validate(
+        {"transfer_call": warm, "handoff_to_agent": {"agent_id": "x"}}
+    )
+
+    # As `transfer_call` takes it: what services/transfer reads as a summary.
+    assert one.action() == ("transfer_call", warm)
+    assert literal.action()[1]["briefing"] == "Router is dead."
+    assert both.action() is None
+    assert [tool for tool, _ in both.actions()] == ["transfer_call", "handoff_to_agent"]
+    assert StepEscalation().action() is None
 
 
 async def test_a_move_elsewhere_answers_the_move_alone():

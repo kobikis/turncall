@@ -13,6 +13,7 @@ carrier.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -99,6 +100,12 @@ def _summary(ended: dict[str, Any]) -> list[dict[str, Any]]:
     return ended["payload"]["procedures"]
 
 
+def _started(procedure: str, at: str) -> tuple[str, dict[str, Any]]:
+    """A procedure starting with its agent, at its start step (an `ask`)."""
+    payload = {"procedure": procedure, "from": None, "to": at, "kind": "ask"}
+    return ("procedure.step", payload)
+
+
 async def test_a_transfer_escalate_step_transfers_the_call(monkeypatch):
     import turncall.storage.redis as redis_module
     from tests.integration.test_carrier_contract import _MemoryRedis
@@ -134,7 +141,7 @@ async def test_a_transfer_escalate_step_transfers_the_call(monkeypatch):
         await call.say(400)
         heard = await call.complete_transfer(answered_by="human")
         ended = await app.sink.wait_for("call.ended")
-        events = await _procedure_events(app, call.call_id, at_least=1)
+        events = await _procedure_events(app, call.call_id, at_least=2)
 
     # The step's transfer, as `transfer_call` would have made it.
     assert heard.target == TECHNICIANS
@@ -147,6 +154,7 @@ async def test_a_transfer_escalate_step_transfers_the_call(monkeypatch):
     # Recorded where it escalated: not completed, and no `procedure.left` —
     # the procedure ended at its escalate step, nothing left it.
     assert events == [
+        _started("no_internet", "lights"),
         (
             "procedure.step",
             {
@@ -155,7 +163,7 @@ async def test_a_transfer_escalate_step_transfers_the_call(monkeypatch):
                 "to": "technician",
                 "kind": "escalate",
             },
-        )
+        ),
     ]
     assert _summary(ended) == [
         {
@@ -167,6 +175,66 @@ async def test_a_transfer_escalate_step_transfers_the_call(monkeypatch):
             "refused_moves": 0,
         }
     ]
+
+
+async def test_a_warm_escalation_briefs_the_operator_from_the_call(monkeypatch):
+    # `briefing` takes what `transfer_call` takes: a summary written when the
+    # operator answers, from the conversation so far.
+    import turncall.services.llm_text as llm_text
+    import turncall.storage.redis as redis_module
+    from tests.integration.test_carrier_contract import _MemoryRedis
+
+    async def summarize(_llm: Any, messages: list[dict[str, str]], **_: Any) -> Any:
+        transcript = messages[-1]["content"].removeprefix("Transcript:\n")
+        return SimpleNamespace(text=f"Summary. {transcript}")
+
+    monkeypatch.setattr(llm_text, "complete_text", summarize)
+    # One store: the whisper reads the intent the transfer parked.
+    redis = _MemoryRedis()
+    monkeypatch.setattr(redis_module, "get_redis", lambda: redis)
+    escalate = {
+        "transfer_call": {
+            "target_number": TECHNICIANS,
+            "transfer_mode": "warm",
+            "briefing": {"from_summary": True},
+        }
+    }
+    script = Script(
+        caller=("Nothing is on, not one light.",),
+        agent=(("A technician will take it from here.", _move("technician")),),
+    )
+    async with run_app(
+        script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        created = await app.api.post(
+            "/v1/agents",
+            json={
+                "name": "support",
+                "config": {
+                    **HARNESS_AGENT,
+                    "first_message": "Hello.",
+                    "procedures": [_no_internet(escalate)],
+                },
+            },
+        )
+        assert created.status_code == 201, created.text
+        stored = created.json()["data"]["config"]["procedures"][0]["steps"][3]
+        number = await app.bind_number(created.json()["data"]["id"])
+        call = await place_inbound_call(
+            app.carrier, app.api, from_number=CALLER, to_number=number
+        )
+        await call.wait_for_agent_speech(1)
+        await call.say(400)
+        heard = await call.complete_transfer(answered_by="human")
+        await app.sink.wait_for("call.ended")
+
+    assert stored["escalate"]["transfer_call"]["briefing"] == {"from_summary": True}
+    assert heard.target == TECHNICIANS and heard.bridged
+    [briefing] = heard.operator
+    assert briefing.startswith("Summary. ")
+    assert "Nothing is on, not one light." in briefing
+    [transferred] = app.sink.of("call.transferred")
+    assert transferred["payload"]["transfer_mode"] == "warm"
 
 
 async def _billing(app: Any) -> str:
@@ -223,7 +291,7 @@ async def test_a_handoff_escalate_step_hands_off_to_the_named_agent(monkeypatch)
         record = (await app.api.get(f"/v1/calls/{call.call_id}")).json()["data"]
         await call.hang_up()
         ended = await app.sink.wait_for("call.ended")
-        events = await _procedure_events(app, call.call_id, at_least=2)
+        events = await _procedure_events(app, call.call_id, at_least=4)
 
     first_turn, billings_turn = given
     assert "no_internet" in _windows(first_turn)[0]
@@ -231,12 +299,15 @@ async def test_a_handoff_escalate_step_hands_off_to_the_named_agent(monkeypatch)
     assert record["active_agent_id"] == billing
     handoffs = app.sink.of("call.agent_handoff")
     assert [e["payload"]["target_agent_id"] for e in handoffs] == [billing]
-    # Escalated, never left: it ended at its escalate step.
-    assert [t for t, _ in events] == ["procedure.step", "procedure.step"]
-    [no_internet] = _summary(ended)
+    # Escalated, never left: it ended at its escalate step. Then billing's
+    # own procedure started, as at a call's start.
+    assert [t for t, _ in events] == ["procedure.step"] * 4
+    assert events[-1] == _started("refund", "amount")
+    no_internet, refund = _summary(ended)
     assert no_internet["path"] == ["lights", "restart", "technician"]
     assert no_internet["escalated_at"] == "technician"
     assert no_internet["completed"] is False
+    assert refund["path"] == ["amount"]
 
 
 async def test_a_handoff_by_the_tool_leaves_the_running_procedures(monkeypatch):
@@ -276,23 +347,24 @@ async def test_a_handoff_by_the_tool_leaves_the_running_procedures(monkeypatch):
         await _until(lambda: len(given) >= 1)
         await call.hang_up()
         ended = await app.sink.wait_for("call.ended")
-        events = await _procedure_events(app, call.call_id, at_least=2)
+        events = await _procedure_events(app, call.call_id, at_least=4)
 
     _as_billing(given[0])
-    assert events[-1] == (
-        "procedure.left",
-        {"procedure": "no_internet", "from": "restart", "reason": "handoff"},
-    )
-    assert _summary(ended) == [
-        {
-            "name": "no_internet",
-            "path": ["lights", "restart"],
-            "completed": False,
-            "ended_at": "restart",
-            "escalated_at": None,
-            "refused_moves": 0,
-        }
+    assert events[-2:] == [
+        (
+            "procedure.left",
+            {"procedure": "no_internet", "from": "restart", "reason": "handoff"},
+        ),
+        _started("refund", "amount"),
     ]
+    assert _summary(ended)[0] == {
+        "name": "no_internet",
+        "path": ["lights", "restart"],
+        "completed": False,
+        "ended_at": "restart",
+        "escalated_at": None,
+        "refused_moves": 0,
+    }
 
 
 async def test_a_handoff_through_the_api_leaves_the_running_procedures(
@@ -318,7 +390,7 @@ async def test_a_handoff_through_the_api_leaves_the_running_procedures(
         await _until(lambda: len(given) >= 1)
         await call.hang_up()
         ended = await app.sink.wait_for("call.ended")
-        events = await _procedure_events(app, call.call_id, at_least=1)
+        events = await _procedure_events(app, call.call_id, at_least=3)
 
     assert sorted(handed.json()["data"]["details"]["tools"]) == [
         "end_call",
@@ -327,12 +399,14 @@ async def test_a_handoff_through_the_api_leaves_the_running_procedures(
     _as_billing(given[0])
     # Left at its start, where it stood: it never moved.
     assert events == [
+        _started("no_internet", "lights"),
         (
             "procedure.left",
             {"procedure": "no_internet", "from": "lights", "reason": "handoff"},
-        )
+        ),
+        _started("refund", "amount"),
     ]
-    [left] = _summary(ended)
+    left, _refund = _summary(ended)
     assert (left["path"], left["ended_at"], left["completed"]) == (
         ["lights"],
         "lights",

@@ -118,12 +118,12 @@ def test_moving_back_needs_no_move_entry():
 
 @pytest.mark.unit
 def test_an_on_request_procedure_starts_at_its_start_step_on_a_move_there():
-    state = ProcedureState.at_call_start((NO_INTERNET, LATER))
+    state = ProcedureState.at_call_start((NO_INTERNET, LATER_TWO_STEPS))
 
     outcome = move(state, "billing", "ask")
 
     assert outcome.accepted
-    assert (outcome.from_step, outcome.to_step, outcome.kind) == (None, "ask", "end")
+    assert (outcome.from_step, outcome.to_step, outcome.kind) == (None, "ask", "ask")
     assert outcome.state.run("billing").path == ("ask",)
     # The procedure already running keeps its place.
     assert outcome.state.run("no_internet").path == ("lights",)
@@ -167,3 +167,69 @@ def test_a_call_procedure_not_running_cannot_be_started_by_a_move():
     refused = json.loads(outcome.result)
     assert refused["message"] == "'no_internet' is not running. Running: []."
     assert refused["details"]["allowed"] == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("path", "ending"),
+    [
+        (("lights", "restart", "after_restart"), "resolved"),
+        (("lights", "power"), "technician"),
+    ],
+)
+def test_reaching_an_end_or_escalate_step_finishes_the_procedure(path, ending):
+    outcome = move(_at(*path), "no_internet", ending)
+
+    assert outcome.accepted
+    assert outcome.state.run("no_internet") is None
+    assert outcome.state.finished_run("no_internet").path == (*path, ending)
+    # Its window stops.
+    assert outcome.state.window_text() is None
+    assert "finished" in json.loads(outcome.result)["message"]
+
+
+@pytest.mark.unit
+def test_a_finished_procedure_refuses_every_move_back_included():
+    finished = move(_at("lights", "power"), "no_internet", "technician").state
+
+    back = move(finished, "no_internet", "power")
+    on = move(finished, "no_internet", "resolved")
+
+    for outcome in (back, on):
+        assert not outcome.accepted
+        assert outcome.state is finished
+        refused = json.loads(outcome.result)
+        assert refused["message"] == (
+            "'no_internet' is finished: it ended at step 'technician'. Running: []."
+        )
+        assert refused["details"] == {
+            "procedure": "no_internet",
+            "at": "technician",
+            "allowed": [],
+        }
+
+
+@pytest.mark.unit
+def test_a_finished_on_request_procedure_is_not_started_again():
+    state = ProcedureState.at_call_start((NO_INTERNET, LATER_TWO_STEPS))
+    state = move(state, "billing", "ask").state
+    finished = move(state, "billing", "refund").state
+
+    again = move(finished, "billing", "ask")
+
+    assert finished.run("billing") is None
+    assert not again.accepted
+    assert "'billing' is finished" in json.loads(again.result)["message"]
+    # The other procedure is untouched.
+    assert finished.run("no_internet").path == ("lights",)
+
+
+@pytest.mark.unit
+def test_a_procedure_started_at_an_ending_step_is_finished_at_once():
+    state = ProcedureState.at_call_start((NO_INTERNET, LATER))
+
+    outcome = move(state, "billing", "ask")
+
+    assert outcome.accepted and outcome.kind == "end"
+    assert outcome.state.run("billing") is None
+    assert outcome.state.finished_run("billing").path == ("ask",)

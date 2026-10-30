@@ -284,6 +284,10 @@ async def test_a_handoff_escalation_names_an_agent_of_the_project(
     assert said in _refusal(refused)
     assert said in _refusal(updated)
     assert refused.json()["code"] == "invalid_agent_config"
+    # The field is the step's own, as a client puts the error beside it.
+    assert refused.json()["details"]["field"] == (
+        "procedures[0].steps[2].escalate.handoff_to_agent.agent_id"
+    )
 
 
 async def test_an_s2s_agents_read_says_its_procedures_are_ignored(monkeypatch):

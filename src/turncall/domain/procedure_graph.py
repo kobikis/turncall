@@ -24,12 +24,17 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from uuid import UUID
 
+from turncall.domain.enums import (
+    ENDING_STEP_KINDS,
+    ProcedureStart,
+    StepKind,
+    TransferMode,
+)
 from turncall.domain.procedures import (
-    START_MODES,
-    STEP_KINDS,
-    TRANSFER_MODES,
+    HANDOFF_TO_AGENT,
+    TRANSFER_CALL,
+    EscalationAction,
     Procedure,
-    StepEscalation,
 )
 
 # How many steps one procedure may have, and how far ahead its window may
@@ -37,9 +42,6 @@ from turncall.domain.procedures import (
 # turn costs; a graph past either belongs in more than one procedure.
 MAX_STEPS = 50
 MAX_WINDOW_DEPTH = 5
-
-# The kinds a procedure can end at: a step with no way on.
-ENDING_KINDS = ("end", "escalate")
 
 # An escalate step's transfer target: the API's `E164_PATTERN`, for an inline
 # agent that skipped it.
@@ -83,15 +85,19 @@ def _readable(procedure: Procedure) -> str | None:
 def _known_words(procedure: Procedure) -> str | None:
     # The API schema's Literals refuse these first; an inline agent's config
     # parses any string here.
-    if procedure.start not in START_MODES:
-        return f"start '{procedure.start}' must be one of {', '.join(START_MODES)}"
+    if procedure.start not in ProcedureStart:
+        return f"start '{procedure.start}' must be one of {_words(ProcedureStart)}"
     for step in procedure.steps:
-        if step.kind not in STEP_KINDS:
+        if step.kind not in StepKind:
             return (
                 f"step '{step.id}' has kind '{step.kind}'; it must be one of "
-                f"{', '.join(STEP_KINDS)}"
+                f"{_words(StepKind)}"
             )
     return None
+
+
+def _words(words: Iterable[str]) -> str:
+    return ", ".join(str(word) for word in words)
 
 
 def _within_the_caps(procedure: Procedure) -> str | None:
@@ -137,11 +143,11 @@ def _moves_land(procedure: Procedure) -> str | None:
 
 
 def _has_an_ending(procedure: Procedure) -> str | None:
-    if any(step.kind in ENDING_KINDS for step in procedure.steps):
+    if any(step.kind in ENDING_STEP_KINDS for step in procedure.steps):
         return None
     return (
         "no step ends it; give it at least one step of kind "
-        f"{' or '.join(repr(k) for k in ENDING_KINDS)}"
+        f"{' or '.join(repr(str(k)) for k in ENDING_STEP_KINDS)}"
     )
 
 
@@ -171,51 +177,42 @@ def _escalations(procedure: Procedure) -> str | None:
     API schema checks a stored one's: a mode the transfer knows, an E.164
     target, an agent id that is one."""
     for step in procedure.steps:
-        action = step.escalate
-        actions = (
-            [] if action is None else [action.transfer_call, action.handoff_to_agent]
-        )
-        named = [a for a in actions if a is not None]
-        if step.kind != "escalate":
-            if named:
+        actions = step.escalate.actions() if step.escalate is not None else []
+        if step.kind != StepKind.ESCALATE:
+            if actions:
                 return (
                     f"step '{step.id}' is of kind '{step.kind}'; only an "
                     "escalate step takes an escalate action"
                 )
             continue
-        if not named:
+        if not actions:
             return (
                 f"step '{step.id}' escalates with no action; give it "
-                "escalate.transfer_call or escalate.handoff_to_agent"
+                f"escalate.{TRANSFER_CALL} or escalate.{HANDOFF_TO_AGENT}"
             )
-        if len(named) > 1:
+        if len(actions) > 1:
             return (
                 f"step '{step.id}' names both a transfer and a handoff; an "
                 "escalate step does one"
             )
-        if (problem := _action_problem(step.escalate)) is not None:
+        if (problem := _action_problem(actions[0])) is not None:
             return f"step '{step.id}' {problem}"
     return None
 
 
-def _action_problem(action: StepEscalation | None) -> str | None:
-    transfer = action.transfer_call if action is not None else None
-    handoff = action.handoff_to_agent if action is not None else None
-    if handoff is not None:
+def _action_problem(action: EscalationAction) -> str | None:
+    tool, args = action
+    if tool == HANDOFF_TO_AGENT:
         try:
-            UUID(handoff.agent_id)
+            UUID(args["agent_id"])
         except ValueError:
-            return f"hands off to '{handoff.agent_id}', which is not an agent id"
-    if transfer is not None:
-        if transfer.transfer_mode not in TRANSFER_MODES:
-            return (
-                f"transfers with mode '{transfer.transfer_mode}'; it must be "
-                f"one of {', '.join(TRANSFER_MODES)}"
-            )
-        if not _E164.fullmatch(transfer.target_number):
-            return (
-                f"transfers to '{transfer.target_number}', which is not an E.164 number"
-            )
+            return f"hands off to '{args['agent_id']}', which is not an agent id"
+        return None
+    mode = args.get("transfer_mode", TransferMode.COLD)
+    if mode not in TransferMode:
+        return f"transfers with mode '{mode}'; it must be one of {_words(TransferMode)}"
+    if not _E164.fullmatch(args["target_number"]):
+        return f"transfers to '{args['target_number']}', which is not an E.164 number"
     return None
 
 

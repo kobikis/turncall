@@ -21,31 +21,35 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from turncall.domain.enums import StepKind
 from turncall.domain.procedure_state import MoveOutcome
+from turncall.domain.procedures import TRANSFER_CALL, EscalationAction
+from turncall.orchestrator.procedures import run_move_to_step
 from turncall.services.tool_mocks import intercept
 
 if TYPE_CHECKING:
     from turncall.orchestrator.pipeline_factory import CallContext
 
-TRANSFER_CALL = "transfer_call"
-HANDOFF_TO_AGENT = "handoff_to_agent"
+
+async def run_move(args: dict[str, Any], call_context: CallContext, params: Any) -> str:
+    """The `move_to_step` tool's result: the move, checked and applied in one
+    step with nothing awaited (#442), then its escalate step's action when
+    it reached one."""
+    return await run_escalation(
+        run_move_to_step(args, call_context), call_context, params
+    )
 
 
-def escalation_of(outcome: MoveOutcome) -> tuple[str, dict[str, Any]] | None:
+def escalation_of(outcome: MoveOutcome) -> EscalationAction | None:
     """The tool and its arguments a move's escalate step runs, or None when
     the move reached no such step."""
-    if not outcome.accepted or outcome.kind != "escalate":
+    if not outcome.accepted or outcome.kind != StepKind.ESCALATE:
         return None
     procedure = outcome.state.procedure(outcome.procedure)
     step = procedure.step(outcome.to_step) if procedure is not None else None
-    action = step.escalate if step is not None else None
-    if action is None:  # the graph rule refuses this at save and at build
-        return None
-    if action.transfer_call is not None:
-        return TRANSFER_CALL, action.transfer_call.model_dump(exclude_none=True)
-    if action.handoff_to_agent is not None:
-        return HANDOFF_TO_AGENT, action.handoff_to_agent.model_dump(exclude_none=True)
-    return None
+    if step is None or step.escalate is None:
+        return None  # the graph rule refuses this at save and at build
+    return step.escalate.action()
 
 
 async def run_escalation(

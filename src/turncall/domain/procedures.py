@@ -15,15 +15,15 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from turncall.domain.enums import ProcedureStart, TransferMode
+
 # The built-in that reports a move (#442). Offered by TurnCall to an agent
 # with procedures, never listed in its `tools`.
 MOVE_TO_STEP = "move_to_step"
+# The built-ins an escalate step runs (#448).
+TRANSFER_CALL = "transfer_call"
+HANDOFF_TO_AGENT = "handoff_to_agent"
 
-STEP_KINDS = ("ask", "instruct", "check", "escalate", "end")
-# `call`: active from the first turn. `on_request`: the model starts it (#446).
-START_MODES = ("call", "on_request")
-# An escalate step's transfer modes: the `transfer_call` tool's (#448).
-TRANSFER_MODES = ("cold", "warm")
 DEFAULT_WINDOW_DEPTH = 1
 
 
@@ -39,13 +39,21 @@ class ProcedureMove(_Shape):
     when: str = ""
 
 
+class BriefingFromSummary(_Shape):
+    """A warm transfer's briefing written from the call so far, when the
+    operator answers: `transfer_call`'s `{"from_summary": true}`."""
+
+    from_summary: bool = True
+
+
 class TransferEscalation(_Shape):
     """An escalate step's transfer: the `transfer_call` tool's fields (#448)."""
 
     target_number: str
-    transfer_mode: str = "cold"
+    transfer_mode: str = TransferMode.COLD
     transfer_message: str | None = None
-    briefing: str | None = None
+    # A literal text, or one written from the call's transcript.
+    briefing: str | BriefingFromSummary | None = None
     fallback_message: str | None = None
     reason: str | None = None
 
@@ -58,15 +66,39 @@ class HandoffEscalation(_Shape):
     context: str | None = None
 
 
+# An escalate step's action: the built-in it runs and that built-in's
+# arguments, as the model would pass them.
+EscalationAction = tuple[str, dict[str, Any]]
+
+
 class StepEscalation(_Shape):
     """What an `escalate` step does: one of the two (#448)."""
 
     transfer_call: TransferEscalation | None = None
     handoff_to_agent: HandoffEscalation | None = None
 
+    def actions(self) -> list[EscalationAction]:
+        """Every action named, as `(tool, arguments)`: one, for a step the
+        graph rule accepts."""
+        named = (
+            (TRANSFER_CALL, self.transfer_call),
+            (HANDOFF_TO_AGENT, self.handoff_to_agent),
+        )
+        return [
+            (tool, action.model_dump(exclude_none=True))
+            for tool, action in named
+            if action is not None
+        ]
+
+    def action(self) -> EscalationAction | None:
+        """The step's one action, or None when it names none or both."""
+        actions = self.actions()
+        return actions[0] if len(actions) == 1 else None
+
 
 class ProcedureStep(_Shape):
     id: str
+    # A `StepKind`; any string parses, for the rule to name (#444).
     kind: str
     text: str = ""
     # The step the procedure starts at; exactly one per procedure (#444).
@@ -81,7 +113,8 @@ class Procedure(_Shape):
     name: str
     # When it applies: what the model reads of an `on_request` one (#446).
     description: str = ""
-    start: str = "call"
+    # A `ProcedureStart`; any string parses, for the rule to name (#444).
+    start: str = ProcedureStart.CALL
     # How many steps ahead the window previews.
     window_depth: int = DEFAULT_WINDOW_DEPTH
     steps: tuple[ProcedureStep, ...] = Field(default_factory=tuple)

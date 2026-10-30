@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
+from turncall.domain.enums import ENDING_STEP_KINDS, ProcedureStart
 from turncall.domain.procedure_window import build_window, window_message
 from turncall.domain.procedures import Procedure, ProcedureStep
 
@@ -30,26 +31,37 @@ class ProcedureRun:
 
 @dataclass(frozen=True)
 class ProcedureState:
-    """The agent's procedures and those of them running, in config order."""
+    """The agent's procedures, those of them running, in the order started,
+    and those finished: a procedure that reaches an `end` or `escalate` step
+    stops running there, for good."""
 
     procedures: tuple[Procedure, ...] = ()
     runs: tuple[ProcedureRun, ...] = ()
+    finished: tuple[ProcedureRun, ...] = ()
 
     @classmethod
     def at_call_start(cls, procedures: Sequence[Procedure]) -> "ProcedureState":
-        """Every `start: "call"` procedure running, at its start step."""
-        runs = tuple(
-            ProcedureRun(p.name, (p.start_step.id,))
-            for p in procedures
-            if p.start == "call" and p.start_step is not None
-        )
-        return cls(procedures=tuple(procedures), runs=runs)
+        """Every `start: "call"` procedure started, at its start step."""
+        state = cls(procedures=tuple(procedures))
+        for procedure in procedures:
+            start = procedure.start_step
+            if procedure.start == ProcedureStart.CALL and start is not None:
+                state = state._placed(ProcedureRun(procedure.name, (start.id,)))
+        return state
 
     def procedure(self, name: str) -> Procedure | None:
         return next((p for p in self.procedures if p.name == name), None)
 
     def run(self, name: str) -> ProcedureRun | None:
         return next((r for r in self.runs if r.name == name), None)
+
+    def finished_run(self, name: str) -> ProcedureRun | None:
+        return next((r for r in self.finished if r.name == name), None)
+
+    def started(self) -> tuple[ProcedureRun, ...]:
+        """Every procedure started, running or finished: at a call's start,
+        each at its start step."""
+        return (*self.runs, *self.finished)
 
     def window_text(self) -> str | None:
         """This turn's window message, or None with nothing running."""
@@ -60,9 +72,22 @@ class ProcedureState:
         ]
         return window_message(windows) if windows else None
 
-    def _with_run(self, run: ProcedureRun) -> "ProcedureState":
+    def _placed(self, run: ProcedureRun) -> "ProcedureState":
+        """The state with `run` where it now stands: running in its place
+        (or last, newly started), or finished at an `end` or `escalate`
+        step."""
+        others = tuple(r for r in self.runs if r.name != run.name)
+        if self._ends_at(run):
+            return replace(self, runs=others, finished=(*self.finished, run))
+        if self.run(run.name) is None:
+            return replace(self, runs=(*self.runs, run))
         runs = tuple(run if r.name == run.name else r for r in self.runs)
         return replace(self, runs=runs)
+
+    def _ends_at(self, run: ProcedureRun) -> bool:
+        procedure = self.procedure(run.name)
+        step = procedure.step(run.current) if procedure is not None else None
+        return step is not None and step.kind in ENDING_STEP_KINDS
 
 
 @dataclass(frozen=True)
@@ -85,9 +110,17 @@ def move(state: ProcedureState, procedure: str, to: str) -> MoveOutcome:
     """Move `procedure` to step `to`: one of the current step's moves, or
     back to the previous step — or, for an `on_request` procedure not yet
     running, its start step, which starts it. Anything else is refused,
-    naming what is allowed."""
+    naming what is allowed. A finished procedure takes no move at all: what
+    it reached stands."""
     run = state.run(procedure)
     graph = state.procedure(procedure)
+    if (done := state.finished_run(procedure)) is not None:
+        names = [r.name for r in state.runs]
+        message = (
+            f"'{procedure}' is finished: it ended at step '{done.current}'. "
+            f"Running: {names}."
+        )
+        return _refused(state, procedure, done.current, to, message)
     if graph is not None and run is None:
         return _start(state, graph, to)
     if graph is None or run is None:
@@ -112,7 +145,7 @@ def move(state: ProcedureState, procedure: str, to: str) -> MoveOutcome:
         return _refused(state, procedure, run.current, to, message, current, back)
     return MoveOutcome(
         accepted=True,
-        state=state._with_run(moved),
+        state=state._placed(moved),
         procedure=procedure,
         from_step=run.current,
         to_step=to,
@@ -125,19 +158,15 @@ def _start(state: ProcedureState, graph: Procedure, to: str) -> MoveOutcome:
     """A move in a procedure not running: the model starting an `on_request`
     one (#446), at its start step and from nowhere. Any other move in it is
     refused, naming the start."""
-    start = graph.start_step if graph.start == "on_request" else None
+    start = graph.start_step if graph.start == ProcedureStart.ON_REQUEST else None
     if start is None or to != start.id:
         names = [r.name for r in state.runs]
         how = f" Start it at its start step '{start.id}'." if start else ""
         message = f"'{graph.name}' is not running.{how} Running: {names}."
         return _refused(state, graph.name, None, to, message, start_at=start)
-    started = ProcedureState(
-        procedures=state.procedures,
-        runs=(*state.runs, ProcedureRun(graph.name, (start.id,))),
-    )
     return MoveOutcome(
         accepted=True,
-        state=started,
+        state=state._placed(ProcedureRun(graph.name, (start.id,))),
         procedure=graph.name,
         from_step=None,
         to_step=start.id,
@@ -154,6 +183,8 @@ def _arrived(step: ProcedureStep) -> str:
     message = f"Now at step '{step.id}' ({step.kind}). Do now: {step.text}"
     if step.tool:
         message += f" Call {step.tool} at this step."
+    if step.kind in ENDING_STEP_KINDS:
+        message += " The procedure is finished here."
     return message
 
 

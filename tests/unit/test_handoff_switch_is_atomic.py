@@ -941,13 +941,11 @@ def _handoff_with_procedures():
         )
 
     first = (procedure("no_internet"), procedure("finished"))
-    # One mid-way, one already at its end step.
+    # One mid-way, one already finished at its end step.
     state = ProcedureState(
         procedures=first,
-        runs=(
-            ProcedureRun("no_internet", ("ask",)),
-            ProcedureRun("finished", ("ask", "done")),
-        ),
+        runs=(ProcedureRun("no_internet", ("ask",)),),
+        finished=(ProcedureRun("finished", ("ask", "done")),),
     )
     config, target = running_procedures(
         AgentConfig(system_prompt="You are billing.", procedures=[procedure("refund")])
@@ -990,10 +988,15 @@ async def test_the_handoff_switch_with_its_procedures_completes_within_one_slice
     # The same holder the window processor reads, now the target's.
     assert context.procedures is holder and holder.state is target
     assert [r.name for r in holder.state.runs] == ["refund"]
-    # Left: only the one mid-way; the other had reached its end.
+    # Left: only the one mid-way; the other had finished. Then the target's,
+    # started as at a call's start.
     assert written == [
         (
             "procedure.left",
             {"procedure": "no_internet", "from": "ask", "reason": "handoff"},
-        )
+        ),
+        (
+            "procedure.step",
+            {"procedure": "refund", "from": None, "to": "ask", "kind": "ask"},
+        ),
     ]

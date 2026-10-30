@@ -120,6 +120,24 @@ def test_a_step_with_no_way_on_says_so():
 
 
 @pytest.mark.unit
+def test_a_step_that_can_escalate_says_when_to():
+    at_power = build_window(NO_INTERNET, ("lights", "power"), depth=1)
+    at_check = build_window(
+        NO_INTERNET, ("lights", "restart", "after_restart"), depth=1
+    )
+    at_lights = build_window(NO_INTERNET, ("lights",), depth=1)
+
+    escalate = (
+        "  If the procedure cannot resolve the caller's problem, escalate: "
+        "move to technician."
+    )
+    assert escalate in at_power.splitlines()
+    assert escalate in at_check.splitlines()
+    # No escalate step is one move away: nothing to say.
+    assert "escalate:" not in at_lights
+
+
+@pytest.mark.unit
 def test_only_on_request_procedures_are_listed_to_start_and_never_a_step():
     later = NO_INTERNET.model_copy(update={"name": "later", "start": "on_request"})
 

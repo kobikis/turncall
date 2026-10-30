@@ -6,16 +6,31 @@ ids, the start, every move's target, reachability, an ending, the caps — is
 #444's, applied here and at build.
 """
 
-from typing import Literal
+from collections.abc import Sequence
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from turncall.api.v1.schemas import E164_PATTERN
-from turncall.domain.models import SKILL_NAME_MAX, SKILL_NAME_PATTERN
-from turncall.domain.procedures import DEFAULT_WINDOW_DEPTH
+from turncall.api.v1.schemas.call_control import BriefingSummary
+from turncall.domain.enums import ProcedureStart, StepKind, TransferMode
+from turncall.domain.models import (
+    BUILTIN_TOOL_NAMES,
+    PROCEDURE_NAME_MAX,
+    PROCEDURE_NAME_PATTERN,
+)
+from turncall.domain.procedure_graph import procedures_refusal
+from turncall.domain.procedures import DEFAULT_WINDOW_DEPTH, MOVE_TO_STEP, Procedure
+from turncall.services.retrieval import KNOWLEDGE_TOOL_SCHEMA
 
 STEP_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
 STEP_ID_MAX = 64
+
+PROCEDURES_DESCRIPTION = (
+    "Graphs of steps the agent follows (#417): the model is shown a window of "
+    "the current step each turn and reports each move with move_to_step. "
+    "Cascade voice only"
+)
 
 
 class _Strict(BaseModel):
@@ -42,9 +57,15 @@ class TransferEscalationSchema(_Strict):
     """The `transfer_call` tool's fields."""
 
     target_number: str = Field(..., pattern=E164_PATTERN)
-    transfer_mode: Literal["cold", "warm"] = "cold"
+    transfer_mode: TransferMode = TransferMode.COLD
     transfer_message: str | None = Field(default=None, max_length=2000)
-    briefing: str | None = Field(default=None, max_length=4000)
+    briefing: Annotated[str, Field(max_length=4000)] | BriefingSummary | None = Field(
+        default=None,
+        description=(
+            'Spoken to the operator on a warm transfer: a text, or {"from_summary": '
+            "true} for a summary of the call so far"
+        ),
+    )
     fallback_message: str | None = Field(default=None, max_length=2000)
     reason: str | None = Field(default=None, max_length=500)
 
@@ -64,7 +85,7 @@ class StepEscalationSchema(_Strict):
 
 class ProcedureStepSchema(_Strict):
     id: str = Field(..., min_length=1, max_length=STEP_ID_MAX, pattern=STEP_ID_PATTERN)
-    kind: Literal["ask", "instruct", "check", "escalate", "end"] = Field(
+    kind: StepKind = Field(
         ...,
         description=(
             "ask a question, instruct the caller, check something (a tool may "
@@ -99,15 +120,15 @@ class ProcedureSchema(_Strict):
     name: str = Field(
         ...,
         min_length=1,
-        max_length=SKILL_NAME_MAX,
-        pattern=SKILL_NAME_PATTERN,
+        max_length=PROCEDURE_NAME_MAX,
+        pattern=PROCEDURE_NAME_PATTERN,
         description="How the model names the procedure when it reports a move",
     )
     description: str = Field(
         default="", max_length=2000, description="When the procedure applies"
     )
-    start: Literal["call", "on_request"] = Field(
-        default="call",
+    start: ProcedureStart = Field(
+        default=ProcedureStart.CALL,
         description=(
             "call: running from the first turn. on_request: the model starts "
             "it when it applies"
@@ -119,3 +140,39 @@ class ProcedureSchema(_Strict):
         description="How many steps ahead of the current one the model is shown",
     )
     steps: list[ProcedureStepSchema] = Field(..., min_length=1)
+
+
+def domain_procedures(procedures: Sequence[ProcedureSchema]) -> list[Procedure]:
+    """The procedures as a call runs them."""
+    return [Procedure.model_validate(p.model_dump()) for p in procedures]
+
+
+def procedures_refusal_at_api(
+    procedures: Sequence[ProcedureSchema],
+    *,
+    tool_names: Sequence[str],
+    has_mcp_servers: bool,
+) -> str | None:
+    """What is wrong with an agent's procedures at save, or None.
+
+    `move_to_step` is offered by the platform to an agent with procedures
+    (#442), built from them as `load_skill` is from skills, so it is never
+    listed. Then the graph rule, run here and at build for an inline agent
+    (#444); here it also checks each step's tool is one the agent can call
+    (#447), unless the agent has an MCP server, whose tools are discovered
+    at call start. `query_knowledge` comes from KB links the config does not
+    hold.
+    """
+    if MOVE_TO_STEP in tool_names:
+        return (
+            f"tools: '{MOVE_TO_STEP}' is offered automatically to an agent "
+            "with procedures; define them in `procedures` instead"
+        )
+    callable_tools = (
+        None
+        if has_mcp_servers
+        else {*tool_names, *BUILTIN_TOOL_NAMES, KNOWLEDGE_TOOL_SCHEMA["name"]}
+    )
+    return procedures_refusal(
+        domain_procedures(procedures), callable_tools=callable_tools
+    )

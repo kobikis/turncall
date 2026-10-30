@@ -40,6 +40,11 @@ from turncall.orchestrator.knowledge_processor import (
     knowledge_tool_definition,
 )
 from turncall.orchestrator.observability import ObservabilityProcessor
+from turncall.orchestrator.procedures import (
+    CallProcedures,
+    move_after_speech_stage,
+    procedure_window_stage,
+)
 from turncall.services.credentials import Credentials
 from turncall.services.llm_models import resolve_llm_model
 from turncall.services.tool_mocks import ToolMocks
@@ -57,12 +62,6 @@ def _no_skills_yet() -> Any:
     from turncall.orchestrator.skill_loader import no_skills
 
     return no_skills(AgentConfig())
-
-
-def _no_procedures_yet() -> Any:
-    from turncall.orchestrator.procedures import no_procedures
-
-    return no_procedures()
 
 
 @dataclass(frozen=True)
@@ -92,11 +91,9 @@ class CallContext:
     # starts with an empty one, so a call whose agent has no skills still has
     # a holder for a handoff to swap the target agent's skills into (#427).
     skills: Any = field(default_factory=_no_skills_yet)
-    # The call's place in its procedures (#442):
-    # `orchestrator/procedures.CallProcedures`, set at build for an agent
-    # with procedures. Every context starts with an empty one, which the
-    # window processor reads every turn.
-    procedures: Any = field(default_factory=_no_procedures_yet)
+    # The call's place in its procedures (#442), set at build; every context
+    # starts with an empty one, which the window processor reads every turn.
+    procedures: CallProcedures = field(default_factory=CallProcedures)
 
     @property
     def is_eval(self) -> bool:
@@ -1767,14 +1764,6 @@ def create_pipeline(
                 "Human detected: call={call_id}",
                 call_id=str(call_context.call_id),
             )
-
-    # The procedure window (#442), right after the KB passages: both go
-    # before the caller's turn, each replacing only its own. After the LLM,
-    # a move beside speech asks for no inference of its own (#445).
-    from turncall.orchestrator.procedures import (
-        move_after_speech_stage,
-        procedure_window_stage,
-    )
 
     # Knowledge base processor (auto mode)
     kb_processor = None

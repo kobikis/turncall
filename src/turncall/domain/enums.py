@@ -67,6 +67,28 @@ class TransferMode(StrEnum):
     COLD = "cold"
 
 
+class StepKind(StrEnum):
+    """What a procedure step asks of the agent (#417)."""
+
+    ASK = "ask"
+    INSTRUCT = "instruct"
+    CHECK = "check"
+    ESCALATE = "escalate"
+    END = "end"
+
+
+# The kinds a procedure ends at: reaching one finishes it.
+ENDING_STEP_KINDS = (StepKind.END, StepKind.ESCALATE)
+
+
+class ProcedureStart(StrEnum):
+    """When a procedure runs (#417): from the call's first turn, or once the
+    model starts it (#446)."""
+
+    CALL = "call"
+    ON_REQUEST = "on_request"
+
+
 class RecordingStatus(StrEnum):
     NONE = "none"
     IN_PROGRESS = "in_progress"

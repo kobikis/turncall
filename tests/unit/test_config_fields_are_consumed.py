@@ -63,6 +63,11 @@ NOT_CONSUMED: dict[str, str] = {
         "consumed, but by the pure graph rule in domain/procedure_graph.py, "
         "which the build runs to fail the call naming it (#444)"
     ),
+    "BriefingFromSummary.from_summary": (
+        "consumed, but as the escalation's transfer_call arguments: dumped to "
+        "{'from_summary': true}, which services/transfer.normalize_briefing "
+        "reads as the transfer_call tool's own briefing (#448)"
+    ),
     "AgentConfig.analysis": (
         "consumed, but through the raw blob rather than the attribute: "
         "call_analysis_trigger rebuilds it with "

@@ -30,7 +30,7 @@ from turncall.domain.enums import (
     ToolExecutionMode,
     ToolExecutionStatus,
 )
-from turncall.domain.procedures import Procedure, read_procedure
+from turncall.domain.procedures import MOVE_TO_STEP, Procedure, read_procedure
 
 
 class DomainModel(BaseModel):
@@ -139,7 +139,7 @@ BUILTIN_TOOL_NAMES = frozenset(
         # listed in its `tools`; a built-in so no skill or MCP tool takes it.
         "load_skill",
         # Offered to an agent with procedures (#442), likewise never listed.
-        "move_to_step",
+        MOVE_TO_STEP,
     }
 )
 
@@ -356,6 +356,10 @@ class KnowledgeBaseAttachment(DomainModel):
 # a tool name (#423).
 SKILL_NAME_PATTERN = r"^[a-z_][a-z0-9_]*$"
 SKILL_NAME_MAX = 64
+# A procedure's name is what the model passes to `move_to_step` (#442):
+# shaped the same way.
+PROCEDURE_NAME_PATTERN = SKILL_NAME_PATTERN
+PROCEDURE_NAME_MAX = SKILL_NAME_MAX
 
 
 class SkillRef(DomainModel):

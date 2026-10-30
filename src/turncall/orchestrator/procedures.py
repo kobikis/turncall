@@ -40,7 +40,6 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from turncall.domain.enums import CallEventType
 from turncall.domain.models import AgentConfig, ToolDefinition
-from turncall.domain.procedure_graph import ENDING_KINDS
 from turncall.domain.procedure_state import MoveOutcome, ProcedureState, move
 from turncall.domain.procedure_window import WINDOW_MARKER, startable_section
 from turncall.domain.procedures import MOVE_TO_STEP, Procedure
@@ -61,8 +60,18 @@ class CallProcedures:
     the old in one assignment."""
 
     def __init__(self, state: ProcedureState | None = None) -> None:
-        self.state = state or ProcedureState()
+        self._state = state or ProcedureState()
         self._last_write: asyncio.Task[None] | None = None
+
+    @property
+    def state(self) -> ProcedureState:
+        return self._state
+
+    def replace(self, state: ProcedureState) -> None:
+        """Put `state` in place of the call's, whole, in one assignment: a
+        move, or a handoff's swap. Never awaits, so nothing reads half of
+        one."""
+        self._state = state
 
     def record(self, write: Coroutine[Any, Any, None]) -> None:
         """Run `write` in the background once the previous one is done, so
@@ -81,10 +90,6 @@ class CallProcedures:
         self._last_write = task
 
 
-def no_procedures() -> CallProcedures:
-    return CallProcedures()
-
-
 def with_procedures(
     config: AgentConfig, call_context: CallContext
 ) -> tuple[AgentConfig, CallContext]:
@@ -95,7 +100,9 @@ def with_procedures(
     if not state.procedures:
         return config, call_context
     logger.info("procedures_running: {names}", names=[r.name for r in state.runs])
-    return running, replace(call_context, procedures=CallProcedures(state))
+    call_context = replace(call_context, procedures=CallProcedures(state))
+    _record_starts(call_context, state)
+    return running, call_context
 
 
 def running_procedures(config: AgentConfig) -> tuple[AgentConfig, ProcedureState]:
@@ -119,32 +126,50 @@ def running_procedures(config: AgentConfig) -> tuple[AgentConfig, ProcedureState
     )
 
 
-def leave_procedures(call_context: CallContext, target: ProcedureState) -> None:
+def leave_procedures(call_context: CallContext, target: ProcedureState | None) -> None:
     """A handoff's (#448): the call's running procedures end where they
-    stand, and `target` — the target agent's, running as at a call's start —
-    takes their place, in one assignment on the call's holder, which the
-    window processor reads. Nothing awaited: it runs inside the handoff's
-    switch. Each procedure left mid-way is a `procedure.left` `{procedure,
-    from, reason}`; one at an `end` or `escalate` step had already ended."""
+    stand, and `target` — the target agent's, running as at a call's start,
+    or none — takes their place, in one assignment on the call's holder,
+    which the window processor reads. Nothing awaited: it runs inside the
+    handoff's switch. Each procedure left mid-way is a `procedure.left`
+    `{procedure, from, reason}`; one that reached an `end` or `escalate` step
+    had already finished. The target's procedures are then recorded as
+    started."""
     holder: CallProcedures | None = getattr(call_context, "procedures", None)
     if holder is None:
         return
-    left = [
-        run
-        for run in holder.state.runs
-        if (graph := holder.state.procedure(run.name)) is not None
-        and (step := graph.step(run.current)) is not None
-        and step.kind not in ENDING_KINDS
-    ]
-    holder.state = target
+    target = target or ProcedureState()
+    left = holder.state.runs
+    holder.replace(target)
     if left:
         logger.info("procedures_left: {names}", names=[r.name for r in left])
+    if call_context.records:
+        for run in left:
+            payload = {"procedure": run.name, "from": run.current, "reason": "handoff"}
+            holder.record(
+                store_call_event(call_context, CallEventType.PROCEDURE_LEFT, payload)
+            )
+    _record_starts(call_context, target)
+
+
+def _record_starts(call_context: CallContext, state: ProcedureState) -> None:
+    """A `procedure.step` from nowhere for each procedure `state` started,
+    at its start step — a call's `start: "call"` ones, or a handoff target's
+    — so the summary has a procedure the caller never moved. Through the
+    call's holder, in order with the moves after it."""
     if not call_context.records:
         return
-    for run in left:
-        payload = {"procedure": run.name, "from": run.current, "reason": "handoff"}
-        holder.record(
-            store_call_event(call_context, CallEventType.PROCEDURE_LEFT, payload)
+    for run in state.started():
+        procedure = state.procedure(run.name)
+        step = procedure.step(run.current) if procedure is not None else None
+        payload = {
+            "procedure": run.name,
+            "from": None,
+            "to": run.current,
+            "kind": step.kind if step is not None else None,
+        }
+        call_context.procedures.record(
+            store_call_event(call_context, CallEventType.PROCEDURE_STEP, payload)
         )
 
 
@@ -185,7 +210,7 @@ def run_move_to_step(args: dict[str, Any], call_context: CallContext) -> MoveOut
         str(args.get("procedure") or "").strip(),
         str(args.get("to") or "").strip(),
     )
-    holder.state = outcome.state
+    holder.replace(outcome.state)
     logger.info(
         "procedure_move: {procedure} {at} -> {to} {verdict}",
         procedure=outcome.procedure,
