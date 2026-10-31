@@ -137,7 +137,8 @@ Procedure "no_internet" — current step: restart (instruct)
   Allowed moves:
     → resolved  when: the caller confirms it is back
     ← back to lights  (always allowed)
-  Next steps (preview):
+  Next steps (preview): what comes next, not what to do now. Do a step's
+  work (ask its question, call its tool) only in a reply that also moves there.
     resolved (end): Confirm it works and close politely.
   Report every move with move_to_step. Do not skip a step. If the caller's answer does not fit any move, ask again.
 ```

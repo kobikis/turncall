@@ -1273,7 +1273,9 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   right before the caller's turn via `turn_message.replace_turn_message`,
   replacing the previous turn's: the current step and its text, the allowed
   moves with their `when`, `← back to <previous>` (always allowed), a preview
-  up to `window_depth` ahead, and — when a move from here reaches an
+  up to `window_depth` ahead (headed as what comes next, not what to do
+  now: calls e624caad, 7d351817 and bd7e197d did a previewed step's work
+  without the move), and — when a move from here reaches an
   `escalate` step — `If the procedure cannot resolve the caller's problem,
   escalate: move to <id>.` The rest of the graph never enters the prompt.
   The inference after a tool result gets no window (the context does not end

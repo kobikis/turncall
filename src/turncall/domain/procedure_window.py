@@ -20,6 +20,13 @@ _RULES = (
     f"Report every move with {MOVE_TO_STEP}. Do not skip a step. If the "
     "caller's answer does not fit any move, ask again."
 )
+# The preview is not a to-do list: calls e624caad, 7d351817 and bd7e197d
+# asked a previewed step's question, or called its tool, without the move.
+_PREVIEW_HEADING = (
+    "  Next steps (preview): what comes next, not what to do now. Do a step's "
+    "work (ask its question, call its tool) only in a reply that also moves "
+    "there."
+)
 
 STARTABLE_HEADING = "## Procedures you can start"
 STARTABLE_HINT = (
@@ -102,7 +109,7 @@ def _preview(procedure: Procedure, current: ProcedureStep, depth: int) -> list[s
     for step, came_from in ahead:
         where = "" if came_from == current.id else f" — after {came_from}"
         lines.append(f"    {step.id} ({_kind(step)}): {step.text}{where}")
-    return ["  Next steps (preview):", *lines]
+    return [_PREVIEW_HEADING, *lines]
 
 
 def _ahead(
