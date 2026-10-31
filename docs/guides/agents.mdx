@@ -73,6 +73,242 @@ tool may share a name with a built-in, the agent's own tool or another listed
 skill's tool: saving the agent otherwise is a `422` naming both sides (see
 [Skills](/guides/skills#attach-skills-to-an-agent)).
 
+## Procedures
+
+A **procedure** is a graph of steps the agent follows on a call: diagnostic
+questions in order, checks the caller performs, the conditions that decide
+the next step, and where it ends. TurnCall holds the route; on every caller
+turn the model is shown only a **window** of it, and reports each move.
+
+This section is the reference. For the concepts — how a procedure sits beside
+the system prompt, what it buys you and what it costs — see
+[Procedures](/guides/procedures).
+
+```json
+"procedures": [
+  {
+    "name": "no_internet",
+    "description": "Caller has no internet connection at home",
+    "start": "call",
+    "window_depth": 1,
+    "steps": [
+      {"id": "lights", "kind": "ask", "start": true,
+       "text": "Ask which lights on the router are on and their colour.",
+       "moves": [
+         {"to": "restart", "when": "the internet light is red or orange"},
+         {"to": "resolved", "when": "all lights are green"}]},
+      {"id": "restart", "kind": "instruct",
+       "text": "Have the caller restart the router and wait 2 minutes.",
+       "moves": [{"to": "resolved", "when": "the caller confirms it is back"}]},
+      {"id": "resolved", "kind": "end", "text": "Confirm it works and close politely."}
+    ]
+  }
+]
+```
+
+| Field | Means |
+|-------|-------|
+| `name` | How the model names the procedure when it reports a move. Lowercase letters, digits and `_` |
+| `description` | When the procedure applies |
+| `start` | `call`: running from the first turn. `on_request`: the model starts it when it applies |
+| `window_depth` | How many steps ahead of the current one the model is shown (default 1, 0 for none) |
+| `steps[].id` | The step's id, which moves name |
+| `steps[].kind` | `ask`, `instruct`, `check`, `escalate` or `end` |
+| `steps[].text` | What the model should do at the step |
+| `steps[].start` | The step the procedure starts at |
+| `steps[].tool` | A tool the model should call at the step |
+| `steps[].moves` | The moves allowed from the step: `{to, when}`, `when` a plain-language condition the model judges |
+| `steps[].escalate` | What an `escalate` step does when the call reaches it, required there and nowhere else ([Escalation](#procedures)): `{"transfer_call": {...}}` (the [transfer tool's](/guides/tools) fields) or `{"handoff_to_agent": {"agent_id": "..."}}` |
+
+**The window.** Before each caller turn the model is given one message, right
+before the turn and replacing the previous turn's: the current step and what
+to do there, the allowed moves with their conditions, the move back to the
+previous step, and a preview of the steps up to `window_depth` ahead. When a
+move from the current step leads to an `escalate` step, it also says to take
+it when the procedure cannot resolve the caller's problem (`If the procedure
+cannot resolve the caller's problem, escalate: move to technician.`). The rest
+of the graph never enters the prompt.
+
+```text
+[Procedure]
+
+Procedure "no_internet" — current step: restart (instruct)
+  Do now: Have the caller restart the router and wait 2 minutes.
+  Allowed moves:
+    → resolved  when: the caller confirms it is back
+    ← back to lights  (always allowed)
+  Next steps (preview): what comes next, not what to do now. Do a step's
+  work (ask its question, call its tool) only once you move there, in that
+  same reply or a later one.
+    resolved (end): Confirm it works and close politely.
+  Report every move with move_to_step. Do not skip a step. If the caller's answer does not fit any move, ask again.
+```
+
+**Moves.** An agent with procedures is offered the built-in `move_to_step`
+(`{procedure, to}`); it is never listed in `tools` (a `422` there). A move the
+current step allows, or back to the previous step, is accepted: the procedure
+moves and the result tells the model what to do at the new step. Anything
+else is refused, the result naming the moves that are allowed and why, and the
+procedure and its window stay where they were.
+
+Reaching an `end` or `escalate` step finishes the procedure: its window is no
+longer shown, and any later move in it, a move back included, is refused as
+finished. So a procedure that completed or escalated stays that way, and a
+finished `on_request` procedure is not started again.
+
+A move adds no pause. When the model's reply already said something to the
+caller, reporting the move beside it costs no second model call: the next
+call is the caller's next turn, which sees the move's result (or its refusal)
+and the window at the new step. A move with nothing said beside it gets one
+model call so the caller is answered, and a move beside another tool, such
+as a step's lookup, gets one once both results are in.
+
+**Start modes and several procedures.** An agent can carry several
+procedures, such as one per fault family. A `start: "call"` one runs from the
+first turn. A `start: "on_request"` one lets the agent handle general
+questions and run the procedure only when it applies: until it starts, the
+prompt names it with its description and its start step's id, and no step's
+text:
+
+```text
+## Procedures you can start
+When one applies, start it with move_to_step(procedure=<its name>, to=<its start step>); its steps are then shown to you one at a time.
+- no_internet: Caller has no internet connection at home (start step: lights)
+- reset_password: Caller forgot the password to their account (start step: identify)
+```
+
+The model starts one with `move_to_step` to its start step; the result says
+what to do there, and from the next turn its window is shown. A move in a
+procedure that is not running is otherwise refused with the reason (an
+`on_request` one's names its start step). The model is never shown the steps
+of a procedure that is not running, and when several run, each has its own
+window in the one message.
+
+**Step tools and variables.** A step's `tool` names a tool the model should
+call at that point, so an API check happens where it belongs and its result
+informs the next move. The window says so, at the step and in the preview
+(`after_restart (check, tool: line_status)`). It is one of the agent's own
+`tools` (or a built-in, or `query_knowledge`) and runs like any other: it
+reaches its webhook and is recorded in the call's tool invocations. Naming a
+tool the agent does not have is a `422` naming the procedure and the step; an
+agent with `mcp_servers` is not checked, since its MCP tools are only known
+once a call connects. A step's `text` renders the call's
+[template variables](#template-variables) like the rest of the config:
+
+```json
+{"id": "after_restart", "kind": "check", "tool": "line_status",
+ "text": "Check the line status for {{account_id}}.",
+ "moves": [{"to": "resolved", "when": "the line is fine"}]}
+```
+
+**Rules.** A procedure is checked when the agent is saved, so a mistake is a
+`422` naming the procedure and the step rather than something found on a call:
+
+- step ids are unique within the procedure, and procedure names within the agent;
+- exactly one step has `start: true`;
+- every move goes to a step that exists;
+- every step can be reached from the start step by its moves;
+- at least one step is of kind `end` or `escalate`;
+- each `escalate` step names exactly one action (below), and no other step names one;
+- a handoff escalation names an agent of the project;
+- at most 50 steps, and `window_depth` at most 5.
+
+```json
+{"success": false, "code": "validation_error", "error": "Validation error",
+ "details": {"errors": [{"msg": "Value error, procedures[0] 'no_internet': step 'after_restart' moves to 'technican', which does not exist", "...": "..."}]}}
+```
+
+**Escalation.** A procedure that cannot resolve the problem ends safely: an
+`escalate` step names its action, and when the model moves the call there,
+TurnCall runs it. A transfer takes the [`transfer_call` tool's](/guides/tools)
+fields, `briefing` included (a text, or `{"from_summary": true}` for a summary
+of the call so far), and goes the way that tool does (see [Call transfer](/guides/tools#call-transfer-cold--warm)), so it works on every carrier the tool
+works on and is refused the same way where it does not (a warm transfer on
+Asterisk, say); a handoff names an agent and goes the way `handoff_to_agent`
+does.
+
+```json
+{"id": "technician", "kind": "escalate",
+ "text": "Tell the caller a technician will take it from here.",
+ "escalate": {"transfer_call": {"target_number": "+15550009999", "transfer_mode": "warm",
+                                "briefing": {"from_summary": true}}}}
+
+{"id": "billing", "kind": "escalate",
+ "text": "Tell the caller billing will take it from here.",
+ "escalate": {"handoff_to_agent": {"agent_id": "<billing agent id>", "reason": "billing question"}}}
+```
+
+The move's result tells the model what became of the transfer or handoff. The
+call's `procedures` then reads `completed: false` and `escalated_at` the step.
+Have the step's `text` say what the caller should hear: the model says it in
+the same reply as the move.
+
+**A handoff ends the procedures.** Whatever hands the call off — an escalate
+step, the `handoff_to_agent` tool or
+[`POST /v1/calls/{id}/handoff`](/guides/tools#live-call-control) — the first agent's
+running procedures end where they stood, each recorded as left (one that had
+finished is not), and the target agent's own procedures start as they would
+at the start of a call. The target never sees the first agent's.
+
+A [call-init](/guides/call-init) inline agent skips that check, so the same
+rule runs when its call is built: a broken procedure, or an entry that is not
+a procedure at all, fails the call with `ended_reason: pipeline_error` and an
+`error.raised` event naming the problem — never a call that runs without it.
+
+Procedures are part of the agent's config, so they version, publish, roll back
+and A/B-route with the agent, and a [call-init](/guides/call-init) inline
+agent can carry its own. Cascade voice calls only: on an S2S agent they are
+skipped, said on its read (`procedures_ignored_on_s2s`, below) and in the
+build's log.
+
+### What a call records
+
+Every move is on the call's event log (`GET /v1/calls/{id}/events`), in the
+order it was made, after the procedure's start (a `procedure.step` from `null`
+to its start step, for a `start: "call"` one as the call starts and for an
+`on_request` one when the model starts it): a `procedure.step` for a move the
+procedure allowed, a
+`procedure.refused` for one it refused, and a `procedure.left` for one a
+handoff ended before it reached an `end` or `escalate` step (`{procedure, from,
+reason: "handoff"}`). They are stored, never sent to webhook subscribers, and
+an eval run records none.
+
+```json
+{"event_type": "procedure.step",    "payload": {"procedure": "no_internet", "from": null,            "to": "lights",        "kind": "ask"}}
+{"event_type": "procedure.step",    "payload": {"procedure": "no_internet", "from": "lights",        "to": "restart",       "kind": "instruct"}}
+{"event_type": "procedure.refused", "payload": {"procedure": "no_internet", "from": "restart",       "to": "after_restart"}}
+{"event_type": "procedure.step",    "payload": {"procedure": "no_internet", "from": "restart",       "to": "after_restart", "kind": "check"}}
+{"event_type": "procedure.step",    "payload": {"procedure": "no_internet", "from": "after_restart", "to": "resolved",      "kind": "end"}}
+```
+
+The call read and `call.ended` both carry `procedures`, worked out from those
+events, so the two always agree:
+
+```json
+"procedures": [{
+  "name": "no_internet",
+  "path": ["lights", "restart", "after_restart", "resolved"],
+  "completed": true,
+  "ended_at": "resolved",
+  "escalated_at": null,
+  "refused_moves": 1
+}]
+```
+
+| Field | Meaning |
+|-------|---------|
+| `path` | Every step reached, in order, a move back included |
+| `ended_at` | The last step reached, or the step a handoff left it at |
+| `completed` | `true` when `ended_at` is an `end` step |
+| `escalated_at` | `ended_at`, when it is an `escalate` step; otherwise `null` |
+| `refused_moves` | How many moves were refused |
+
+A procedure is listed once it started, so one the caller never got past the
+first step of is listed (`path: ["lights"]`, not completed); an `on_request`
+one the model never started is not. The list is empty
+for a call that followed none, and `null` once [retention](/guides/retention)
+deleted the call's transcript: the moves go with it.
+
 ## Warnings on a Read
 
 `GET /v1/agents/{id}` returns a **`warnings`** list beside the config: things
@@ -100,6 +336,7 @@ them would break working agents.
 | `pronunciations_ignored_on_s2s` | `pipeline_mode: "s2s"` has no TTS stage for the markup to apply to |
 | `knowledge_mode_unsupported` | A [knowledge base](/guides/s2s#knowledge-bases) is linked in `auto` mode to an S2S agent, which skips it: auto retrieval runs before each LLM turn, and a speech-to-speech model has no such point. Carries `modes` and `provider`. Link it in `tool` or `prompt` mode |
 | `skills_ignored_on_s2s` | An S2S agent lists [skills](/guides/skills), which only cascade calls load; its calls run without them. Carries `skills` and `provider` |
+| `procedures_ignored_on_s2s` | An S2S agent has [procedures](#procedures), which only cascade calls follow: the window goes before each caller turn, and a realtime model has no such point. Its calls run without them. Carries `procedures` and `provider` |
 
 Warnings are **derived on every read**, never stored, so an agent whose model
 moved out from under its pronunciations starts saying so without being edited.
@@ -116,7 +353,7 @@ Personalize agents per-call using `{{variable}}` placeholders:
 }
 ```
 
-Variables are rendered at call start via [call-init](/guides/call-init) or the API, in a [skill's](/guides/skills) instructions too. See [Server Events](/guides/server-events) for how to dynamically inject variables.
+Variables are rendered at call start via [call-init](/guides/call-init) or the API, in a [skill's](/guides/skills) instructions and a [procedure](#procedures) step's text too. See [Server Events](/guides/server-events) for how to dynamically inject variables.
 
 ## Pipeline Mode
 

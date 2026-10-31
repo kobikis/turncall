@@ -17,9 +17,11 @@ from turncall.api.v1.schemas.agents import (
     CreateAgentRequest,
     UpdateAgentRequest,
 )
+from turncall.api.v1.schemas.procedures import domain_procedures
 from turncall.auth import Auth, AuthContext, WriteAuth
 from turncall.domain.enums import AuditAction, AuditResource
 from turncall.domain.models import RetentionConfig
+from turncall.domain.procedures import HANDOFF_TO_AGENT
 from turncall.services import audit_log, retention, skill_library, skills
 from turncall.services.audit_log import AuditTrail
 from turncall.storage.repositories import (
@@ -76,6 +78,43 @@ async def _check_skills(
             message=refusal.message,
             details=refusal.details,
         )
+
+
+async def _check_escalations(
+    session: AsyncSession, project_id: UUID, config: AgentConfigSchema | None
+) -> None:
+    """A procedure's handoff escalation names an agent of this project
+    (#448): a typo'd id fails here rather than as a refused handoff on the
+    call that needed it."""
+    if config is None:
+        return
+    for index, procedure in enumerate(domain_procedures(config.procedures)):
+        for at, step in enumerate(procedure.steps):
+            action = step.escalate.action() if step.escalate else None
+            if action is None or action[0] != HANDOFF_TO_AGENT:
+                continue
+            agent_id = action[1]["agent_id"]
+            agent = await agent_repo.get_agent_by_id(
+                session, UUID(agent_id), project_id=project_id
+            )
+            if agent is not None:
+                continue
+            raise ApiError(
+                status_code=422,
+                code=ErrorCode.INVALID_AGENT_CONFIG,
+                message=(
+                    f"procedures[{index}] '{procedure.name}': step '{step.id}' "
+                    f"hands off to '{agent_id}', which is not an agent in this "
+                    "project"
+                ),
+                details={
+                    "field": (
+                        f"procedures[{index}].steps[{at}].escalate."
+                        f"{HANDOFF_TO_AGENT}.agent_id"
+                    ),
+                    "agent_id": agent_id,
+                },
+            )
 
 
 def _refuse_inline_knowledge_bases(config: AgentConfigSchema | None) -> None:
@@ -221,6 +260,7 @@ async def create_agent(
     _refuse_inline_knowledge_bases(body.config)
     await _check_ambience(session, auth.project_id, body.config)
     await _check_skills(session, auth.project_id, body.config)
+    await _check_escalations(session, auth.project_id, body.config)
     before = await _retention_before(session, auth, {body.name})
     _refuse_written_retention(before, body.name, body.config.model_dump())
     next_version = await agent_repo.get_next_version(
@@ -318,6 +358,7 @@ async def update_agent(
     _refuse_inline_knowledge_bases(body.config)
     await _check_ambience(session, auth.project_id, body.config)
     await _check_skills(session, auth.project_id, body.config)
+    await _check_escalations(session, auth.project_id, body.config)
     config_blob = body.config.model_dump() if body.config else existing.config_blob
     name = body.name or existing.name
     before = await _retention_before(session, auth, {existing.name, name})

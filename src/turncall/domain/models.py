@@ -30,6 +30,7 @@ from turncall.domain.enums import (
     ToolExecutionMode,
     ToolExecutionStatus,
 )
+from turncall.domain.procedures import MOVE_TO_STEP, Procedure, read_procedure
 
 
 class DomainModel(BaseModel):
@@ -137,6 +138,8 @@ BUILTIN_TOOL_NAMES = frozenset(
         # Offered by TurnCall itself to an agent with skills (#424), never
         # listed in its `tools`; a built-in so no skill or MCP tool takes it.
         "load_skill",
+        # Offered to an agent with procedures (#442), likewise never listed.
+        MOVE_TO_STEP,
     }
 )
 
@@ -353,6 +356,10 @@ class KnowledgeBaseAttachment(DomainModel):
 # a tool name (#423).
 SKILL_NAME_PATTERN = r"^[a-z_][a-z0-9_]*$"
 SKILL_NAME_MAX = 64
+# A procedure's name is what the model passes to `move_to_step` (#442):
+# shaped the same way.
+PROCEDURE_NAME_PATTERN = SKILL_NAME_PATTERN
+PROCEDURE_NAME_MAX = SKILL_NAME_MAX
 
 
 class SkillRef(DomainModel):
@@ -587,6 +594,26 @@ class AgentConfig(DomainModel):
                 high=high,
             )
         return min(max(value, low), high)
+
+    # Graphs of steps the agent follows on a cascade voice call (#442,
+    # ADR-0032). Only the shape is parsed here; whether a graph holds
+    # together is the build's rule (#444, `domain/procedure_graph`), which
+    # can say why.
+    procedures: list[Procedure] = Field(default_factory=list)
+
+    @field_validator("procedures", mode="before")
+    @classmethod
+    def _unreadable_procedures_are_kept(cls, value: Any) -> list[Procedure]:
+        """An inline agent's config arrives from a call-init webhook, past
+        any API schema, and is parsed before the build: a raise here would
+        fail the call before it could say why. So an entry that cannot be
+        read as a procedure at all is kept, marked `unreadable`, and the
+        build's rule fails the call naming it (#444)."""
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return [Procedure(name="", unreadable="procedures must be a list")]
+        return [read_procedure(entry) for entry in value]
 
     transport: str = "twilio"  # "twilio" | "webrtc" | "both"
     server_url: ServerUrlConfig = Field(default_factory=ServerUrlConfig)

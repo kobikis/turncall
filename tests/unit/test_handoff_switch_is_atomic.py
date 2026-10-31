@@ -910,3 +910,93 @@ async def test_cancelling_a_load_that_brings_a_search_is_all_or_nothing():
     assert (len(queue), bool(skills.loaded)) in {(0, False), (2, True)}, (
         f"half-applied: {len(queue)} frame(s) queued, loaded={skills.loaded}"
     )
+
+
+# --- A handoff's procedures (#448) --------------------------------------------
+# The first agent's running procedures end and the target's run, in the same
+# apply step: a plain assignment on the call's holder, which the window
+# processor reads, and the `procedure.left` writes spawned, never awaited.
+
+
+def _handoff_with_procedures():
+    from turncall.domain.procedure_state import ProcedureRun, ProcedureState
+    from turncall.domain.procedures import Procedure
+    from turncall.orchestrator.procedures import CallProcedures, running_procedures
+
+    def procedure(name):
+        return Procedure.model_validate(
+            {
+                "name": name,
+                "steps": [
+                    {
+                        "id": "ask",
+                        "kind": "ask",
+                        "start": True,
+                        "text": "Ask.",
+                        "moves": [{"to": "done", "when": "answered"}],
+                    },
+                    {"id": "done", "kind": "end", "text": "Close."},
+                ],
+            }
+        )
+
+    first = (procedure("no_internet"), procedure("finished"))
+    # One mid-way, one already finished at its end step.
+    state = ProcedureState(
+        procedures=first,
+        runs=(ProcedureRun("no_internet", ("ask",)),),
+        finished=(ProcedureRun("finished", ("ask", "done")),),
+    )
+    config, target = running_procedures(
+        AgentConfig(system_prompt="You are billing.", procedures=[procedure("refund")])
+    )
+    prepared = _target(config)._replace(procedures=target)
+    context = _context()
+    context.procedures = CallProcedures(state)
+    context.records = True
+    return context, prepared, target
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_handoff_switch_with_its_procedures_completes_within_one_slice():
+    from turncall.orchestrator import procedures as procedures_module
+    from turncall.orchestrator.tool_bridge import _apply_handoff_context
+
+    context, prepared, target = _handoff_with_procedures()
+    holder = context.procedures
+    written: list = []
+
+    async def store(_context, event_type, payload):
+        written.append((event_type, payload))
+
+    queue: list = []
+    with (
+        patch("turncall.orchestrator.tool_bridge.register_tools"),
+        patch.object(procedures_module, "store_call_event", store),
+    ):
+        task = asyncio.create_task(
+            _apply_handoff_context(prepared, context, _params(queue))
+        )
+        await asyncio.sleep(0)
+        done = task.done()
+        await task
+        await asyncio.sleep(0.01)  # the spawned writes
+
+    assert done, "the handoff switch suspended partway through its procedures"
+    assert len(queue) == 2
+    # The same holder the window processor reads, now the target's.
+    assert context.procedures is holder and holder.state is target
+    assert [r.name for r in holder.state.runs] == ["refund"]
+    # Left: only the one mid-way; the other had finished. Then the target's,
+    # started as at a call's start.
+    assert written == [
+        (
+            "procedure.left",
+            {"procedure": "no_internet", "from": "ask", "reason": "handoff"},
+        ),
+        (
+            "procedure.step",
+            {"procedure": "refund", "from": None, "to": "ask", "kind": "ask"},
+        ),
+    ]

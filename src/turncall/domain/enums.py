@@ -67,6 +67,28 @@ class TransferMode(StrEnum):
     COLD = "cold"
 
 
+class StepKind(StrEnum):
+    """What a procedure step asks of the agent (#417)."""
+
+    ASK = "ask"
+    INSTRUCT = "instruct"
+    CHECK = "check"
+    ESCALATE = "escalate"
+    END = "end"
+
+
+# The kinds a procedure ends at: reaching one finishes it.
+ENDING_STEP_KINDS = (StepKind.END, StepKind.ESCALATE)
+
+
+class ProcedureStart(StrEnum):
+    """When a procedure runs (#417): from the call's first turn, or once the
+    model starts it (#446)."""
+
+    CALL = "call"
+    ON_REQUEST = "on_request"
+
+
 class RecordingStatus(StrEnum):
     NONE = "none"
     IN_PROGRESS = "in_progress"
@@ -132,6 +154,15 @@ class CallEventType(StrEnum):
     # dispatched; identifiers only (`{skill, version, reason}`).
     SKILL_LOADED = "skill.loaded"
     SKILL_UNLOADED = "skill.unloaded"
+
+    # Procedures (#443): a move the agent reported, accepted
+    # (`{procedure, from, to, kind}`, `kind` the step it reached) or refused
+    # (`{procedure, from, to}`). Stored, never dispatched; identifiers only.
+    PROCEDURE_STEP = "procedure.step"
+    PROCEDURE_REFUSED = "procedure.refused"
+    # A running procedure a handoff ended where it stood (#448):
+    # `{procedure, from, reason}`, `reason` `handoff`. Stored only, likewise.
+    PROCEDURE_LEFT = "procedure.left"
 
     # SMS / Chat
     SESSION_CREATED = "session.created"

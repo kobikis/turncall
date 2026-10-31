@@ -39,6 +39,7 @@ from turncall.orchestrator.pipeline_factory import (
     _build_vad_analyzer,
     _create_stt_service,
 )
+from turncall.orchestrator.procedures import CallProcedures
 from turncall.orchestrator.turn_metrics import TurnMetricsRecorder
 
 pytestmark = pytest.mark.unit
@@ -251,7 +252,10 @@ def _built_for_flux(mocker, **over: object) -> tuple[DeepgramFluxSTTService, obj
         config=_flux(**over),
         transport=mocker.MagicMock(),
         call_context=SimpleNamespace(
-            is_eval=False, call_id=uuid4(), session_factory=None
+            is_eval=False,
+            call_id=uuid4(),
+            session_factory=None,
+            procedures=CallProcedures(),
         ),
         credentials=creds("sk-test", deepgram="dg-test"),
         pipecat_settings=PipecatSettings(),

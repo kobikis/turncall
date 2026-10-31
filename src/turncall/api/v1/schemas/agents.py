@@ -22,6 +22,11 @@ from pydantic import (
 
 from turncall.api.v1.schemas import outbound_url
 from turncall.api.v1.schemas.knowledge import LinkKnowledgeBaseRequest
+from turncall.api.v1.schemas.procedures import (
+    PROCEDURES_DESCRIPTION,
+    ProcedureSchema,
+    procedures_refusal_at_api,
+)
 from turncall.domain.config_secrets import sanitize_config as _sanitize_config
 from turncall.domain.ipa import normalize_pronunciations
 from turncall.domain.models import (
@@ -809,6 +814,9 @@ class AgentConfigSchema(BaseModel):
             "unloads the one loaded longest ago, in the same switch"
         ),
     )
+    procedures: list[ProcedureSchema] = Field(
+        default_factory=list, description=PROCEDURES_DESCRIPTION
+    )
     transport: str = Field(default="twilio", pattern=r"^(twilio|webrtc|both)$")
     server_url: ServerUrlConfigSchema = Field(default_factory=ServerUrlConfigSchema)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -831,6 +839,17 @@ class AgentConfigSchema(BaseModel):
                 "with skills; list skills in `skills` instead"
             )
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def validate_procedures(self) -> "AgentConfigSchema":
+        problem = procedures_refusal_at_api(
+            self.procedures,
+            tool_names=[t.name for t in self.tools],
+            has_mcp_servers=bool(self.mcp_servers),
+        )
+        if problem:
+            raise ValueError(problem)
         return self
 
     @model_validator(mode="after")

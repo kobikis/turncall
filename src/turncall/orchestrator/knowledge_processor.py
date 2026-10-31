@@ -16,6 +16,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.domain.models import KnowledgeBaseAttachment, ToolDefinition
+from turncall.orchestrator.turn_message import replace_turn_message, text_of
 from turncall.services.retrieval import (
     KNOWLEDGE_TOOL_SCHEMA,
     format_retrieved_context,
@@ -91,21 +92,6 @@ async def load_inline_kb_attachments(
 _PASSAGES_MARKER = "[Knowledge Base Context]"
 
 
-def _text_of(message: Any) -> str:
-    """A message's text, whether its content is a string or content parts."""
-    content = message.get("content") if isinstance(message, dict) else None
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts = [p.get("text", "") for p in content if isinstance(p, dict)]
-        return " ".join(t for t in parts if t).strip()
-    return ""
-
-
-def _is_passages(message: Any) -> bool:
-    return isinstance(message, dict) and _text_of(message).startswith(_PASSAGES_MARKER)
-
-
 class KnowledgeRetrievalProcessor(FrameProcessor):
     """Retrieves passages for each caller turn and puts them before it.
 
@@ -159,22 +145,7 @@ class KnowledgeRetrievalProcessor(FrameProcessor):
 
     async def _retrieve_for(self, context: Any) -> None:
         """Replace the previous turn's passages with this turn's, if any."""
-        messages = [m for m in context.get_messages() if not _is_passages(m)]
-        last = messages[-1] if messages else None
-        current = (
-            _text_of(last)
-            if isinstance(last, dict) and last.get("role") == "user"
-            else ""
-        )
-        passages = await self._passages(messages, current) if current else None
-        # Read again: the aggregators share this context and may have added to
-        # it while the search was out — writing back the list read before it
-        # would drop that. The turn is found by identity, not position.
-        fresh = [m for m in context.get_messages() if not _is_passages(m)]
-        at = next((i for i, m in enumerate(fresh) if m is last), None)
-        if passages is not None and at is not None:
-            fresh = [*fresh[:at], passages, *fresh[at:]]
-        context.set_messages(fresh)
+        await replace_turn_message(context, _PASSAGES_MARKER, self._passages)
 
     async def _passages(
         self, messages: list[Any], current: str
@@ -219,7 +190,7 @@ def build_retrieval_query(
     carries the entities the conversation is actually about. Recency last,
     capped so an essay-length reply can't drown the question."""
 
-    _text = _text_of
+    _text = text_of
 
     current = current.strip()
     prev_user = next(

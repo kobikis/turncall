@@ -189,3 +189,38 @@ def test_every_transport_persists_the_inline_config(label: str, path: Path) -> N
         '"dynamic_config" — the call finalizes with nothing to analyse and '
         "dispatches no call.ended."
     )
+
+
+# --- procedures on an inline agent (#444) -------------------------------------
+#
+# Every voice transport parses the inline config as an `AgentConfig` before the
+# build (`media_stream`, and `usable_agent` for an outbound dial), outside
+# `build_call_pipeline`. A raise there fails the call with no `error.raised`
+# and no `pipeline_error`; a silent drop runs it without its procedure. So the
+# domain model accepts any procedures, broken ones included, and the build's
+# graph rule is what refuses them, naming the problem.
+
+_BROKEN_GRAPH = {
+    "name": "broken",
+    "steps": [{"id": "a", "kind": "ask", "moves": [{"to": "x"}]}],
+}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "procedures",
+    [[_BROKEN_GRAPH], [{"name": "unreadable", "steps": "a, then b"}], "not a list"],
+    ids=["broken graph", "unreadable entry", "not a list"],
+)
+def test_an_inline_config_with_bad_procedures_still_parses_for_the_build(
+    procedures: object,
+) -> None:
+    from turncall.domain.models import AgentConfig
+    from turncall.domain.procedure_graph import procedures_refusal
+
+    config = AgentConfig.model_validate(
+        {"system_prompt": "hi", "procedures": procedures}
+    )
+
+    assert config.procedures, "dropped: the call would run without it"
+    assert procedures_refusal(config.procedures) is not None

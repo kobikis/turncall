@@ -231,6 +231,47 @@ async def test_what_a_call_ran_of_its_skills_never_reaches_the_detector(
     assert not redaction.texts_in(loaded, event_type="skill.loaded")
 
 
+async def test_a_procedure_walked_never_reaches_the_detector(monkeypatch) -> None:
+    """A procedure's moves (#443) name a procedure and its step ids, and
+    `call.ended`'s `procedures` lists them: identifiers, not the steps' text."""
+    built: list[str] = []
+    _use(monkeypatch, lambda: built.append("built") or _Marks())
+    step = {
+        "procedure": "no_internet",
+        "from": "lights",
+        "to": "Restart",
+        "kind": "step",
+    }
+    refused = {"procedure": "no_internet", "from": "Restart", "to": "resolved"}
+    # A handoff leaving it (#448): `reason` is TurnCall's word here.
+    left = {"procedure": "no_internet", "from": "Restart", "reason": "handoff"}
+    ended = {
+        "procedures": [
+            {
+                "name": "no_internet",
+                "path": ["lights", "Restart"],
+                "completed": False,
+                "ended_at": "Restart",
+                "escalated_at": None,
+                "refused_moves": 1,
+            }
+        ]
+    }
+
+    out = [
+        await redaction.redact_payload(step, POLICY, event_type="procedure.step"),
+        await redaction.redact_payload(refused, POLICY, event_type="procedure.refused"),
+        await redaction.redact_payload(left, POLICY, event_type="procedure.left"),
+        await redaction.redact_payload(ended, POLICY, event_type="call.ended"),
+    ]
+
+    assert out == [step, refused, left, ended]
+    assert built == []
+    assert not redaction.texts_in(step, event_type="procedure.step")
+    assert not redaction.texts_in(refused, event_type="procedure.refused")
+    assert not redaction.texts_in(left, event_type="procedure.left")
+
+
 async def test_identifiers_read_back_as_data_are_not_analysed(detector) -> None:
     """A provider or tool name is no ORGANIZATION: `provider.failover`'s
     `from`/`to` and `tool_name` are TurnCall's own vocabulary, while a reason

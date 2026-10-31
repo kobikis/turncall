@@ -26,6 +26,7 @@ from pipecat.tests.utils import SleepFrame, run_test
 from tests.conftest import creds
 from turncall.config.settings import PipecatSettings
 from turncall.domain.models import AgentConfig
+from turncall.orchestrator.procedures import CallProcedures
 
 pytestmark = pytest.mark.unit
 
@@ -71,7 +72,10 @@ def _built_user_aggregator(mocker, config: AgentConfig) -> tuple[object, list]:
         "create_pipeline",
         config=config,
         call_context=SimpleNamespace(
-            is_eval=False, call_id=uuid4(), session_factory=None
+            is_eval=False,
+            call_id=uuid4(),
+            session_factory=None,
+            procedures=CallProcedures(),
         ),
         credentials=creds("sk-test", deepgram="dg-test"),
     )

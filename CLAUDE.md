@@ -126,7 +126,7 @@ turncall-demo         # the website demo: agents from a file over WebRTC, no DB/
 | Role | Providers |
 |------|-----------|
 | STT | `deepgram` (default, streaming), `openai`, `elevenlabs`, `cartesia` (Ink, streaming), `assemblyai` (Universal-Streaming, #203), `xai` (#394). `stt.model` empty = that provider's own default (`nova-3-general` / `gpt-transcribe` / `scribe_v1` / `ink-whisper` / `universal-streaming-english` / `grok-voice-transcribe-2.0`), resolved in the pipeline factory the way `_tts_model_voice` already does for TTS. It used to default to `nova-3-general` for **every** provider, which the other three answer 400 to — so that value is read as unset on them, since `model_dump()` persisted it into existing agents. `stt.keyterms` is one list of vocabulary hints — product names, SKUs, surnames — mapped to each provider's own spelling: `keyterm` on Cartesia, `keywords` on OpenAI, `keyterms` on ElevenLabs, `keyterms_prompt` on AssemblyAI, `keyterm` (repeated) on xAI, and on Deepgram **whichever the model takes** — `keyterm` for `nova-3*`/`flux*`, `keywords` for everything older. Deepgram 400s on the wrong one (`INVALID_QUERY_PARAMETER`) rather than ignoring it, so a hand-written `extra: {"keyterm": ...}` on a Nova-2 agent kills the call at connect; `keyterms` beats the same key in `extra` for that reason. Cartesia honors them on `ink-2*`/`ink-preview*` only and caps a connection at 100 terms / 1200 characters, truncating past that with a warning. AssemblyAI **refuses** a session carrying more than 100, so TurnCall keeps the first 100 with a warning. Blanks and duplicates are dropped at the API boundary. AssemblyAI's default is the $0.15/hr English model rather than pipecat's (Universal-3.5 Pro, three times that); it splits its models by language instead of taking one, so an agent whose `stt.language` is not English and names no model gets `universal-streaming-multilingual` (en/es/de/fr/pt/it) — the English model transcribes Spanish as English words, with no error. Pipecat reads only its declared settings onto AssemblyAI's URL, so `stt.extra` is promoted onto them by name (`domain`, `mode`, `voice_focus`…) and a key with no such setting is warned about. It runs in pipecat's turn mode: TurnCall's VAD and Smart Turn decide the turn. **xAI** (#394, `orchestrator/xai_stt.py`, on the `xai` account) refuses the whole connection over 100 keyterms or for one over 50 characters, so longer terms are dropped and the list capped at 100, each warned about. Pipecat sends no keyterms and drops all of `stt.extra`, so the subclass adds them to the URL: `endpointing`/`interim_results`/`diarize` go onto pipecat's settings, `format`/`filler_words`/`vad_threshold`/`smart_turn`/`smart_turn_timeout` onto the URL, anything else is warned about and dropped. It sends xAI's `finalize` when VAD hears the caller stop, as pipecat's Deepgram does (final 0.23 s after speech instead of 0.86 s, measured at 8 kHz). A wrong key is a handshake 400, read as `key_rejected` (`XAIKeyRefusal`). **Deepgram Flux** (#204) is a `flux-*` model on `deepgram` (`flux-general-en`, `flux-general-multi`; same account and key), served by pipecat's own Flux service on `/v2/listen`, and it **owns end-of-turn**: the user aggregator gets Flux's StartOfTurn/EndOfTurn (`ExternalUserTurnStrategies`, barge-in per `interruption_enabled`), Smart Turn is not built whatever `smart_turn_detection` says (it would wait again after Flux's verdict), and `silence_timeout_ms` is not read. VAD stays at pipecat's 0.2s deciding nothing — it is what the latency observer measures from, so without it a Flux call records no `metrics.turn`. Flux's own knobs (`eot_threshold`, `eot_timeout_ms`, `eager_eot_threshold`, `min_confidence`, `language_hints`) go in `stt.extra` and are set on their fields, since Flux sends no `extra`; any other key is logged and dropped. `eager_eot_threshold` also turns on the speculative reply (pipecat's `enable_eager_end_of_turn` + `EagerUserTurnStrategies`): the LLM answers Flux's EagerEndOfTurn and its own `SpeculationGate` holds the reply until EndOfTurn, a speculative tool call is withdrawn rather than run. `stt.language` is not sent (`-multi` auto-detects). `stt.failover` and `tts.failover` (#223) are the same failover for the speech roles: ordered backup STT/TTS configs, each validated and keyed exactly like `stt`/`tts` (an entry is a whole config — its `keyterms`/`pronunciations`/`language` are its own, never inherited), switched on an **unusable** error only, never switched back — and a stall counts: a TTS with a backup is written off after **one** reply that ends with no audio (pipecat's default is three), and an STT after **two** turns in a row where the caller spoke and waited 3s with nothing transcribed (pipecat reports no error for that at all); the last member of a group is never written off for either, since that would end the call. OpenAI TTS requests time out after 10s between chunks (the SDK's 600s held a hung-up call's session and live-call slot open), recorded as `provider.failover` with `role: stt|tts`. What "the call continues" means per role is a **replay** (`orchestrator/failover.py`): the STT backup is handed the caller's speech no member transcribed yet (audio since the last final transcript, bracketed by VAD frames sent *upstream* so a segmented backup — OpenAI, ElevenLabs — hears a whole segment and nothing downstream sees a new turn), and the TTS backup the reply being spoken, from its start (a reply half-said before the failure is said again in full). Both replay the **original** frames: the switcher passes a frame id out once and observers report one once, so neither the caller's audio nor the reply's bracket is delivered twice. Refused on S2S (422). An STT group cannot mix Deepgram Flux (`flux-*`) with other models (422): turn handling is chosen at build from the primary (#204), and a switch across that line would leave every turn on pipecat's 5s timeout. One rule (`deepgram_flux.mixes_flux`) is applied twice — at the API, and at build, since a call-init inline agent never passes the API's schema; there the call fails at build (`pipeline_error`, `error.raised`) |
-| LLM | `llm.model` empty = the provider's house model (`gpt-5.4-mini` for openai — `gpt-4o-mini` until OpenAI deprecated it, 2026-10-30; an agent that named it keeps it —, `claude-sonnet-5` for anthropic, `gemini-3.6-flash` for google, `grok-4.20-non-reasoning` for xai). `ollama`, `custom_openai`, `bedrock` and `openrouter` have none — the model *is* the deployment there — so an unnamed one is a 422 at create rather than a dead call. It used to default to `gpt-4o-mini` for **every** provider (Anthropic: `404 not_found_error`), and `model_dump()` persisted that into existing agents, so the value is read as unset off OpenAI. `openai` (default), `anthropic` (Claude), `google` (#205: Gemini, voice + text, on the `google` account Gemini Live already uses; tools on both routes — the text dialect sends `parametersJsonSchema` and hands the model's turn back verbatim, since Gemini 3 refuses a follow-up whose function call lost its `thoughtSignature`; **Gemini 3 is sent no temperature** — Google says it loops below its own 1.0, and 0.7 is TurnCall's default, not the agent's — while pre-3 models still get one; `llm.extra` merges into the generation config last on both routes, so it sets one anyway or a `thinkingConfig`; `base_url` is a 422; works as an `llm.failover` entry), `xai` (#393: Grok, pipecat's `pipecat.services.xai.llm` — never the deprecated `grok` module — voice + text, tools on both, works as an `llm.failover` entry and with `warm_up`; the text path always posts to `https://api.x.ai/v1`, so `base_url` is a 422 and a stored one is ignored; `reasoning_effort` rides on pipecat's own setting, `minimal` is a 422 and xAI's non-reasoning models reject any value; a wrong key is xAI's 400, read as `key_rejected` by `orchestrator/xai_errors.XAIKeyRefusal`. The `base_url` and `minimal` refusals are one rule, `orchestrator/xai_config.llm_refusal`, applied at the API and at build, where a call-init inline agent or failover member breaking it fails the call (`pipeline_error`)), `ollama` (local), `custom_openai` (any OpenAI-compatible endpoint), `openrouter` (multi-model + `fallback_models` routing, voice only), `bedrock` (AWS-hosted Anthropic/Meta/Mistral/Amazon models — a *gateway*, not a vendor; credentials come from the agent's `aws` block, and `llm.extra` passes through to `additionalModelRequestFields` for e.g. Anthropic extended thinking. See `adr/0016`). Sampling: `llm.temperature` (0–2, default 0.7) + `llm.max_tokens` (default 1024) apply on voice and chat/SMS; the voicemail classifier stays pinned at 0.1. **Claude is sent no temperature at all, on either route** — `anthropic` direct and `anthropic.*` models via `bedrock`. Current Claude models reject it (`400 "temperature is deprecated for this model"`), which made the service unusable and ended the call. The deprecation belongs to the model, so it travels with the model rather than the endpoint; the other vendors `bedrock` fronts (Meta, Mistral, Amazon) still get one. `llm.extra` is the way to set one on an older model that still accepts it — e.g. `"extra": {"temperature": 0.3}`. The Anthropic SDK dropped `temperature`/`top_k`/`top_p` from `messages.create()`, so TurnCall routes any key it won't take by name into `extra_body` (checked against the SDK's own signature). Passing one directly used to raise `TypeError` on the first LLM turn. **Claude caches its prompt** (#374): every `anthropic` LLM a call builds (failover members and an `openai_live` delegate included) sets pipecat's `enable_prompt_caching`, and the text path sends its system prompt as one `cache_control` block, at Anthropic's default 5-minute TTL with no per-agent setting (ADR-0028's addendum). `llm.reasoning_effort` (`minimal`\|`low`\|`medium`\|`high`, unset by default) sent via `extra_body` on voice + chat/SMS — OpenAI-family only (openai/openrouter/custom_openai; and `xai`, through pipecat's setting), for reasoning models (o-series/gpt-5); classifier forces it off. See `adr/0014`. **On `openai` the model decides what is sent** (`services/openai_models.chat_params`, voice and text, measured 2026-10-30): `max_completion_tokens` always (the gpt-5 family 400s `max_tokens`); no `reasoning_effort` to a model that does not reason (gpt-4o, gpt-4.1 400 it), no `minimal` but to gpt-5.0, and none beside function tools on gpt-5.4 and later (a voice call counts as having tools, since it can gain them mid-call); no `temperature` to a model that always reasons (o-series, gpt-5/-mini/-nano) or while an effort is sent. A dropped effort is logged `openai_param_dropped`, never a failed call; OpenAI-compatible endpoints get the config as is. `llm.warm_up` (default false) sends one 1-token completion with the system prompt on the call's own client as the caller's **first** turn starts (`orchestrator/llm_warm_up.py`) — not at call start, since the OpenAI client drops a connection idle for 5s; cascade voice, OpenAI-compatible services only, any other is logged and skipped. `llm.failover` (#222) is an ordered list of backup LLM configs, each validated and keyed like `llm` itself: when the active LLM reports an error that leaves it **unusable** (pipecat's verdict — 401/403/400/404), a voice call moves to the next and the turn that failed is replayed there, so the caller is answered; a recoverable error (429, 5xx, timeout) does not switch, and a failed service is never switched back to. Each switch is a `provider.failover` call event `{role, from, to, error}` and an entry in `failovers` on `call.ended` and the call read; in an eval it is among the iteration's `agent_errors`. Cascade voice, plus an `openai_live` **client delegate** (#246) — that delegate is an ordinary LLM, so it is built as the same group and records the same event; refused on every other S2S agent, responses mode included (422), ignored on chat/SMS. Tools and a handoff's prompt reach every member. OpenRouter's `fallback_models` is separate and unchanged |
+| LLM | `llm.model` empty = the provider's house model (`gpt-5.4-mini` for openai — `gpt-4o-mini` until OpenAI deprecated it, 2026-10-30; an agent that named it keeps it —, `claude-sonnet-5` for anthropic, `gemini-3.6-flash` for google, `grok-4.20-non-reasoning` for xai). `ollama`, `custom_openai`, `bedrock` and `openrouter` have none — the model *is* the deployment there — so an unnamed one is a 422 at create rather than a dead call. It used to default to `gpt-4o-mini` for **every** provider (Anthropic: `404 not_found_error`), and `model_dump()` persisted that into existing agents, so the value is read as unset off OpenAI. `openai` (default), `anthropic` (Claude), `google` (#205: Gemini, voice + text, on the `google` account Gemini Live already uses; tools on both routes — the text dialect sends `parametersJsonSchema` and hands the model's turn back verbatim, since Gemini 3 refuses a follow-up whose function call lost its `thoughtSignature`; **Gemini 3 is sent no temperature** — Google says it loops below its own 1.0, and 0.7 is TurnCall's default, not the agent's — while pre-3 models still get one; `llm.extra` merges into the generation config last on both routes, so it sets one anyway or a `thinkingConfig`; `base_url` is a 422; works as an `llm.failover` entry), `xai` (#393: Grok, pipecat's `pipecat.services.xai.llm` — never the deprecated `grok` module — voice + text, tools on both, works as an `llm.failover` entry and with `warm_up`; the text path always posts to `https://api.x.ai/v1`, so `base_url` is a 422 and a stored one is ignored; `reasoning_effort` rides on pipecat's own setting, `minimal` is a 422 and xAI's non-reasoning models reject any value; a wrong key is xAI's 400, read as `key_rejected` by `orchestrator/xai_errors.XAIKeyRefusal`. The `base_url` and `minimal` refusals are one rule, `orchestrator/xai_config.llm_refusal`, applied at the API and at build, where a call-init inline agent or failover member breaking it fails the call (`pipeline_error`)), `ollama` (local), `custom_openai` (any OpenAI-compatible endpoint), `openrouter` (multi-model + `fallback_models` routing, voice only), `bedrock` (AWS-hosted Anthropic/Meta/Mistral/Amazon models — a *gateway*, not a vendor; credentials come from the agent's `aws` block, and `llm.extra` passes through to `additionalModelRequestFields` for e.g. Anthropic extended thinking. See `adr/0016`). Sampling: `llm.temperature` (0–2, default 0.7) + `llm.max_tokens` (default 1024) apply on voice and chat/SMS; the voicemail classifier stays pinned at 0.1. **Claude is sent no temperature at all, on either route** — `anthropic` direct and `anthropic.*` models via `bedrock`. Current Claude models reject it (`400 "temperature is deprecated for this model"`), which made the service unusable and ended the call. The deprecation belongs to the model, so it travels with the model rather than the endpoint; the other vendors `bedrock` fronts (Meta, Mistral, Amazon) still get one. `llm.extra` is the way to set one on an older model that still accepts it — e.g. `"extra": {"temperature": 0.3}`. The Anthropic SDK dropped `temperature`/`top_k`/`top_p` from `messages.create()`, so TurnCall routes any key it won't take by name into `extra_body` (checked against the SDK's own signature). Passing one directly used to raise `TypeError` on the first LLM turn. **Claude caches its prompt** (#374): every `anthropic` LLM a call builds (failover members and an `openai_live` delegate included) sets pipecat's `enable_prompt_caching`, and the text path sends its system prompt as one `cache_control` block, at Anthropic's default 5-minute TTL with no per-agent setting (ADR-0028's addendum). `llm.reasoning_effort` (`minimal`\|`low`\|`medium`\|`high`, unset by default) sent via `extra_body` on voice + chat/SMS — OpenAI-family only (openai/openrouter/custom_openai; and `xai`, through pipecat's setting), for reasoning models (o-series/gpt-5); classifier forces it off. See `adr/0014`. **On `openai` the model decides what is sent** (`services/openai_models.chat_params`, voice and text, measured 2026-10-30): `max_completion_tokens` always (the gpt-5 family 400s `max_tokens`); no `reasoning_effort` to a model that does not reason (gpt-4o, gpt-4.1 400 it), no `minimal` but to gpt-5.0, and none beside function tools on gpt-5.4 and later (a voice call counts as having tools, since it can gain them mid-call); no `temperature` to a model that always reasons (o-series, gpt-5/-mini/-nano) or while an effort is sent. A dropped effort is logged `openai_param_dropped`, never a failed call; OpenAI-compatible endpoints get the config as is. A hosted `openai` or `openrouter` chat completion on a voice call with no response headers (they come with the first token) within `LLM_STALL_SECONDS` (5 s) is abandoned, logged `llm_request_stalled` and sent again, twice, the third attempt unbounded (`orchestrator/llm_stall.py`): measured 2026-10-31, one `gpt-5.4-mini` request in 10-20 gets no answer for 30 s+, from a laptop as from the container, and the same request sent again answers in under a second; calls c02c84fd and ebfa5e53 sat 16 s in silence on one. pipecat's own `retry_on_timeout` re-sends once, unbounded, logging at DEBUG, and ebfa5e53 still stalled with it. Not for a model that reasons first, whose first token may take longer: one sent a reasoning effort, or one that always reasons (`openai_models.always_reasons`: the o-series, gpt-5.0). On OpenRouter only when the model and every `fallback_models` entry are OpenAI's own (`openai/o3` read as `o3`), since OpenRouter may answer with any of them: another vendor's may reason first with no effort sent, and the stall was measured on OpenAI. Every LLM the voice path builds this way gets it — failover members, an `openai_live` client delegate, the voicemail classifier. The text path (`llm_text`) is not covered. `llm.warm_up` (default false) sends one 1-token completion with the system prompt on the call's own client as the caller's **first** turn starts (`orchestrator/llm_warm_up.py`) — not at call start, since the OpenAI client drops a connection idle for 5s; cascade voice, OpenAI-compatible services only, any other is logged and skipped. `llm.failover` (#222) is an ordered list of backup LLM configs, each validated and keyed like `llm` itself: when the active LLM reports an error that leaves it **unusable** (pipecat's verdict — 401/403/400/404), a voice call moves to the next and the turn that failed is replayed there, so the caller is answered; a recoverable error (429, 5xx, timeout) does not switch, and a failed service is never switched back to. Each switch is a `provider.failover` call event `{role, from, to, error}` and an entry in `failovers` on `call.ended` and the call read; in an eval it is among the iteration's `agent_errors`. Cascade voice, plus an `openai_live` **client delegate** (#246) — that delegate is an ordinary LLM, so it is built as the same group and records the same event; refused on every other S2S agent, responses mode included (422), ignored on chat/SMS. Tools and a handoff's prompt reach every member. OpenRouter's `fallback_models` is separate and unchanged |
 | TTS | `deepgram` (default), `openai`, `elevenlabs`, `cartesia` (Sonic-3.6, streaming, 60+ emotions), `xai` (#395: xAI's voices on the `xai` account, `voice` defaults to `eve`, at the transport's rate; pipecat's **HTTP** `XAIHttpTTSService` — its WebSocket one sends no `text.done` until the reply ends and xAI holds the audio for it, measured as half a second of speech then silence. xAI TTS has no model, so `tts.model` is not sent and the failover label names the voice. `speed` outside 0.7–1.5 is a 422, failover entries included, since xAI 400s it; the same rule (`orchestrator/xai_config.tts_refusal`) fails the build of a call-init inline agent. A wrong key is **not** `key_rejected` here: pipecat's HTTP TTS reports xAI's refusal as an `ErrorFrame` with no exception, so there is nothing to classify — a backup in `tts.failover` is what keeps the call speaking (written off after one reply with no audio). `tts.extra`'s `optimize_streaming_latency`, `text_normalization` and `language` go onto the settings. No pronunciation markup: `pronunciations_unreadable`. Its `[laugh]`-style tags are stripped like any other stage direction). `tts.pronunciations` is one flat word→IPA map (`{"Metformin": "mɛtˈfɔɹmɪn"}`) — the outbound mirror of `stt.keyterms`: one spelling, each provider's own markup generated from it (Cartesia inline phonemes, ElevenLabs SSML `<phoneme>`, Deepgram inline object; OpenAI has none). Validation is **TurnCall's own**, at the API boundary: pipecat's IPA utilities normalize and tokenize but never reject, so `met-FOR-min` would be accepted, inserted into the markup and do nothing — it is a 422 naming the word. `/…/` and `[…]` are stripped and the value stored canonically, so two spellings are one config; blanks are dropped and an empty map equals absence. Whether the built voice can *read* the markup is decided at pipeline build, not at create — on ElevenLabs it takes a phoneme-capable model **and** `enable_ssml_parsing` — and is a **warning** naming the provider, never a refusal, since an agent's voice changes after its pronunciations are written. That flag is a constructor kwarg no `tts.extra` could reach, so the pipeline factory passes it, for exactly the agents that have pronunciations *and* a model pipecat lists in `ELEVENLABS_PHONEME_MODELS` — never for everyone, since SSML parsing changes how **all** of that agent's text is read (#147). The model stays the author's: a phoneme-incapable one is warned about, never downgraded — and the markup is **withheld** from it, because a `<phoneme>` tag reaching a service that is not parsing SSML is *spoken aloud* (measured on the WebSocket: 3.5-4.3x the audio), which is worse than the mispronunciation. One unusable word is spoken as written; it never silences the reply. Two things that cannot be refusals ride back as **`warnings` on the agent read** instead (#148, derived every read, never stored, the shape #95 set for eval scenarios): a "pronunciation" equal to its own spelling (`{"Metformin": "metformin"}` — legal IPA *notation*, so the 422 cannot see it, and it reaches the voice as real markup), and a voice that will not read the markup, which #147 knew at build and said only to a log. The transform is registered **last** (a later transform would eat the markup — markdown stripping and an SSML tag). Cartesia's inline tags (`<emotion value="…"/>`, `speed`, `volume`, `break`, `spell`), which a prompt may ask the model to write, reach only a Cartesia voice: every other TTS's stage-direction transform (`stage_direction_transform`) strips them (`voice_tags=False`), so a Deepgram backup does not read them aloud, and the transcript tap strips them too. Cascade only: an S2S agent has no TTS stage and is warned at build. `tts.failover`: see the STT row (#223). |
 | S2S | `openai` (Realtime API), `openai_live` (GPT-Live-1, full duplex; it calls **no tools itself** and hands them to a *delegate* — `s2s.delegation` `{mode, model, reasoning_effort, service_tier, instructions, timeout_seconds}`. `client` (#244, the **default** for an agent with static or MCP tools, or a `tool`-mode KB, and no block; none without tools) builds the agent's own `llm` the way cascade does and runs it in pipecat's `BackendLLMWorker` with the tools and TurnCall's handlers on it — the live service's context carries none; `timeout_seconds` (default 30) bounds each delegation, and the delegate's account joins `missing_keys`. Call control works in client mode too (#245): the worker is outside the call's pipeline, so `end_call`/`do_not_call` reach the call's `HangupAfterReply` directly (`register_tools(..., hangup_gate=)`) instead of pushing from the delegate's LLM, inside the same shielded record. One goodbye (#262): gpt-live-1 used to answer the caller's "bye" itself and then voice the delegate's goodbye too, since the delegate's transcript ends where its delegation began. So in client mode the delegation paragraph tells gpt-live-1 to leave the goodbye to the delegation (`GOODBYE_TO_THE_DELEGATE`, only with `end_call`), and the delegate's tool only *marks* the call as ending (`begin_ending`): the live service arms the gate as it relays the delegate's answer, once gpt-live-1 is quiet, so a filler it said meanwhile ("One moment") is not taken for the goodbye. It still answers a "bye" itself at times, so when what it said since the caller last spoke reads as a goodbye (English phrases, `delegation_events._FAREWELL`), the delegate's is dropped and the call ends after gpt-live-1's. And when both the caller and gpt-live-1 have said goodbye, nothing is in flight and no ending tool follows within `_UNENDED_GOODBYE_SECS` (4 s; a delegation in flight holds the wait and its end restarts it), the call ends itself after the reply playing, recorded as `call.ended` source `control`, reason `goodbye_without_end_call` (#413; only for an agent offering `end_call`, never in an eval). With nothing of the delegate's to relay — an empty or failed answer, whose pipecat stand-in sentence then goes as thinking rather than commentary — the call ends after the reply playing (`HangupArmFrame(current_reply=True)`). `model`/`reasoning_effort`/`service_tier` are a 422 in client mode. `responses` (#243) is an OpenAI-hosted Responses model whose function calls the live service runs with TurnCall's handlers in the call's pipeline, so `end_call`'s hangup gate works; `timeout_seconds` bounds each such call. gpt-live-1's instructions gain a generated paragraph naming every tool; `system_prompt` reaches both, `delegation.instructions` replaces the delegate's. `s2s.extra.backend_model` is read as responses mode with that model. 422: `delegation` on any other provider, responses without `model`, `handoff_to_agent` among its tools. It waits for speech, so its session opens on a trailing developer message — the `first_message`, or a greeting — which pipecat sends as commentary once the session starts, the API's way of asking it to speak first (#248, `s2s_opening_messages`). Gemini Live and Nova Sonic open on a trailing **user** message instead, the turn each answers (#381: Gemini's adapter hands the system instruction back as a message for an empty context, so the service seeded nothing to answer; Nova Sonic 2 answers only a context ending in a user message); Realtime opens on the empty context), `google` (Gemini Live, `gemini-3.8-live`; `voice` defaults to `Charon`), `aws` (Amazon Nova Sonic 2, `amazon.nova-2-sonic-v1:0`; `voice` defaults to `matthew`, `s2s.extra.endpointing_sensitivity` = `LOW`\|`MEDIUM`\|`HIGH`. Sessions roll over every ~6 min and credentials are re-resolved each time. See `adr/0016`), `xai` (Grok Voice, #386: pipecat's `xai` realtime module, never the deprecated `grok` one; `grok-voice-3.0` pinned rather than the `grok-voice-latest` alias, `voice` defaults to `eve`; its own `xai` account, project credential then `XAI_API_KEY`; audio is PCM at the transport's rate. xAI answers a wrong key's handshake with a 400, not a 401, so the service files that one as AUTHENTICATION and `error.raised` still carries `key_rejected`. Opens on the empty context like Realtime: pipecat answers Grok's first context with a `response.create`, and `tests/live/test_live_xai_realtime.py` checks that it greets. #387, `orchestrator/grok_voice.py`: `s2s.base_url` (message points to gateway mode on `openai`), `s2s.temperature` and `s2s.max_tokens` are a 422 — Grok's session has none — and, since a call-init inline agent skips the schema, the same rule fails the build; `s2s.extra`'s `reasoning`/`replace`/`resumption` are set onto the session by name in xAI's shape (a bad value is a 422 naming `s2s.extra.<key>`), any other key warned about and dropped; `pipecat_vad` is pipecat's manual mode, `turn_detection=None`) — set `pipeline_mode: "s2s"`. Knowledge bases: `prompt` + `tool` on every provider, `auto` warned about and skipped (#254, see Knowledge Base). Sampling: `s2s.max_tokens` (both), `s2s.temperature` (google only — Realtime GA rejects it with 422). `openai` accepts an optional `s2s.base_url` (`wss://`) to target an OpenAI-Realtime-compatible gateway (Vercel AI Gateway, LiteLLM) — routes models like `openai/gpt-realtime-2` over the same protocol (Grok Voice is the `xai` provider, not a gateway). SSRF-gated by `BYOM_ALLOWED_URL_PATTERNS`. `s2s.model`/`s2s.voice` default to OpenAI's (`gpt-realtime-2.1`/`alloy`) whatever the provider, so each non-OpenAI path swaps those sentinels for its own — and passes an explicitly chosen value through untouched, so a wrong one is reported by the provider rather than silently replaced |
 
@@ -163,7 +163,7 @@ project's OpenAI key (its endpoint is the agent's own). No code reads
 
 Cascade (default):
 ```
-transport.input → STT → [VoicemailDetector] → user_agg (VAD + SmartTurnV3) → [KnowledgeRetrieval] → LLM → TTS → [VM gate] → transport.output → asst_agg → observability
+transport.input → STT → [VoicemailDetector] → user_agg (VAD + SmartTurnV3) → [KnowledgeRetrieval] → ProcedureWindow → LLM → MoveAfterSpeech → TTS → [VM gate] → transport.output → asst_agg → observability
 ```
 
 S2S (`pipeline_mode: "s2s"`):
@@ -783,8 +783,8 @@ Inbound call → resolve phone number → routing_target_type == "webhook"?
 
 Template variables (`{{name}}`, `\w+` only — no spaces, no dots; an unsent one
 stays literal) live on the call row as `metadata_json["template_variables"]`
-and render `system_prompt`, `first_message`, tool descriptions and
-`s2s.delegation.instructions`. A `handoff_to_agent` (tool or API) gives the
+and render `system_prompt`, `first_message`, tool descriptions,
+`s2s.delegation.instructions` and each procedure step's `text` (#447). A `handoff_to_agent` (tool or API) gives the
 target agent the same call's variables and call-init `knowledge_context`
 (`tool_bridge._as_this_call`), rendered then prepended as at the call's start.
 
@@ -919,6 +919,7 @@ PDF, TXT, Markdown, DOCX, CSV, JSON, YAML, XML, TSV
 - `services/document_ingestion.py` — Upload, extract, chunk, embed pipeline
 - `services/retrieval.py` — Query embedding + pgvector search + formatting
 - `orchestrator/knowledge_processor.py` — Pipecat FrameProcessor (auto mode) + tool handler (tool mode)
+- `orchestrator/turn_message.py` — `replace_turn_message(context, marker, make)` (#441): the one per-turn `developer` message before the caller's turn, the previous turn's taken out, the context re-read after `make`. Auto mode's passages ride on it; each user has its own marker (the text the message starts with), so two never take out each other's
 - `storage/repositories/knowledge_repo.py` — KB, document, chunk, link CRUD
 - `api/v1/knowledge.py` — REST endpoints
 - `adapters/storage/` — Local filesystem and S3 storage adapters
@@ -1239,6 +1240,229 @@ Key files: `api/v1/skills.py`, `api/v1/schemas/skills.py`,
 `tests/unit/test_skill_attachment_rules.py`, `tests/unit/test_text_skills.py`,
 `tests/unit/test_text_turn_refresh.py`.
 
+## Procedures
+
+A graph of steps an agent follows on a cascade voice call (PRD #417,
+ADR-0032): **the system holds the route, the model sees a window.**
+`config.procedures` = `[{name, description, start: call|on_request,
+window_depth, steps: [{id, kind: ask|instruct|check|escalate|end, text,
+start, tool, moves: [{to, when}], escalate: {transfer_call | handoff_to_agent}}]}]`
+(kind, start and transfer mode are `domain/enums` `StepKind`,
+`ProcedureStart`, `TransferMode`)
+— part of the agent config, so it versions, publishes, rolls back and
+A/B-routes with the agent, and a call-init inline agent carries its own.
+
+- **Layers.** `domain/procedures.py` the shapes (permissive: an inline agent
+  arrives past the API schema, and a broken graph is the build's to refuse
+  with a reason, #444) and `MOVE_TO_STEP`; `domain/procedure_graph.py` the
+  graph rule; `api/v1/schemas/procedures.py` the
+  strict schema (`AgentConfigSchema.procedures`); `domain/procedure_window.py`
+  the pure window builder (`build_window(procedure, path, depth=)`, marker
+  `[Procedure]`); `domain/procedure_state.py` the immutable per-call state
+  (`ProcedureState`, `ProcedureRun(name, path)`) and the pure `move(state,
+  procedure, to) -> MoveOutcome`; `orchestrator/procedures.py` the pipecat
+  side. No pipecat in the first five.
+- **At build** (`pipeline_builder._assemble`, before `_with_skills` so a
+  skill load keeps the tool): `with_procedures` adds `move_to_step` first in
+  `tools` and puts a `CallProcedures` holder on the context
+  (`CallContext.procedures`, every context starts with an empty one) with each
+  `start: "call"` procedure running at its start step, each start recorded
+  (below). Skipped on S2S (warned, below).
+- **The window.** `ProcedureWindowProcessor`, in every cascade pipeline right
+  before the LLM (after the KB auto processor), puts one `developer` message
+  right before the caller's turn via `turn_message.replace_turn_message`,
+  replacing the previous turn's: the current step and its text, the allowed
+  moves with their `when`, `← back to <previous>` (always allowed), a preview
+  up to `window_depth` ahead (headed as what comes next, not what to do
+  now: calls e624caad, 7d351817 and bd7e197d did a previewed step's work
+  without the move), and — when a move from here reaches an
+  `escalate` step — `If the procedure cannot resolve the caller's problem,
+  escalate: move to <id>.` The rest of the graph never enters the prompt.
+  The inference after a tool result gets no window (the context does not end
+  on the caller's turn), which is why an accepted move's result carries the
+  new step's text. Guard: `tests/unit/test_procedure_window_wiring.py`.
+- **`move_to_step`** (`{procedure, to}`; a built-in, never listed in `tools`
+  — a 422 there) runs `procedure_escalation.run_move` from `tool_bridge`:
+  `run_move_to_step` checks and applies the move with no `await` in between,
+  the holder's state replaced in one assignment (`CallProcedures.replace`,
+  the only swap). A move from the current step or back to the previous one
+  is accepted (back pops the path), its result giving the new step's text,
+  its tool and `Then move on: <its moves>` — a step tool's result comes with
+  no window, so this is how the model knows to move once the tool is done;
+  and the step's own tool, when it answers, says it again: its result as the
+  model reads it gains `[Procedure] '<name>' is at step '<id>', whose tool
+  this was. If one of its moves now applies, report it with move_to_step
+  before you reply: <moves>. If none does, stay on '<id>'.` ("if one
+  applies": a failed tool may leave none), and the tool of a step one move
+  ahead names that move and the one after, "if you called it for that step"
+  (the same tool may answer a side question; call 7d351817 booked from
+  `invite` and was recorded ending there) — never when that step is an
+  `escalate` one, whose move would run its transfer or handoff again
+  (`ProcedureState.step_tool_followup`; `tool_bridge._with_followup` puts it
+  on the result callback itself, so every path carries it: webhook, MCP,
+  built-ins including those that deliver their own result (`end_call`,
+  `load_skill`), a `query_knowledge` search (`recorded_tool`) and an eval's
+  mock; read when the result arrives, since a move beside the tool in one
+  response may land after it starts; the recorded result stays the tool's),
+  since a skill load or other calls
+  can sit between the move and the tool (call c02c84fd never moved to
+  `confirmed`). A
+  move to the current step is the model staying put: `success: true`,
+  `details.stayed`, the allowed moves named, no event either way. Anything
+  else is refused, the result naming the allowed moves (`details.allowed`)
+  and the window staying put. The result is the `{success, message,
+  details}` JSON the other built-ins answer.
+- **Reaching an `end` or `escalate` step finishes the procedure**: it leaves
+  `ProcedureState.runs` for `finished` (`_placed`), its window stops, the
+  move's result says `The procedure is finished here.`, and every later move
+  on it — a move back included — is refused (`'<name>' is finished: it ended
+  at step '<id>'`, `details.allowed: []`), so `completed` / `escalated_at`
+  cannot be undone. A finished `on_request` procedure is not started again.
+  A procedure started at an ending step is finished at once.
+- **A move costs no extra inference** (#445). `MoveAfterSpeech`, right after
+  the LLM (the failover group) in every cascade pipeline, sets the `run_llm`
+  of each result in a response that reported a move: False until the
+  response's last call settles, then True, or False when the response spoke
+  (a non-blank `LLMTextFrame` the TTS reads) and held only moves. So speech
+  plus a move is one inference, a move alone gets one that answers the
+  caller, a refusal beside speech is read on the next turn's inference, and a
+  move beside a step's lookup is answered once, with both results in (pipecat's
+  group rule ran the LLM twice when the move settled before the lookup's
+  in-progress frame reached the aggregator). Decided after the LLM, not in
+  the handler, which runs before the text has passed; a SystemFrame can jump
+  data frames, so only the call list (`FunctionCallsStartedFrame`) is read
+  from one. A tool's own `run_llm` (`load_skill`) is kept; a response with
+  no move is pipecat's. The result's properties are set on the frame itself
+  (a rebuilt frame would be a new id to observers). A call cancelled by a
+  barge-in (`FunctionCallCancelFrame`) is waited on no more, and an
+  `InterruptionFrame` forgets every unsettled call, so a sibling's result is
+  never held at `run_llm=False`.
+
+- **The graph rule** (#444): `domain/procedure_graph.procedures_refusal`,
+  pure, first problem wins, `procedures[i] '<name>': step '<id>' ...`. Unique
+  procedure names and step ids, one start step, every move to an existing
+  step, every step reachable from the start, an `end` or `escalate` step,
+  `MAX_STEPS` (50), `MAX_WINDOW_DEPTH` (5), each `escalate` step naming
+  exactly one action and no other step one (#448, `_escalations`); for an
+  inline agent also the kind and start-mode words the schema's Literals cover,
+  and an escalation's E.164 target, transfer mode and agent-id UUID. Applied twice: the
+  `AgentConfigSchema.validate_procedures` validator
+  (`schemas/procedures.procedures_refusal_at_api`, which also refuses
+  `move_to_step` in `tools`; 422
+  `validation_error`, also an eval `inline` target) and
+  `pipeline_builder._check_procedures`, before `with_procedures`, which raises
+  `ValueError` → `pipeline_error` + `error.raised` for a call-init inline
+  agent. The domain `AgentConfig` never raises on procedures (it is parsed
+  before the build): an entry that cannot be read is kept as
+  `Procedure(unreadable=<why>)` (`read_procedure`), which the rule names. A
+  new check is one function in `_CHECKS`. On S2S the build skips them (no
+  rule) logging `procedures_skipped: <message>` from
+  `config_warnings.procedures_on_s2s_warning`, the agent read's
+  `procedures_ignored_on_s2s`.
+- **What a call records** (#443). Each procedure started is a
+  `procedure.step` from null to its start step — a `start: "call"` one at
+  build (`with_procedures`) and a handoff target's (`leave_procedures`),
+  through the holder, `_record_starts`. Each accepted move is a `procedure.step`
+  call event `{procedure, from, to, kind}` (`kind` the step reached), each
+  refused one a `procedure.refused` `{procedure, from, to}` (`from` null when
+  the procedure was not running): stored only, through `turn_metrics
+  .store_call_event`, none when `CallContext.records` is false (an eval).
+  `run_move_to_step` queues the write on the holder (`CallProcedures.record`:
+  each waits for the previous), so two moves in one response are logged in
+  the order made. `procedures` on the call read and `call.ended` is
+  `call_view.call_procedures`, folded from `PROCEDURE_EVENTS` read in one
+  ordered query (`call_repo.list_typed_payloads_by_call`; a new event type
+  joins the tuple and gets a branch in `_walked`): per procedure, in the order
+  each first appears, `{name, path, completed, ended_at, escalated_at,
+  refused_moves}` — `path` every step reached (the first event's `from`, then
+  each `to`, a move back included), `ended_at` the last, `completed` when it
+  is an `end` step, `escalated_at` it when an `escalate` one. A procedure that
+  started and never moved is listed (`path: [<start>]`, not completed); an
+  `on_request` one never started is not. `[]` with none; null once the
+  transcript or the events expired. The events (and #448's `procedure.left`)
+  are transcript-class
+  (`retention.TRANSCRIPT_EVENTS`); `procedure`, `procedures` are redaction
+  structural fields and `from`/`to` (`from`/`reason` on `procedure.left`)
+  identifiers on the events. An
+  `on_request` start (#446) is a `procedure.step` with `from` null.
+- **Start modes, several procedures** (#446). `start: "on_request"`: not
+  running until the model moves it to its start step — `move` starts it
+  (`from_step` None, a new `ProcedureRun` appended; result `Started '<name>'.`
+  + the start step's text). Until then the prompt carries only
+  `## Procedures you can start` (`procedure_window.startable_section`: name,
+  description, start step id, never step text), appended to `system_prompt`
+  by `with_procedures` — static for the call, so it still lists one already
+  started. Any other move in a procedure not running is refused (`'<name>' is
+  not running`, plus `Start it at its start step '<id>'` and
+  `details.allowed: [<start id>]` for an `on_request` one); a `call` one not
+  running is never started by a move. Several may run at once, each its own
+  window in the one `[Procedure]` message; one not running shows no step.
+- **Step tools and variables** (#447). A step's `tool` is shown in the window
+  and its preview (`(check, tool: line_status)`); it is an ordinary agent tool,
+  dispatched and recorded like any other. At save it must be one of the
+  agent's `tools`, a built-in or `query_knowledge`
+  (the graph rule's `callable_tools=`, passed by `AgentConfigSchema` only,
+  never at build; 422
+  `procedures[i] '<name>': step '<id>' names tool '<x>', ...`); an agent with
+  `mcp_servers` is not checked (its tools are discovered at call start).
+  `template_renderer.render_agent_config` renders each step's `text` with the
+  call's `{{variables}}`, so the window, preview and move result show it.
+- **Escalation** (#448, `orchestrator/procedure_escalation.py`). An accepted
+  move onto an `escalate` step runs its action from the `move_to_step`
+  branch (`run_escalation`, after `run_move_to_step`; the step's action is
+  `StepEscalation.action()`, `(tool, arguments)`, also what the graph rule and
+  `_check_escalations` read): `escalate.transfer_call` (the `transfer_call`
+  tool's fields, `briefing` a text or `{"from_summary": true}` as the tool
+  takes it) through
+  `_execute_builtin("transfer_call")`, shielded as the tool is, so it works —
+  and is refused, `UnsupportedCarrierAction` — wherever the tool does;
+  `escalate.handoff_to_agent` (`{agent_id, reason?, context?}`) through
+  `run_handoff`, the tool's and the live API's. The move's result carries the
+  action's: `success` the action's, `details.escalation` `{action, ...its
+  result}`. In an eval the action goes through `tool_mocks.intercept` under
+  its tool's name (mocked, or refused under `mock_only`). The summary reads
+  `completed: false, escalated_at: <step>` from the `procedure.step` alone.
+  At save, `api/v1/agents._check_escalations` 422s (`invalid_agent_config`,
+  `details.field` `procedures[i].steps[j].escalate.handoff_to_agent.agent_id`)
+  a handoff to an agent not in the project; an inline agent's is refused at
+  the call (`_prepare_handoff` is project-scoped).
+- **A handoff ends the procedures** (#448): every handoff — an escalate
+  step, the `handoff_to_agent` tool, `POST /v1/calls/{id}/handoff` — goes
+  through `run_handoff`. `_prepare_handoff` gives the target's config
+  `running_procedures` (the build's transform: `move_to_step`, the startable
+  section, its `call` procedures at their start) before its skills, into
+  `PreparedHandoff.procedures`; `_apply_handoff_context` calls
+  `leave_procedures`, which replaces the **existing** holder's state (the
+  window processor holds that holder) with the target's in one assignment,
+  queues a `procedure.left` `{procedure, from, reason: "handoff"}` on the
+  holder for each procedure still running (a finished one is not), then the
+  target's starts. Nothing awaited
+  (`test_handoff_switch_is_atomic.py`). In the summary a left procedure ends
+  where it was left, not completed.
+- **In an eval** (#449): `move_to_step` is never mocked
+  (`tool_mocks.NEVER_MOCKED`, beside `load_skill`): it runs under
+  `mock_only`, the procedure accepting or refusing it, recorded in
+  `tool_calls` with outcome `applied` (a refused move too, its result saying
+  so); a scenario's mock for it is ignored with a `mock_ignored` warning
+  (`run_warnings.warn_never_mocked`, which names what each ignored tool
+  changes). A move is a tool call, so a `function_call` expectation (`calls:`
+  with `{procedure, to}`) asserts the path, and an agent that skips a step
+  scores `failed`, never `errored`. No `procedure.*` events (`records` is
+  false). Tests: `tests/integration/test_eval_procedures.py`,
+  `tests/unit/test_eval_procedures.py`.
+
+Tests: `tests/unit/test_procedure_window.py`, `test_procedure_state.py`,
+`test_procedure_graph.py`, `test_procedures_on_s2s.py`, `test_move_after_speech.py`,
+`test_procedure_events.py`, `test_call_view.py`,
+`tests/integration/test_procedures_api.py`,
+`tests/integration/test_harness_call_procedures.py`,
+`test_harness_call_procedure_rules.py`,
+`tests/integration/test_harness_call_procedure_steps.py`,
+`tests/integration/test_harness_call_procedure_record.py`,
+`tests/integration/test_harness_call_procedure_moves.py`,
+`tests/integration/test_harness_call_procedure_escalation.py`,
+`tests/unit/test_procedure_escalation.py`.
+
 ## A/B Testing
 
 Weighted traffic routing on phone numbers. Deterministic by caller number (SHA256 hash).
@@ -1417,7 +1641,8 @@ and the janitor:
   `account_for_call`'s account), `recording_url`; `recording_status` →
   `expired` (enum value) where there was one, and `recording.ready`'s `*_url`
   fields nulled. Transcript: `TRANSCRIPT_EVENTS` (`transcript.*`,
-  `tool.called`/`tool.result`, `context.injected`), the call's
+  `tool.called`/`tool.result`, `context.injected`, `procedure.step`/
+  `procedure.refused`, `procedure.left`), the call's
   `tool_invocations`, `analysis_json`, and every other event's free-text
   fields (`redaction.text_fields`) nulled. Events: every other call event,
   but `recording.ready` stays while the recording does (deleted with it).
@@ -1942,8 +2167,8 @@ one target.
   refused and the iteration is `errored` naming it; `live` is the typed opt-in
   for read-only tools. What each iteration called lands in its results entry as
   `tool_calls`, each with its `outcome` (`mocked`, `refused`, `executed`, or
-  `applied` for `load_skill`, which is never mocked: it changes the agent under
-  test, #431 — see "Skills"). Mocks are the **scenario's**, never the
+  `applied` for `load_skill` and `move_to_step`, which are never mocked: they
+  change the agent under test, #431, #449 — see "Skills", "Procedures"). Mocks are the **scenario's**, never the
   run's: "the booking succeeds" and "the booking fails" are two tests.
 
 ### Writing a scenario that actually catches a provider regression
@@ -2177,6 +2402,7 @@ POST /v1/calls/{id}/analysis/rerun   # Re-run analysis (admin/developer key)
 | `handoff_to_agent` | Switch to another agent. Refused (422) on an `openai_live` S2S agent | `agent_id` (required), `reason`, `context` |
 | `send_dtmf` | Send keypad tones | `digits` (required) |
 | `load_skill` | Load one of the agent's skills (#424, see "Skills"): its instructions join the prompt and its tools the tool list, the context kept. Offered automatically to an agent with resolved skills, never listed in `tools` | `name` (required) |
+| `move_to_step` | Report a move in one of the agent's procedures (#442, see "Procedures"): accepted when the current step allows it or it goes back to the previous step, else refused naming the allowed moves. Offered automatically to a cascade agent with procedures, never listed in `tools` | `procedure`, `to` (both required) |
 | `do_not_call` | Suppress the caller's number (project-wide), record `call.opted_out`, end the call after the goodbye, like `end_call` (#228). Opt-in like every built-in: listed in `tools` or absent. A call with no E.164 caller (WebRTC) is refused and keeps running | none |
 
 ### Custom Webhook Tools
@@ -2284,7 +2510,7 @@ Headers: `X-TurnCall-Signature` (HMAC-SHA256), `X-TurnCall-Timestamp`, `X-TurnCa
 `call.ended` payload: `status`, `ended_reason`, `from_number`, `to_number`, `direction`,
 `duration_ms`, `provider_call_sid`, `metadata`, `started_at`, `ended_at`,
 `recording_status`, `recording_url`, `summary`, `analysis`, `agent_name`,
-`agent_version`, `latency_summary`, `failovers` (`[{role, from, to, error}]`, `role` `stt`\|`llm`\|`tts`, #222/#223), `skills` (`[{skill, version, pinned, loaded}]`, every skill the call resolved, `[]` with none, #425), `retention` (`{recordings_days, transcripts_days, events_days}`, null = kept for good, #316), and `transcript` (`[{role, text, timestamp}]`).
+`agent_version`, `latency_summary`, `failovers` (`[{role, from, to, error}]`, `role` `stt`\|`llm`\|`tts`, #222/#223), `skills` (`[{skill, version, pinned, loaded}]`, every skill the call resolved, `[]` with none, #425), `procedures` (`[{name, path, completed, ended_at, escalated_at, refused_moves}]`, `[]` with none, null once its events expired, #443; see "Procedures"), `retention` (`{recordings_days, transcripts_days, events_days}`, null = kept for good, #316), and `transcript` (`[{role, text, timestamp}]`).
 
 `latency_summary` is derived from the call's `metrics.turn` events (#179):
 `{turns, user_to_bot, stages: {stt|llm|tts}, slowest_turn}`, each spread being
@@ -2300,14 +2526,15 @@ provider_call_id}`. Dispatched only — there is no event log to store it on.
 Stored-only call events — on the call's event log (`GET /v1/calls/{id}/events`),
 never sent to webhook subscribers, none in an eval: `metrics.turn` (#176),
 `delegation.completed` (#247), `avatar.unavailable` (#402, see "Video
-Avatar"), `voicemail.detected`, and the log's own
+Avatar"), `procedure.step` / `procedure.refused` / `procedure.left` (#443, #448, see "Procedures"),
+`voicemail.detected`, and the log's own
 `call.ended` rows (the carrier's: Twilio's `completed`/`busy`/`no-answer`
 status callback, Telnyx's hangup; and the agent's hangup marker, source
 `control`). Subscribers get the comprehensive `call.ended` instead, which is
 sent and never stored.
 
 The call read (`GET /v1/calls[/{id}]`) carries the same derived fields —
-`ended_reason`, `agent_name`, `agent_version`, `latency_summary`, `failovers`, `skills` — from the same function,
+`ended_reason`, `agent_name`, `agent_version`, `latency_summary`, `failovers`, `skills`, `procedures` — from the same function,
 `services/call_view.py`, so the read and the webhook cannot disagree (#175).
 `ended_reason` is null on the read while the call is still live; agent fields
 are null for an inline agent and for a deleted agent row.

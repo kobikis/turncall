@@ -9,6 +9,7 @@ the live call control API.
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
 import json
 import time
@@ -22,6 +23,13 @@ from loguru import logger
 
 from turncall.domain.enums import ToolExecutionMode
 from turncall.domain.models import BUILTIN_TOOL_NAMES, ToolDefinition
+from turncall.domain.procedures import MOVE_TO_STEP
+from turncall.orchestrator.procedure_escalation import run_move
+from turncall.orchestrator.procedures import (
+    leave_procedures,
+    running_procedures,
+    with_step_followup,
+)
 from turncall.services import call_control
 from turncall.services.skills import LOAD_SKILL
 from turncall.services.template_renderer import (
@@ -29,7 +37,11 @@ from turncall.services.template_renderer import (
     render_agent_config,
 )
 from turncall.services.tool_mocks import intercept
-from turncall.services.tool_webhook import invocation_record, post_tool_webhook
+from turncall.services.tool_webhook import (
+    invocation_record,
+    post_tool_webhook,
+    tool_text,
+)
 
 if TYPE_CHECKING:
     from pipecat.services.llm_service import LLMService
@@ -200,6 +212,23 @@ def _builtin_without_a_platform(function_name: str) -> str:
     )
 
 
+def _with_followup(params: Any, call_context: CallContext, name: str) -> Any:
+    """`params` whose result callback adds the procedure's reminder
+    (`with_step_followup`) to whatever the tool answers, on every path:
+    a mock, and the tools that deliver their own result (`end_call`,
+    `load_skill`) too. The recorded result stays the tool's own."""
+    answer = params.result_callback
+
+    async def followed(result: Any, *rest: Any, **kwargs: Any) -> None:
+        await answer(with_step_followup(result, call_context, name), *rest, **kwargs)
+
+    # A copy, not `dataclasses.replace`: the suite drives handlers with
+    # stand-in params (a namespace), and the original stays untouched either way.
+    followed_params = copy.copy(params)
+    followed_params.result_callback = followed
+    return followed_params
+
+
 def recorded_tool(name: str, handler: Any, call_context: CallContext) -> Any:
     """A tool registered outside `register_tools` — `query_knowledge` — logged
     and recorded as one of them: a `tool_invocations` row and `tool.result`,
@@ -214,17 +243,18 @@ def recorded_tool(name: str, handler: Any, call_context: CallContext) -> Any:
             call_id=str(call_context.call_id),
         )
         args = dict(params.arguments)
+        followed_params = _with_followup(params, call_context, name)
         # Ahead of the search, as `register_tools` does: under `mock_only` an
         # unmocked search is refused, never run against the real knowledge base.
         mocked = intercept(call_context.tool_mocks, name, args)
         if mocked is not None:
-            await params.result_callback(mocked)
+            await followed_params.result_callback(mocked)
             return
         started = time.perf_counter()
 
         async def deliver(result: Any, *rest: Any, **kwargs: Any) -> None:
-            await params.result_callback(result, *rest, **kwargs)
-            text = result if isinstance(result, str) else json.dumps(result)
+            await followed_params.result_callback(result, *rest, **kwargs)
+            text = tool_text(result)
             if call_context.tool_mocks is not None:
                 # A `live` eval: the search really ran, and the run says so.
                 call_context.tool_mocks.ran(name, args, text)
@@ -324,13 +354,14 @@ class PreparedHandoff(NamedTuple):
     is the target agent's (`skill_loader.CallSkills`, none loaded), resolved
     here for the same reason and swapped into the call by the apply step
     (#427); `config` is then the target's with its skills' list and
-    `load_skill`.
+    `load_skill`, and its procedures' `move_to_step`: `procedures` (#448).
     """
 
     name: str
     config: AgentConfig
     frames: tuple[Any, ...]
     skills: Any | None = None
+    procedures: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -473,6 +504,8 @@ async def _prepare_handoff(
 
         from turncall.orchestrator.skill_loader import prepare_handoff_skills
 
+        # Before its skills, as at build: a skill load keeps `move_to_step`.
+        config, procedures = running_procedures(config)
         # The target's skills, resolved as at a call's start: I/O, so here,
         # before the commit — never in the apply step (#427).
         skills, config = await prepare_handoff_skills(config, call_context)
@@ -491,9 +524,7 @@ async def _prepare_handoff(
             servers=[s.name for s in config.mcp_servers],
         )
 
-    return PreparedHandoff(
-        name=target.name, config=config, frames=frames, skills=skills
-    )
+    return PreparedHandoff(target.name, config, frames, skills, procedures)
 
 
 async def apply_switch(
@@ -544,7 +575,8 @@ async def _apply_handoff_context(
     Everything that can wait or raise happened in `_prepare_handoff`, before
     the switch was committed; `apply_switch` is the part that must not
     suspend, and nothing here may either — the skills swap included (#427):
-    from here the call's skills are the target agent's, none loaded.
+    from here the call's skills are the target agent's, none loaded, and
+    so are its procedures (#448).
     """
     await apply_switch(
         prepared.config, prepared.frames, call_context, params, clear_context=True
@@ -552,6 +584,7 @@ async def _apply_handoff_context(
     holder = getattr(call_context, "skills", None)
     if holder is not None and prepared.skills is not None:
         holder.adopt(prepared.skills)
+    leave_procedures(call_context, prepared.procedures)
 
     logger.info(
         "handoff_context: switched system instruction to agent '{name}'",
@@ -719,6 +752,7 @@ def _register_single_tool(
             tool=function_name,
             call_id=str(call_context.call_id),
         )
+        followed_params = _with_followup(params, call_context, function_name)
 
         # An eval's mocks short-circuit ahead of every branch below: a built-in
         # acts on a call that does not exist, a webhook books a real
@@ -727,7 +761,7 @@ def _register_single_tool(
         # dict lookup there. #71.
         mocked = intercept(call_context.tool_mocks, function_name, args)
         if mocked is not None:
-            await params.result_callback(mocked)
+            await followed_params.result_callback(mocked)
             return
 
         started = time.perf_counter()
@@ -742,7 +776,11 @@ def _register_single_tool(
             # no call to end, and the harness owns its length.)
             result = await asyncio.shield(
                 _run_ending_tool(
-                    function_name, dict(args), call_context, params, hangup_gate
+                    function_name,
+                    dict(args),
+                    call_context,
+                    followed_params,
+                    hangup_gate,
                 )
             )
             delivered = True
@@ -751,15 +789,19 @@ def _register_single_tool(
             # `active_agent_id`, then applied without waiting on anything:
             # anything that waits or raises after that commit is a window where
             # the record says handed off and the pipeline never switched. #144.
-            result = (await run_handoff(dict(args), call_context, params)).result
+            result = (
+                await run_handoff(dict(args), call_context, followed_params)
+            ).result
         elif function_name == LOAD_SKILL:
             # Adds a skill's prompt section and tools without clearing the
             # context, and asks for the model's next inference itself, after
             # the switch (#424): so it delivers its own result.
             from turncall.orchestrator.skill_loader import run_load_skill
 
-            result = await run_load_skill(dict(args), call_context, params)
+            result = await run_load_skill(dict(args), call_context, followed_params)
             delivered = True
+        elif function_name == MOVE_TO_STEP:
+            result = await run_move(dict(args), call_context, followed_params)
         elif function_name in BUILTIN_TOOL_NAMES:
             execution = _execute_builtin(function_name, args, call_context)
             # A transfer takes the call away from this pipeline: the carrier
@@ -792,7 +834,7 @@ def _register_single_tool(
         # critical path so they never sit between the caller and the response.
         latency_ms = int((time.perf_counter() - started) * 1000)
         if not delivered:
-            await params.result_callback(result)
+            await followed_params.result_callback(result)
         if call_context.tool_mocks is not None:
             # The tool really ran — a `live` eval, or `load_skill`, which an
             # eval never mocks (#431) — and the run's record says so.

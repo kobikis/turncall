@@ -39,7 +39,13 @@ from turncall.orchestrator.knowledge_processor import (
     knowledge_tool,
     knowledge_tool_definition,
 )
+from turncall.orchestrator.llm_stall import StallRetryingOpenAILLMService
 from turncall.orchestrator.observability import ObservabilityProcessor
+from turncall.orchestrator.procedures import (
+    CallProcedures,
+    move_after_speech_stage,
+    procedure_window_stage,
+)
 from turncall.services.credentials import Credentials
 from turncall.services.llm_models import resolve_llm_model
 from turncall.services.tool_mocks import ToolMocks
@@ -86,6 +92,9 @@ class CallContext:
     # starts with an empty one, so a call whose agent has no skills still has
     # a holder for a handoff to swap the target agent's skills into (#427).
     skills: Any = field(default_factory=_no_skills_yet)
+    # The call's place in its procedures (#442), set at build; every context
+    # starts with an empty one, which the window processor reads every turn.
+    procedures: CallProcedures = field(default_factory=CallProcedures)
 
     @property
     def is_eval(self) -> bool:
@@ -477,6 +486,33 @@ def _openai_extra_body(
     return {"extra_body": body} if body else {}
 
 
+def _openai_llm_class(
+    models: list[str], reasoning_effort: str | None
+) -> type[OpenAILLMService]:
+    """The service class for a hosted OpenAI chat completion: one that re-sends
+    a stalled request (`llm_stall`), unless a model it may answer with reasons
+    first (asked to, or always does), whose first token can legitimately take
+    longer than a stall's limit."""
+    from turncall.services.openai_models import always_reasons
+
+    reasons = reasoning_effort or any(always_reasons(m) for m in models)
+    return OpenAILLMService if reasons else StallRetryingOpenAILLMService
+
+
+def _openrouter_llm_class(
+    models: list[str], reasoning_effort: str | None
+) -> type[OpenAILLMService]:
+    """`_openai_llm_class` for an OpenRouter agent, whose request may be
+    answered by its model or any of its `fallback_models`: cut only when
+    every one is OpenAI's own (`openai/o3` read as `o3`). Another vendor's may
+    reason first with no effort sent, and the stall was measured on
+    OpenAI."""
+    named = [m.rpartition("/") for m in models]
+    if any(vendor != "openai" for vendor, _, _ in named):
+        return OpenAILLMService
+    return _openai_llm_class([name for _, _, name in named], reasoning_effort)
+
+
 def _create_llm_service(
     config: AgentConfig,
     credentials: Credentials,
@@ -522,18 +558,15 @@ def _create_llm_service(
         # OpenRouter is OpenAI-compatible; fallback_models ride in extra_body as
         # the `models` array (primary first), tried in order on rate-limit/error.
         # See ADR-0003. reasoning_effort folds into the same extra_body.
-        models = (
-            {"models": [model, *config.llm.fallback_models]}
-            if config.llm.fallback_models
-            else None
-        )
-        return OpenAILLMService(
+        routed = [model, *config.llm.fallback_models]
+        fallback_body = {"models": routed} if config.llm.fallback_models else None
+        return _openrouter_llm_class(routed, effort)(
             api_key=credentials.api_key("openrouter", config.llm.api_key),
             base_url="https://openrouter.ai/api/v1",
             settings=OpenAILLMService.Settings(
                 model=model,
                 **si,
-                extra=_openai_extra_body(effort, models),
+                extra=_openai_extra_body(effort, fallback_body),
                 temperature=temperature,
                 max_tokens=max_tokens,
             ),
@@ -556,7 +589,7 @@ def _create_llm_service(
         sampling = (
             {} if params.temperature is None else {"temperature": params.temperature}
         )
-        return OpenAILLMService(
+        return _openai_llm_class([model], params.reasoning_effort)(
             api_key=credentials.api_key("openai", config.llm.api_key),
             settings=OpenAILLMService.Settings(
                 model=model,
@@ -1808,7 +1841,9 @@ def create_pipeline(
             voicemail_detector.detector(),
             context_aggregator.user(),
             *([kb_processor] if kb_processor else []),
+            *procedure_window_stage(call_context),
             llm,
+            *move_after_speech_stage(),
             *_hangup_gate(call_context),
             assistant_tap,
             tts,
@@ -1830,7 +1865,9 @@ def create_pipeline(
             customer_tap,
             context_aggregator.user(),
             *([kb_processor] if kb_processor else []),
+            *procedure_window_stage(call_context),
             llm,
+            *move_after_speech_stage(),
             *_hangup_gate(call_context),
             assistant_tap,
             tts,

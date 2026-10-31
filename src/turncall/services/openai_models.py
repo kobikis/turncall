@@ -45,6 +45,13 @@ def _version(model: str) -> tuple[int, int] | None:
     return (int(match.group(1)), int(match.group(2) or 0)) if match else None
 
 
+def always_reasons(model: str) -> bool:
+    """Whether `model` reasons before it answers with no effort sent: the
+    o-series, and gpt-5.0, which has no `none`."""
+    name = (model or "").lower()
+    return _O_SERIES.match(name) is not None or _version(name) == (5, 0)
+
+
 def chat_params(
     model: str,
     *,
@@ -57,10 +64,8 @@ def chat_params(
     function tools, or (voice) may come to."""
     name = (model or "").lower()
     version = _version(name)
-    o_series = _O_SERIES.match(name) is not None
-    reasons = o_series or (version is not None and version >= (5, 0))
-    # gpt-5.0 has no `none`: it always reasons, as the o-series do.
-    always_reasons = o_series or version == (5, 0)
+    always = always_reasons(name)
+    reasons = always or (version is not None and version >= (5, 0))
 
     dropped: list[str] = []
     effort = reasoning_effort
@@ -79,7 +84,7 @@ def chat_params(
 
     # Not reported: TurnCall's 0.7 is its own default, which every agent
     # carries, so the drop would be news on every call (as for Claude).
-    sends_temperature = not always_reasons and not effort
+    sends_temperature = not always and not effort
     return OpenAIParams(
         temperature=temperature if sends_temperature else None,
         max_completion_tokens=max_tokens,

@@ -187,6 +187,10 @@ _STRUCTURAL_FIELDS = frozenset(
         # names, versions and flags, never the skill's text.
         "skill",
         "skills",
+        # A procedure's name (#443), and `call.ended`'s summary of the
+        # call's procedures: names, step ids, flags and counts.
+        "procedure",
+        "procedures",
     }
 )
 _STRUCTURAL_SUFFIXES = ("_id", "_ids", "_sid", "_at", "_url")
@@ -200,6 +204,11 @@ _IDENTIFIERS_BY_EVENT: dict[str, frozenset[str]] = {
     # `load_skill`, or #427's `limit`: why, as a word of TurnCall's.
     "skill.loaded": frozenset({"reason"}),
     "skill.unloaded": frozenset({"reason"}),
+    # Step ids of a procedure's graph (#443).
+    "procedure.step": frozenset({"from", "to"}),
+    "procedure.refused": frozenset({"from", "to"}),
+    # #448: the step it was left at, and why (`handoff`).
+    "procedure.left": frozenset({"from", "reason"}),
 }
 _UUID = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
