@@ -82,15 +82,15 @@ class ProcedureState:
         never moving to `book`. None for any other tool."""
         lines = []
         for run in self.runs:
-            placed = self._procedure_and_step(run)
-            line = _tool_followup(run, *placed, tool) if placed else None
+            found = self._procedure_and_step(run)
+            line = _tool_followup(run, *found, tool) if found else None
             if line:
                 lines.append(line)
         return "\n".join(lines) or None
 
     def current_step(self, run: ProcedureRun) -> ProcedureStep | None:
-        placed = self._procedure_and_step(run)
-        return placed[1] if placed else None
+        found = self._procedure_and_step(run)
+        return found[1] if found else None
 
     def _procedure_and_step(
         self, run: ProcedureRun

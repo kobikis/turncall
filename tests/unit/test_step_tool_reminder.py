@@ -5,7 +5,7 @@ rides on the result callback itself (`tool_bridge._with_followup`)."""
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -15,10 +15,6 @@ from turncall.domain.procedure_state import ProcedureState
 from turncall.orchestrator import tool_bridge
 from turncall.orchestrator.procedures import CallProcedures
 from turncall.orchestrator.skill_loader import CallSkills
-
-# Bound here: a load re-registers through `tool_bridge.register_tools`, which
-# the skill test patches, while the handler under test must be the real one.
-from turncall.orchestrator.tool_bridge import register_tools
 from turncall.services.skills import ResolvedSkill
 
 pytestmark = pytest.mark.unit
@@ -52,7 +48,9 @@ def _wrap_up(tool: str) -> dict:
     }
 
 
-async def _call_tool(tool: str, skills: CallSkills | None = None) -> AsyncMock:
+async def _call_tool(
+    tool: str, arguments: dict | None = None, skills: CallSkills | None = None
+) -> AsyncMock:
     """Run `tool` through `register_tools`' handler on a live call whose
     procedure is at the step `tool` belongs to; the result callback."""
     config = AgentConfig(system_prompt="s", procedures=[_wrap_up(tool)])
@@ -69,7 +67,7 @@ async def _call_tool(tool: str, skills: CallSkills | None = None) -> AsyncMock:
         procedures=CallProcedures(ProcedureState.at_call_start(config.procedures)),
     )
     llm = _LLM()
-    register_tools(
+    tool_bridge.register_tools(
         llm, [ToolDefinition(name=tool, description="d", parameters_schema={})], context
     )
     answer = AsyncMock()
@@ -81,7 +79,7 @@ async def _call_tool(tool: str, skills: CallSkills | None = None) -> AsyncMock:
         SimpleNamespace(
             function_name=tool,
             tool_call_id="1",
-            arguments={"name": "explain_bill"},
+            arguments=arguments or {},
             llm=MagicMock(push_frame=AsyncMock()),
             context=MagicMock(),
             pipeline_worker=SimpleNamespace(queue_frame=queue_frame),
@@ -115,8 +113,7 @@ async def test_a_real_skill_load_gets_it_and_keeps_its_properties() -> None:
         AgentConfig(system_prompt="s"), (skill,), tool_bridge.SwitchInputs()
     )
 
-    with patch("turncall.orchestrator.tool_bridge.register_tools"):
-        answer = await _call_tool("load_skill", skills)
+    answer = await _call_tool("load_skill", {"name": "explain_bill"}, skills)
 
     assert REMINDER in answer.await_args.args[0]
     # `run_load_skill`'s own delivery: the next inference waits for the switch.
