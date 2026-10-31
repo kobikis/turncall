@@ -24,7 +24,8 @@ from pipecat.services.openai.llm import OpenAILLMService
 # is not given this service (`pipeline_factory._openai_llm_class`).
 LLM_STALL_SECONDS = 5.0
 # Attempts cut at LLM_STALL_SECONDS before the last, which waits as long as
-# it takes: the caller hears silence for at most 2 x 5 s on a stall.
+# it takes: a stall costs the caller 5 s, two in a row 10 s, and only a third
+# in a row is waited out (about one request in a thousand, at worst).
 _CUT_ATTEMPTS = 2
 
 

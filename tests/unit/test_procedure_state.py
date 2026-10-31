@@ -331,9 +331,10 @@ def test_a_step_tool_result_says_where_to_move_now():
 
     assert followup == (
         "[Procedure] 'no_internet' is at step 'after_restart', whose tool this "
-        "was. Report the move with move_to_step before you reply: resolved "
-        "(when the internet light is green); technician (when the light is "
-        "still red); back to restart."
+        "was. If one of its moves now applies, report it with move_to_step "
+        "before you reply: resolved (when the internet light is green); "
+        "technician (when the light is still red); back to restart. If none "
+        "does, stay on 'after_restart'."
     )
 
 
@@ -356,12 +357,44 @@ def test_a_tool_one_move_ahead_says_to_report_the_skipped_move():
     followup = _at("lights", "restart").step_tool_followup("line_status")
 
     assert followup == (
-        "[Procedure] 'no_internet' is at step 'restart', but this was the tool "
-        "of step 'after_restart', a move that was never reported. Report the "
-        "move to after_restart with move_to_step, then the move after it, "
-        "before you reply: resolved (when the internet light is green); "
-        "technician (when the light is still red)."
+        "[Procedure] 'no_internet' is at step 'restart', and this is the tool "
+        "of step 'after_restart', one move ahead. If you called it for that "
+        "step, report the move to after_restart with move_to_step, then the "
+        "move after it, before you reply: resolved (when the internet light is "
+        "green); technician (when the light is still red)."
     )
     # The two moves it asks for are both accepted, in that order.
     first = move(_at("lights", "restart"), "no_internet", "after_restart")
     assert move(first.state, "no_internet", "resolved").accepted
+
+
+@pytest.mark.unit
+def test_an_escalate_steps_tool_ahead_asks_for_no_move():
+    """The move onto an escalate step runs its transfer: reported after the
+    tool already transferred, it would transfer the call again."""
+    graph = Procedure.model_validate(
+        {
+            "name": "help",
+            "start": "call",
+            "steps": [
+                {
+                    "id": "ask",
+                    "kind": "ask",
+                    "start": True,
+                    "text": "Ask what is wrong.",
+                    "moves": [{"to": "human", "when": "the caller wants a person"}],
+                },
+                {
+                    "id": "human",
+                    "kind": "escalate",
+                    "tool": "transfer_call",
+                    "text": "Say you are putting them through.",
+                    "escalate": {"transfer_call": {"target_number": "+15555550100"}},
+                },
+            ],
+        }
+    )
+
+    state = ProcedureState.at_call_start((graph,))
+
+    assert state.step_tool_followup("transfer_call") is None

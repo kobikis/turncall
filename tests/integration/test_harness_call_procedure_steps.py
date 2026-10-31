@@ -240,7 +240,8 @@ async def test_a_step_names_its_tool_and_renders_the_calls_variables(monkeypatch
     read = tool_results[-1]
     assert (
         "[Procedure] 'no_internet' is at step 'after_restart', whose tool this "
-        "was. Report the move with move_to_step before you reply: resolved "
-        "(when the line is fine); back to restart." in read
+        "was. If one of its moves now applies, report it with move_to_step "
+        "before you reply: resolved (when the line is fine); back to restart. "
+        "If none does, stay on 'after_restart'." in read
     ), read
     assert "[Procedure]" not in json.dumps(by_name["line_status"]["output_json"])

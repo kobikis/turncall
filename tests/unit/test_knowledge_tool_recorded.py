@@ -240,7 +240,7 @@ async def test_a_search_that_is_a_steps_tool_says_where_to_move(monkeypatch):
 
     read = delivered.await_args.args[0]
     assert read.startswith(json.dumps({"results": "Salmon roll", "count": 1}))
-    assert "Report the move with move_to_step before you reply: done" in read
+    assert "report it with move_to_step before you reply: done" in read
     [coro] = spawned
     await coro
     assert "[Procedure]" not in logged.await_args.args[3]

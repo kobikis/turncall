@@ -9,6 +9,7 @@ the live call control API.
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
 import json
 import time
@@ -27,6 +28,7 @@ from turncall.orchestrator.procedure_escalation import run_move
 from turncall.orchestrator.procedures import (
     leave_procedures,
     running_procedures,
+    tool_text,
     with_step_followup,
 )
 from turncall.services import call_control
@@ -207,6 +209,21 @@ def _builtin_without_a_platform(function_name: str) -> str:
     )
 
 
+def _with_followup(params: Any, call_context: CallContext, name: str) -> Any:
+    """`params` whose result callback adds the procedure's reminder
+    (`with_step_followup`) to whatever the tool answers, on every path:
+    a mock, and the tools that deliver their own result (`end_call`,
+    `load_skill`) too. The recorded result stays the tool's own."""
+    answer = params.result_callback
+
+    async def followed(result: Any, *rest: Any, **kwargs: Any) -> None:
+        await answer(with_step_followup(result, call_context, name), *rest, **kwargs)
+
+    followed_params = copy.copy(params)
+    followed_params.result_callback = followed
+    return followed_params
+
+
 def recorded_tool(name: str, handler: Any, call_context: CallContext) -> Any:
     """A tool registered outside `register_tools` — `query_knowledge` — logged
     and recorded as one of them: a `tool_invocations` row and `tool.result`,
@@ -221,19 +238,18 @@ def recorded_tool(name: str, handler: Any, call_context: CallContext) -> Any:
             call_id=str(call_context.call_id),
         )
         args = dict(params.arguments)
+        answering = _with_followup(params, call_context, name)
         # Ahead of the search, as `register_tools` does: under `mock_only` an
         # unmocked search is refused, never run against the real knowledge base.
         mocked = intercept(call_context.tool_mocks, name, args)
         if mocked is not None:
-            await params.result_callback(with_step_followup(mocked, call_context, name))
+            await answering.result_callback(mocked)
             return
         started = time.perf_counter()
 
         async def deliver(result: Any, *rest: Any, **kwargs: Any) -> None:
-            await params.result_callback(
-                with_step_followup(result, call_context, name), *rest, **kwargs
-            )
-            text = result if isinstance(result, str) else json.dumps(result)
+            await answering.result_callback(result, *rest, **kwargs)
+            text = tool_text(result)
             if call_context.tool_mocks is not None:
                 # A `live` eval: the search really ran, and the run says so.
                 call_context.tool_mocks.ran(name, args, text)
@@ -731,6 +747,7 @@ def _register_single_tool(
             tool=function_name,
             call_id=str(call_context.call_id),
         )
+        params = _with_followup(params, call_context, function_name)
 
         # An eval's mocks short-circuit ahead of every branch below: a built-in
         # acts on a call that does not exist, a webhook books a real
@@ -739,10 +756,7 @@ def _register_single_tool(
         # dict lookup there. #71.
         mocked = intercept(call_context.tool_mocks, function_name, args)
         if mocked is not None:
-            # A step's tool reads the same reminder in an eval as on a call (#449).
-            await params.result_callback(
-                with_step_followup(mocked, call_context, function_name)
-            )
+            await params.result_callback(mocked)
             return
 
         started = time.perf_counter()
@@ -809,9 +823,7 @@ def _register_single_tool(
         # critical path so they never sit between the caller and the response.
         latency_ms = int((time.perf_counter() - started) * 1000)
         if not delivered:
-            await params.result_callback(
-                with_step_followup(result, call_context, function_name)
-            )
+            await params.result_callback(result)
         if call_context.tool_mocks is not None:
             # The tool really ran — a `live` eval, or `load_skill`, which an
             # eval never mocks (#431) — and the run's record says so.

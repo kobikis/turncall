@@ -23,9 +23,12 @@ def _service(provider: str, model: str = "m", **llm):
     return _create_llm_service(config, creds("sk-test", openrouter="sk-or-test"))
 
 
-@pytest.mark.parametrize("provider", ["openai", "openrouter"])
-def test_a_hosted_openai_family_llm_resends_a_stall(provider):
-    assert isinstance(_service(provider), StallRetryingOpenAILLMService)
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [("openai", "gpt-5.4-mini"), ("openrouter", "openai/gpt-5.4-mini")],
+)
+def test_a_hosted_openai_llm_resends_a_stall(provider, model):
+    assert isinstance(_service(provider, model=model), StallRetryingOpenAILLMService)
 
 
 @pytest.mark.parametrize(
@@ -35,6 +38,7 @@ def test_a_hosted_openai_family_llm_resends_a_stall(provider):
         ("openai", "o4-mini", None),  # always reasons
         ("openai", "gpt-5-mini", None),
         ("openrouter", "openai/o3", None),
+        ("openrouter", "deepseek/deepseek-r1", None),  # another vendor's
     ],
 )
 def test_a_model_that_reasons_first_is_not_cut(provider, model, effort):

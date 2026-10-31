@@ -178,6 +178,26 @@ class TestAMockedStepToolSaysWhereToMove:
 
         read = callback.await_args.args[0]
         assert json.loads(read.split("\n\n")[0]) == {"status": "shipped"}
-        assert "Report the move with move_to_step before you reply: done" in read
+        assert "report it with move_to_step before you reply: done" in read
         [call] = mocks.calls
         assert "[Procedure]" not in call["result"]
+
+
+class TestASelfDeliveringToolReadsTheReminder:
+    async def test_end_call_or_load_skill_as_a_steps_tool_gets_it(self) -> None:
+        """`end_call` and `load_skill` hand back their own result, past the
+        handler's last line: the reminder rides on the callback itself."""
+        config = AgentConfig(system_prompt="s", procedures=[LOOKUP])
+        context = SimpleNamespace(
+            procedures=CallProcedures(ProcedureState.at_call_start(config.procedures))
+        )
+        answer = AsyncMock()
+        params = SimpleNamespace(result_callback=answer, function_name="get_order")
+
+        followed = tool_bridge._with_followup(params, context, "get_order")
+        await followed.result_callback('{"success": true}', properties="kept")
+
+        read = answer.await_args.args[0]
+        assert read.startswith('{"success": true}\n\n[Procedure]')
+        assert answer.await_args.kwargs == {"properties": "kept"}
+        assert params.result_callback is answer  # the original is untouched

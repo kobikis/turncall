@@ -223,21 +223,25 @@ def run_move_to_step(args: dict[str, Any], call_context: CallContext) -> MoveOut
     return outcome
 
 
+def tool_text(result: Any) -> str:
+    """A tool's result as text: a knowledge search answers a dict, which
+    pipecat would serialize itself."""
+    return result if isinstance(result, str) else json.dumps(result)
+
+
 def with_step_followup(result: Any, call_context: CallContext, tool: str) -> Any:
     """`result` as the model reads it: when `tool` is the current step's own,
-    followed by the procedure's reminder to report the move
-    (`ProcedureState.step_tool_followup`). What is recorded stays the tool's
-    answer. Read when the result arrives, not when the tool was called: a
-    move reported beside the tool, in the same response, may land after the
-    tool starts."""
+    or the tool of a step one move ahead, followed by the procedure's reminder
+    to report the move (`ProcedureState.step_tool_followup`). What is recorded
+    stays the tool's answer. Read when the result arrives, not when the tool
+    was called: a move reported beside the tool, in the same response, may
+    land after the tool starts."""
     # ponytail: a stand-in context (a test's namespace) may carry no holder.
     holder = getattr(call_context, "procedures", None)
     followup = holder.state.step_tool_followup(tool) if holder else None
     if followup is None:
         return result
-    # A knowledge search answers a dict, which pipecat would serialize itself.
-    text = result if isinstance(result, str) else json.dumps(result)
-    return f"{text}\n\n{followup}"
+    return f"{tool_text(result)}\n\n{followup}"
 
 
 def _verdict(outcome: MoveOutcome) -> str:

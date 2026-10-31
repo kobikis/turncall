@@ -487,17 +487,21 @@ def _openai_extra_body(
 
 
 def _openai_llm_class(
-    model: str, reasoning_effort: str | None
+    model: str, reasoning_effort: str | None, *, openrouter: bool = False
 ) -> type[OpenAILLMService]:
-    """The service class for a hosted OpenAI-family chat completion: one that
-    re-sends a stalled request (`llm_stall`), unless the model reasons first
-    (asked to, or always does), whose first token can legitimately take longer
-    than a stall's limit. OpenRouter's `openai/o3` is read as `o3`."""
+    """The service class for a hosted OpenAI chat completion: one that re-sends
+    a stalled request (`llm_stall`), unless the model reasons first (asked
+    to, or always does), whose first token can legitimately take longer than
+    a stall's limit. On OpenRouter only OpenAI's own models (`openai/o3` read
+    as `o3`): another vendor's may reason first with no effort sent, and the
+    stall was measured on OpenAI."""
     from turncall.services.openai_models import always_reasons
 
-    # ponytail: only OpenAI's own reasoners are known by name; another vendor's
-    # on OpenRouter (deepseek-r1) is cut at 5 s unless the agent sends an effort.
-    reasons = reasoning_effort or always_reasons(model.rpartition("/")[2])
+    if openrouter:
+        vendor, _, model = model.rpartition("/")
+        if vendor != "openai":
+            return OpenAILLMService
+    reasons = reasoning_effort or always_reasons(model)
     return OpenAILLMService if reasons else StallRetryingOpenAILLMService
 
 
@@ -551,7 +555,7 @@ def _create_llm_service(
             if config.llm.fallback_models
             else None
         )
-        return _openai_llm_class(model, effort)(
+        return _openai_llm_class(model, effort, openrouter=True)(
             api_key=credentials.api_key("openrouter", config.llm.api_key),
             base_url="https://openrouter.ai/api/v1",
             settings=OpenAILLMService.Settings(

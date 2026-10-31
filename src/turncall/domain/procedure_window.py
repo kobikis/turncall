@@ -24,8 +24,8 @@ _RULES = (
 # asked a previewed step's question, or called its tool, without the move.
 _PREVIEW_HEADING = (
     "  Next steps (preview): what comes next, not what to do now. Do a step's "
-    "work (ask its question, call its tool) only in a reply that also moves "
-    "there."
+    "work (ask its question, call its tool) only once you move there, in that "
+    "same reply or a later one."
 )
 
 STARTABLE_HEADING = "## Procedures you can start"
@@ -102,7 +102,7 @@ def _moves(current: ProcedureStep, path: Sequence[str]) -> list[str]:
 
 
 def _preview(procedure: Procedure, current: ProcedureStep, depth: int) -> list[str]:
-    ahead = _ahead(procedure, current, depth)
+    ahead = steps_ahead(procedure, current, depth)
     if not ahead:
         return []
     lines = []
@@ -112,7 +112,7 @@ def _preview(procedure: Procedure, current: ProcedureStep, depth: int) -> list[s
     return [_PREVIEW_HEADING, *lines]
 
 
-def _ahead(
+def steps_ahead(
     procedure: Procedure, current: ProcedureStep, depth: int
 ) -> list[tuple[ProcedureStep, str]]:
     """The steps up to `depth` moves ahead, nearest first, each with the step
