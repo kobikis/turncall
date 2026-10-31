@@ -341,8 +341,27 @@ def test_a_step_tool_result_says_where_to_move_now():
 def test_another_tool_or_another_step_adds_nothing():
     at_check = _at("lights", "restart", "after_restart")
     assert at_check.step_tool_followup("other") is None
-    assert _at("lights", "restart").step_tool_followup("line_status") is None
+    assert _at("lights").step_tool_followup("line_status") is None  # two ahead
     finished = move(
         _at("lights", "restart", "after_restart"), "no_internet", "resolved"
     )
     assert finished.state.step_tool_followup("line_status") is None
+
+
+@pytest.mark.unit
+def test_a_tool_one_move_ahead_says_to_report_the_skipped_move():
+    """Call 7d351817 booked from `invite`, calling `book`'s tool without the
+    move to `book`: the procedure was recorded as ending at `invite`. The
+    tool's result names the move it skipped and the one after it."""
+    followup = _at("lights", "restart").step_tool_followup("line_status")
+
+    assert followup == (
+        "[Procedure] 'no_internet' is at step 'restart', but this was the tool "
+        "of step 'after_restart', a move that was never reported. Report the "
+        "move to after_restart with move_to_step, then the move after it, "
+        "before you reply: resolved (when the internet light is green); "
+        "technician (when the light is still red)."
+    )
+    # The two moves it asks for are both accepted, in that order.
+    first = move(_at("lights", "restart"), "no_internet", "after_restart")
+    assert move(first.state, "no_internet", "resolved").accepted

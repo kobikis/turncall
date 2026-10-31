@@ -74,20 +74,52 @@ class ProcedureState:
 
     def step_tool_followup(self, tool: str) -> str | None:
         """What a running procedure adds to the result of its current step's
-        own tool: report the move now. The inference reading a tool result
-        gets no window, and the move into the step that named its moves can
-        be several replies back by then — call c02c84fd loaded a skill,
-        booked, and ended the call from `book` without moving to `confirmed`.
-        None for any other tool."""
-        lines = [
-            f"[Procedure] '{run.name}' is at step '{step.id}', whose tool this "
-            f"was. Report the move with {MOVE_TO_STEP} before you reply: "
-            f"{nexts}."
-            for run in self.runs
-            if (step := self.current_step(run)) is not None and step.tool == tool
-            if (nexts := _next_text(step, _previous(run)))
-        ]
+        own tool, or of a step one move ahead: report the move now. The
+        inference reading a tool result gets no window, and the move into the
+        step that named its moves can be several replies back by then — call
+        c02c84fd loaded a skill, booked, and ended the call from `book`
+        without moving to `confirmed`; call 7d351817 booked from `invite`,
+        never moving to `book`. None for any other tool."""
+        lines = [line for run in self.runs if (line := self._tool_followup(run, tool))]
         return "\n".join(lines) or None
+
+    def _tool_followup(self, run: ProcedureRun, tool: str) -> str | None:
+        procedure = self.procedure(run.name)
+        step = self.current_step(run)
+        if procedure is None or step is None:
+            return None
+        if step.tool == tool:
+            nexts = _next_text(step, _previous(run))
+            return (
+                f"[Procedure] '{run.name}' is at step '{step.id}', whose tool "
+                f"this was. Report the move with {MOVE_TO_STEP} before you "
+                f"reply: {nexts}."
+                if nexts
+                else None
+            )
+        # ponytail: one move ahead only; a tool further on is a skipped step,
+        # which the move's refusal names.
+        ahead = next(
+            (
+                target
+                for m in step.moves
+                if (target := procedure.step(m.to)) is not None and target.tool == tool
+            ),
+            None,
+        )
+        if ahead is None:
+            return None
+        then = _next_text(ahead, None)
+        return (
+            f"[Procedure] '{run.name}' is at step '{step.id}', but this was the "
+            f"tool of step '{ahead.id}', a move that was never reported. Report "
+            f"the move to {ahead.id} with {MOVE_TO_STEP}"
+            + (
+                f", then the move after it, before you reply: {then}."
+                if then
+                else " before you reply."
+            )
+        )
 
     def current_step(self, run: ProcedureRun) -> ProcedureStep | None:
         procedure = self.procedure(run.name)

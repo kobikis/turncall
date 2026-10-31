@@ -1289,7 +1289,10 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   no window, so this is how the model knows to move once the tool is done;
   and the step's own tool, when it answers, says it again: its result as the
   model reads it gains `[Procedure] '<name>' is at step '<id>', whose tool
-  this was. Report the move with move_to_step before you reply: <moves>.`
+  this was. Report the move with move_to_step before you reply: <moves>.`,
+  and the tool of a step one move ahead names the move it skipped and the
+  one after it (call 7d351817 booked from `invite` and was recorded ending
+  there)
   (`ProcedureState.step_tool_followup`, `procedures.with_step_followup` in
   `tool_bridge`, on a webhook, MCP or built-in result, a `query_knowledge`
   search (`recorded_tool`) and an eval's mock alike; read when the result
