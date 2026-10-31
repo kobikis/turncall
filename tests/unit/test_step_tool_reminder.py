@@ -49,10 +49,11 @@ def _wrap_up(tool: str) -> dict:
 
 
 async def _call_tool(
-    tool: str, arguments: dict | None = None, skills: CallSkills | None = None
+    tool: str, *, arguments: dict | None = None, skills: CallSkills | None = None
 ) -> AsyncMock:
-    """Run `tool` through `register_tools`' handler on a live call whose
-    procedure is at the step `tool` belongs to; the result callback."""
+    """Run `tool` with `arguments` (none by default) through `register_tools`'
+    handler on a live call whose procedure is at the step `tool` belongs to,
+    the call's `skills` on its context; the result callback."""
     config = AgentConfig(system_prompt="s", procedures=[_wrap_up(tool)])
     context = SimpleNamespace(
         call_id=uuid4(),
@@ -113,7 +114,9 @@ async def test_a_real_skill_load_gets_it_and_keeps_its_properties() -> None:
         AgentConfig(system_prompt="s"), (skill,), tool_bridge.SwitchInputs()
     )
 
-    answer = await _call_tool("load_skill", {"name": "explain_bill"}, skills)
+    answer = await _call_tool(
+        "load_skill", arguments={"name": "explain_bill"}, skills=skills
+    )
 
     assert REMINDER in answer.await_args.args[0]
     # `run_load_skill`'s own delivery: the next inference waits for the switch.
