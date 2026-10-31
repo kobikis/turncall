@@ -559,14 +559,14 @@ def _create_llm_service(
         # the `models` array (primary first), tried in order on rate-limit/error.
         # See ADR-0003. reasoning_effort folds into the same extra_body.
         routed = [model, *config.llm.fallback_models]
-        models = {"models": routed} if config.llm.fallback_models else None
+        fallback_body = {"models": routed} if config.llm.fallback_models else None
         return _openrouter_llm_class(routed, effort)(
             api_key=credentials.api_key("openrouter", config.llm.api_key),
             base_url="https://openrouter.ai/api/v1",
             settings=OpenAILLMService.Settings(
                 model=model,
                 **si,
-                extra=_openai_extra_body(effort, models),
+                extra=_openai_extra_body(effort, fallback_body),
                 temperature=temperature,
                 max_tokens=max_tokens,
             ),
