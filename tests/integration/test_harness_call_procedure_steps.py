@@ -235,7 +235,9 @@ async def test_a_step_names_its_tool_and_renders_the_calls_variables(monkeypatch
 
     # The step's own tool says where to move now, as the model reads it; the
     # record keeps what the tool answered.
-    [read] = [m["content"] for m in answered if m["role"] == "tool"][-1:]
+    tool_results = [m["content"] for m in answered if m["role"] == "tool"]
+    assert tool_results, answered
+    read = tool_results[-1]
     assert (
         "[Procedure] 'no_internet' is at step 'after_restart', whose tool this "
         "was. Report the move with move_to_step before you reply: resolved "

@@ -20,6 +20,7 @@ model sees a window.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Coroutine, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
@@ -40,12 +41,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from turncall.domain.enums import CallEventType
 from turncall.domain.models import AgentConfig, ToolDefinition
-from turncall.domain.procedure_state import (
-    MoveOutcome,
-    ProcedureState,
-    move,
-    step_tool_followup,
-)
+from turncall.domain.procedure_state import MoveOutcome, ProcedureState, move
 from turncall.domain.procedure_window import WINDOW_MARKER, startable_section
 from turncall.domain.procedures import MOVE_TO_STEP, Procedure
 from turncall.orchestrator.turn_message import replace_turn_message
@@ -230,13 +226,18 @@ def run_move_to_step(args: dict[str, Any], call_context: CallContext) -> MoveOut
 def with_step_followup(result: Any, call_context: CallContext, tool: str) -> Any:
     """`result` as the model reads it: when `tool` is the current step's own,
     followed by the procedure's reminder to report the move
-    (`step_tool_followup`). What is recorded stays the tool's answer."""
+    (`ProcedureState.step_tool_followup`). What is recorded stays the tool's
+    answer. Read when the result arrives, not when the tool was called: a
+    move reported beside the tool, in the same response, may land after the
+    tool starts."""
     # ponytail: a stand-in context (a test's namespace) may carry no holder.
     holder = getattr(call_context, "procedures", None)
-    followup = step_tool_followup(holder.state, tool) if holder else None
-    if followup is None or not isinstance(result, str):
+    followup = holder.state.step_tool_followup(tool) if holder else None
+    if followup is None:
         return result
-    return f"{result}\n\n{followup}"
+    # A knowledge search answers a dict, which pipecat would serialize itself.
+    text = result if isinstance(result, str) else json.dumps(result)
+    return f"{text}\n\n{followup}"
 
 
 def _verdict(outcome: MoveOutcome) -> str:

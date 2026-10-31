@@ -7,7 +7,7 @@ import json
 import pytest
 
 from tests.unit.test_procedure_window import NO_INTERNET
-from turncall.domain.procedure_state import ProcedureState, move, step_tool_followup
+from turncall.domain.procedure_state import ProcedureState, move
 from turncall.domain.procedures import Procedure
 
 LATER = Procedure.model_validate(
@@ -327,7 +327,7 @@ def test_a_step_tool_result_says_where_to_move_now():
     So the step's own tool result says it again."""
     state = _at("lights", "restart", "after_restart")
 
-    followup = step_tool_followup(state, "line_status")
+    followup = state.step_tool_followup("line_status")
 
     assert followup == (
         "[Procedure] 'no_internet' is at step 'after_restart', whose tool this "
@@ -339,11 +339,10 @@ def test_a_step_tool_result_says_where_to_move_now():
 
 @pytest.mark.unit
 def test_another_tool_or_another_step_adds_nothing():
-    assert (
-        step_tool_followup(_at("lights", "restart", "after_restart"), "other") is None
-    )
-    assert step_tool_followup(_at("lights", "restart"), "line_status") is None
+    at_check = _at("lights", "restart", "after_restart")
+    assert at_check.step_tool_followup("other") is None
+    assert _at("lights", "restart").step_tool_followup("line_status") is None
     finished = move(
         _at("lights", "restart", "after_restart"), "no_internet", "resolved"
     )
-    assert step_tool_followup(finished.state, "line_status") is None
+    assert finished.state.step_tool_followup("line_status") is None

@@ -13,12 +13,15 @@ logs the retry at DEBUG, where nobody sees it.
 import asyncio
 
 from loguru import logger
+from openai import AsyncStream
+from openai.types.chat import ChatCompletionChunk
+from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.openai.llm import OpenAILLMService
 
 # How long a request may go without its response headers. They arrive with
 # the first token, so this is also the longest first token allowed; a normal
-# one here is under 1.2 s. A model that reasons first may take longer, so an
-# agent that sends a reasoning effort is not given this service.
+# one here is under 1.2 s. A model that reasons first may take longer, so it
+# is not given this service (`pipeline_factory._openai_llm_class`).
 LLM_STALL_SECONDS = 5.0
 # Attempts cut at LLM_STALL_SECONDS before the last, which waits as long as
 # it takes: the caller hears silence for at most 2 x 5 s on a stall.
@@ -26,7 +29,15 @@ _CUT_ATTEMPTS = 2
 
 
 class StallRetryingOpenAILLMService(OpenAILLMService):
-    async def get_chat_completions(self, context):  # type: ignore[no-untyped-def]
+    """pipecat's OpenAI service, whose request is cut and sent again while no
+    response headers come. pipecat awaits the headers in `get_chat_completions`
+    and reads the stream later, so the cut never lands mid-answer."""
+
+    async def get_chat_completions(
+        self, context: LLMContext
+    ) -> AsyncStream[ChatCompletionChunk]:
+        # ponytail: each attempt re-reads the context and logs it again; one
+        # request in ten to twenty, so not worth copying pipecat's body here.
         for attempt in range(1, _CUT_ATTEMPTS + 1):
             try:
                 return await asyncio.wait_for(

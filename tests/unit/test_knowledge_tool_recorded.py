@@ -14,11 +14,14 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pipecat.services.llm_service import FunctionCallParams
 
+from turncall.domain.procedure_state import ProcedureState
+from turncall.domain.procedures import Procedure
 from turncall.orchestrator import tool_bridge
 from turncall.orchestrator.knowledge_processor import (
     create_knowledge_tool_handler,
     knowledge_tool,
 )
+from turncall.orchestrator.procedures import CallProcedures
 from turncall.services.tool_mocks import ToolMocks
 
 
@@ -191,3 +194,53 @@ async def test_a_failed_voice_search_does_not_tell_the_model_why():
         await handler(_params(delivered))
 
     delivered.assert_awaited_once_with({"error": "knowledge search failed"})
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_search_that_is_a_steps_tool_says_where_to_move(monkeypatch):
+    """A step can name `query_knowledge` as its tool: its result reminds the
+    model to report the move, as any step tool's does; the record keeps the
+    search's own answer."""
+    spawned: list = []
+    monkeypatch.setattr(tool_bridge, "_spawn", lambda coro: spawned.append(coro))
+    logged = AsyncMock()
+    monkeypatch.setattr(tool_bridge, "_log_tool_result", logged)
+    menu = Procedure.model_validate(
+        {
+            "name": "menu",
+            "start": "call",
+            "steps": [
+                {
+                    "id": "search",
+                    "kind": "check",
+                    "start": True,
+                    "tool": "query_knowledge",
+                    "text": "Search the menu.",
+                    "moves": [{"to": "done", "when": "the dish is on it"}],
+                },
+                {"id": "done", "kind": "end", "text": "Say so."},
+            ],
+        }
+    )
+    call = SimpleNamespace(
+        call_id=uuid.uuid4(),
+        is_eval=False,
+        records=True,
+        has_database=True,
+        tool_mocks=None,
+        procedures=CallProcedures(ProcedureState.at_call_start((menu,))),
+    )
+
+    async def search(params):
+        await params.result_callback({"results": "Salmon roll", "count": 1})
+
+    delivered = AsyncMock()
+    await tool_bridge.recorded_tool("query_knowledge", search, call)(_params(delivered))
+
+    read = delivered.await_args.args[0]
+    assert read.startswith(json.dumps({"results": "Salmon roll", "count": 1}))
+    assert "Report the move with move_to_step before you reply: done" in read
+    [coro] = spawned
+    await coro
+    assert "[Procedure]" not in logged.await_args.args[3]

@@ -13,7 +13,7 @@ from typing import Any
 
 from turncall.domain.enums import ENDING_STEP_KINDS, ProcedureStart
 from turncall.domain.procedure_window import build_window, window_message
-from turncall.domain.procedures import Procedure, ProcedureStep
+from turncall.domain.procedures import MOVE_TO_STEP, Procedure, ProcedureStep
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,27 @@ class ProcedureState:
         ]
         return window_message(windows) if windows else None
 
+    def step_tool_followup(self, tool: str) -> str | None:
+        """What a running procedure adds to the result of its current step's
+        own tool: report the move now. The inference reading a tool result
+        gets no window, and the move into the step that named its moves can
+        be several replies back by then — call c02c84fd loaded a skill,
+        booked, and ended the call from `book` without moving to `confirmed`.
+        None for any other tool."""
+        lines = [
+            f"[Procedure] '{run.name}' is at step '{step.id}', whose tool this "
+            f"was. Report the move with {MOVE_TO_STEP} before you reply: "
+            f"{nexts}."
+            for run in self.runs
+            if (step := self.current_step(run)) is not None and step.tool == tool
+            if (nexts := _next_text(step, _previous(run)))
+        ]
+        return "\n".join(lines) or None
+
+    def current_step(self, run: ProcedureRun) -> ProcedureStep | None:
+        procedure = self.procedure(run.name)
+        return procedure.step(run.current) if procedure is not None else None
+
     def _placed(self, run: ProcedureRun) -> "ProcedureState":
         """The state with `run` where it now stands: running in its place
         (or last, newly started), or finished at an `end` or `escalate`
@@ -85,8 +106,7 @@ class ProcedureState:
         return replace(self, runs=runs)
 
     def _ends_at(self, run: ProcedureRun) -> bool:
-        procedure = self.procedure(run.name)
-        step = procedure.step(run.current) if procedure is not None else None
+        step = self.current_step(run)
         return step is not None and step.kind in ENDING_STEP_KINDS
 
 
@@ -161,28 +181,6 @@ def move(state: ProcedureState, procedure: str, to: str) -> MoveOutcome:
             {"procedure": procedure, "step": to},
         ),
     )
-
-
-def step_tool_followup(state: ProcedureState, tool: str) -> str | None:
-    """What a running procedure adds to the result of its current step's own
-    tool: report the move now. The inference reading a tool result gets no
-    window, and the move into the step that named its moves can be several
-    replies back by then — call c02c84fd loaded a skill, booked, and ended
-    the call from `book` without moving to `confirmed`. None for any other
-    tool."""
-    lines = []
-    for run in state.runs:
-        graph = state.procedure(run.name)
-        step = graph.step(run.current) if graph is not None else None
-        if step is None or step.tool != tool:
-            continue
-        if nexts := _next_text(step, _previous(run)):
-            lines.append(
-                f"[Procedure] '{run.name}' is at step '{step.id}', whose tool "
-                f"this was. Report the move with move_to_step before you "
-                f"reply: {nexts}."
-            )
-    return "\n".join(lines) or None
 
 
 def _previous(run: ProcedureRun) -> str | None:

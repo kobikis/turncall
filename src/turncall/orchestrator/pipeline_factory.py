@@ -486,12 +486,19 @@ def _openai_extra_body(
     return {"extra_body": body} if body else {}
 
 
-def _hosted_openai_llm(reasoning_effort: str | None) -> type:
+def _openai_llm_class(
+    model: str, reasoning_effort: str | None
+) -> type[OpenAILLMService]:
     """The service class for a hosted OpenAI-family chat completion: one that
-    re-sends a stalled request (`llm_stall`), unless the model is asked to
-    reason first, whose first token can legitimately take longer than a
-    stall's limit."""
-    return OpenAILLMService if reasoning_effort else StallRetryingOpenAILLMService
+    re-sends a stalled request (`llm_stall`), unless the model reasons first
+    (asked to, or always does), whose first token can legitimately take longer
+    than a stall's limit. OpenRouter's `openai/o3` is read as `o3`."""
+    from turncall.services.openai_models import always_reasons
+
+    # ponytail: only OpenAI's own reasoners are known by name; another vendor's
+    # on OpenRouter (deepseek-r1) is cut at 5 s unless the agent sends an effort.
+    reasons = reasoning_effort or always_reasons(model.rpartition("/")[2])
+    return OpenAILLMService if reasons else StallRetryingOpenAILLMService
 
 
 def _create_llm_service(
@@ -544,7 +551,7 @@ def _create_llm_service(
             if config.llm.fallback_models
             else None
         )
-        return _hosted_openai_llm(effort)(
+        return _openai_llm_class(model, effort)(
             api_key=credentials.api_key("openrouter", config.llm.api_key),
             base_url="https://openrouter.ai/api/v1",
             settings=OpenAILLMService.Settings(
@@ -573,7 +580,7 @@ def _create_llm_service(
         sampling = (
             {} if params.temperature is None else {"temperature": params.temperature}
         )
-        return _hosted_openai_llm(params.reasoning_effort)(
+        return _openai_llm_class(model, params.reasoning_effort)(
             api_key=credentials.api_key("openai", config.llm.api_key),
             settings=OpenAILLMService.Settings(
                 model=model,

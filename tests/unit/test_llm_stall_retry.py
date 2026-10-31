@@ -28,8 +28,17 @@ def test_a_hosted_openai_family_llm_resends_a_stall(provider):
     assert isinstance(_service(provider), StallRetryingOpenAILLMService)
 
 
-def test_a_model_asked_to_reason_first_is_not_cut():
-    service = _service("openai", model="o4-mini", reasoning_effort="high")
+@pytest.mark.parametrize(
+    ("provider", "model", "effort"),
+    [
+        ("openai", "gpt-5.1", "high"),  # asked to reason (5.4+ drops it beside tools)
+        ("openai", "o4-mini", None),  # always reasons
+        ("openai", "gpt-5-mini", None),
+        ("openrouter", "openai/o3", None),
+    ],
+)
+def test_a_model_that_reasons_first_is_not_cut(provider, model, effort):
+    service = _service(provider, model=model, reasoning_effort=effort)
 
     assert not isinstance(service, StallRetryingOpenAILLMService)
 

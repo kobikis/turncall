@@ -225,12 +225,14 @@ def recorded_tool(name: str, handler: Any, call_context: CallContext) -> Any:
         # unmocked search is refused, never run against the real knowledge base.
         mocked = intercept(call_context.tool_mocks, name, args)
         if mocked is not None:
-            await params.result_callback(mocked)
+            await params.result_callback(with_step_followup(mocked, call_context, name))
             return
         started = time.perf_counter()
 
         async def deliver(result: Any, *rest: Any, **kwargs: Any) -> None:
-            await params.result_callback(result, *rest, **kwargs)
+            await params.result_callback(
+                with_step_followup(result, call_context, name), *rest, **kwargs
+            )
             text = result if isinstance(result, str) else json.dumps(result)
             if call_context.tool_mocks is not None:
                 # A `live` eval: the search really ran, and the run says so.
@@ -737,7 +739,10 @@ def _register_single_tool(
         # dict lookup there. #71.
         mocked = intercept(call_context.tool_mocks, function_name, args)
         if mocked is not None:
-            await params.result_callback(mocked)
+            # A step's tool reads the same reminder in an eval as on a call (#449).
+            await params.result_callback(
+                with_step_followup(mocked, call_context, function_name)
+            )
             return
 
         started = time.perf_counter()

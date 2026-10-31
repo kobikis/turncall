@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import pytest
 
-from turncall.domain.models import AgentConfig
+from turncall.domain.models import AgentConfig, ToolDefinition
 from turncall.domain.procedure_state import ProcedureState
 from turncall.evals.run_warnings import warn_never_mocked
 from turncall.orchestrator import tool_bridge
@@ -123,3 +123,61 @@ class TestAMockForItIsIgnored:
         assert warning["tools"] == ["load_skill", "move_to_step"]
         assert "load_skill" in warning["message"]
         assert "move_to_step" in warning["message"]
+
+
+LOOKUP = {
+    "name": "find_order",
+    "start": "call",
+    "steps": [
+        {
+            "id": "lookup",
+            "kind": "check",
+            "start": True,
+            "tool": "get_order",
+            "text": "Look the order up.",
+            "moves": [{"to": "done", "when": "the order was found"}],
+        },
+        {"id": "done", "kind": "end", "text": "Read the order out."},
+    ],
+}
+
+
+class TestAMockedStepToolSaysWhereToMove:
+    async def test_the_model_reads_the_reminder_and_the_record_keeps_the_mock(
+        self,
+    ) -> None:
+        """An eval reads what a call reads: the step tool's result says to
+        report the move, mocked or not."""
+        mocks = ToolMocks(responses={"get_order": {"status": "shipped"}})
+        config = AgentConfig(system_prompt="s", procedures=[LOOKUP])
+        context = SimpleNamespace(
+            call_id=uuid4(),
+            project_id=uuid4(),
+            mcp_manager=None,
+            tool_mocks=mocks,
+            is_eval=True,
+            records=False,
+            has_database=True,
+            procedures=CallProcedures(ProcedureState.at_call_start(config.procedures)),
+        )
+        get_order = ToolDefinition(
+            name="get_order",
+            description="Look an order up.",
+            parameters_schema={"type": "object", "properties": {}},
+            webhook_url="https://example.com/orders",
+        )
+        llm = _LLM()
+        tool_bridge.register_tools(llm, [get_order], context)
+        callback = AsyncMock()
+
+        await llm.handlers["get_order"](
+            SimpleNamespace(
+                function_name="get_order", arguments={}, result_callback=callback
+            )
+        )
+
+        read = callback.await_args.args[0]
+        assert json.loads(read.split("\n\n")[0]) == {"status": "shipped"}
+        assert "Report the move with move_to_step before you reply: done" in read
+        [call] = mocks.calls
+        assert "[Procedure]" not in call["result"]
