@@ -24,7 +24,11 @@ from turncall.domain.enums import ToolExecutionMode
 from turncall.domain.models import BUILTIN_TOOL_NAMES, ToolDefinition
 from turncall.domain.procedures import MOVE_TO_STEP
 from turncall.orchestrator.procedure_escalation import run_move
-from turncall.orchestrator.procedures import leave_procedures, running_procedures
+from turncall.orchestrator.procedures import (
+    leave_procedures,
+    running_procedures,
+    with_step_followup,
+)
 from turncall.services import call_control
 from turncall.services.skills import LOAD_SKILL
 from turncall.services.template_renderer import (
@@ -800,7 +804,9 @@ def _register_single_tool(
         # critical path so they never sit between the caller and the response.
         latency_ms = int((time.perf_counter() - started) * 1000)
         if not delivered:
-            await params.result_callback(result)
+            await params.result_callback(
+                with_step_followup(result, call_context, function_name)
+            )
         if call_context.tool_mocks is not None:
             # The tool really ran — a `live` eval, or `load_skill`, which an
             # eval never mocks (#431) — and the run's record says so.

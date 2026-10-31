@@ -40,7 +40,12 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from turncall.domain.enums import CallEventType
 from turncall.domain.models import AgentConfig, ToolDefinition
-from turncall.domain.procedure_state import MoveOutcome, ProcedureState, move
+from turncall.domain.procedure_state import (
+    MoveOutcome,
+    ProcedureState,
+    move,
+    step_tool_followup,
+)
 from turncall.domain.procedure_window import WINDOW_MARKER, startable_section
 from turncall.domain.procedures import MOVE_TO_STEP, Procedure
 from turncall.orchestrator.turn_message import replace_turn_message
@@ -220,6 +225,18 @@ def run_move_to_step(args: dict[str, Any], call_context: CallContext) -> MoveOut
     )
     _record_move(call_context, outcome)
     return outcome
+
+
+def with_step_followup(result: Any, call_context: CallContext, tool: str) -> Any:
+    """`result` as the model reads it: when `tool` is the current step's own,
+    followed by the procedure's reminder to report the move
+    (`step_tool_followup`). What is recorded stays the tool's answer."""
+    # ponytail: a stand-in context (a test's namespace) may carry no holder.
+    holder = getattr(call_context, "procedures", None)
+    followup = step_tool_followup(holder.state, tool) if holder else None
+    if followup is None or not isinstance(result, str):
+        return result
+    return f"{result}\n\n{followup}"
 
 
 def _verdict(outcome: MoveOutcome) -> str:

@@ -163,6 +163,28 @@ def move(state: ProcedureState, procedure: str, to: str) -> MoveOutcome:
     )
 
 
+def step_tool_followup(state: ProcedureState, tool: str) -> str | None:
+    """What a running procedure adds to the result of its current step's own
+    tool: report the move now. The inference reading a tool result gets no
+    window, and the move into the step that named its moves can be several
+    replies back by then — call c02c84fd loaded a skill, booked, and ended
+    the call from `book` without moving to `confirmed`. None for any other
+    tool."""
+    lines = []
+    for run in state.runs:
+        graph = state.procedure(run.name)
+        step = graph.step(run.current) if graph is not None else None
+        if step is None or step.tool != tool:
+            continue
+        if nexts := _next_text(step, _previous(run)):
+            lines.append(
+                f"[Procedure] '{run.name}' is at step '{step.id}', whose tool "
+                f"this was. Report the move with move_to_step before you "
+                f"reply: {nexts}."
+            )
+    return "\n".join(lines) or None
+
+
 def _previous(run: ProcedureRun) -> str | None:
     return run.path[-2] if len(run.path) > 1 else None
 

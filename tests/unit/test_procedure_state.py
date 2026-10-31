@@ -7,7 +7,7 @@ import json
 import pytest
 
 from tests.unit.test_procedure_window import NO_INTERNET
-from turncall.domain.procedure_state import ProcedureState, move
+from turncall.domain.procedure_state import ProcedureState, move, step_tool_followup
 from turncall.domain.procedures import Procedure
 
 LATER = Procedure.model_validate(
@@ -317,3 +317,33 @@ def test_a_previous_step_that_is_also_a_move_is_named_once():
 
     assert "back to date" not in json.loads(arrived.result)["message"]
     assert json.loads(refused.result)["details"]["allowed"] == ["done", "date"]
+
+
+@pytest.mark.unit
+def test_a_step_tool_result_says_where_to_move_now():
+    """The move into a step names its moves, but by the time the step's tool
+    answers that can be several replies back (a skill loaded first): call
+    c02c84fd ended the call from `book` without ever moving to `confirmed`.
+    So the step's own tool result says it again."""
+    state = _at("lights", "restart", "after_restart")
+
+    followup = step_tool_followup(state, "line_status")
+
+    assert followup == (
+        "[Procedure] 'no_internet' is at step 'after_restart', whose tool this "
+        "was. Report the move with move_to_step before you reply: resolved "
+        "(when the internet light is green); technician (when the light is "
+        "still red); back to restart."
+    )
+
+
+@pytest.mark.unit
+def test_another_tool_or_another_step_adds_nothing():
+    assert (
+        step_tool_followup(_at("lights", "restart", "after_restart"), "other") is None
+    )
+    assert step_tool_followup(_at("lights", "restart"), "line_status") is None
+    finished = move(
+        _at("lights", "restart", "after_restart"), "no_internet", "resolved"
+    )
+    assert step_tool_followup(finished.state, "line_status") is None

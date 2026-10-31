@@ -203,7 +203,7 @@ async def test_a_step_names_its_tool_and_renders_the_calls_variables(monkeypatch
         await call.hang_up()
         await app.sink.wait_for("call.ended")
 
-    at_restart, after_move, at_check, _answered = given
+    at_restart, after_move, at_check, answered = given
     # The step's text and the preview, rendered; the preview names the tool.
     window = _window(at_restart)
     assert f"Do now: Have the caller restart the router on account {ACCOUNT}." in (
@@ -232,3 +232,13 @@ async def test_a_step_names_its_tool_and_renders_the_calls_variables(monkeypatch
     by_name = {r["tool_name"]: r for r in rows}
     assert by_name["line_status"]["status"] == "succeeded", rows
     assert "move_to_step" in by_name, rows
+
+    # The step's own tool says where to move now, as the model reads it; the
+    # record keeps what the tool answered.
+    [read] = [m["content"] for m in answered if m["role"] == "tool"][-1:]
+    assert (
+        "[Procedure] 'no_internet' is at step 'after_restart', whose tool this "
+        "was. Report the move with move_to_step before you reply: resolved "
+        "(when the line is fine); back to restart." in read
+    ), read
+    assert "[Procedure]" not in json.dumps(by_name["line_status"]["output_json"])
