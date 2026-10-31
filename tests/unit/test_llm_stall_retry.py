@@ -31,6 +31,17 @@ def test_a_hosted_openai_llm_resends_a_stall(provider, model):
     assert isinstance(_service(provider, model=model), StallRetryingOpenAILLMService)
 
 
+def test_an_openrouter_fallback_to_another_vendor_is_not_cut():
+    """OpenRouter may answer with any of `fallback_models`."""
+    service = _service(
+        "openrouter",
+        model="openai/gpt-5.4-mini",
+        fallback_models=["deepseek/deepseek-r1"],
+    )
+
+    assert not isinstance(service, StallRetryingOpenAILLMService)
+
+
 @pytest.mark.parametrize(
     ("provider", "model", "effort"),
     [

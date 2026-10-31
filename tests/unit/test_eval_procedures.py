@@ -18,7 +18,7 @@ import pytest
 from turncall.domain.models import AgentConfig, ToolDefinition
 from turncall.domain.procedure_state import ProcedureState
 from turncall.evals.run_warnings import warn_never_mocked
-from turncall.orchestrator import tool_bridge
+from turncall.orchestrator import skill_loader, tool_bridge
 from turncall.orchestrator.procedures import CallProcedures, move_to_step_tool
 from turncall.services.tool_mocks import ToolMocks, intercept
 
@@ -183,21 +183,70 @@ class TestAMockedStepToolSaysWhereToMove:
         assert "[Procedure]" not in call["result"]
 
 
+def _wrap_up(tool: str) -> dict:
+    return {
+        "name": "wrap_up",
+        "start": "call",
+        "steps": [
+            {
+                "id": "wrap",
+                "kind": "instruct",
+                "start": True,
+                "tool": tool,
+                "text": "Wrap the call up.",
+                "moves": [{"to": "done", "when": "the tool answered"}],
+            },
+            {"id": "done", "kind": "end", "text": "Say goodbye."},
+        ],
+    }
+
+
 class TestASelfDeliveringToolReadsTheReminder:
-    async def test_end_call_or_load_skill_as_a_steps_tool_gets_it(self) -> None:
-        """`end_call` and `load_skill` hand back their own result, past the
-        handler's last line: the reminder rides on the callback itself."""
-        config = AgentConfig(system_prompt="s", procedures=[LOOKUP])
+    """`end_call` and `load_skill` hand back their own result, from inside
+    the handler's branch: the reminder rides on the callback itself, on a
+    live call as in an eval."""
+
+    @pytest.mark.parametrize("tool", ["end_call", "load_skill"])
+    async def test_a_steps_own_tool_gets_it(self, monkeypatch, tool) -> None:
+        async def builtin(*_args):
+            return '{"success": true, "message": "ok", "details": null}'
+
+        async def load(_args, _context, params):
+            await params.result_callback("loaded", properties="kept")
+            return "loaded"
+
+        monkeypatch.setattr(tool_bridge, "_execute_builtin", builtin)
+        monkeypatch.setattr(skill_loader, "run_load_skill", load)
+        config = AgentConfig(system_prompt="s", procedures=[_wrap_up(tool)])
         context = SimpleNamespace(
-            procedures=CallProcedures(ProcedureState.at_call_start(config.procedures))
+            call_id=uuid4(),
+            project_id=uuid4(),
+            mcp_manager=None,
+            tool_mocks=None,
+            is_eval=False,
+            records=False,
+            has_database=True,
+            procedures=CallProcedures(ProcedureState.at_call_start(config.procedures)),
+        )
+        llm = _LLM()
+        tool_bridge.register_tools(
+            llm,
+            [ToolDefinition(name=tool, description="d", parameters_schema={})],
+            context,
         )
         answer = AsyncMock()
-        params = SimpleNamespace(result_callback=answer, function_name="get_order")
+        params = SimpleNamespace(
+            function_name=tool,
+            tool_call_id="1",
+            arguments={},
+            llm=SimpleNamespace(push_frame=AsyncMock()),
+            context=None,
+            result_callback=answer,
+        )
 
-        followed = tool_bridge._with_followup(params, context, "get_order")
-        await followed.result_callback('{"success": true}', properties="kept")
+        await llm.handlers[tool](params)
 
         read = answer.await_args.args[0]
-        assert read.startswith('{"success": true}\n\n[Procedure]')
-        assert answer.await_args.kwargs == {"properties": "kept"}
-        assert params.result_callback is answer  # the original is untouched
+        assert "\n\n[Procedure] 'wrap_up' is at step 'wrap', whose tool" in read
+        if tool == "load_skill":
+            assert answer.await_args.kwargs == {"properties": "kept"}

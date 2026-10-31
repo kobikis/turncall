@@ -20,7 +20,6 @@ model sees a window.
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Coroutine, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
@@ -46,6 +45,7 @@ from turncall.domain.procedure_window import WINDOW_MARKER, startable_section
 from turncall.domain.procedures import MOVE_TO_STEP, Procedure
 from turncall.orchestrator.turn_message import replace_turn_message
 from turncall.orchestrator.turn_metrics import store_call_event
+from turncall.services.tool_webhook import tool_text
 
 if TYPE_CHECKING:
     from turncall.orchestrator.pipeline_factory import CallContext
@@ -221,12 +221,6 @@ def run_move_to_step(args: dict[str, Any], call_context: CallContext) -> MoveOut
     )
     _record_move(call_context, outcome)
     return outcome
-
-
-def tool_text(result: Any) -> str:
-    """A tool's result as text: a knowledge search answers a dict, which
-    pipecat would serialize itself."""
-    return result if isinstance(result, str) else json.dumps(result)
 
 
 def with_step_followup(result: Any, call_context: CallContext, tool: str) -> Any:

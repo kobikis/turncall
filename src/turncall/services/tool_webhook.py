@@ -30,6 +30,12 @@ from turncall.services.outbound_url import warn_if_plain_http
 _PREVIEW_BYTES = 512
 
 
+def tool_text(result: Any) -> str:
+    """A tool's result as text: a knowledge search answers a dict, which
+    pipecat would serialize itself."""
+    return result if isinstance(result, str) else json.dumps(result)
+
+
 def cap_tool_result(text: str, max_bytes: int, *, tool: str, source: str) -> str:
     """Keep a runaway tool result out of the LLM context.
 

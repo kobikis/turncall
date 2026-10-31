@@ -116,7 +116,9 @@ def steps_ahead(
     procedure: Procedure, current: ProcedureStep, depth: int
 ) -> list[tuple[ProcedureStep, str]]:
     """The steps up to `depth` moves ahead, nearest first, each with the step
-    it is reached from; each step once, and never the current one."""
+    it is reached from; each step once, and never the current one. The
+    preview's, and the step-tool reminder's one move ahead
+    (`ProcedureState.step_tool_followup`)."""
     seen = {current.id}
     frontier = [current]
     found: list[tuple[ProcedureStep, str]] = []

@@ -80,18 +80,24 @@ class ProcedureState:
         c02c84fd loaded a skill, booked, and ended the call from `book`
         without moving to `confirmed`; call 7d351817 booked from `invite`,
         never moving to `book`. None for any other tool."""
-        lines = [
-            line
-            for run in self.runs
-            if (procedure := self.procedure(run.name)) is not None
-            and (step := procedure.step(run.current)) is not None
-            and (line := _tool_followup(run, procedure, step, tool))
-        ]
+        lines = []
+        for run in self.runs:
+            placed = self._placing(run)
+            line = _tool_followup(run, *placed, tool) if placed else None
+            if line:
+                lines.append(line)
         return "\n".join(lines) or None
 
     def current_step(self, run: ProcedureRun) -> ProcedureStep | None:
+        placed = self._placing(run)
+        return placed[1] if placed else None
+
+    def _placing(self, run: ProcedureRun) -> tuple[Procedure, ProcedureStep] | None:
+        """`run`'s procedure and the step it is at; None when either is gone."""
         procedure = self.procedure(run.name)
-        return procedure.step(run.current) if procedure is not None else None
+        if procedure is None or (step := procedure.step(run.current)) is None:
+            return None
+        return procedure, step
 
     def _placed(self, run: ProcedureRun) -> "ProcedureState":
         """The state with `run` where it now stands: running in its place
@@ -199,12 +205,17 @@ def _tool_followup(
         )
     # ponytail: one move ahead only; a tool further on is a skipped step,
     # which the move's refusal names.
+    # Never an escalate step: it runs its action on the move, so reported
+    # after its tool already ran, the transfer or handoff would run twice.
     ahead = next(
-        (s for s, _ in steps_ahead(procedure, step, 1) if s.tool == tool), None
+        (
+            s
+            for s, _ in steps_ahead(procedure, step, 1)
+            if s.tool == tool and s.kind != StepKind.ESCALATE
+        ),
+        None,
     )
-    # An escalate step runs its action on the move: reported after its tool
-    # already ran, the transfer or handoff would run twice.
-    if ahead is None or ahead.kind == StepKind.ESCALATE:
+    if ahead is None:
         return None
     # "If you called it for that step": the same tool may answer a side
     # question (a menu search) with the step still ahead.

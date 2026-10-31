@@ -398,3 +398,45 @@ def test_an_escalate_steps_tool_ahead_asks_for_no_move():
     state = ProcedureState.at_call_start((graph,))
 
     assert state.step_tool_followup("transfer_call") is None
+
+
+@pytest.mark.unit
+def test_an_escalate_step_ahead_does_not_hide_another_with_the_tool():
+    """Two steps one move ahead share the tool; the escalate one comes first."""
+    graph = Procedure.model_validate(
+        {
+            "name": "help",
+            "start": "call",
+            "steps": [
+                {
+                    "id": "ask",
+                    "kind": "ask",
+                    "start": True,
+                    "text": "Ask what is wrong.",
+                    "moves": [
+                        {"to": "human", "when": "the caller wants a person"},
+                        {"to": "lookup", "when": "the caller gave an order number"},
+                    ],
+                },
+                {
+                    "id": "human",
+                    "kind": "escalate",
+                    "tool": "get_order",
+                    "text": "Say you are putting them through.",
+                    "escalate": {"transfer_call": {"target_number": "+15555550100"}},
+                },
+                {
+                    "id": "lookup",
+                    "kind": "check",
+                    "tool": "get_order",
+                    "text": "Look the order up.",
+                    "moves": [{"to": "done", "when": "found"}],
+                },
+                {"id": "done", "kind": "end", "text": "Say so."},
+            ],
+        }
+    )
+
+    followup = ProcedureState.at_call_start((graph,)).step_tool_followup("get_order")
+
+    assert followup is not None and "step 'lookup', one move ahead" in followup
