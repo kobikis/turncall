@@ -485,6 +485,16 @@ def _openai_extra_body(
     return {"extra_body": body} if body else {}
 
 
+# How long a hosted OpenAI-family chat completion may go without starting its
+# response before pipecat abandons it and sends it once more
+# (`retry_on_timeout`). Call c02c84fd: OpenAI took two requests and sent
+# nothing for 16-17 s each, until the caller's "Hello?" cancelled them. The
+# limit is on the request's start (its headers), not on the reply, so a slow
+# model streaming steadily is never cut; a normal start here is under 1.2 s.
+LLM_STALL_SECONDS = 5.0
+_RETRY_A_STALL = {"retry_on_timeout": True, "retry_timeout_secs": LLM_STALL_SECONDS}
+
+
 def _create_llm_service(
     config: AgentConfig,
     credentials: Credentials,
@@ -538,6 +548,7 @@ def _create_llm_service(
         return OpenAILLMService(
             api_key=credentials.api_key("openrouter", config.llm.api_key),
             base_url="https://openrouter.ai/api/v1",
+            **_RETRY_A_STALL,
             settings=OpenAILLMService.Settings(
                 model=model,
                 **si,
@@ -566,6 +577,7 @@ def _create_llm_service(
         )
         return OpenAILLMService(
             api_key=credentials.api_key("openai", config.llm.api_key),
+            **_RETRY_A_STALL,
             settings=OpenAILLMService.Settings(
                 model=model,
                 **si,
