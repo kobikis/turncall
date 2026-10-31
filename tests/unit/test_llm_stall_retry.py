@@ -1,11 +1,5 @@
-"""A hosted LLM request that never answers is re-sent (call c02c84fd).
-
-Twice in one call OpenAI accepted a chat completion and sent nothing for
-16-17 s, until the caller's "Hello?" cancelled it: the caller heard silence.
-A stall shows as no response headers at all, so pipecat's `retry_on_timeout`
-(a time limit on the request's start, then one unbounded retry) covers it
-without cutting a slow but streaming reply.
-"""
+"""A hosted LLM request that never starts answering is sent again (calls
+c02c84fd, ebfa5e53): see `orchestrator/llm_stall.py`."""
 
 import asyncio
 from unittest.mock import AsyncMock
@@ -15,43 +9,44 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 
 from tests.conftest import creds
 from turncall.domain.models import AgentConfig, LLMConfig
-from turncall.orchestrator.pipeline_factory import (
-    LLM_STALL_SECONDS,
-    _create_llm_service,
-)
+from turncall.orchestrator import llm_stall
+from turncall.orchestrator.llm_stall import StallRetryingOpenAILLMService
+from turncall.orchestrator.pipeline_factory import _create_llm_service
 
 pytestmark = pytest.mark.unit
 
 
-def _service(provider: str):
+def _service(provider: str, model: str = "m", **llm):
     config = AgentConfig(
-        system_prompt="hi", llm=LLMConfig(provider=provider, model="m")
+        system_prompt="hi", llm=LLMConfig(provider=provider, model=model, **llm)
     )
     return _create_llm_service(config, creds("sk-test", openrouter="sk-or-test"))
 
 
 @pytest.mark.parametrize("provider", ["openai", "openrouter"])
-def test_a_hosted_openai_family_llm_retries_a_stalled_request(provider):
-    service = _service(provider)
-
-    assert service._retry_on_timeout is True
-    assert service._retry_timeout_secs == LLM_STALL_SECONDS
+def test_a_hosted_openai_family_llm_resends_a_stall(provider):
+    assert isinstance(_service(provider), StallRetryingOpenAILLMService)
 
 
-async def test_a_stalled_request_is_sent_again(monkeypatch):
+def test_a_model_asked_to_reason_first_is_not_cut():
+    service = _service("openai", model="o4-mini", reasoning_effort="high")
+
+    assert not isinstance(service, StallRetryingOpenAILLMService)
+
+
+async def test_stalls_are_sent_again_until_one_answers(monkeypatch):
     service = _service("openai")
-    monkeypatch.setattr(service, "_retry_timeout_secs", 0.05)
+    monkeypatch.setattr(llm_stall, "LLM_STALL_SECONDS", 0.05)
     answered = object()
-    attempts = iter([None, answered])
+    attempts = iter([None, None, answered])
 
-    async def stall_then_answer(**_params):
-        reply = next(attempts)
-        if reply is None:
+    async def stall_twice(**_params):
+        if (reply := next(attempts)) is None:
             await asyncio.sleep(3600)  # no headers, ever
         return reply
 
-    create = AsyncMock(side_effect=stall_then_answer)
+    create = AsyncMock(side_effect=stall_twice)
     monkeypatch.setattr(service._client.chat.completions, "create", create)
 
     assert await service.get_chat_completions(LLMContext()) is answered
-    assert create.await_count == 2
+    assert create.await_count == 3
