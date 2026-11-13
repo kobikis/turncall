@@ -191,6 +191,8 @@ class AssistantTranscriptTapProcessor(FrameProcessor):
             "text": strip_voice_tags(text),
             "role": "assistant",
         }
+        if not payload["text"]:
+            return  # nothing but tags
         live_transcript.said(self._call_context.call_id, "assistant", payload["text"])
         model = self._resolved_model()
         if model:

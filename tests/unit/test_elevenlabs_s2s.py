@@ -5,7 +5,7 @@ sends. The socket itself is the live file's
 (`tests/live/test_live_elevenlabs_realtime.py`).
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -226,6 +226,66 @@ class TestTheKey:
         (frame,) = [c.args[0] for c in service.push_frame.await_args_list]
         assert (frame.category is ErrorCategory.AUTHENTICATION) is is_key
         assert not service.is_usable
+
+    async def test_our_own_close_is_not_an_error(self) -> None:
+        """The call ending closes the socket; that close is not ElevenLabs'."""
+        from websockets.exceptions import ConnectionClosedError
+        from websockets.frames import Close
+
+        class Closing:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise ConnectionClosedError(None, Close(1000, ""), rcvd_then_sent=None)
+
+        service = _service()
+        service._websocket = Closing()
+        service._disconnecting = True
+        service.push_frame = AsyncMock()
+        await service._receive_task_handler()
+        service.push_frame.assert_not_awaited()
+
+
+class TestCallerAudioWaitsForTheSession:
+    """ElevenLabs takes the caller's first audio as the conversation starting,
+    and then refuses the session's voice and model (measured on a call,
+    a79c36a5): audio before the first session.update is dropped."""
+
+    @staticmethod
+    def _audio():
+        from pipecat.frames.frames import InputAudioRawFrame
+
+        return InputAudioRawFrame(
+            audio=b"\1\0" * 480, sample_rate=24000, num_channels=1
+        )
+
+    async def test_audio_before_the_session_update_is_not_sent(self) -> None:
+        service = _service()
+        service._ws_send = AsyncMock()
+        await service._send_user_audio(self._audio())
+        service._ws_send.assert_not_awaited()
+
+    async def test_audio_after_it_is(self) -> None:
+        service = _service()
+        await _session_update(service)
+        await service._send_user_audio(self._audio())
+        kinds = [c.args[0]["type"] for c in service._ws_send.await_args_list]
+        assert kinds == ["session.update", "input_audio_buffer.append"]
+
+    async def test_a_new_session_waits_again(self) -> None:
+        service = _service()
+        await _session_update(service)
+        service._websocket = None
+        service.push_error = AsyncMock()
+        with patch(
+            "pipecat.services.openai.realtime.llm.websocket_connect",
+            AsyncMock(side_effect=OSError),
+        ):
+            await service._connect()
+        service._ws_send = AsyncMock()
+        await service._send_user_audio(self._audio())
+        service._ws_send.assert_not_awaited()
 
 
 class TestTheS2SRulesHold:

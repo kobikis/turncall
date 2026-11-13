@@ -3,8 +3,8 @@
 Nothing in the unit suite opens a socket, so these are what say the key is
 taken as `xi-api-key`, that ElevenLabs accepts the session TurnCall sends
 (temperature, session length, language, semantic VAD), that a refused key's
-4001 close reads as `key_rejected`, and that the agent greets from the empty
-context and calls a tool.
+4001 close reads as `key_rejected`, and that the agent greets unprompted and
+calls a tool.
 
 Live: needs ELEVENLABS_API_KEY on a workspace Eleven Realtime has reached.
 Skipped without it.
@@ -129,8 +129,9 @@ async def _run(blob: dict[str, Any], definition: dict, session_factory: Any):
 async def test_the_agent_opens_the_call_unprompted(
     elevenlabs_key: str, session_factory: Any
 ) -> None:
-    """No opening-role entry, so the session opens on the empty context, as
-    OpenAI Realtime's and Grok's do. Several runs: "sometimes" is the bug."""
+    """ElevenLabs answers nothing on an empty conversation, so the session
+    opens on a trailing user message, as Gemini Live's and Nova Sonic's do
+    (#468). Several runs: "sometimes" is the bug."""
     blob = {**_blob(), "first_message": "Thanks for calling Luigi's, this is Marco."}
     definition = {
         "turns": [{"expect": [{"event": "llm_response", "within_ms": 20000}]}]

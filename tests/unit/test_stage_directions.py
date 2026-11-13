@@ -92,6 +92,13 @@ async def test_every_tts_provider_leaves_a_narration_unspoken(provider, monkeypa
         ('Sure. <break time="1s"/> Done.', "Sure. Done."),
         ("Your code is <spell>A1B</spell>.", "Your code is A1B."),
         ("Nothing to strip <here>.", "Nothing to strip <here>."),
+        # Eleven Realtime's expressive tags (#468): lowercase words only.
+        ("[friendly] Hello and welcome!", "Hello and welcome!"),
+        ("Sure [laughs softly] we are open.", "Sure we are open."),
+        ("[Happy] We have sushi.", "We have sushi."),
+        # A tool call written out as text is spoken ("End call.", call 9160c705).
+        ("[end_call()]", "[end_call()]"),
+        ("See note [1], ask [Your Name].", "See note [1], ask [Your Name]."),
     ],
 )
 def test_voice_tags_come_out(text, plain):

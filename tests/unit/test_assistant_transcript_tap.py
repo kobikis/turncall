@@ -58,3 +58,9 @@ async def test_a_voice_tag_is_not_written_down(monkeypatch) -> None:
     await tap._log_transcript('<emotion value="excited"/>Buona sera!')
 
     assert written.call_args.kwargs["payload"]["text"] == "Buona sera!"
+
+
+async def test_a_reply_that_was_only_tags_is_not_written_down() -> None:
+    tap, factory = _tap(tts_usable=None)
+    await tap._log_transcript("[laughs]")
+    factory.assert_not_called()

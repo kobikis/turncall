@@ -126,7 +126,9 @@ async def _opening_context(config: AgentConfig) -> tuple[Any, Any]:
         transport=MagicMock(),
         call_context=MagicMock(is_eval=True),
         pipecat_settings=SimpleNamespace(),
-        credentials=creds("sk-test", google="g-test", xai="x-test"),
+        credentials=creds(
+            "sk-test", google="g-test", xai="x-test", elevenlabs="el-test"
+        ),
     )
     aggregator = next(
         p for p in pipeline.processors if isinstance(p, LLMUserAggregator)
@@ -405,3 +407,26 @@ async def test_grok_answers_the_empty_opening_itself() -> None:
 
     sent = [c.args[0] for c in service.send_client_event.await_args_list]
     assert any(isinstance(e, events.ResponseCreateEvent) for e in sent), sent
+
+
+async def test_eleven_realtime_opens_on_a_trailing_user_message() -> None:
+    """ElevenLabs answers a `response.create` on an empty conversation with
+    nothing, and greets from a trailing user message (measured, #468): the
+    message is sent as a conversation item, then the response is asked for."""
+    from pipecat.processors.frame_processor import FrameDirection
+
+    context, service = await _opening_context(_agent("elevenlabs", "Hi!"))
+    (opening,) = context.get_messages()
+    assert opening["role"] == "user" and "Hi!" in opening["content"]
+
+    service._api_session_ready = True
+    service.send_client_event = AsyncMock()
+    service.push_frame = AsyncMock()
+    await service._handle_context(context, FrameDirection.DOWNSTREAM)
+
+    sent = [c.args[0] for c in service.send_client_event.await_args_list]
+    kinds = [type(e).__name__ for e in sent]
+    assert "ConversationItemCreateEvent" in kinds, kinds
+    assert kinds.index("ConversationItemCreateEvent") < kinds.index(
+        "ResponseCreateEvent"
+    ), kinds
