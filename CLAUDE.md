@@ -2472,7 +2472,7 @@ Recording runs off the reply's critical path and is best-effort: a failure is lo
 
 All Pipecat imports isolated in `orchestrator/`. No other module imports Pipecat.
 
-- `serializer.py` — Twilio mulaw ↔ PCM16 frames
+- `serializer.py` — Twilio mulaw ↔ PCM16 frames, `clear` on barge-in (#463; the carrier contract holds every carrier to a flush)
 - `asterisk_serializer.py` — Asterisk chan_websocket raw ulaw ↔ PCM16, `FLUSH_MEDIA` on barge-in
 - `pipeline_factory.py` — Builds pipeline from AgentConfig (providers, VAD, Smart Turn, voicemail)
 - `transport_factory.py` — Creates a carrier media-stream, WebRTC, or WhatsApp transport. `CARRIER_MEDIA` is the one place a call's carrier picks a serializer and rate (see "Carriers")

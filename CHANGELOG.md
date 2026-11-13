@@ -148,6 +148,11 @@ and is not part of this repository's history.
   were gone; a handoff to an agent with no tools got the first agent's back
   at the next reconnect. A handoff now opens a new session (about 0.6 s) on
   the target agent's prompt and tools.
+- **A Twilio caller who talks over the agent no longer hears the rest of the
+  cut-off reply** (#463). A barge-in sent Twilio nothing, so the audio Twilio
+  already held for the reply kept playing; it now sends Twilio's `clear` for
+  the call's stream, as Telnyx (`clear`) and Asterisk (`FLUSH_MEDIA`) already
+  did.
 
 ## [2.1.1]
 

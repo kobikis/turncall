@@ -83,6 +83,9 @@ on with the same LLM rather than moving to a backup. See
 - **A handoff on a Gemini Live call reaches the model**: the agent the call
   hands off to answers with its own prompt and tools, where the model used to
   carry on as the first agent.
+- **A Twilio caller who talks over the agent no longer hears the rest of the
+  reply it cut off**: TurnCall now tells Twilio to drop the audio it has not
+  played yet, as it already did on Telnyx and Asterisk.
 
 </Update>
 

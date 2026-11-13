@@ -66,7 +66,7 @@ async def test_an_interruption_drops_the_cut_off_replys_tail() -> None:
     serializer = TwilioFrameSerializer(stream_sid="SID")
     await _sent(serializer, first)
 
-    assert await serializer.serialize(InterruptionFrame()) is None
+    await serializer.serialize(InterruptionFrame())
     after_barge_in = await _sent(serializer, second)
 
     assert after_barge_in == await _sent(
