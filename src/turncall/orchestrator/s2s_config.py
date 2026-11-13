@@ -5,6 +5,7 @@ GeminiLiveLLMService, AWSNovaSonicLLMService or GrokRealtimeLLMService with
 appropriate session properties, voice, and turn detection settings.
 """
 
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -42,6 +43,14 @@ _GROK_VOICE_VOICE = "eve"
 # this one, so what the service is told and what it is sent agree.
 S2S_SERVICE_SAMPLE_RATE = 24000
 
+
+# Realtime's transcription keywords (#455) are taken by `gpt-transcribe` and
+# `gpt-live-transcribe` only, not pipecat's default `gpt-realtime-whisper`.
+# `gpt-transcribe` is the one OpenAI documents for a conversation session's
+# input transcription. A keyword holding `<`, `>` or a line break makes OpenAI
+# refuse the whole session update, so it is dropped instead.
+_KEYWORDS_TRANSCRIPTION_MODEL = "gpt-transcribe"
+_UNSENDABLE_KEYWORD = re.compile(r"[<>\r\n]")
 
 # The role of the opening message per provider; one without an entry opens on
 # an empty context.
@@ -141,7 +150,6 @@ def _create_openai_realtime(config: AgentConfig, api_key: str) -> Any:
         AudioConfiguration,
         AudioInput,
         AudioOutput,
-        InputAudioTranscription,
         SessionProperties,
         TurnDetection,
     )
@@ -166,11 +174,9 @@ def _create_openai_realtime(config: AgentConfig, api_key: str) -> Any:
         max_output_tokens=s2s.max_tokens,
         audio=AudioConfiguration(
             input=AudioInput(
-                # No model= — inherit Pipecat's current realtime transcription
-                # default (gpt-realtime-whisper) instead of pinning a stale one.
                 # Constructing it at all is what keeps the user-side transcript
-                # populated; only the model choice is delegated.
-                transcription=InputAudioTranscription(),
+                # populated.
+                transcription=_input_transcription(config.stt.keyterms),
                 turn_detection=turn_detection,
             ),
             output=AudioOutput(voice=s2s.voice),
@@ -203,6 +209,28 @@ def _create_openai_realtime(config: AgentConfig, api_key: str) -> Any:
         base_url=s2s.base_url or "openai-default",
     )
     return service
+
+
+def _input_transcription(keyterms: list[str]) -> Any:
+    """Realtime's input transcription, carrying `stt.keyterms` as keywords.
+
+    Without any it names no model, inheriting pipecat's current default
+    instead of pinning a stale one; with some, the model that takes them.
+    """
+    from pipecat.services.openai.realtime.events import InputAudioTranscription
+
+    keywords = [t for t in keyterms if t.strip() and not _UNSENDABLE_KEYWORD.search(t)]
+    if len(keywords) < len(keyterms):
+        logger.warning(
+            "openai_realtime_keywords_dropped count={count} "
+            "reason=blank_or_holds_angle_bracket_or_line_break",
+            count=len(keyterms) - len(keywords),
+        )
+    if not keywords:
+        return InputAudioTranscription()
+    return InputAudioTranscription(
+        model=_KEYWORDS_TRANSCRIPTION_MODEL, keywords=keywords
+    )
 
 
 def _create_gemini_live(config: AgentConfig, api_key: str) -> Any:
