@@ -53,6 +53,7 @@ class AsteriskCall(HearsTheAgent):
     _outgoing: asyncio.Queue[bytes] = field(default_factory=asyncio.Queue)
     _loud_at: list[float] = field(default_factory=list)
     _tasks: list[asyncio.Task] = field(default_factory=list)
+    flushes: int = 0
     closed: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def say(self, ms: int = 400) -> None:
@@ -106,6 +107,7 @@ class AsteriskCall(HearsTheAgent):
                     self.heard(audioop.ulaw2lin(message, 2))
                 else:
                     self.asterisk.commands.append(message)
+                    self.flushes += message == "FLUSH_MEDIA"
         except websockets.ConnectionClosed:
             pass
         finally:

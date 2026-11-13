@@ -9,6 +9,7 @@ Twilio → Pipecat:
 
 Pipecat → Twilio:
   OutputAudioRawFrame(PCM16) → Twilio "media" JSON with base64 mulaw payload
+  InterruptionFrame (a barge-in) → Twilio "clear" for the stream
 """
 
 import base64
@@ -82,9 +83,9 @@ class TwilioFrameSerializer(FrameSerializer):
 
         if isinstance(frame, InterruptionFrame):
             # The cut-off reply's tail, still in the filter, must not start
-            # the next one.
+            # the next one; `clear` drops what Twilio holds of it unplayed.
             await self._reset_audio_out()
-            return None
+            return self.build_clear_message() if self._stream_sid else None
 
         if not isinstance(frame, OutputAudioRawFrame):
             return None

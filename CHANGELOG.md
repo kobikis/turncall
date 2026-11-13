@@ -142,6 +142,11 @@ and is not part of this repository's history.
   sooner** (#459). pipecat re-opens a Gemini Live session whose first context
   brings tools, so every such agent opened two sessions before it spoke; the
   tools now go into the session it opens with, off the context.
+- **A Twilio caller who talks over the agent no longer hears the rest of the
+  cut-off reply** (#463). A barge-in sent Twilio nothing, so the audio Twilio
+  already held for the reply kept playing; it now sends Twilio's `clear` for
+  the call's stream, as Telnyx (`clear`) and Asterisk (`FLUSH_MEDIA`) already
+  did.
 
 ## [2.1.1]
 
