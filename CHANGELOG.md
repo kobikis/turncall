@@ -13,6 +13,15 @@ and is not part of this repository's history.
 
 ### Added
 
+- **Eleven Realtime** (#465): ElevenLabs' speech-to-speech models as the
+  `elevenlabs` S2S provider, on the ElevenLabs account TTS and STT already
+  use. `eleven_realtime_v1_mini` by default, `eleven_realtime_v1_max` for
+  agents that lean on tools; voice `brian`. `s2s.extra.language` and
+  `s2s.extra.eagerness`, `s2s.temperature` and `s2s.max_tokens` are sent; the
+  session lasts the agent's `max_call_duration_seconds` (at most 7,200 s, a 422
+  above). A refused key carries `key_rejected: true`. An `openai` agent whose
+  `s2s.base_url` points at ElevenLabs is now a 422, since it would send the
+  OpenAI key there.
 - **Skills** (#421–#431). A skill is a project's versioned capability: a
   `name`, a `description` saying when to use it, `instructions`, `tools` and
   `knowledge_bases`. `/v1/skills` creates, edits (drafts only), publishes,

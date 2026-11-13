@@ -45,7 +45,7 @@ from turncall.domain.providers import (
     STT_PROVIDERS,
     TTS_PROVIDERS,
 )
-from turncall.orchestrator import grok_voice, xai_config
+from turncall.orchestrator import eleven_realtime, grok_voice, xai_config
 from turncall.orchestrator.deepgram_flux import MIXED_FLUX_GROUP, mixes_flux
 from turncall.services.skills import LOAD_SKILL
 
@@ -471,7 +471,7 @@ class S2SConfigSchema(BaseModel):
     )
     # OpenAI-Realtime-compatible gateway/endpoint (wss://). openai provider only.
     base_url: str | None = Field(default=None, max_length=2048)
-    # None = provider default. temperature is google-only (OpenAI Realtime GA
+    # None = provider default. temperature is google and elevenlabs only (OpenAI Realtime GA
     # has no temperature control); max_tokens maps to max_output_tokens on openai.
     # Grok Voice (xai) has neither, so either is a 422 there (#387).
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
@@ -508,6 +508,10 @@ class S2SConfigSchema(BaseModel):
         # Ahead of the generic base_url and temperature validators, so an xai
         # agent hears the way out (gateway mode) rather than a URL-shape rule.
         if self.provider == "xai" and (problem := grok_voice.refusal(self)):
+            raise ValueError(problem)
+        if self.provider == "elevenlabs" and (problem := eleven_realtime.refusal(self)):
+            raise ValueError(problem)
+        if problem := eleven_realtime.gateway_refusal(self):
             raise ValueError(problem)
         return self
 
@@ -891,6 +895,16 @@ class AgentConfigSchema(BaseModel):
                 "leaving the previous agent's voice and prompt in place"
             )
             raise ValueError(msg)
+        if (
+            self.pipeline_mode == "s2s"
+            and self.s2s.provider == "elevenlabs"
+            and (
+                problem := eleven_realtime.duration_refusal(
+                    self.max_call_duration_seconds
+                )
+            )
+        ):
+            raise ValueError(problem)
         return self
 
 

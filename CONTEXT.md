@@ -58,6 +58,15 @@ xAI's text models, run as the `xai` LLM [[provider]]
 (`grok-4.20-non-reasoning` by default) on the same xAI account as
 [[Grok Voice]].
 
+**Eleven Realtime**:
+ElevenLabs' speech-to-speech models, run as the `elevenlabs` S2S [[provider]]
+on the same ElevenLabs account as its TTS and STT. Two models: Mini (price and
+speed) and Max (reasons first; for heavy tool use). Spoken to over the
+OpenAI-Realtime protocol at ElevenLabs' own endpoint — a provider of its own,
+never [[S2S gateway mode]], which would send the OpenAI key to ElevenLabs.
+_Avoid_: "ElevenLabs gateway", "ElevenAgents" (ElevenLabs' hosted agent
+product, which TurnCall does not use).
+
 **Bedrock**:
 The AWS-hosted gateway [[provider]] (`bedrock`) reaching Anthropic, Meta, Mistral and
 Amazon foundation models through one API. The only [[provider]] whose name is a gateway

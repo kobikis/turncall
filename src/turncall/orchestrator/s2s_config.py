@@ -18,7 +18,7 @@ from turncall.domain.models import (
     ToolDefinition,
     resolve_delegation,
 )
-from turncall.orchestrator import grok_voice
+from turncall.orchestrator import eleven_realtime, grok_voice
 from turncall.orchestrator.config_warnings import (
     keyterms_on_s2s_warning,
     realtime_keywords,
@@ -146,6 +146,8 @@ def create_s2s_service(
         return _create_nova_sonic(config, credentials.aws(config.aws))
     if provider == "xai":
         return _create_grok_realtime(config, credentials.api_key("xai"))
+    if provider == "elevenlabs":
+        return _create_eleven_realtime(config, credentials.api_key("elevenlabs"))
     raise ValueError(f"Unsupported S2S provider: {provider}")
 
 
@@ -161,6 +163,10 @@ def _create_openai_realtime(config: AgentConfig, api_key: str) -> Any:
     from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 
     s2s = config.s2s
+    # The API schema refuses it at save; a call-init inline agent reaches here
+    # unchecked, and would hand the OpenAI key to ElevenLabs (#465).
+    if problem := eleven_realtime.gateway_refusal(s2s):
+        raise ValueError(problem)
 
     system_prompt = _build_s2s_system_prompt(config)
 
@@ -340,6 +346,70 @@ def _create_grok_realtime(config: AgentConfig, api_key: str) -> Any:
 
     logger.info(
         "S2S service created: provider=xai model={model} voice={voice} turn={turn}",
+        model=model,
+        voice=voice,
+        turn=s2s.turn_detection,
+    )
+    return service
+
+
+def _create_eleven_realtime(config: AgentConfig, api_key: str) -> Any:
+    """Create Eleven Realtime (#465): pipecat's OpenAI Realtime service at
+    ElevenLabs, PCM at S2S_SERVICE_SAMPLE_RATE both ways. What the session
+    takes, and what is refused, is `eleven_realtime`'s."""
+    from pipecat.services.openai.realtime import events
+
+    from turncall.orchestrator.eleven_realtime_service import ElevenRealtime
+
+    s2s = config.s2s
+    problem = eleven_realtime.refusal(s2s) or eleven_realtime.duration_refusal(
+        config.max_call_duration_seconds
+    )
+    if problem:
+        raise ValueError(problem)
+
+    model, voice = _own_defaults(
+        s2s, model=eleven_realtime.MODEL, voice=eleven_realtime.VOICE
+    )
+    extras = eleven_realtime.session_extras(s2s.extra)
+    session: dict[str, Any] = {
+        "max_duration_seconds": eleven_realtime.session_seconds(
+            config.max_call_duration_seconds
+        )
+    }
+    if s2s.temperature is not None:
+        session["temperature"] = s2s.temperature
+    if s2s.max_tokens is not None:
+        session["max_response_output_tokens"] = s2s.max_tokens
+    pcm = events.PCMAudioFormat(rate=S2S_SERVICE_SAMPLE_RATE)
+    turn_detection = (
+        events.SemanticTurnDetection(eagerness=extras.get("eagerness"))
+        if s2s.turn_detection == "server_vad"
+        else False
+    )
+
+    service = ElevenRealtime(
+        api_key=api_key,
+        base_url=eleven_realtime.URL,
+        session=session,
+        language=extras.get("language"),
+        settings=ElevenRealtime.Settings(
+            model=model,
+            session_properties=events.SessionProperties(
+                model=model,
+                output_modalities=["audio"],
+                instructions=_build_s2s_system_prompt(config) or None,
+                audio=events.AudioConfiguration(
+                    input=events.AudioInput(format=pcm, turn_detection=turn_detection),
+                    output=events.AudioOutput(format=pcm, voice=voice),
+                ),
+            ),
+        ),
+    )
+
+    logger.info(
+        "S2S service created: provider=elevenlabs model={model} voice={voice} "
+        "turn={turn}",
         model=model,
         voice=voice,
         turn=s2s.turn_detection,

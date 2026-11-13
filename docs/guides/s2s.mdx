@@ -1,6 +1,6 @@
 ---
 title: Speech-to-Speech
-description: "Ultra-low latency with OpenAI Realtime, Gemini Live, Amazon Nova Sonic and Grok Voice"
+description: "Ultra-low latency with OpenAI Realtime, Gemini Live, Amazon Nova Sonic, Grok Voice and Eleven Realtime"
 icon: "bolt"
 ---
 
@@ -56,6 +56,18 @@ Set `pipeline_mode: "s2s"` in the agent config. The `stt`, `llm`, and `tts` fiel
 }
 ```
 
+```json Eleven Realtime
+{
+  "pipeline_mode": "s2s",
+  "s2s": {
+    "provider": "elevenlabs",
+    "model": "eleven_realtime_v1_mini",
+    "voice": "brian",
+    "extra": {"language": "en"}
+  }
+}
+```
+
 ```json Gateway
 {
   "pipeline_mode": "s2s",
@@ -73,12 +85,12 @@ Set `pipeline_mode: "s2s"` in the agent config. The `stt`, `llm`, and `tts` fiel
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | Yes | `openai`, `openai_live`, `google`, `aws`, or `xai` |
-| `model` | No | Model name. Defaults per provider: `gpt-realtime-2.1` (openai), `gpt-live-1` (openai_live), `gemini-3.8-live` (google), `amazon.nova-2-sonic-v1:0` (aws), `grok-voice-3.0` (xai) |
-| `voice` | No | Voice name (default: `alloy` / `Charon` / `matthew` / `eve`) |
+| `provider` | Yes | `openai`, `openai_live`, `google`, `aws`, `xai`, or `elevenlabs` |
+| `model` | No | Model name. Defaults per provider: `gpt-realtime-2.1` (openai), `gpt-live-1` (openai_live), `gemini-3.8-live` (google), `amazon.nova-2-sonic-v1:0` (aws), `grok-voice-3.0` (xai), `eleven_realtime_v1_mini` (elevenlabs) |
+| `voice` | No | Voice name (default: `alloy` / `Charon` / `matthew` / `eve` / `brian`) |
 | `turn_detection` | No | `server_vad` (default) or `pipecat_vad` |
 | `base_url` | No | `wss://` endpoint of an OpenAI-Realtime-compatible gateway (`openai` provider only — **rejected** on every other). See [Gateways](#gateways-and-third-party-models) |
-| `extra` | No | Provider passthrough. On `aws`: `endpointing_sensitivity` (`LOW`/`MEDIUM`/`HIGH`). On `xai`: `reasoning`, `replace`, `resumption` (see [Grok Voice](#grok-voice)) |
+| `extra` | No | Provider passthrough. On `aws`: `endpointing_sensitivity` (`LOW`/`MEDIUM`/`HIGH`). On `xai`: `reasoning`, `replace`, `resumption` (see [Grok Voice](#grok-voice)). On `elevenlabs`: `language`, `eagerness` (see [Eleven Realtime](#eleven-realtime)) |
 
 ### Voices
 
@@ -86,6 +98,7 @@ Set `pipeline_mode: "s2s"` in the agent config. The `stt`, `llm`, and `tts` fiel
 - **Gemini Live** — any [Gemini-supported voice](https://ai.google.dev/gemini-api/docs/live) (e.g. `Aoede`, `Charon`, `Kore`, `Puck`, `Zephyr`, and more). The set grows per model, so TurnCall doesn't allowlist it — Gemini validates the voice when the session connects.
 - **Nova Sonic** — `matthew` (default), `tiffany`, `amy`, `lupe`, `carlos`. AWS validates on connect.
 - **Grok Voice** — `eve` (default), any other built-in Grok voice, or a custom voice id from your xAI account. xAI validates on connect.
+- **Eleven Realtime** — `brian` (default), or any ElevenLabs voice name or id your account can use. ElevenLabs validates on connect.
 
 ## OpenAI GPT-Live-1
 
@@ -281,6 +294,47 @@ server-side tools (web search, X search, file search, hosted MCP) are never
 sent. Knowledge bases work in `prompt` and `tool` mode; `auto` is ignored with
 a warning, as on every S2S provider.
 
+## Eleven Realtime
+
+`provider: "elevenlabs"` runs ElevenLabs' speech-to-speech models on the same
+`elevenlabs` account as its TTS and STT: the project's `elevenlabs` credential,
+else the platform's `ELEVENLABS_API_KEY`. Two models:
+`eleven_realtime_v1_mini` (the default, for price and speed) and
+`eleven_realtime_v1_max`, which reasons before it answers — ElevenLabs
+recommends it for agents that lean on tools. Eleven Realtime is reaching
+ElevenLabs workspaces gradually; a key on a workspace without it is refused
+when the call connects.
+
+```json
+"s2s": {
+  "provider": "elevenlabs",
+  "model": "eleven_realtime_v1_max",
+  "temperature": 0.6,
+  "extra": {"language": "es", "eagerness": "low"}
+}
+```
+
+- `extra.language` is the language the caller is heard in **and** answered in
+  (ElevenLabs' default is English).
+- `extra.eagerness` (`low`, `medium`, `high`) is how quickly ElevenLabs'
+  semantic turn detection decides the caller has finished.
+  `turn_detection: "pipecat_vad"` turns it off and lets TurnCall's VAD decide.
+- `temperature` is accepted, and `max_tokens` caps each reply.
+- A session lasts as long as the agent's `max_call_duration_seconds` (plus a
+  short margin). ElevenLabs caps a session at 7,200 seconds, so an agent
+  allowed longer is a 422.
+
+Any other `extra` key is ignored with a warning. `s2s.base_url` is a 422: the
+provider always connects to ElevenLabs. An `openai` agent whose `base_url`
+points at ElevenLabs is a 422 too, since it would send your OpenAI key there.
+A key ElevenLabs refuses ends the call with `error.raised` carrying
+`provider: "elevenlabs"` and `key_rejected: true`.
+
+Tools, knowledge bases, evals, avatars and ambience work as on OpenAI
+Realtime: tools run through TurnCall, recorded and mocked in evals.
+ElevenLabs' own `mcp` tool type is never sent — an agent's MCP servers are
+connected by TurnCall.
+
 ## Gateways and third-party models
 
 The `openai` provider speaks the OpenAI-Realtime WebSocket protocol — and so do OpenAI-Realtime-compatible gateways ([Vercel AI Gateway](https://vercel.com/docs/ai-gateway), [LiteLLM](https://docs.litellm.ai/)). Set `s2s.base_url` to route the realtime connection through one; provider-prefixed models like `openai/gpt-realtime-2` then flow over the same protocol — no new provider, same pipeline.
@@ -324,7 +378,7 @@ entry in `warnings` naming the mode and provider. Link it in `tool` mode instead
 
 ```
 transport.input → user_agg (VAD)
-  → S2S_LLM (OpenAI Realtime / Gemini Live / Nova Sonic / Grok Voice)
+  → S2S_LLM (OpenAI Realtime / Gemini Live / Nova Sonic / Grok Voice / Eleven Realtime)
   → transport.output
   → context_aggregator.assistant → observability
 ```
@@ -336,6 +390,7 @@ transport.input → user_agg (VAD)
 | OpenAI Realtime | `OPENAI_API_KEY` |
 | Gemini Live | `GOOGLE_API_KEY` |
 | Grok Voice | `XAI_API_KEY` |
+| Eleven Realtime | `ELEVENLABS_API_KEY` |
 | Gateway (Vercel AI Gateway / LiteLLM) | `OPENAI_API_KEY` set to the gateway key |
 | Amazon Nova Sonic | *No key* — see [AWS credentials](/guides/providers#credentials) |
 

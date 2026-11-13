@@ -725,8 +725,13 @@ def provider_of(processor: object) -> str | None:
 
     The nearest pipecat vendor class in its MRO, so a TurnCall subclass of a
     vendor's service (Grok's key-aware one) still names the vendor; a subclass
-    of a vendor-neutral base (`pipecat.services.llm_service`) names none.
+    of a vendor-neutral base (`pipecat.services.llm_service`) names none. A
+    class naming its own `vendor` wins: Eleven Realtime is pipecat's OpenAI
+    Realtime service at ElevenLabs.
     """
+    vendor = getattr(type(processor), "vendor", None)
+    if isinstance(vendor, str):
+        return vendor
     for cls in type(processor).__mro__:
         parts = cls.__module__.split(".")
         if parts[:2] == ["pipecat", "services"] and len(parts) > 3:
