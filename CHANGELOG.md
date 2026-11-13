@@ -55,6 +55,16 @@ and is not part of this repository's history.
   0.6 a short "yes" or "no" often never started a turn, which then closed on
   pipecat's 5 s stop timeout. Replaying two calls, 0.4 detected 14 and 15
   caller utterances where 0.6 detected 10 and 13.
+- **`stt.keyterms` on OpenAI Realtime** (#455). An `openai` S2S agent sends its
+  keyterms as the session's input transcription `keywords`, transcribed by
+  `gpt-transcribe` (pipecat's default `gpt-realtime-whisper` takes none), so
+  product names and surnames reach the stored transcript, post-call analysis
+  and the eval judge as on cascade. A keyterm holding `<`, `>` or a line break,
+  which OpenAI refuses the whole session for, is dropped with a warning. On
+  every other S2S provider the agent read now warns `keyterms_ignored_on_s2s`
+  instead of ignoring them silently. A long Realtime call keeps OpenAI's
+  default truncation (the oldest messages dropped as needed); TurnCall sets no
+  `truncation`.
 
 ### Changed
 

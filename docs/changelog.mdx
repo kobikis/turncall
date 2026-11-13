@@ -28,6 +28,12 @@ can't be deleted while an agent in any linked project uses it.
 caller's turn. Unset keeps pipecat's 0.6, at which a short "yes" or "no" is
 often missed and answered only after five seconds; 0.4 catches most of them.
 
+**Keyterms on OpenAI Realtime.** An `openai` speech-to-speech agent now uses its
+`stt.keyterms`, so product names and surnames are transcribed as written, in the
+stored transcript, post-call analysis and evals. Other speech-to-speech
+providers still can't use them, and the agent read now says so
+(`keyterms_ignored_on_s2s`).
+
 ## Changed
 
 - **OpenAI's default model is `gpt-5.4-mini`**: an `openai` agent that names no

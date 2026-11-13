@@ -57,6 +57,7 @@ def config_warnings(
                 knowledge_mode_warning(config, kb_modes),
                 skills_on_s2s_warning(config),
                 procedures_on_s2s_warning(config),
+                keyterms_on_s2s_warning(config),
             )
             if warning is not None
         ]
@@ -139,6 +140,28 @@ def procedures_on_s2s_warning(config: AgentConfig) -> dict[str, Any] | None:
         ),
         "procedures": names,
         "provider": config.s2s.provider,
+    }
+
+
+def keyterms_on_s2s_warning(config: AgentConfig) -> dict[str, Any] | None:
+    """`stt.keyterms` on an S2S agent whose provider has nowhere to send them
+    (#455). OpenAI Realtime sends them as transcription keywords
+    (`s2s_config`); every other realtime service transcribes on its own.
+    """
+    provider = config.s2s.provider
+    if config.pipeline_mode != "s2s" or not config.stt.keyterms or provider == "openai":
+        return None
+    keyterms = list(config.stt.keyterms)
+    return {
+        "code": "keyterms_ignored_on_s2s",
+        "message": (
+            f"stt.keyterms ({', '.join(keyterms)}) are ignored on this S2S "
+            f"agent ({provider}): its realtime service takes no transcription "
+            "hints. OpenAI Realtime (s2s.provider='openai') and "
+            "pipeline_mode='cascade' use them."
+        ),
+        "keyterms": keyterms,
+        "provider": provider,
     }
 
 
