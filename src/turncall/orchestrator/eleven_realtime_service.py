@@ -7,6 +7,7 @@ agent's service; `eleven_realtime` is the half the API schema reads.
 
 from typing import Any
 
+from pipecat.frames.frames import InputAudioRawFrame
 from pipecat.services.openai.realtime import events
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 from pipecat.utils.errors import ErrorCategory
@@ -29,6 +30,20 @@ class ElevenRealtime(OpenAIRealtimeLLMService):
         super().__init__(**kwargs)
         self._session_extras = session
         self._language = language
+        # ElevenLabs takes the caller's first audio as the conversation
+        # starting, after which it refuses the session's voice and model
+        # (call a79c36a5). pipecat streams audio as soon as the socket opens,
+        # so audio before the session is configured is dropped: it is the
+        # moment before the greeting.
+        self._session_configured = False
+
+    async def _connect(self) -> None:
+        self._session_configured = False
+        await super()._connect()
+
+    async def _send_user_audio(self, frame: InputAudioRawFrame) -> None:
+        if self._session_configured:
+            await super()._send_user_audio(frame)
 
     async def _auth_headers(self) -> dict[str, str]:
         return {"xi-api-key": self.api_key}
@@ -44,6 +59,7 @@ class ElevenRealtime(OpenAIRealtimeLLMService):
             # Input is always transcribed; only the language is ElevenLabs'.
             session["audio"]["input"]["transcription"] = {"language": self._language}
         await self._ws_send(message)
+        self._session_configured = True
 
     async def _receive_task_handler(self) -> None:
         """pipecat's receive loop only logs a closed socket, which would leave
@@ -51,6 +67,8 @@ class ElevenRealtime(OpenAIRealtimeLLMService):
         try:
             await super()._receive_task_handler()
         except ConnectionClosedError as closed:
+            if self._disconnecting:
+                return  # our own close, as the call ends
             refused = closed.rcvd is not None and closed.rcvd.code == _KEY_REFUSED_CLOSE
             await self.push_error(
                 f"ElevenLabs closed the session: {closed}",
