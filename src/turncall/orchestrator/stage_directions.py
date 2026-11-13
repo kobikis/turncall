@@ -23,6 +23,10 @@ Cartesia's inline tags (`<emotion value="excited"/>`, `<break time="1s"/>`,
 prompt may ask for them. Every other voice would read them out — including a
 Deepgram backup in the same failover group — so only Cartesia's filter keeps
 them. They never reach the transcript.
+
+Eleven Realtime voices its replies itself and writes its expressive tags into
+the reply's transcript (`[friendly] Hello`, measured in #468). A lowercase
+word or words in brackets is such a tag; `[1]` or `[Your Name]` is not.
 """
 
 import re
@@ -40,6 +44,8 @@ _OPEN_TO_END = re.compile(r"(\[[^\]]*|(?<!\S)\*(?=\S)[^*]*)$")
 _CLOSE_AT_START = re.compile(r"^\s*(\*(?!\S)|[^\[]*\])")
 # Cartesia's SSML-style tags, the set pipecat strips from its word timestamps.
 _VOICE_TAG = re.compile(r"<\s*/?\s*(?:emotion|speed|volume|break|spell)\b[^>]*>", re.I)
+# Eleven Realtime's tags, as they arrive in its transcript.
+_AUDIO_TAG = re.compile(r"\[[a-z]+(?: [a-z]+)*\]")
 
 
 def _tidy(original: str, stripped: str) -> str:
@@ -49,8 +55,9 @@ def _tidy(original: str, stripped: str) -> str:
 
 
 def strip_voice_tags(text: str) -> str:
-    """`text` without Cartesia's inline tags (a `<spell>`'s content stays)."""
-    return _tidy(text, _VOICE_TAG.sub("", text))
+    """`text` without Cartesia's inline tags (a `<spell>`'s content stays) or
+    Eleven Realtime's bracketed ones."""
+    return _tidy(text, _AUDIO_TAG.sub("", _VOICE_TAG.sub("", text)))
 
 
 def strip_stage_directions(text: str) -> str:

@@ -21,7 +21,10 @@ and is not part of this repository's history.
   session lasts the agent's `max_call_duration_seconds` (at most 7,200 s, a 422
   above). A refused key carries `key_rejected: true`. An `openai` agent whose
   `s2s.base_url` points at ElevenLabs is now a 422, since it would send the
-  OpenAI key there.
+  OpenAI key there. Eleven Realtime opens the call on a trailing user message,
+  since it answers nothing on an empty conversation, and its expressive tags
+  (`[friendly]`) are kept out of the transcript (#468). The key needs
+  ElevenLabs' ElevenAgents permission.
 - **Skills** (#421–#431). A skill is a project's versioned capability: a
   `name`, a `description` saying when to use it, `instructions`, `tools` and
   `knowledge_bases`. `/v1/skills` creates, edits (drafts only), publishes,

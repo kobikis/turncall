@@ -54,8 +54,14 @@ S2S_SERVICE_SAMPLE_RATE = 24000
 _KEYWORDS_TRANSCRIPTION_MODEL = "gpt-transcribe"
 
 # The role of the opening message per provider; one without an entry opens on
-# an empty context.
-_OPENING_ROLE = {"openai_live": "developer", "google": "user", "aws": "user"}
+# an empty context. Eleven Realtime answers a `response.create` on an empty
+# conversation with nothing (measured, #468).
+_OPENING_ROLE = {
+    "openai_live": "developer",
+    "google": "user",
+    "aws": "user",
+    "elevenlabs": "user",
+}
 
 
 def _own_defaults(
