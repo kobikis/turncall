@@ -57,6 +57,7 @@ def config_warnings(
                 knowledge_mode_warning(config, kb_modes),
                 skills_on_s2s_warning(config),
                 procedures_on_s2s_warning(config),
+                *_retiring_model_warnings(config),
             )
             if warning is not None
         ]
@@ -140,6 +141,26 @@ def procedures_on_s2s_warning(config: AgentConfig) -> dict[str, Any] | None:
         "procedures": names,
         "provider": config.s2s.provider,
     }
+
+
+def _retiring_model_warnings(config: AgentConfig) -> list[dict[str, Any] | None]:
+    """Every LLM model this agent names that its vendor retires (#458).
+
+    `analysis.model` runs on the agent's own provider. Warned whatever the
+    pipeline mode: chat, SMS and post-call analysis run the agent's `llm` on
+    an S2S agent too.
+    """
+    from turncall.services.llm_models import retiring_warning
+
+    llm = config.llm
+    return [
+        retiring_warning("llm.model", llm.provider, llm.model),
+        *(
+            retiring_warning(f"llm.failover[{i}].model", entry.provider, entry.model)
+            for i, entry in enumerate(llm.failover)
+        ),
+        retiring_warning("analysis.model", llm.provider, config.analysis.model),
+    ]
 
 
 def _respelling_warning(config: AgentConfig) -> dict[str, Any] | None:

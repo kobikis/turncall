@@ -76,7 +76,13 @@ class TestTheLegacySentinel:
         assert "claude" in resolve_llm_model("anthropic", "gpt-4o-mini")
 
     def test_openai_keeps_it_because_there_it_is_correct(self) -> None:
-        assert resolve_llm_model("openai", "gpt-4o-mini") == "gpt-4o-mini"
+        """Until OpenAI retires it (#458, test_model_retirement.py)."""
+        from datetime import date
+
+        assert (
+            resolve_llm_model("openai", "gpt-4o-mini", today=date(2027, 1, 13))
+            == "gpt-4o-mini"
+        )
 
     def test_a_required_provider_raises_instead_of_carrying_it(self) -> None:
         """Sending `gpt-4o-mini` to Ollama asks for a local model by that

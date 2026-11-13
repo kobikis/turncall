@@ -337,6 +337,7 @@ them would break working agents.
 | `knowledge_mode_unsupported` | A [knowledge base](/guides/s2s#knowledge-bases) is linked in `auto` mode to an S2S agent, which skips it: auto retrieval runs before each LLM turn, and a speech-to-speech model has no such point. Carries `modes` and `provider`. Link it in `tool` or `prompt` mode |
 | `skills_ignored_on_s2s` | An S2S agent lists [skills](/guides/skills), which only cascade calls load; its calls run without them. Carries `skills` and `provider` |
 | `procedures_ignored_on_s2s` | An S2S agent has [procedures](#procedures), which only cascade calls follow: the window goes before each caller turn, and a realtime model has no such point. Its calls run without them. Carries `procedures` and `provider` |
+| `model_retiring` | A model field (`llm.model`, an `llm.failover` entry's, `analysis.model`) names a model its vendor retires: `gpt-4o-mini` on `openai`, on 2027-01-14. From that date the agent runs `replacement` (`gpt-5.4-mini`) instead of failing. Carries `model`, `retires_on`, `replacement` and `field`. An eval scenario read says the same of a `judge` or `simulator` naming it |
 
 Warnings are **derived on every read**, never stored, so an agent whose model
 moved out from under its pronunciations starts saying so without being edited.
