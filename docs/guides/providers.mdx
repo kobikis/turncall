@@ -101,6 +101,14 @@ calls it.
 
 Blanks and duplicates are dropped when the agent is created.
 
+On a [speech-to-speech](/guides/s2s) agent only OpenAI Realtime
+(`s2s.provider: "openai"`) uses `stt.keyterms`: they become its input
+transcription `keywords`, and the caller is transcribed by `gpt-transcribe`
+(the default model takes no keywords). A term holding `<`, `>` or a line break
+is dropped with a warning, since OpenAI refuses the whole session over one. On
+every other S2S provider they are ignored, and the agent read carries a
+`keyterms_ignored_on_s2s` warning.
+
 <Warning>
   Don't hand-write `extra: {"keyterm": [...]}` on Deepgram. Which spelling is
   correct depends on the model — a Nova-2 agent sent `keyterm` gets
