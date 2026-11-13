@@ -142,6 +142,12 @@ and is not part of this repository's history.
   sooner** (#459). pipecat re-opens a Gemini Live session whose first context
   brings tools, so every such agent opened two sessions before it spoke; the
   tools now go into the session it opens with, off the context.
+- **A handoff on a Gemini Live call reaches the model** (#464). pipecat
+  applies neither a new prompt nor new tools to an open Gemini Live session,
+  so the model went on as the previous agent, calling tools whose handlers
+  were gone; a handoff to an agent with no tools got the first agent's back
+  at the next reconnect. A handoff now opens a new session (about 0.6 s) on
+  the target agent's prompt and tools.
 
 ## [2.1.1]
 

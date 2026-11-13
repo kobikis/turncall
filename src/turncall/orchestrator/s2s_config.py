@@ -242,11 +242,12 @@ def _create_gemini_live(config: AgentConfig, api_key: str, tools: Any = None) ->
     """Create a GeminiLiveLLMService from S2SConfig, opening with `tools`.
 
     pipecat re-opens a session whose first context brings tools of its own,
-    so the tools are kept off the context (#459). A later `LLMSetToolsFrame`
-    (a handoff) still lands on the context, which the next session reads
-    over these.
+    so the tools are kept off the context (#459). A handoff reopens it on the
+    target's prompt and tools (#464).
     """
     from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
+
+    from turncall.orchestrator.gemini_live import HandoffGeminiLive
 
     s2s = config.s2s
 
@@ -285,7 +286,7 @@ def _create_gemini_live(config: AgentConfig, api_key: str, tools: Any = None) ->
 
     system_prompt = _build_s2s_system_prompt(config)
 
-    service = GeminiLiveLLMService(
+    service = HandoffGeminiLive(
         api_key=api_key,
         system_instruction=system_prompt or None,
         tools=tools,

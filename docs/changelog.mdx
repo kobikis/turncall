@@ -80,6 +80,9 @@ on with the same LLM rather than moving to a backup. See
   goodbye: TurnCall no longer waits for xAI to answer the websocket close.
 - **A Gemini Live agent with tools greets a browser caller about 0.7 s
   sooner**: it no longer opens a second session with Google before speaking.
+- **A handoff on a Gemini Live call reaches the model**: the agent the call
+  hands off to answers with its own prompt and tools, where the model used to
+  carry on as the first agent.
 
 </Update>
 

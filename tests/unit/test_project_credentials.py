@@ -265,8 +265,9 @@ class TestCredentialsReachTheServices:
             (
                 "google",
                 "google",
-                "pipecat.services.google.gemini_live.llm",
-                "GeminiLiveLLMService",
+                # pipecat's, reopened on a handoff (#464).
+                "turncall.orchestrator.gemini_live",
+                "HandoffGeminiLive",
             ),
         ],
     )
