@@ -64,7 +64,7 @@ def around_the_user_aggregator(
     provider: str,
 ) -> tuple[list[FrameProcessor], list[FrameProcessor]]:
     """The processors to put before and after the user aggregator, or none."""
-    if provider not in ("xai", "openai"):
+    if provider not in ("xai", "openai", "elevenlabs"):
         return [], []
     bypass = AppendsAroundTheUserAggregator()
     return [bypass], [bypass.rejoin]
