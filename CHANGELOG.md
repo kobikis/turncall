@@ -59,10 +59,14 @@ and is not part of this repository's history.
   keyterms as the session's input transcription `keywords`, transcribed by
   `gpt-transcribe` (pipecat's default `gpt-realtime-whisper` takes none), so
   product names and surnames reach the stored transcript, post-call analysis
-  and the eval judge as on cascade. A keyterm holding `<`, `>` or a line break,
-  which OpenAI refuses the whole session for, is dropped with a warning. On
-  every other S2S provider the agent read now warns `keyterms_ignored_on_s2s`
-  instead of ignoring them silently. A long Realtime call keeps OpenAI's
+  and the eval judge as on cascade. Duplicates are sent once. A keyterm
+  holding `<`, `>` or a line break, which OpenAI refuses the whole session for,
+  is dropped, and the agent read says so (`keyterms_unsendable_on_s2s`). Through
+  a gateway (`s2s.base_url`) none are sent and the transcription model stays
+  the default, since the gateway may not serve `gpt-transcribe`. On every other
+  S2S provider, and through a gateway, the agent read warns
+  `keyterms_ignored_on_s2s` and the build logs `keyterms_skipped` instead of
+  ignoring them silently. A long Realtime call keeps OpenAI's
   default truncation (the oldest messages dropped as needed); TurnCall sets no
   `truncation`.
 - **`content_filtered: true` on `error.raised`** (#456): a request the
@@ -81,12 +85,17 @@ and is not part of this repository's history.
   carries a `model_retiring` warning (`{code, message, model, retires_on,
   replacement, field}`) for each `openai` model field that names it — `llm.model`,
   an `llm.failover` entry, `analysis.model` — and so does an eval scenario read
-  for a `judge` or `simulator` naming it. From that date `gpt-4o-mini` on
-  `openai` runs `gpt-5.4-mini` instead, voice, text, post-call analysis and an
-  OpenAI eval judge alike, and each resolution logs `llm_model_retired
-  from=gpt-4o-mini to=gpt-5.4-mini`: a call on a different model beats a call
-  that fails on its first reply. Name a model before then to choose what runs.
-  Retirements are one table in `services/llm_models.py`.
+  for a `judge` or `simulator` naming it, typed or as a raw block in its
+  `definition` (`definition.judge.eval.model`, which pipecat builds itself and
+  nothing swaps). `EVAL_JUDGE_MODEL` / `EVAL_SIMULATOR_MODEL` naming it log
+  `eval_model_retiring` at API and eval-worker startup. From that date
+  `gpt-4o-mini` on `openai` runs `gpt-5.4-mini` instead, voice, text, post-call
+  analysis and an OpenAI eval judge alike, logging `llm_model_retired
+  from=gpt-4o-mini to=gpt-5.4-mini` once per process: a call on a different
+  model beats a call that fails on its first reply. Not through a gateway (an
+  `llm.base_url`, a judge's `endpoint`), which serves what it serves. Name a
+  model before then to choose what runs. Retirements are one table in
+  `services/llm_models.py`.
 - **pipecat 1.16** (ADR-0033). The requirement is now `>=1.16.0,<1.17.0`,
   taking 1.15 and 1.16 together. No API or config change. google-genai moves
   to 3; torchaudio, resampy and numba leave the image. What changes:

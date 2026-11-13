@@ -38,13 +38,18 @@ class TestResolution:
             "gpt-5.4-mini"
         )
 
-    def test_each_resolution_after_the_date_is_logged(self) -> None:
+    def test_the_swap_is_logged_once_per_process(self) -> None:
+        from turncall.services import llm_models
+
+        llm_models._log_retired.cache_clear()
         lines: list[str] = []
         sink = logger.add(
             lambda m: lines.append(m), level="WARNING", format="{message}"
         )
         try:
+            # A call resolves its model several times over.
             resolve_llm_model("openai", "gpt-4o-mini", today=ON)
+            resolve_llm_model("openai", "gpt-4o-mini", today=AFTER)
             resolve_llm_model("openai", "gpt-4o-mini", today=BEFORE)
         finally:
             logger.remove(sink)
@@ -52,6 +57,17 @@ class TestResolution:
         assert [line.strip() for line in lines] == [
             "llm_model_retired from=gpt-4o-mini to=gpt-5.4-mini"
         ]
+
+    def test_a_gateway_serves_what_it_serves(self) -> None:
+        assert (
+            resolve_llm_model(
+                "openai",
+                "gpt-4o-mini",
+                base_url="https://gw.example.com/v1",
+                today=AFTER,
+            )
+            == "gpt-4o-mini"
+        )
 
     def test_other_models_and_providers_are_untouched(self) -> None:
         assert resolve_llm_model("openai", "gpt-4.1", today=AFTER) == "gpt-4.1"
@@ -110,7 +126,7 @@ class TestTheAgentWarning:
 
 
 class TestTheEvalWarning:
-    def _scenario(self, **models: Any) -> Any:
+    def _scenario(self, definition: dict[str, Any] | None = None, **models: Any) -> Any:
         from turncall.api.v1.schemas.evals import EvalScenarioResponse
 
         return EvalScenarioResponse.model_validate(
@@ -120,7 +136,8 @@ class TestTheEvalWarning:
                 name="greets",
                 description=None,
                 kind="script",
-                definition={
+                definition=definition
+                or {
                     "turns": [
                         {
                             "user": "hi",
@@ -152,6 +169,35 @@ class TestTheEvalWarning:
             ("model_retiring", "simulator.model"),
         ]
 
+    def test_a_raw_block_in_the_definition_is_warned_about(self) -> None:
+        response = self._scenario(
+            definition={
+                "turns": [
+                    {
+                        "user": "hi",
+                        "expect": [{"event": "llm_response", "text_contains": "hi"}],
+                    }
+                ],
+                "judge": {
+                    "eval": {
+                        "service": "openai",
+                        "model": "gpt-4o-mini",
+                        "explainer": {"service": "openai", "model": "gpt-4o-mini"},
+                    }
+                },
+                "simulator": {"service": "ollama", "model": "gpt-4o-mini"},
+            }
+        )
+
+        assert [w["field"] for w in response.warnings] == [
+            "definition.judge.eval.model",
+            "definition.judge.eval.explainer.model",
+        ]
+
+    def test_a_block_naming_no_provider_is_ollama(self) -> None:
+        response = self._scenario(judge={"model": "gpt-4o-mini"})
+        assert response.warnings == []
+
     def test_another_judge_says_nothing(self) -> None:
         response = self._scenario(
             judge={"provider": "openai", "model": "gpt-5.4-mini"},
@@ -180,3 +226,46 @@ class TestTheEvalWarning:
         judges.openai({"model": "gpt-4o-mini"})
 
         assert seen["settings"].model == "gpt-5.4-mini"
+
+    def test_a_judge_through_a_gateway_keeps_its_model(self, monkeypatch) -> None:
+        import pipecat.services.openai.llm as openai_llm
+
+        from turncall.evals import judges
+        from turncall.services import llm_models
+
+        seen: dict[str, Any] = {}
+
+        class _Fake:
+            Settings = openai_llm.OpenAILLMService.Settings
+
+            def __init__(self, **kwargs: Any) -> None:
+                seen.update(kwargs)
+
+        monkeypatch.setattr(openai_llm, "OpenAILLMService", _Fake)
+        monkeypatch.setattr(judges, "_platform_key", lambda attr: "sk-test")
+        monkeypatch.setattr(llm_models, "_today", lambda: ON)
+
+        judges.openai({"model": "gpt-4o-mini", "endpoint": "https://gw.example.com/v1"})
+
+        assert seen["settings"].model == "gpt-4o-mini"
+
+
+def test_the_platform_judge_and_persona_are_warned_about_at_startup() -> None:
+    from turncall.evals.judges import warn_retiring_platform_models
+
+    lines: list[str] = []
+    sink = logger.add(lambda m: lines.append(m), level="WARNING", format="{message}")
+    try:
+        warn_retiring_platform_models(
+            SimpleNamespace(
+                judge_provider="openai",
+                judge_model="gpt-4o-mini",
+                simulator_provider=None,
+                simulator_model="gpt-4o-mini",  # Ollama's: not retiring
+            )
+        )
+    finally:
+        logger.remove(sink)
+
+    [line] = lines
+    assert line.startswith("eval_model_retiring: EVAL_JUDGE_MODEL: openai retires")

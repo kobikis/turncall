@@ -14,6 +14,7 @@ Pipecat → Twilio:
 import base64
 import json
 from dataclasses import dataclass
+from typing import Any
 
 from pipecat.audio import g711
 from pipecat.frames.frames import (
@@ -46,16 +47,22 @@ class TwilioFrameSerializer(FrameSerializer):
     but Twilio uses mulaw encoding.
     """
 
-    def __init__(self, stream_sid: str = "", **kwargs) -> None:  # type: ignore[no-untyped-def]
+    def __init__(
+        self,
+        stream_sid: str = "",
+        params: FrameSerializer.InputParams | None = None,
+        **kwargs: Any,
+    ) -> None:
         # The base class resamples outgoing audio to audio_out_sample_rate with
         # one stream resampler carried across frames (resetting the filter at
-        # each ~20ms boundary clicks on continuous TTS audio).
-        super().__init__(
-            params=FrameSerializer.InputParams(
-                audio_out_sample_rate=TWILIO_SAMPLE_RATE
-            ),
-            **kwargs,
+        # each ~20ms boundary clicks on continuous TTS audio). A caller's
+        # params keep everything but that rate, which is the wire's.
+        # `_resample_audio_out` / `_reset_audio_out` are pipecat privates:
+        # test_serializer_resample pins them.
+        params = (params or FrameSerializer.InputParams()).model_copy(
+            update={"audio_out_sample_rate": TWILIO_SAMPLE_RATE}
         )
+        super().__init__(params=params, **kwargs)
         self._stream_sid = stream_sid
         self._metadata: TwilioStreamMetadata | None = None
         self._logged_first_audio = False

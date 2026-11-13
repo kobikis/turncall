@@ -31,8 +31,9 @@ often missed and answered only after five seconds; 0.4 catches most of them.
 **Keyterms on OpenAI Realtime.** An `openai` speech-to-speech agent now uses its
 `stt.keyterms`, so product names and surnames are transcribed as written, in the
 stored transcript, post-call analysis and evals. Other speech-to-speech
-providers still can't use them, and the agent read now says so
-(`keyterms_ignored_on_s2s`).
+providers, and OpenAI Realtime through a gateway (`s2s.base_url`), still can't
+use them, and the agent read now says so (`keyterms_ignored_on_s2s`), as it
+does for a keyterm OpenAI would refuse (`keyterms_unsendable_on_s2s`).
 
 **Content-filter refusals named.** When a provider's content filter refuses a
 request, the agent says nothing that turn. The call's `error.raised` event now
@@ -49,9 +50,12 @@ on with the same LLM rather than moving to a backup. See
 - **`gpt-4o-mini` retires on 2027-01-14.** Until then, reading an agent that
   names it on OpenAI (its model, a failover model or its analysis model)
   returns a `model_retiring` warning with the date and the model it will run
-  on, and so does reading an eval scenario whose judge or persona names it.
-  From that date those agents run `gpt-5.4-mini` instead of failing their
-  calls. Choose a model before then if you want a different one.
+  on, and so does reading an eval scenario whose judge or persona names it,
+  in its own fields or inside its definition. A platform judge or persona set
+  to it is logged at startup. From that date those agents run `gpt-5.4-mini`
+  instead of failing their calls, except through a gateway (`llm.base_url`, a
+  judge's `endpoint`), which keeps the model it was given. Choose a model
+  before then if you want a different one.
 - **pipecat 1.16**: the speech framework moves from 1.14 to 1.16. Nothing in
   the API or agent config changes. Eval scenarios can assert with
   `text_matches` (regular expressions the reply must match). You may notice

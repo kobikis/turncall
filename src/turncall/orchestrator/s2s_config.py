@@ -5,7 +5,6 @@ GeminiLiveLLMService, AWSNovaSonicLLMService or GrokRealtimeLLMService with
 appropriate session properties, voice, and turn detection settings.
 """
 
-import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -20,6 +19,10 @@ from turncall.domain.models import (
     resolve_delegation,
 )
 from turncall.orchestrator import grok_voice
+from turncall.orchestrator.config_warnings import (
+    keyterms_on_s2s_warning,
+    realtime_keywords,
+)
 from turncall.services.credentials import Credentials
 
 # S2SConfig's defaults are OpenAI Realtime's. Nova Sonic needs its own, applied
@@ -47,10 +50,8 @@ S2S_SERVICE_SAMPLE_RATE = 24000
 # Realtime's transcription keywords (#455) are taken by `gpt-transcribe` and
 # `gpt-live-transcribe` only, not pipecat's default `gpt-realtime-whisper`.
 # `gpt-transcribe` is the one OpenAI documents for a conversation session's
-# input transcription. A keyword holding `<`, `>` or a line break makes OpenAI
-# refuse the whole session update, so it is dropped instead.
+# input transcription. Which keyterms are sent is `realtime_keywords`.
 _KEYWORDS_TRANSCRIPTION_MODEL = "gpt-transcribe"
-_UNSENDABLE_KEYWORD = re.compile(r"[<>\r\n]")
 
 # The role of the opening message per provider; one without an entry opens on
 # an empty context.
@@ -129,6 +130,8 @@ def create_s2s_service(
     (#262).
     """
     provider = config.s2s.provider
+    if (ignored := keyterms_on_s2s_warning(config)) is not None:
+        logger.warning("keyterms_skipped: {message}", message=ignored["message"])
     if provider == "openai":
         return _create_openai_realtime(config, credentials.api_key("openai"))
     if provider == "google":
@@ -176,7 +179,7 @@ def _create_openai_realtime(config: AgentConfig, api_key: str) -> Any:
             input=AudioInput(
                 # Constructing it at all is what keeps the user-side transcript
                 # populated.
-                transcription=_input_transcription(config.stt.keyterms),
+                transcription=_input_transcription(config),
                 turn_detection=turn_detection,
             ),
             output=AudioOutput(voice=s2s.voice),
@@ -211,7 +214,7 @@ def _create_openai_realtime(config: AgentConfig, api_key: str) -> Any:
     return service
 
 
-def _input_transcription(keyterms: list[str]) -> Any:
+def _input_transcription(config: AgentConfig) -> Any:
     """Realtime's input transcription, carrying `stt.keyterms` as keywords.
 
     Without any it names no model, inheriting pipecat's current default
@@ -219,12 +222,12 @@ def _input_transcription(keyterms: list[str]) -> Any:
     """
     from pipecat.services.openai.realtime.events import InputAudioTranscription
 
-    keywords = [t for t in keyterms if t.strip() and not _UNSENDABLE_KEYWORD.search(t)]
-    if len(keywords) < len(keyterms):
+    keywords, dropped = realtime_keywords(config)
+    if dropped:
         logger.warning(
             "openai_realtime_keywords_dropped count={count} "
-            "reason=blank_or_holds_angle_bracket_or_line_break",
-            count=len(keyterms) - len(keywords),
+            "reason=holds_angle_bracket_or_line_break",
+            count=len(dropped),
         )
     if not keywords:
         return InputAudioTranscription()

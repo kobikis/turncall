@@ -83,3 +83,26 @@ def test_no_audioop_under_src() -> None:
         if "import audioop" in p.read_text()
     ]
     assert users == []
+
+
+def test_a_callers_params_keep_the_wire_rate() -> None:
+    from pipecat.serializers.base_serializer import FrameSerializer
+
+    serializer = TwilioFrameSerializer(
+        stream_sid="MZ", params=FrameSerializer.InputParams(ignore_rtvi_messages=False)
+    )
+
+    assert serializer.audio_out_sample_rate == 8000
+    assert serializer._params.ignore_rtvi_messages is False
+
+
+def test_pipecats_private_resampling_surface_is_still_there() -> None:
+    """The serializer resamples and resets through pipecat's private
+    `FrameSerializer` methods; a bump that renames them should fail here,
+    naming them, rather than at the first call's audio."""
+    from pipecat.serializers.base_serializer import FrameSerializer
+
+    for name in ("_resample_audio_out", "_reset_audio_out"):
+        assert callable(getattr(FrameSerializer, name, None)), (
+            f"pipecat's FrameSerializer.{name} is gone: TwilioFrameSerializer calls it"
+        )

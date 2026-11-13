@@ -256,7 +256,13 @@ async def analyze_call(
     # back in the analysis result and ships in the `call.ended` payload, so an
     # agent that named none would be recorded as having run a model it did not.
     effective_llm = effective_llm.model_copy(
-        update={"model": resolve_llm_model(effective_llm.provider, effective_llm.model)}
+        update={
+            "model": resolve_llm_model(
+                effective_llm.provider,
+                effective_llm.model,
+                base_url=effective_llm.base_url,
+            )
+        }
     )
 
     messages = _build_analysis_prompt(transcript, analysis_config, system_prompt)
@@ -345,7 +351,13 @@ async def extract_takeaway(
     # back in the analysis result and ships in the `call.ended` payload, so an
     # agent that named none would be recorded as having run a model it did not.
     effective_llm = effective_llm.model_copy(
-        update={"model": resolve_llm_model(effective_llm.provider, effective_llm.model)}
+        update={
+            "model": resolve_llm_model(
+                effective_llm.provider,
+                effective_llm.model,
+                base_url=effective_llm.base_url,
+            )
+        }
     )
 
     parts = [f"Takeaway: {name}"]
