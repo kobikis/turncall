@@ -23,6 +23,11 @@ pytestmark = [pytest.mark.live, pytest.mark.asyncio]
 # 1008 `not supported for bidiGenerateContent`.
 _LIVE_MODEL = "gemini-3.8-live"
 
+# google-genai 3 defaults the Gemini API to `v1`, whose Live endpoint answers
+# the handshake with 404. pipecat's service asks for `v1beta`
+# (`gemini_api_http_options`); a raw client here has to as well.
+_HTTP_OPTIONS = {"api_version": "v1beta"}
+
 
 async def test_the_genai_sdk_is_the_major_pipecat_requires() -> None:
     """Pipecat 1.16's `google` extra requires `>=3.2.0`. Which major is
@@ -49,7 +54,7 @@ async def test_the_live_socket_opens_and_answers(google_key: str) -> None:
     from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=google_key)
+    client = genai.Client(api_key=google_key, http_options=_HTTP_OPTIONS)
     config = types.LiveConnectConfig(
         response_modalities=["AUDIO"],
         output_audio_transcription=types.AudioTranscriptionConfig(),
@@ -132,7 +137,7 @@ async def test_the_model_a_default_google_agent_gets_is_one_google_serves(
     model = str(service._settings.model)
     voice = str(service._settings.voice)
 
-    client = genai.Client(api_key=google_key)
+    client = genai.Client(api_key=google_key, http_options=_HTTP_OPTIONS)
     config = types.LiveConnectConfig(
         response_modalities=["AUDIO"],
         speech_config=types.SpeechConfig(
