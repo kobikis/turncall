@@ -71,7 +71,7 @@ Commit `uv.lock` with the change. CI's `uv sync --locked` fails when the lock
 does not match `pyproject.toml`, and `uv lock --check` tells you the same
 locally. (uv 0.12 words a stale lock oddly here, as a missing hash for
 `en-core-web-sm`; the fix is still `uv lock`.) pipecat is capped at the next minor on purpose (ADR-0028): raising
-the cap means reading its changelog first. torch and torchaudio come from
+the cap means reading its changelog first. torch comes from
 PyTorch's CPU-only index (`[tool.uv.sources]`); a lock that lists `nvidia-*`
 packages has lost that.
 

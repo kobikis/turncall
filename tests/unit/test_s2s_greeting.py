@@ -157,7 +157,12 @@ async def _gemini_opening(config: AgentConfig) -> tuple[Any, Any]:
         send_client_content=AsyncMock(), send_realtime_input=AsyncMock()
     )
     service._session = session
+    # As connect leaves it: 1.16 re-opens a session whose instruction differs
+    # from the context's (#6289), which a fake session cannot do.
+    service._sent_system_instruction = service._settings.system_instruction
+    service._reconnect = AsyncMock()
     await service._handle_context(context)
+    service._reconnect.assert_not_awaited()
     return session.send_client_content, session.send_realtime_input
 
 

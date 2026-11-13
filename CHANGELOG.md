@@ -62,6 +62,25 @@ and is not part of this repository's history.
   no model runs it, and so do an OpenAI eval judge that names none and
   knowledge-base enrichment. OpenAI shuts `gpt-4o-mini` down on 2027-01-14. An
   agent whose config names `gpt-4o-mini` keeps it until you change it.
+- **pipecat 1.16** (ADR-0033). The requirement is now `>=1.16.0,<1.17.0`,
+  taking 1.15 and 1.16 together. No API or config change. google-genai moves
+  to 3; torchaudio, resampy and numba leave the image. What changes:
+  - **Smart Turn** keeps working: 1.16 gives the analyzer a resampler our
+    shared-model analyzer did not set, which would have failed the first turn
+    of every call.
+  - **Eval scenarios** can assert with `text_matches` (regular expressions),
+    and an expectation using only it counts as an assertion.
+  - **xAI speech-to-text** sends keyterms and its `stt.extra` options as
+    pipecat settings; the same parameters reach xAI.
+  - **Deepgram Flux** turns end up to 0.5 s sooner; a reply whose voice
+    produced no audio is no longer kept in the agent's context; Claude Haiku
+    5.5 is sent `effort: low` by default, so it no longer speaks its reasoning
+    before a tool call (a little slower on turns where it has to decide).
+  - **Fixes that come with it**, among them: OpenAI Realtime going silent with
+    `gpt-transcribe`; HeyGen avatar gaps and clipped endings; failover groups
+    growing in memory over a long call; provider connections left open after
+    a call cancelled during shutdown; Gemini Live retrying a session that
+    fails to open; Markdown inside inline code read aloud wrongly.
 
 ### Fixed
 

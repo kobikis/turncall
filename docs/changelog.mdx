@@ -34,6 +34,12 @@ often missed and answered only after five seconds; 0.4 catches most of them.
   model runs it, and so do an eval judge on OpenAI that names none and
   knowledge-base enrichment. OpenAI shuts `gpt-4o-mini` down on 2027-01-14. An
   agent whose config names `gpt-4o-mini` keeps it until you change it.
+- **pipecat 1.16**: the speech framework moves from 1.14 to 1.16. Nothing in
+  the API or agent config changes. Eval scenarios can assert with
+  `text_matches` (regular expressions the reply must match). You may notice
+  Deepgram Flux agents answering up to half a second sooner, and Claude Haiku
+  5.5 no longer reading its reasoning aloud before a tool call. If you import
+  `google-genai` beside TurnCall, it is now version 3.
 
 ## Fixed
 

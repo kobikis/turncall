@@ -58,6 +58,7 @@ class TestWhatCountsAsAnAssertion:
         [
             {"event": "llm_response", "text_contains": "Berlin"},
             {"event": "llm_response", "text_excludes": "sorry"},
+            {"event": "llm_response", "text_matches": r"^(Hi|Hello)\b"},
             {"event": "llm_response", "eval": "answers the question"},
             {"event": "function_call", "calls": [{"name": "book", "args": {}}]},
             # Asserting an event never arrives is a claim about behaviour, and
