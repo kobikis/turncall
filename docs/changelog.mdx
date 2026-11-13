@@ -3,9 +3,23 @@ title: Changelog
 description: "Latest updates and improvements to TurnCall"
 ---
 
-<Update label="Unreleased" description="Unreleased" tags={["Feature", "Update", "Fix"]}>
+<Update label="Unreleased" description="Unreleased" tags={["Feature"]}>
+
+</Update>
+
+<Update label="2026-11-13" description="November 13, 2026" tags={["Release", "Feature", "Update", "Fix"]}>
+
+## 2.2.0
 
 ## Added
+
+**Guided procedures.** Give a voice agent a route to follow: a graph of steps
+and the moves allowed between them. On a call the model sees only where it is,
+where it may go next and a short preview, and reports each move with the
+`move_to_step` tool; a move the graph does not allow is refused. A step can name
+a tool, an escalation step transfers the call or hands it to another agent, and
+the call read and `call.ended` show each procedure's path. Cascade voice agents
+only. See [Procedures](/guides/procedures).
 
 **Eleven Realtime.** Run ElevenLabs' speech-to-speech models, Mini and Max, as
 `s2s.provider: "elevenlabs"`, on the ElevenLabs key you already use for its
