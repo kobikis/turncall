@@ -207,6 +207,7 @@ def validate(definition: dict[str, Any], *, name: str | None = None) -> EvalKind
 _ASSERTING_FIELDS = (
     "text_contains",
     "text_excludes",
+    "text_matches",
     "eval",
     "calls",
     "marker",
@@ -298,7 +299,7 @@ def _weak_expectations(turns: list[Any]) -> tuple[int, list[str]]:
 
 def _warning_for(total: int, weak: list[str]) -> list[dict[str, Any]]:
     """What a turn count and its weak expectations add up to, if anything."""
-    add = " Add text_contains, text_excludes, eval: or a function_call with its args."
+    add = " Add text_contains, text_excludes, text_matches, eval: or a function_call with its args."
     if total == 0:
         return [_cannot_fail("this scenario's turns carry no expectations." + add, [])]
     if not weak:

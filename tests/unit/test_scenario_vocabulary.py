@@ -84,6 +84,28 @@ def test_send_after_anchors_a_barge_in() -> None:
     assert interrupting.expect[1].text_excludes == "Paris"
 
 
+def test_text_matches_takes_one_regex_or_several() -> None:
+    """pipecat 1.15: `text_matches` patterns must each `re.search` the text."""
+    scenario = _script(
+        {
+            "turns": [
+                {
+                    "user": "hi",
+                    "expect": [{"event": "llm_response", "text_matches": "^Hi"}],
+                },
+                {
+                    "user": "bye",
+                    "expect": [
+                        {"event": "llm_response", "text_matches": ["bye", "!$"]}
+                    ],
+                },
+            ]
+        }
+    )
+    assert scenario.turns[0].expect[0].text_matches == ["^Hi"]
+    assert scenario.turns[1].expect[0].text_matches == ["bye", "!$"]
+
+
 def test_a_bare_delay_needs_no_event() -> None:
     """A `send_after` with only a delay is a plain wait from the previous send."""
     scenario = _script(

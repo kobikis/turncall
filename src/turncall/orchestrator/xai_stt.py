@@ -18,26 +18,27 @@ from turncall.orchestrator.xai_errors import XAIKeyRefusal
 
 _FINALIZE = json.dumps({"type": "finalize"})
 
-# `stt.extra` keys pipecat has a setting for, and so sends itself.
-_SETTING_KEYS = ("endpointing", "interim_results", "diarize")
-# Query parameters xAI takes that pipecat has no setting for. `smart_turn` is
-# xAI's own end-of-turn model, a second opinion on what TurnCall's VAD and
+# `stt.extra` keys pipecat has a setting for, and so sends itself. `smart_turn`
+# is xAI's own end-of-turn model, a second opinion on what TurnCall's VAD and
 # Smart Turn already decide: reachable, not recommended.
-_URL_KEYS = (
-    "format",
+_SETTING_KEYS = (
+    "endpointing",
+    "interim_results",
+    "diarize",
     "filler_words",
     "vad_threshold",
     "smart_turn",
     "smart_turn_timeout",
 )
+# Query parameters xAI takes that pipecat has no setting for.
+_URL_KEYS = ("format",)
 
 
 class TurnCallXAISTT(XAIKeyRefusal, XAISTTService):
     """xAI STT, reading xAI's refusal of a key as one (`XAIKeyRefusal`).
 
     Pipecat builds the connection URL from its declared settings alone, so
-    what it has no setting for — `keyterm`, repeated once per term, and the
-    URL-only `stt.extra` keys — is added to the URL here.
+    what it has no setting for (`format`) is added to the URL here.
     """
 
     def __init__(self, *, url_params: list[tuple[str, Any]], **kwargs: Any) -> None:
@@ -96,8 +97,10 @@ def create_xai_stt(
     return TurnCallXAISTT(
         api_key=api_key,
         sample_rate=sample_rate,
-        settings=TurnCallXAISTT.Settings(model=model, language=language, **settings),
-        url_params=[("keyterm", term) for term in keyterms] + url_extra,
+        settings=TurnCallXAISTT.Settings(
+            model=model, language=language, keyterm=keyterms or None, **settings
+        ),
+        url_params=url_extra,
         # xAI never answers the close handshake: pipecat's 2 s default held
         # every call's end that long after the goodbye.
         ws_close_timeout=_CLOSE_TIMEOUT_SECS,

@@ -66,6 +66,8 @@ class SharedSmartTurnAnalyzer(LocalSmartTurnAnalyzerV3):
         owner = _model_owner()
         self._log_data = owner._log_data
         self._session = owner._session
+        # The call's own: a stream resampler carries audio between frames.
+        self._resampler = None
 
 
 def _shared_default_stop_strategies() -> list:

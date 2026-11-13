@@ -1,7 +1,8 @@
-"""C6 — Gemini Live under google-genai 2.x.
+"""C6 — Gemini Live under google-genai 3.x.
 
 Pipecat 1.11 floors the `google` extra at `google-genai>=2.19.0`, so taking it
-moved the SDK beneath Gemini Live across a major version (1.75 → 2.24). This is
+moved the SDK beneath Gemini Live across a major version (1.75 → 2.24); pipecat
+1.16 moved it again, to `>=3.2.0`. This is
 the same shape as the openai 3 upgrade this suite was started for: nothing in
 the unit suite opens a socket, so an S2S transport can break under us without a
 single test going red.
@@ -24,7 +25,7 @@ _LIVE_MODEL = "gemini-3.8-live"
 
 
 async def test_the_genai_sdk_is_the_major_pipecat_requires() -> None:
-    """Pipecat 1.11's `google` extra requires `>=2.19.0,<3`. Which major is
+    """Pipecat 1.16's `google` extra requires `>=3.2.0`. Which major is
     resolved decides whether the rest of this file tests what we think it
     does."""
     import importlib.metadata as md
@@ -32,13 +33,13 @@ async def test_the_genai_sdk_is_the_major_pipecat_requires() -> None:
     version = md.version("google-genai")
     major, minor = (int(part) for part in version.split(".")[:2])
 
-    assert major == 2, f"google-genai {version} is not the 2.x line pipecat 1.11 needs"
-    assert (major, minor) >= (2, 19), f"google-genai {version} is below pipecat's floor"
+    assert major == 3, f"google-genai {version} is not the 3.x line pipecat 1.16 needs"
+    assert (major, minor) >= (3, 2), f"google-genai {version} is below pipecat's floor"
 
 
 async def test_the_live_socket_opens_and_answers(google_key: str) -> None:
     """The websocket S2S calls ride. Opening it and getting a spoken turn back
-    is what proves the 2.x client actually talks to the Live API, rather than
+    is what proves the 3.x client actually talks to the Live API, rather than
     merely importing.
 
     Audio out, not text: `gemini-3.8-live` is a native-audio model and closes
