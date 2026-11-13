@@ -11,6 +11,11 @@ and is not part of this repository's history.
 
 ## [Unreleased]
 
+## [2.2.0]
+
+Guided procedures, skills and skill libraries, Eleven Realtime, pipecat 1.16,
+and `gpt-5.4-mini` as OpenAI's default model.
+
 ### Added
 
 - **Eleven Realtime** (#465): ElevenLabs' speech-to-speech models as the
@@ -24,7 +29,18 @@ and is not part of this repository's history.
   OpenAI key there. Eleven Realtime opens the call on a trailing user message,
   since it answers nothing on an empty conversation, and its expressive tags
   (`[friendly]`) are kept out of the transcript (#468). The key needs
-  ElevenLabs' ElevenAgents permission.
+  ElevenLabs' ElevenAgents permission. Mini called no tool with a real agent
+  prompt in testing, so use Max for an agent with tools.
+- **Guided procedures** (#417, ADR-0032). `procedures` in the agent config: a
+  graph of steps (`ask`, `instruct`, `check`, `escalate`, `end`) that a cascade
+  voice agent walks a caller through. The model sees only the current step, its
+  allowed moves and a short preview, and reports each move with the
+  `move_to_step` built-in, which refuses a move the graph does not allow. A
+  procedure starts with the call or on request; a step can name a tool, and an
+  `escalate` step transfers the call or hands it to another agent. Moves are
+  `procedure.step` / `procedure.refused` call events, and `procedures` on the
+  call read and `call.ended` shows each one's path. A broken graph is a `422`;
+  S2S agents skip procedures with a warning.
 - **Skills** (#421–#431). A skill is a project's versioned capability: a
   `name`, a `description` saying when to use it, `instructions`, `tools` and
   `knowledge_bases`. `/v1/skills` creates, edits (drafts only), publishes,
