@@ -80,6 +80,9 @@ on with the same LLM rather than moving to a backup. See
   goodbye: TurnCall no longer waits for xAI to answer the websocket close.
 - **A Gemini Live agent with tools greets a browser caller about 0.7 s
   sooner**: it no longer opens a second session with Google before speaking.
+- **A Twilio caller who talks over the agent no longer hears the rest of the
+  reply it cut off**: TurnCall now tells Twilio to drop the audio it has not
+  played yet, as it already did on Telnyx and Asterisk.
 
 </Update>
 
