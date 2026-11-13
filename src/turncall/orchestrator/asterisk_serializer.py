@@ -15,9 +15,9 @@ sends `FLUSH_MEDIA`, Twilio's `clear`. Media should arrive in whole frames
 ships no serializer for this protocol (1.12), hence this one.
 """
 
-import audioop
 import json
 
+from pipecat.audio import g711
 from pipecat.audio.dtmf.types import KeypadEntry
 from pipecat.frames.frames import (
     Frame,
@@ -45,14 +45,14 @@ class AsteriskFrameSerializer(FrameSerializer):
         ):
             return None
         # The transport runs at the carrier's 8 kHz, so no resampling here.
-        ulaw = audioop.lin2ulaw(frame.audio, 2)
+        ulaw = g711.pcm_to_ulaw(frame.audio)
         short = -len(ulaw) % FRAME_BYTES
         return ulaw + ULAW_SILENCE * short
 
     async def deserialize(self, data: str | bytes) -> Frame | None:
         if isinstance(data, bytes):
             return InputAudioRawFrame(
-                audio=audioop.ulaw2lin(data, 2),
+                audio=g711.ulaw_to_pcm(data),
                 sample_rate=ASTERISK_SAMPLE_RATE,
                 num_channels=1,
             )
