@@ -40,6 +40,10 @@ often missed and answered only after five seconds; 0.4 catches most of them.
   Deepgram Flux agents answering up to half a second sooner, and Claude Haiku
   5.5 no longer reading its reasoning aloud before a tool call. If you import
   `google-genai` beside TurnCall, it is now version 3.
+- **Phone calls on Twilio resample the agent's voice with pipecat's resampler**
+  instead of Python's `audioop`, which Python 3.13 removes. After the caller
+  talks over the agent, the end of the reply they cut off is no longer heard
+  at the start of the next one.
 
 ## Fixed
 

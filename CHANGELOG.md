@@ -81,6 +81,12 @@ and is not part of this repository's history.
     growing in memory over a long call; provider connections left open after
     a call cancelled during shutdown; Gemini Live retrying a session that
     fails to open; Markdown inside inline code read aloud wrongly.
+- **The carriers' audio no longer uses `audioop`** (#453), which Python 3.13
+  removes. Twilio and Asterisk μ-law is pipecat's `g711` (byte-identical,
+  tested against `audioop`). Twilio's resampling of the agent's audio to 8 kHz
+  is pipecat's sinc stream resampler instead of `audioop.ratecv`, reset on a
+  barge-in so the end of the reply the caller cut off is not played at the
+  start of the next one.
 
 ### Fixed
 
