@@ -84,6 +84,23 @@ class TestSwitching:
         assert switcher.active_llm is primary
         assert [f for f in up if isinstance(f, ErrorFrame)]
 
+    async def test_a_content_filter_refusal_does_not_switch(self) -> None:
+        """One refused request is about its content, not the provider (#456):
+        the call keeps its LLM."""
+        primary = _FakeLLM("primary", fail=ErrorCategory.CONTENT_FILTERED)
+        backup = _FakeLLM("backup")
+        switcher = FailoverLLM([("a/1", primary), ("b/2", backup)])
+
+        _down, up = await run_test(
+            switcher,
+            frames_to_send=[LLMContextFrame(context=LLMContext(messages=[]))],
+        )
+
+        assert backup.contexts == 0
+        assert switcher.active_llm is primary
+        assert primary.is_usable
+        assert [f for f in up if isinstance(f, ErrorFrame)]
+
     async def test_no_switching_back(self) -> None:
         primary = _FakeLLM("primary", fail=ErrorCategory.AUTHENTICATION)
         backup = _FakeLLM("backup", fail=ErrorCategory.AUTHENTICATION)

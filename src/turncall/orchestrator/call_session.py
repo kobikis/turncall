@@ -397,6 +397,20 @@ class CallSession:
                 "error_after_caller_left", call_id=str(self.call_id), error=noted
             )
             return
+        if frame.category is ErrorCategory.CONTENT_FILTERED:
+            # The provider refused this request's content (#456): not the
+            # service's health, so the call goes on (and stays on this LLM),
+            # but nothing answers the turn. Said, without failing the call.
+            await self._log_event(
+                CallEventType.ERROR_RAISED,
+                {
+                    "stage": str(processor),
+                    "error": readable_error(frame.error),
+                    "provider": provider_of(processor),
+                    "content_filtered": True,
+                },
+            )
+            return
         if not (frame.fatal or (processor is not None and not processor.is_usable)):
             return
         error = readable_error(frame.error)

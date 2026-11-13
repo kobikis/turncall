@@ -34,6 +34,12 @@ stored transcript, post-call analysis and evals. Other speech-to-speech
 providers still can't use them, and the agent read now says so
 (`keyterms_ignored_on_s2s`).
 
+**Content-filter refusals named.** When a provider's content filter refuses a
+request, the agent says nothing that turn. The call's `error.raised` event now
+says so, with `content_filtered: true` and the provider, and the call carries
+on with the same LLM rather than moving to a backup. See
+[When a call fails](/guides/post-call-analysis#when-a-call-fails).
+
 ## Changed
 
 - **OpenAI's default model is `gpt-5.4-mini`**: an `openai` agent that names no

@@ -65,6 +65,11 @@ and is not part of this repository's history.
   instead of ignoring them silently. A long Realtime call keeps OpenAI's
   default truncation (the oldest messages dropped as needed); TurnCall sets no
   `truncation`.
+- **`content_filtered: true` on `error.raised`** (#456): a request the
+  provider's content filter refused (pipecat 1.16's `CONTENT_FILTERED`, OpenAI's
+  `content_filter` 400) is recorded with `provider`, so the silent turn it
+  leaves has a reason. It does not fail the call, and it does not switch
+  `llm.failover`: a refused request says nothing about the provider.
 
 ### Changed
 
