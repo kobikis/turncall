@@ -486,6 +486,35 @@ async def test_a_warm_transfer_nobody_answers(edge, monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("edge", CARRIERS)
+async def test_a_barge_in_drops_what_the_carrier_has_not_played(
+    edge: CarrierEdge, monkeypatch
+) -> None:
+    """The caller talks over the greeting: the carrier is told to drop the
+    agent audio it holds and has not played (Twilio's `clear`, Telnyx's
+    `clear`, Asterisk's `FLUSH_MEDIA`), so the cut-off reply stops at once
+    (#463)."""
+    script = Script(caller=("Sorry, one question.",), agent=("Go ahead.",))
+    agent = {**AGENT, "first_message": " ".join(["Welcome"] * 60)}
+    async with run_app(
+        script, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        number = await edge.bind(app, await app.create_agent(agent))
+        call = await edge.ring(app, CALLER, number)
+        async with asyncio.timeout(10):
+            while not call.agent_utterances():
+                await asyncio.sleep(0.02)
+        assert call.flushes == 0  # nothing to drop until someone barges in
+        await call.say(400)
+        async with asyncio.timeout(10):
+            while not call.flushes:
+                await asyncio.sleep(0.02)
+        await call.hang_up()
+        await app.sink.wait_for("call.ended")
+
+    assert call.flushes == 1
+
+
+@pytest.mark.parametrize("edge", CARRIERS)
 async def test_the_caller_hangs_up(edge: CarrierEdge, monkeypatch) -> None:
     script = Script(caller=(), agent=())
     async with run_app(

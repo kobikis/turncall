@@ -19,6 +19,10 @@ from turncall.domain.models import (
     resolve_delegation,
 )
 from turncall.orchestrator import grok_voice
+from turncall.orchestrator.config_warnings import (
+    keyterms_on_s2s_warning,
+    realtime_keywords,
+)
 from turncall.services.credentials import Credentials
 
 # S2SConfig's defaults are OpenAI Realtime's. Nova Sonic needs its own, applied
@@ -42,6 +46,12 @@ _GROK_VOICE_VOICE = "eve"
 # this one, so what the service is told and what it is sent agree.
 S2S_SERVICE_SAMPLE_RATE = 24000
 
+
+# Realtime's transcription keywords (#455) are taken by `gpt-transcribe` and
+# `gpt-live-transcribe` only, not pipecat's default `gpt-realtime-whisper`.
+# `gpt-transcribe` is the one OpenAI documents for a conversation session's
+# input transcription. Which keyterms are sent is `realtime_keywords`.
+_KEYWORDS_TRANSCRIPTION_MODEL = "gpt-transcribe"
 
 # The role of the opening message per provider; one without an entry opens on
 # an empty context.
@@ -109,21 +119,25 @@ def create_s2s_service(
     tools: Sequence[ToolDefinition] = (),
     delegate: Any = None,
     hangup_gate: Any = None,
+    session_tools: Any = None,
 ) -> Any:
     """Create the appropriate S2S service based on provider.
 
     `tools` is what the call advertises (static + MCP, deduplicated). Only
     `openai_live` reads it here, to tell gpt-live-1 what it can delegate; every
-    other provider gets the tools themselves through the pipeline's context.
+    other provider gets the tools themselves through the pipeline's context,
+    except Gemini Live, which opens its session with `session_tools` (#459).
     `delegate` is the worker running the agent's own llm, for client mode, and
     `hangup_gate` the call's gate, armed as a delegation's goodbye is relayed
     (#262).
     """
     provider = config.s2s.provider
+    if (ignored := keyterms_on_s2s_warning(config)) is not None:
+        logger.warning("keyterms_skipped: {message}", message=ignored["message"])
     if provider == "openai":
         return _create_openai_realtime(config, credentials.api_key("openai"))
     if provider == "google":
-        return _create_gemini_live(config, credentials.api_key("google"))
+        return _create_gemini_live(config, credentials.api_key("google"), session_tools)
     if provider == "openai_live":
         return _create_openai_live(
             config, credentials.api_key("openai"), tools, delegate, hangup_gate
@@ -141,7 +155,6 @@ def _create_openai_realtime(config: AgentConfig, api_key: str) -> Any:
         AudioConfiguration,
         AudioInput,
         AudioOutput,
-        InputAudioTranscription,
         SessionProperties,
         TurnDetection,
     )
@@ -166,11 +179,9 @@ def _create_openai_realtime(config: AgentConfig, api_key: str) -> Any:
         max_output_tokens=s2s.max_tokens,
         audio=AudioConfiguration(
             input=AudioInput(
-                # No model= — inherit Pipecat's current realtime transcription
-                # default (gpt-realtime-whisper) instead of pinning a stale one.
                 # Constructing it at all is what keeps the user-side transcript
-                # populated; only the model choice is delegated.
-                transcription=InputAudioTranscription(),
+                # populated.
+                transcription=_input_transcription(config),
                 turn_detection=turn_detection,
             ),
             output=AudioOutput(voice=s2s.voice),
@@ -205,9 +216,38 @@ def _create_openai_realtime(config: AgentConfig, api_key: str) -> Any:
     return service
 
 
-def _create_gemini_live(config: AgentConfig, api_key: str) -> Any:
-    """Create a GeminiLiveLLMService from S2SConfig."""
+def _input_transcription(config: AgentConfig) -> Any:
+    """Realtime's input transcription, carrying `stt.keyterms` as keywords.
+
+    Without any it names no model, inheriting pipecat's current default
+    instead of pinning a stale one; with some, the model that takes them.
+    """
+    from pipecat.services.openai.realtime.events import InputAudioTranscription
+
+    keywords, dropped = realtime_keywords(config)
+    if dropped:
+        logger.warning(
+            "openai_realtime_keywords_dropped count={count} "
+            "reason=holds_angle_bracket_or_line_break",
+            count=len(dropped),
+        )
+    if not keywords:
+        return InputAudioTranscription()
+    return InputAudioTranscription(
+        model=_KEYWORDS_TRANSCRIPTION_MODEL, keywords=keywords
+    )
+
+
+def _create_gemini_live(config: AgentConfig, api_key: str, tools: Any = None) -> Any:
+    """Create a GeminiLiveLLMService from S2SConfig, opening with `tools`.
+
+    pipecat re-opens a session whose first context brings tools of its own,
+    so the tools are kept off the context (#459). A handoff reopens it on the
+    target's prompt and tools (#464).
+    """
     from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
+
+    from turncall.orchestrator.gemini_live import HandoffGeminiLive
 
     s2s = config.s2s
 
@@ -246,9 +286,10 @@ def _create_gemini_live(config: AgentConfig, api_key: str) -> Any:
 
     system_prompt = _build_s2s_system_prompt(config)
 
-    service = GeminiLiveLLMService(
+    service = HandoffGeminiLive(
         api_key=api_key,
         system_instruction=system_prompt or None,
+        tools=tools,
         settings=GeminiLiveLLMService.Settings(**settings_kwargs),
     )
 

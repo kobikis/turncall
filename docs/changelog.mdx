@@ -28,18 +28,44 @@ can't be deleted while an agent in any linked project uses it.
 caller's turn. Unset keeps pipecat's 0.6, at which a short "yes" or "no" is
 often missed and answered only after five seconds; 0.4 catches most of them.
 
+**Keyterms on OpenAI Realtime.** An `openai` speech-to-speech agent now uses its
+`stt.keyterms`, so product names and surnames are transcribed as written, in the
+stored transcript, post-call analysis and evals. Other speech-to-speech
+providers, and OpenAI Realtime through a gateway (`s2s.base_url`), still can't
+use them, and the agent read now says so (`keyterms_ignored_on_s2s`), as it
+does for a keyterm OpenAI would refuse (`keyterms_unsendable_on_s2s`).
+
+**Content-filter refusals named.** When a provider's content filter refuses a
+request, the agent says nothing that turn. The call's `error.raised` event now
+says so, with `content_filtered: true` and the provider, and the call carries
+on with the same LLM rather than moving to a backup. See
+[When a call fails](/guides/post-call-analysis#when-a-call-fails).
+
 ## Changed
 
 - **OpenAI's default model is `gpt-5.4-mini`**: an `openai` agent that names no
   model runs it, and so do an eval judge on OpenAI that names none and
   knowledge-base enrichment. OpenAI shuts `gpt-4o-mini` down on 2027-01-14. An
-  agent whose config names `gpt-4o-mini` keeps it until you change it.
+  agent whose config names `gpt-4o-mini` keeps it until then.
+- **`gpt-4o-mini` retires on 2027-01-14.** Until then, reading an agent that
+  names it on OpenAI (its model, a failover model or its analysis model)
+  returns a `model_retiring` warning with the date and the model it will run
+  on, and so does reading an eval scenario whose judge or persona names it,
+  in its own fields or inside its definition. A platform judge or persona set
+  to it is logged at startup. From that date those agents run `gpt-5.4-mini`
+  instead of failing their calls, except through a gateway (`llm.base_url`, a
+  judge's `endpoint`), which keeps the model it was given. Choose a model
+  before then if you want a different one.
 - **pipecat 1.16**: the speech framework moves from 1.14 to 1.16. Nothing in
   the API or agent config changes. Eval scenarios can assert with
   `text_matches` (regular expressions the reply must match). You may notice
   Deepgram Flux agents answering up to half a second sooner, and Claude Haiku
   5.5 no longer reading its reasoning aloud before a tool call. If you import
   `google-genai` beside TurnCall, it is now version 3.
+- **Phone calls on Twilio resample the agent's voice with pipecat's resampler**
+  instead of Python's `audioop`, which Python 3.13 removes. After the caller
+  talks over the agent, the end of the reply they cut off is no longer heard
+  at the start of the next one.
 
 ## Fixed
 
@@ -52,6 +78,14 @@ often missed and answered only after five seconds; 0.4 catches most of them.
   longer be written to the browser, is logged instead of failing the call.
 - **An agent on xAI speech-to-text hangs up about 2 s sooner** after its
   goodbye: TurnCall no longer waits for xAI to answer the websocket close.
+- **A Gemini Live agent with tools greets a browser caller about 0.7 s
+  sooner**: it no longer opens a second session with Google before speaking.
+- **A handoff on a Gemini Live call reaches the model**: the agent the call
+  hands off to answers with its own prompt and tools, where the model used to
+  carry on as the first agent.
+- **A Twilio caller who talks over the agent no longer hears the rest of the
+  reply it cut off**: TurnCall now tells Twilio to drop the audio it has not
+  played yet, as it already did on Telnyx and Asterisk.
 
 </Update>
 

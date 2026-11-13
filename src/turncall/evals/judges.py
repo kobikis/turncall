@@ -101,6 +101,31 @@ def default_block(
     }
 
 
+def warn_retiring_platform_models(evals: Any) -> None:
+    """`EVAL_JUDGE_MODEL` / `EVAL_SIMULATOR_MODEL` naming a model its vendor
+    retires (#458), logged at startup: a setting has no read to warn on. From
+    the date the `openai` factory runs the replacement."""
+    from loguru import logger
+
+    from turncall.services.llm_models import retiring_warnings
+
+    for warning in retiring_warnings(
+        *(
+            # No provider is Ollama, as in `default_block`.
+            (setting, str(provider or "ollama"), model)
+            for setting, provider, model in (
+                ("EVAL_JUDGE_MODEL", evals.judge_provider, evals.judge_model),
+                (
+                    "EVAL_SIMULATOR_MODEL",
+                    evals.simulator_provider,
+                    evals.simulator_model,
+                ),
+            )
+        )
+    ):
+        logger.warning("eval_model_retiring: {message}", message=warning["message"])
+
+
 # How long a local judge gets to answer one classification.
 #
 # pipecat 1.12 judges a simulation **one bot turn per call** rather than the
@@ -224,6 +249,8 @@ def openai(config: dict[str, Any]) -> Any:
     included — pipecat forwards it as top-level request parameters."""
     from pipecat.services.openai.llm import OpenAILLMService
 
+    from turncall.services.llm_models import resolve_llm_model
+
     return OpenAILLMService(
         api_key=_platform_key("openai"),
         # An OpenAI-compatible gateway, when the scenario named one. The same
@@ -231,7 +258,14 @@ def openai(config: dict[str, Any]) -> Any:
         # rather than after either vendor.
         base_url=config.get("endpoint") or None,
         settings=OpenAILLMService.Settings(
-            model=config.get("model") or DEFAULT_MODELS["openai"],
+            # Through the agent's resolution, so a retired model runs its
+            # replacement rather than error every run (#458); not through a
+            # gateway, which serves what it serves.
+            model=resolve_llm_model(
+                "openai",
+                config.get("model") or DEFAULT_MODELS["openai"],
+                base_url=config.get("endpoint") or None,
+            ),
             extra=dict(config.get("extra") or {}),
         ),
     )

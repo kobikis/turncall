@@ -279,7 +279,7 @@ class TestAnalyzeCall:
             summary_enabled=True,
             sentiment_enabled=True,
         )
-        llm = LLMConfig(provider="openai", model="gpt-4o-mini", api_key="test")
+        llm = LLMConfig(provider="openai", model="gpt-4.1-mini", api_key="test")
         events = [
             {"text": "Hello, how can I help?", "user_id": "assistant"},
             {"text": "I need help with billing", "user_id": "customer"},
@@ -308,7 +308,7 @@ class TestAnalyzeCall:
         assert result.summary == "Customer called about billing."
         assert result.sentiment is not None
         assert result.sentiment["overall"] == "neutral"
-        assert result.model == "gpt-4o-mini"
+        assert result.model == "gpt-4.1-mini"
         assert result.duration_ms >= 0
 
     @pytest.mark.asyncio

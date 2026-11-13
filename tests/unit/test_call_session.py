@@ -223,6 +223,7 @@ class TestProviderError:
             error="Error connecting: HTTP 401",
             fatal=fatal,
             processor=SimpleNamespace(is_usable=usable),
+            category=None,
         )
 
     async def test_an_unusable_provider_fails_the_call(self) -> None:
@@ -377,6 +378,34 @@ async def test_a_rejected_key_names_its_provider() -> None:
         "Deepgram rejected the connection (status 401)"
     )
     assert (payload["provider"], payload["key_rejected"]) == ("deepgram", True)
+
+
+@pytest.mark.unit
+async def test_a_content_filter_refusal_is_named_and_the_call_goes_on() -> None:
+    """A request the provider's content policy refused (#456): not permanent, so
+    the service stays usable and the call carries on, but the agent says
+    nothing for that turn — `error.raised` says why."""
+    from pipecat.frames.frames import ErrorFrame
+    from pipecat.utils.errors import ErrorCategory
+
+    cs = _make_call_session(uuid4())
+    llm_class = type(
+        "OpenAILLMService",
+        (),
+        {"__module__": "pipecat.services.openai.llm", "is_usable": True},
+    )
+    frame = ErrorFrame(
+        error="Error code: 400 - content_filter",
+        category=ErrorCategory.CONTENT_FILTERED,
+    )
+    frame.processor = llm_class()
+    with patch.object(cs, "_log_event", AsyncMock()) as log_event:
+        await cs._on_pipeline_error(frame)
+    event_type, payload = log_event.await_args.args
+    assert event_type == "error.raised"
+    assert (payload["provider"], payload["content_filtered"]) == ("openai", True)
+    assert "content_filter" in payload["error"]
+    assert cs._error is None  # the call is not failed
 
 
 @pytest.mark.unit

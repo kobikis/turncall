@@ -99,6 +99,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await _ensure_credentials_readable(settings)
     await _warn_unverifiable_webhooks(settings)
     await _warn_plain_http_urls(settings)
+    from turncall.evals.judges import warn_retiring_platform_models
+
+    warn_retiring_platform_models(settings.evals)
 
     # Log all agent configs on startup
     try:

@@ -106,8 +106,10 @@ async def test_pipecat_builds_a_gemini_live_service(google_key: str) -> None:
 
     service = create_s2s_service(config, credentials=creds("", google=google_key))
 
-    assert service is not None
-    assert type(service).__name__ == "GeminiLiveLLMService"
+    from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
+
+    # TurnCall's own subclass (#464, a handoff reopens the session).
+    assert isinstance(service, GeminiLiveLLMService)
 
 
 async def test_the_model_a_default_google_agent_gets_is_one_google_serves(

@@ -5,6 +5,7 @@ import base64
 import json
 
 import pytest
+from pipecat.frames.frames import InterruptionFrame
 
 from turncall.orchestrator.serializer import (
     TWILIO_CHANNELS,
@@ -138,6 +139,19 @@ class TestSerializerHelpers:
         msg = json.loads(serializer.build_clear_message())
         assert msg["event"] == "clear"
         assert msg["streamSid"] == "MZ_test"
+
+    @pytest.mark.asyncio
+    async def test_an_interruption_clears_twilios_buffer(self) -> None:
+        """A barge-in drops the audio Twilio holds for the cut-off reply (#463),
+        as pipecat's own Twilio serializer does."""
+        serializer = TwilioFrameSerializer(stream_sid="MZ_test")
+        sent = await serializer.serialize(InterruptionFrame())
+        assert json.loads(sent) == {"event": "clear", "streamSid": "MZ_test"}
+
+    @pytest.mark.asyncio
+    async def test_no_clear_before_the_stream_starts(self) -> None:
+        """Nothing has played without a stream, and Twilio needs its sid."""
+        assert await TwilioFrameSerializer().serialize(InterruptionFrame()) is None
 
     def test_build_mark_message(self) -> None:
         serializer = TwilioFrameSerializer(stream_sid="MZ_test")

@@ -55,13 +55,47 @@ and is not part of this repository's history.
   0.6 a short "yes" or "no" often never started a turn, which then closed on
   pipecat's 5 s stop timeout. Replaying two calls, 0.4 detected 14 and 15
   caller utterances where 0.6 detected 10 and 13.
+- **`stt.keyterms` on OpenAI Realtime** (#455). An `openai` S2S agent sends its
+  keyterms as the session's input transcription `keywords`, transcribed by
+  `gpt-transcribe` (pipecat's default `gpt-realtime-whisper` takes none), so
+  product names and surnames reach the stored transcript, post-call analysis
+  and the eval judge as on cascade. Duplicates are sent once. A keyterm
+  holding `<`, `>` or a line break, which OpenAI refuses the whole session for,
+  is dropped, and the agent read says so (`keyterms_unsendable_on_s2s`). Through
+  a gateway (`s2s.base_url`) none are sent and the transcription model stays
+  the default, since the gateway may not serve `gpt-transcribe`. On every other
+  S2S provider, and through a gateway, the agent read warns
+  `keyterms_ignored_on_s2s` and the build logs `keyterms_skipped` instead of
+  ignoring them silently. A long Realtime call keeps OpenAI's
+  default truncation (the oldest messages dropped as needed); TurnCall sets no
+  `truncation`.
+- **`content_filtered: true` on `error.raised`** (#456): a request the
+  provider's content filter refused (pipecat 1.16's `CONTENT_FILTERED`, OpenAI's
+  `content_filter` 400) is recorded with `provider`, so the silent turn it
+  leaves has a reason. It does not fail the call, and it does not switch
+  `llm.failover`: a refused request says nothing about the provider.
 
 ### Changed
 
 - **OpenAI's default model is `gpt-5.4-mini`.** An `openai` agent that names
   no model runs it, and so do an OpenAI eval judge that names none and
   knowledge-base enrichment. OpenAI shuts `gpt-4o-mini` down on 2027-01-14. An
-  agent whose config names `gpt-4o-mini` keeps it until you change it.
+  agent whose config names `gpt-4o-mini` keeps it until then.
+- **`gpt-4o-mini` retires on 2027-01-14** (#458). Until then an agent read
+  carries a `model_retiring` warning (`{code, message, model, retires_on,
+  replacement, field}`) for each `openai` model field that names it — `llm.model`,
+  an `llm.failover` entry, `analysis.model` — and so does an eval scenario read
+  for a `judge` or `simulator` naming it, typed or as a raw block in its
+  `definition` (`definition.judge.eval.model`, which pipecat builds itself and
+  nothing swaps). `EVAL_JUDGE_MODEL` / `EVAL_SIMULATOR_MODEL` naming it log
+  `eval_model_retiring` at API and eval-worker startup. From that date
+  `gpt-4o-mini` on `openai` runs `gpt-5.4-mini` instead, voice, text, post-call
+  analysis and an OpenAI eval judge alike, logging `llm_model_retired
+  from=gpt-4o-mini to=gpt-5.4-mini` once per process: a call on a different
+  model beats a call that fails on its first reply. Not through a gateway (an
+  `llm.base_url`, a judge's `endpoint`), which serves what it serves. Name a
+  model before then to choose what runs. Retirements are one table in
+  `services/llm_models.py`.
 - **pipecat 1.16** (ADR-0033). The requirement is now `>=1.16.0,<1.17.0`,
   taking 1.15 and 1.16 together. No API or config change. google-genai moves
   to 3; torchaudio, resampy and numba leave the image. What changes:
@@ -81,6 +115,12 @@ and is not part of this repository's history.
     growing in memory over a long call; provider connections left open after
     a call cancelled during shutdown; Gemini Live retrying a session that
     fails to open; Markdown inside inline code read aloud wrongly.
+- **The carriers' audio no longer uses `audioop`** (#453), which Python 3.13
+  removes. Twilio and Asterisk μ-law is pipecat's `g711` (byte-identical,
+  tested against `audioop`). Twilio's resampling of the agent's audio to 8 kHz
+  is pipecat's sinc stream resampler instead of `audioop.ratecv`, reset on a
+  barge-in so the end of the reply the caller cut off is not played at the
+  start of the next one.
 
 ### Fixed
 
@@ -98,6 +138,21 @@ and is not part of this repository's history.
 - **An agent on xAI speech-to-text hangs up about 2 s sooner.** xAI does not
   answer the websocket close, so every call's end waited pipecat's 2 s close
   timeout after the goodbye; TurnCall now waits 0.25 s.
+- **A Gemini Live agent with tools greets a browser caller about 0.7 s
+  sooner** (#459). pipecat re-opens a Gemini Live session whose first context
+  brings tools, so every such agent opened two sessions before it spoke; the
+  tools now go into the session it opens with, off the context.
+- **A handoff on a Gemini Live call reaches the model** (#464). pipecat
+  applies neither a new prompt nor new tools to an open Gemini Live session,
+  so the model went on as the previous agent, calling tools whose handlers
+  were gone; a handoff to an agent with no tools got the first agent's back
+  at the next reconnect. A handoff now opens a new session (about 0.6 s) on
+  the target agent's prompt and tools.
+- **A Twilio caller who talks over the agent no longer hears the rest of the
+  cut-off reply** (#463). A barge-in sent Twilio nothing, so the audio Twilio
+  already held for the reply kept playing; it now sends Twilio's `clear` for
+  the call's stream, as Telnyx (`clear`) and Asterisk (`FLUSH_MEDIA`) already
+  did.
 
 ## [2.1.1]
 

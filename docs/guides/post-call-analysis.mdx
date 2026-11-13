@@ -116,6 +116,13 @@ A call that broke ends with `status: "failed"` and `ended_reason: "pipeline_erro
 
 Read `missing_keys` / `provider` rather than parsing `error`: the sentence is the vendor's and changes with them.
 
+One `error.raised` does not fail the call: a request the provider's content filter refused (OpenAI reports a `content_filter` 400) carries `provider` and `content_filtered: true`. Nothing answers that turn, but the call goes on, on the same LLM: a refused request is about its content, so it never moves the call to an `llm.failover` backup.
+
+```json
+{"stage": "OpenAILLMService#0", "provider": "openai", "content_filtered": true,
+ "error": "Error code: 400 - {'error': {'code': 'content_filter', ...}}"}
+```
+
 ## Fetch a Recording
 
 Stream the WAV directly from TurnCall — useful when you don't want to expose your object-storage URLs to clients, or when the stored URL is presigned and short-lived:

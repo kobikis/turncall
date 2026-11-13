@@ -84,7 +84,8 @@ def _build(
 
 
 def _tool_names(context: Any) -> set[str]:
-    return {f.name for f in context.tools.standard_tools} if context.tools else set()
+    tools = getattr(context, "tools", context)
+    return {f.name for f in tools.standard_tools} if tools else set()
 
 
 def _instructions(service: Any) -> str:
@@ -155,7 +156,9 @@ def test_tool_mode_on_a_provider_that_calls_tools_itself(provider: str) -> None:
     service, context = _build(_config(provider, tools=[_BOOK]), [_attachment("tool")])
 
     assert "query_knowledge" in service._functions
-    assert _tool_names(context) == {"book_table", "query_knowledge"}
+    # Gemini Live opens its session with them, off the context (#459).
+    tools = service._service_tools() if provider == "google" else context
+    assert _tool_names(tools) == {"book_table", "query_knowledge"}
 
 
 def test_cascade_tool_mode_is_unchanged() -> None:

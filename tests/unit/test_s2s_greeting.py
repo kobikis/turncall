@@ -11,7 +11,7 @@ import asyncio
 import time
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pipecat.frames.frames import Frame, LLMContextFrame, LLMRunFrame
@@ -25,7 +25,7 @@ from pipecat.processors.frame_processor import (
 from pipecat.workers.runner import WorkerRunner
 
 from tests.conftest import creds
-from turncall.domain.models import AgentConfig, AWSConfig, S2SConfig
+from turncall.domain.models import AgentConfig, AWSConfig, S2SConfig, ToolDefinition
 from turncall.orchestrator.call_session import CallSession, s2s_greeting_frame
 from turncall.orchestrator.pipeline_factory import create_pipeline
 
@@ -205,6 +205,168 @@ class TestGeminiLiveSpeaksFirst:
 
         sent.assert_awaited_once()
         assert sent.await_args.kwargs["turn_complete"] is True
+
+
+class TestGeminiLiveOpensOnce:
+    """pipecat re-opens a Gemini Live session whose first context brings tools
+    of its own, which cost a WebRTC caller +763 ms median to the greeting
+    (#459). The tools go into the session it opens with instead."""
+
+    _TOOL = ToolDefinition(
+        name="lookup_order",
+        description="Look up an order by number.",
+        parameters_schema={"type": "object", "properties": {}},
+        webhook_url="https://x.example/hook",
+    )
+
+    def _agent(self) -> AgentConfig:
+        return _agent("google", "Thanks for calling!").model_copy(
+            update={"tools": [self._TOOL]}
+        )
+
+    async def test_an_agent_with_tools_does_not_reopen_on_the_first_context(
+        self,
+    ) -> None:
+        sent, _ = await _gemini_opening(self._agent())  # asserts no reconnect
+
+        sent.assert_awaited_once()
+
+    @staticmethod
+    async def _session_tool_names(service: Any) -> list[str]:
+        """The tools the next session Gemini Live opens is configured with."""
+        service.create_task = MagicMock()
+        with patch.object(service, "_connection_task_handler", MagicMock()) as handler:
+            await service._connect()
+        (tool,) = handler.call_args.kwargs["config"].tools
+        return [f["name"] for f in tool["function_declarations"]]
+
+    async def test_its_tools_are_in_the_session_it_opens(self) -> None:
+        _, service = await _opening_context(self._agent())
+
+        assert await self._session_tool_names(service) == ["lookup_order"]
+
+    async def test_a_handoffs_tools_reach_the_next_session(self) -> None:
+        """pipecat 1.16 applies no `LLMSetToolsFrame` to an open session; the
+        user aggregator puts it on the context, which a re-opened session
+        (Gemini's session rollover) reads over the tools it was built with."""
+        from pipecat.processors.aggregators.llm_response_universal import (
+            LLMUserAggregator,
+        )
+        from pipecat.services.llm_service import LLMService
+        from pipecat.tests.utils import run_test
+
+        from turncall.orchestrator.tool_bridge import build_switch_frames
+
+        pipeline = create_pipeline(
+            config=self._agent(),
+            transport=MagicMock(),
+            call_context=MagicMock(is_eval=True),
+            pipecat_settings=SimpleNamespace(),
+            credentials=creds("sk-test", google="g-test"),
+        )
+        aggregator = next(
+            p for p in pipeline.processors if isinstance(p, LLMUserAggregator)
+        )
+        service = next(
+            p for p in pipeline.processors_with_metrics() if isinstance(p, LLMService)
+        )
+        target = self._agent().model_copy(
+            update={"tools": [self._TOOL.model_copy(update={"name": "book_table"})]}
+        )
+        _, tools_frame = build_switch_frames(target)
+        await run_test(aggregator, frames_to_send=[tools_frame])
+        service._context = aggregator.context
+
+        assert await self._session_tool_names(service) == ["book_table"]
+
+
+class TestGeminiLiveHandsOff:
+    """pipecat 1.16 applies neither a handoff's prompt nor its tools to an open
+    Gemini Live session, so the model went on as the previous agent, calling
+    tools whose handlers were gone, until the session next reopened (#464)."""
+
+    _TOOL = TestGeminiLiveOpensOnce._TOOL
+
+    def _agent(self) -> AgentConfig:
+        return _agent("google", "Thanks for calling!").model_copy(
+            update={"tools": [self._TOOL]}
+        )
+
+    @staticmethod
+    async def _handed_off(config: AgentConfig, target: AgentConfig) -> Any:
+        """A built Gemini Live service, on a call that is `config`, after a
+        handoff's switch frames reach it through the call's user aggregator,
+        connecting nowhere: each session it would open is recorded."""
+        from pipecat.processors.aggregators.llm_response_universal import (
+            LLMUserAggregator,
+        )
+        from pipecat.processors.frame_processor import FrameDirection
+        from pipecat.services.llm_service import LLMService
+        from pipecat.tests.utils import run_test
+
+        from turncall.orchestrator.tool_bridge import build_switch_frames
+
+        pipeline = create_pipeline(
+            config=config,
+            transport=MagicMock(),
+            call_context=MagicMock(is_eval=True),
+            pipecat_settings=SimpleNamespace(),
+            credentials=creds("sk-test", google="g-test"),
+        )
+        aggregator = next(
+            p for p in pipeline.processors if isinstance(p, LLMUserAggregator)
+        )
+        service = next(
+            p for p in pipeline.processors_with_metrics() if isinstance(p, LLMService)
+        )
+        service._context = aggregator.context
+        service._session = MagicMock(close=AsyncMock())  # the open session
+        service.create_task = MagicMock(return_value=None)  # no connection task
+        service._connection_task_handler = MagicMock()
+        down, _ = await run_test(
+            aggregator, frames_to_send=[*build_switch_frames(target)]
+        )
+        for frame in down:
+            await service.process_frame(frame, FrameDirection.DOWNSTREAM)
+        return service
+
+    @staticmethod
+    def _opened(service: Any) -> list[Any]:
+        """The config of every session the service opened."""
+        return [
+            c.kwargs["config"] for c in service._connection_task_handler.call_args_list
+        ]
+
+    @staticmethod
+    def _tool_names(config: Any) -> list[str]:
+        return [
+            f["name"]
+            for tool in config.tools or []
+            for f in tool["function_declarations"]
+        ]
+
+    async def test_the_next_session_is_the_target_agent(self) -> None:
+        target = self._agent().model_copy(
+            update={
+                "system_prompt": "You book tables at Nonna's.",
+                "tools": [self._TOOL.model_copy(update={"name": "book_table"})],
+            }
+        )
+
+        service = await self._handed_off(self._agent(), target)
+
+        (session,) = self._opened(service)
+        assert self._tool_names(session) == ["book_table"]
+        assert session.system_instruction.startswith("You book tables at Nonna's.")
+
+    async def test_a_target_with_no_tools_opens_with_none(self) -> None:
+        target = self._agent().model_copy(update={"tools": []})
+
+        service = await self._handed_off(self._agent(), target)
+        service._session = MagicMock(close=AsyncMock())
+        await service._reconnect()  # a later rollover, or a dropped connection
+
+        assert [self._tool_names(s) for s in self._opened(service)] == [[], []]
 
 
 class TestNovaSonicSpeaksFirst:

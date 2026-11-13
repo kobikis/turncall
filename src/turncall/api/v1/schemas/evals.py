@@ -206,11 +206,14 @@ class EvalScenarioResponse(BaseModel):
 
     @model_validator(mode="after")
     def _derive_warnings(self) -> "EvalScenarioResponse":
-        from turncall.evals.scenario import assertion_warnings
+        from turncall.evals.scenario import assertion_warnings, retiring_model_warnings
 
         if self.warnings:
             return self
-        found = assertion_warnings(self.definition, name=self.name)
+        found = [
+            *assertion_warnings(self.definition, name=self.name),
+            *retiring_model_warnings(self.definition, self.judge, self.simulator),
+        ]
         return self.model_copy(update={"warnings": found}) if found else self
 
     @field_validator("default_target")

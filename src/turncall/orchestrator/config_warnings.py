@@ -23,8 +23,10 @@ response validator the way `EvalScenarioResponse` calls `assertion_warnings`
 (#95).
 """
 
+import re
 from collections.abc import Collection
 from typing import Any
+from urllib.parse import urlparse
 
 from loguru import logger
 
@@ -57,6 +59,9 @@ def config_warnings(
                 knowledge_mode_warning(config, kb_modes),
                 skills_on_s2s_warning(config),
                 procedures_on_s2s_warning(config),
+                keyterms_on_s2s_warning(config),
+                unsendable_keyterms_warning(config),
+                *_retiring_model_warnings(config),
             )
             if warning is not None
         ]
@@ -140,6 +145,105 @@ def procedures_on_s2s_warning(config: AgentConfig) -> dict[str, Any] | None:
         "procedures": names,
         "provider": config.s2s.provider,
     }
+
+
+# The S2S providers whose session takes `stt.keyterms` (#455): OpenAI
+# Realtime, as transcription keywords. The build (`s2s_config`) and the agent
+# read both go by it.
+S2S_KEYTERM_PROVIDERS = frozenset({"openai"})
+# OpenAI refuses the whole session update over a keyword holding one of these.
+_UNSENDABLE_KEYWORD = re.compile(r"[<>\r\n]")
+
+
+def realtime_keywords(config: AgentConfig) -> tuple[list[str], list[str]]:
+    """The keyterms an S2S session sends as transcription keywords, and those
+    dropped for a character OpenAI refuses.
+
+    Deduplicated keeping the first, blanks dropped: the API does both, a
+    call-init inline agent skips it. None on a provider outside
+    `S2S_KEYTERM_PROVIDERS` or through a gateway (`s2s.base_url`), which may
+    not serve the model that takes them. OpenAI documents no limit on how
+    many keywords a session takes, so none is cut.
+    """
+    if config.s2s.provider not in S2S_KEYTERM_PROVIDERS or config.s2s.base_url:
+        return [], []
+    terms = list(dict.fromkeys(t for t in config.stt.keyterms if t.strip()))
+    dropped = [t for t in terms if _UNSENDABLE_KEYWORD.search(t)]
+    return [t for t in terms if t not in dropped], dropped
+
+
+def keyterms_on_s2s_warning(config: AgentConfig) -> dict[str, Any] | None:
+    """`stt.keyterms` on an S2S agent that sends none of them (#455): a
+    provider outside `S2S_KEYTERM_PROVIDERS`, whose realtime service
+    transcribes on its own, or OpenAI Realtime through a gateway. The build
+    skips them on exactly this rule and logs this message (`keyterms_skipped`).
+    """
+    if config.pipeline_mode != "s2s" or not config.stt.keyterms:
+        return None
+    provider = config.s2s.provider
+    if provider not in S2S_KEYTERM_PROVIDERS:
+        why = "its realtime service takes no transcription hints"
+    elif config.s2s.base_url:
+        gateway = urlparse(config.s2s.base_url).hostname or config.s2s.base_url
+        why = (
+            f"it runs through a gateway ({gateway}), which may not serve "
+            "gpt-transcribe, the transcription model that takes keywords, so "
+            "the session keeps its default transcription"
+        )
+    else:
+        return None
+    keyterms = list(config.stt.keyterms)
+    return {
+        "code": "keyterms_ignored_on_s2s",
+        "message": (
+            f"stt.keyterms ({', '.join(keyterms)}) are ignored on this S2S "
+            f"agent ({provider}): {why}. OpenAI Realtime "
+            "(s2s.provider='openai', no s2s.base_url) and "
+            "pipeline_mode='cascade' use them."
+        ),
+        "keyterms": keyterms,
+        "provider": provider,
+    }
+
+
+def unsendable_keyterms_warning(config: AgentConfig) -> dict[str, Any] | None:
+    """Keyterms an OpenAI Realtime session drops (#455): one holding `<`, `>`
+    or a line break, over which OpenAI refuses the whole session update."""
+    if config.pipeline_mode != "s2s":
+        return None
+    _, dropped = realtime_keywords(config)
+    if not dropped:
+        return None
+    return {
+        "code": "keyterms_unsendable_on_s2s",
+        "message": (
+            f"stt.keyterms {dropped!r} are not sent on this S2S agent "
+            f"({config.s2s.provider}): OpenAI Realtime refuses a transcription "
+            "keyword holding '<', '>' or a line break. Remove or reword them."
+        ),
+        "keyterms": dropped,
+        "provider": config.s2s.provider,
+    }
+
+
+def _retiring_model_warnings(config: AgentConfig) -> list[dict[str, Any]]:
+    """Every LLM model this agent names that its vendor retires (#458).
+
+    `analysis.model` runs on the agent's own provider. Warned whatever the
+    pipeline mode: chat, SMS and post-call analysis run the agent's `llm` on
+    an S2S agent too.
+    """
+    from turncall.services.llm_models import retiring_warnings
+
+    llm = config.llm
+    return retiring_warnings(
+        ("llm.model", llm.provider, llm.model),
+        *(
+            (f"llm.failover[{i}].model", entry.provider, entry.model)
+            for i, entry in enumerate(llm.failover)
+        ),
+        ("analysis.model", llm.provider, config.analysis.model),
+    )
 
 
 def _respelling_warning(config: AgentConfig) -> dict[str, Any] | None:

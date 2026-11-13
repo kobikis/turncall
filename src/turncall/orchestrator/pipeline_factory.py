@@ -552,7 +552,7 @@ def _create_llm_service(
     # all of them; see services/llm_models.py. Resolved once here so every
     # branch below — and `is_anthropic_model`, which reads the name to decide
     # whether Bedrock gets a temperature — sees the same value.
-    model = resolve_llm_model(provider, config.llm.model)
+    model = resolve_llm_model(provider, config.llm.model, base_url=config.llm.base_url)
 
     if provider == "openrouter":
         # OpenRouter is OpenAI-compatible; fallback_models ride in extra_body as
@@ -740,7 +740,8 @@ def _create_llm_service(
 
 
 def _llm_label(llm: LLMConfig) -> str:
-    return f"{llm.provider}/{resolve_llm_model(llm.provider, llm.model)}"
+    model = resolve_llm_model(llm.provider, llm.model, base_url=llm.base_url)
+    return f"{llm.provider}/{model}"
 
 
 def _create_llm_stage(
@@ -1885,7 +1886,7 @@ def create_pipeline(
     # runs something else entirely, and a log that says otherwise sends the
     # next person looking in the wrong place. Safe to resolve again here — the
     # service was already built from it, so it cannot raise now.
-    llm_info = f"{config.llm.provider}/{resolve_llm_model(config.llm.provider, config.llm.model)}"
+    llm_info = _llm_label(config.llm)
     if config.llm.base_url:
         llm_info += f" @ {config.llm.base_url}"
     logger.info(
@@ -2058,8 +2059,21 @@ def _create_s2s_pipeline(
             hangup_gate=gate,
             byom_settings=byom_settings,
         )
+    # Pass tools via context — except to a client delegation, whose tools live
+    # on the delegate (#244), and to Gemini Live, which re-opens its session
+    # when the first context brings tools of its own (+763 ms to a WebRTC
+    # greeting, #459) and so opens with them instead.
+    tools_schema = (
+        None if client_mode else _build_tools_schema(config, extra_tools=extra_tools)
+    )
+    session_tools = tools_schema if config.s2s.provider == "google" else None
     s2s_llm = create_s2s_service(
-        config, credentials, tools=advertised, delegate=delegate, hangup_gate=gate
+        config,
+        credentials,
+        tools=advertised,
+        delegate=delegate,
+        hangup_gate=gate,
+        session_tools=session_tools,
     )
     if knowledge is not None and not client_mode:
         # Before pipeline_builder registers the agent's tools, so on a name
@@ -2076,14 +2090,10 @@ def _create_s2s_pipeline(
     # Build context — system prompt + first_message are handled by the S2S
     # service directly (SessionProperties.instructions for OpenAI,
     # system_instruction for Gemini), plus the opening gpt-live-1, Gemini Live
-    # and Nova Sonic need before they speak first (#248, #381). Only
-    # pass tools via context — except to a client delegation, whose tools live
-    # on the delegate (#244).
-    tools_schema = (
-        None if client_mode else _build_tools_schema(config, extra_tools=extra_tools)
-    )
+    # and Nova Sonic need before they speak first (#248, #381), and the tools
+    # (above).
     context_kwargs: dict[str, Any] = {"messages": s2s_opening_messages(config)}
-    if tools_schema is not None:
+    if tools_schema is not None and session_tools is None:
         context_kwargs["tools"] = tools_schema
     context = LLMContext(**context_kwargs)
 

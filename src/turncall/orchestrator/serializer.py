@@ -9,16 +9,19 @@ Twilio → Pipecat:
 
 Pipecat → Twilio:
   OutputAudioRawFrame(PCM16) → Twilio "media" JSON with base64 mulaw payload
+  InterruptionFrame (a barge-in) → Twilio "clear" for the stream
 """
 
-import audioop
 import base64
 import json
 from dataclasses import dataclass
+from typing import Any
 
+from pipecat.audio import g711
 from pipecat.frames.frames import (
     Frame,
     InputAudioRawFrame,
+    InterruptionFrame,
     OutputAudioRawFrame,
 )
 from pipecat.serializers.base_serializer import FrameSerializer
@@ -45,18 +48,25 @@ class TwilioFrameSerializer(FrameSerializer):
     but Twilio uses mulaw encoding.
     """
 
-    def __init__(self, stream_sid: str = "", **kwargs) -> None:  # type: ignore[no-untyped-def]
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        stream_sid: str = "",
+        params: FrameSerializer.InputParams | None = None,
+        **kwargs: Any,
+    ) -> None:
+        # The base class resamples outgoing audio to audio_out_sample_rate with
+        # one stream resampler carried across frames (resetting the filter at
+        # each ~20ms boundary clicks on continuous TTS audio). A caller's
+        # params keep everything but that rate, which is the wire's.
+        # `_resample_audio_out` / `_reset_audio_out` are pipecat privates:
+        # test_serializer_resample pins them.
+        params = (params or FrameSerializer.InputParams()).model_copy(
+            update={"audio_out_sample_rate": TWILIO_SAMPLE_RATE}
+        )
+        super().__init__(params=params, **kwargs)
         self._stream_sid = stream_sid
         self._metadata: TwilioStreamMetadata | None = None
         self._logged_first_audio = False
-        # ratecv filter state, carried across frames. Passing None every frame
-        # (the old code) reset the filter at each ~20ms boundary, producing
-        # clicks/aliasing on continuous TTS audio — the exact bug audio_resampler
-        # was written to fix. ponytail: audioop carry-state, not SOXR; audioop is
-        # removed in 3.13 — swap to create_stream_resampler then.
-        self._resample_state: object | None = None
-        self._resample_rate: int | None = None
 
     @property
     def stream_sid(self) -> str:
@@ -71,6 +81,12 @@ class TwilioFrameSerializer(FrameSerializer):
         if self.should_ignore_frame(frame):
             return None
 
+        if isinstance(frame, InterruptionFrame):
+            # The cut-off reply's tail, still in the filter, must not start
+            # the next one; `clear` drops what Twilio holds of it unplayed.
+            await self._reset_audio_out()
+            return self.build_clear_message() if self._stream_sid else None
+
         if not isinstance(frame, OutputAudioRawFrame):
             return None
 
@@ -78,17 +94,10 @@ class TwilioFrameSerializer(FrameSerializer):
             return None
 
         # PCM16 (possibly 16kHz+) → resample to 8kHz → mulaw for Twilio
-        audio = frame.audio
-        if frame.sample_rate != 8000:
-            # Reset filter state if the input rate ever changes (it shouldn't
-            # mid-call), otherwise carry it so the resampler stays continuous.
-            if frame.sample_rate != self._resample_rate:
-                self._resample_state = None
-                self._resample_rate = frame.sample_rate
-            audio, self._resample_state = audioop.ratecv(
-                audio, 2, 1, frame.sample_rate, 8000, self._resample_state
-            )
-        mulaw_audio = audioop.lin2ulaw(audio, 2)
+        audio = await self._resample_audio_out(frame)
+        if not audio:
+            return None
+        mulaw_audio = g711.pcm_to_ulaw(audio)
         payload = base64.b64encode(mulaw_audio).decode("ascii")
 
         message = {
@@ -139,7 +148,7 @@ class TwilioFrameSerializer(FrameSerializer):
 
         # Base64 decode → mulaw → PCM16 (stay at 8kHz, no resampling)
         mulaw_bytes = base64.b64decode(payload)
-        pcm_audio = audioop.ulaw2lin(mulaw_bytes, 2)
+        pcm_audio = g711.ulaw_to_pcm(mulaw_bytes)
 
         return InputAudioRawFrame(
             audio=pcm_audio,

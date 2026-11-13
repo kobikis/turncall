@@ -136,6 +136,12 @@ class TwilioCall(CarrierCall):
     async def _send(self, message: dict[str, Any]) -> None:
         await self._ws.send(json.dumps({**message, "streamSid": self.stream_sid}))
 
+    def _is_flush(self, message: dict[str, Any]) -> bool:
+        # Twilio clears only the stream the message names.
+        return (
+            super()._is_flush(message) and message.get("streamSid") == self.stream_sid
+        )
+
     def _media_message(self, chunk: int, payload: str) -> dict[str, Any]:
         return {
             "event": "media",

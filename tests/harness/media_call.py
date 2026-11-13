@@ -59,9 +59,12 @@ class TransferHeard:
 
 class HearsTheAgent:
     """What a caller hears, for any carrier's call object: it appends the
-    arrival time of each loud agent frame to `_loud_at` and sets `closed`."""
+    arrival time of each loud agent frame to `_loud_at`, counts the carrier
+    being told to drop the agent audio it has not played yet in `flushes`
+    (a barge-in), and sets `closed`."""
 
     _loud_at: list[float]
+    flushes: int
     closed: asyncio.Event
 
     def heard(self, pcm: bytes) -> None:
@@ -113,6 +116,7 @@ class CarrierCall(HearsTheAgent):
     _outgoing: asyncio.Queue[bytes] = field(default_factory=asyncio.Queue)
     _loud_at: list[float] = field(default_factory=list)  # agent audio arrival times
     _tasks: list[asyncio.Task] = field(default_factory=list)
+    flushes: int = 0
     closed: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def say(self, ms: int = 400) -> None:
@@ -151,6 +155,10 @@ class CarrierCall(HearsTheAgent):
     def _media_message(self, chunk: int, payload: str) -> dict[str, Any]:
         raise NotImplementedError
 
+    def _is_flush(self, message: dict[str, Any]) -> bool:
+        """Whether a message from the app drops the audio not yet played."""
+        return message.get("event") == "clear"
+
     def _start_streaming(self) -> None:
         self._tasks = [
             asyncio.create_task(self._send_media()),
@@ -183,6 +191,8 @@ class CarrierCall(HearsTheAgent):
         try:
             async for raw in self._ws:
                 message = json.loads(raw)
+                if self._is_flush(message):
+                    self.flushes += 1
                 if message.get("event") != "media":
                     continue
                 self.heard(
