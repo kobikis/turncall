@@ -55,6 +55,11 @@ and is not part of this repository's history.
   0.6 a short "yes" or "no" often never started a turn, which then closed on
   pipecat's 5 s stop timeout. Replaying two calls, 0.4 detected 14 and 15
   caller utterances where 0.6 detected 10 and 13.
+- **`content_filtered: true` on `error.raised`** (#456): a request the
+  provider's content filter refused (pipecat 1.16's `CONTENT_FILTERED`, OpenAI's
+  `content_filter` 400) is recorded with `provider`, so the silent turn it
+  leaves has a reason. It does not fail the call, and it does not switch
+  `llm.failover`: a refused request says nothing about the provider.
 
 ### Changed
 

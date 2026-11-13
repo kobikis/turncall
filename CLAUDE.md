@@ -2558,7 +2558,10 @@ A provider with **no key at any level** is caught before the build
 provider). The event and the WebRTC 500 both carry `missing_keys: [account]`.
 A key that is present but refused mid-call (pipecat's `AUTHENTICATION` /
 `AUTHORIZATION`) carries `provider` and `key_rejected: true`, so a console can
-name the key without parsing the vendor's sentence.
+name the key without parsing the vendor's sentence. A request the provider's
+content filter refused (pipecat's `CONTENT_FILTERED`, #456) is an `error.raised`
+with `provider` and `content_filtered: true` that fails nothing: the category is
+not permanent, so the call goes on and `llm.failover` does not switch.
 
 Since pipecat 1.12 a user turn that VAD opened and closed with **no
 transcript** — a cough, a door, an unrecognized word — is handled rather than
