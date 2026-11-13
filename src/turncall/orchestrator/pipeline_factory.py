@@ -2059,8 +2059,21 @@ def _create_s2s_pipeline(
             hangup_gate=gate,
             byom_settings=byom_settings,
         )
+    # Pass tools via context — except to a client delegation, whose tools live
+    # on the delegate (#244), and to Gemini Live, which re-opens its session
+    # when the first context brings tools of its own (+763 ms to a WebRTC
+    # greeting, #459) and so opens with them instead.
+    tools_schema = (
+        None if client_mode else _build_tools_schema(config, extra_tools=extra_tools)
+    )
+    session_tools = tools_schema if config.s2s.provider == "google" else None
     s2s_llm = create_s2s_service(
-        config, credentials, tools=advertised, delegate=delegate, hangup_gate=gate
+        config,
+        credentials,
+        tools=advertised,
+        delegate=delegate,
+        hangup_gate=gate,
+        session_tools=session_tools,
     )
     if knowledge is not None and not client_mode:
         # Before pipeline_builder registers the agent's tools, so on a name
@@ -2077,14 +2090,10 @@ def _create_s2s_pipeline(
     # Build context — system prompt + first_message are handled by the S2S
     # service directly (SessionProperties.instructions for OpenAI,
     # system_instruction for Gemini), plus the opening gpt-live-1, Gemini Live
-    # and Nova Sonic need before they speak first (#248, #381). Only
-    # pass tools via context — except to a client delegation, whose tools live
-    # on the delegate (#244).
-    tools_schema = (
-        None if client_mode else _build_tools_schema(config, extra_tools=extra_tools)
-    )
+    # and Nova Sonic need before they speak first (#248, #381), and the tools
+    # (above).
     context_kwargs: dict[str, Any] = {"messages": s2s_opening_messages(config)}
-    if tools_schema is not None:
+    if tools_schema is not None and session_tools is None:
         context_kwargs["tools"] = tools_schema
     context = LLMContext(**context_kwargs)
 
