@@ -138,6 +138,10 @@ and is not part of this repository's history.
 - **An agent on xAI speech-to-text hangs up about 2 s sooner.** xAI does not
   answer the websocket close, so every call's end waited pipecat's 2 s close
   timeout after the goodbye; TurnCall now waits 0.25 s.
+- **A Gemini Live agent with tools greets a browser caller about 0.7 s
+  sooner** (#459). pipecat re-opens a Gemini Live session whose first context
+  brings tools, so every such agent opened two sessions before it spoke; the
+  tools now go into the session it opens with, off the context.
 
 ## [2.1.1]
 

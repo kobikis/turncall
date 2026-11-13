@@ -119,12 +119,14 @@ def create_s2s_service(
     tools: Sequence[ToolDefinition] = (),
     delegate: Any = None,
     hangup_gate: Any = None,
+    session_tools: Any = None,
 ) -> Any:
     """Create the appropriate S2S service based on provider.
 
     `tools` is what the call advertises (static + MCP, deduplicated). Only
     `openai_live` reads it here, to tell gpt-live-1 what it can delegate; every
-    other provider gets the tools themselves through the pipeline's context.
+    other provider gets the tools themselves through the pipeline's context,
+    except Gemini Live, which opens its session with `session_tools` (#459).
     `delegate` is the worker running the agent's own llm, for client mode, and
     `hangup_gate` the call's gate, armed as a delegation's goodbye is relayed
     (#262).
@@ -135,7 +137,7 @@ def create_s2s_service(
     if provider == "openai":
         return _create_openai_realtime(config, credentials.api_key("openai"))
     if provider == "google":
-        return _create_gemini_live(config, credentials.api_key("google"))
+        return _create_gemini_live(config, credentials.api_key("google"), session_tools)
     if provider == "openai_live":
         return _create_openai_live(
             config, credentials.api_key("openai"), tools, delegate, hangup_gate
@@ -236,8 +238,14 @@ def _input_transcription(config: AgentConfig) -> Any:
     )
 
 
-def _create_gemini_live(config: AgentConfig, api_key: str) -> Any:
-    """Create a GeminiLiveLLMService from S2SConfig."""
+def _create_gemini_live(config: AgentConfig, api_key: str, tools: Any = None) -> Any:
+    """Create a GeminiLiveLLMService from S2SConfig, opening with `tools`.
+
+    pipecat re-opens a session whose first context brings tools of its own,
+    so the tools are kept off the context (#459). A later `LLMSetToolsFrame`
+    (a handoff) still lands on the context, which the next session reads
+    over these.
+    """
     from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
 
     s2s = config.s2s
@@ -280,6 +288,7 @@ def _create_gemini_live(config: AgentConfig, api_key: str) -> Any:
     service = GeminiLiveLLMService(
         api_key=api_key,
         system_instruction=system_prompt or None,
+        tools=tools,
         settings=GeminiLiveLLMService.Settings(**settings_kwargs),
     )
 
