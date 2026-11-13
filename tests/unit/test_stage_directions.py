@@ -96,6 +96,8 @@ async def test_every_tts_provider_leaves_a_narration_unspoken(provider, monkeypa
         ("[friendly] Hello and welcome!", "Hello and welcome!"),
         ("Sure [laughs softly] we are open.", "Sure we are open."),
         ("[Happy] We have sushi.", "We have sushi."),
+        # A tool call written out as text (call 9160c705).
+        ("[end_call()]", ""),
         ("See note [1], ask [Your Name].", "See note [1], ask [Your Name]."),
     ],
 )
