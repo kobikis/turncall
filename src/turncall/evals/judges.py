@@ -224,6 +224,8 @@ def openai(config: dict[str, Any]) -> Any:
     included — pipecat forwards it as top-level request parameters."""
     from pipecat.services.openai.llm import OpenAILLMService
 
+    from turncall.services.llm_models import resolve_llm_model
+
     return OpenAILLMService(
         api_key=_platform_key("openai"),
         # An OpenAI-compatible gateway, when the scenario named one. The same
@@ -231,7 +233,11 @@ def openai(config: dict[str, Any]) -> Any:
         # rather than after either vendor.
         base_url=config.get("endpoint") or None,
         settings=OpenAILLMService.Settings(
-            model=config.get("model") or DEFAULT_MODELS["openai"],
+            # Through the agent's resolution, so a retired model runs its
+            # replacement rather than error every run (#458).
+            model=resolve_llm_model(
+                "openai", config.get("model") or DEFAULT_MODELS["openai"]
+            ),
             extra=dict(config.get("extra") or {}),
         ),
     )

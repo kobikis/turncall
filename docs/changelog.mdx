@@ -45,7 +45,13 @@ on with the same LLM rather than moving to a backup. See
 - **OpenAI's default model is `gpt-5.4-mini`**: an `openai` agent that names no
   model runs it, and so do an eval judge on OpenAI that names none and
   knowledge-base enrichment. OpenAI shuts `gpt-4o-mini` down on 2027-01-14. An
-  agent whose config names `gpt-4o-mini` keeps it until you change it.
+  agent whose config names `gpt-4o-mini` keeps it until then.
+- **`gpt-4o-mini` retires on 2027-01-14.** Until then, reading an agent that
+  names it on OpenAI (its model, a failover model or its analysis model)
+  returns a `model_retiring` warning with the date and the model it will run
+  on, and so does reading an eval scenario whose judge or persona names it.
+  From that date those agents run `gpt-5.4-mini` instead of failing their
+  calls. Choose a model before then if you want a different one.
 - **pipecat 1.16**: the speech framework moves from 1.14 to 1.16. Nothing in
   the API or agent config changes. Eval scenarios can assert with
   `text_matches` (regular expressions the reply must match). You may notice

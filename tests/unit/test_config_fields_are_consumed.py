@@ -68,12 +68,6 @@ NOT_CONSUMED: dict[str, str] = {
         "{'from_summary': true}, which services/transfer.normalize_briefing "
         "reads as the transfer_call tool's own briefing (#448)"
     ),
-    "AgentConfig.analysis": (
-        "consumed, but through the raw blob rather than the attribute: "
-        "call_analysis_trigger rebuilds it with "
-        "AnalysisConfig(**agent_config_blob.get('analysis', {})). Its own "
-        "fields are read normally, so only this hop is invisible here"
-    ),
 }
 
 
