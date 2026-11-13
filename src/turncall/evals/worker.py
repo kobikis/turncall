@@ -129,6 +129,10 @@ async def run_worker() -> None:
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, stop.set)
 
+    from turncall.evals.judges import warn_retiring_platform_models
+
+    warn_retiring_platform_models(settings.evals)
+
     slots = asyncio.Semaphore(settings.evals.max_concurrent_runs)
     logger.info(
         "eval_worker_started",

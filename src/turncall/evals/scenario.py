@@ -326,6 +326,37 @@ def _warning_for(total: int, weak: list[str]) -> list[dict[str, Any]]:
     ]
 
 
+# The raw blocks inside a definition that name an LLM, as pipecat reads them:
+# `service` (default `ollama`) and `model`.
+_RAW_MODEL_PATHS = (("judge", "eval"), ("judge", "eval", "explainer"), ("simulator",))
+
+
+def retiring_model_warnings(
+    definition: Any, judge: dict[str, Any] | None, simulator: dict[str, Any] | None
+) -> list[dict[str, Any]]:
+    """A judge or persona naming a model its vendor retires (#458): the
+    scenario's typed blocks, and a raw block inside its `definition`, which
+    pipecat builds itself (`service: openai`), so nothing swaps its model on
+    the date. Derived per read, like `assertion_warnings`."""
+    from turncall.services.llm_models import retiring_warnings
+
+    # A typed block naming no provider is Ollama (`compile_model_block`).
+    typed = [
+        (f"{role}.model", str(block.get("provider") or "ollama"), block.get("model"))
+        for role, block in (("judge", judge), ("simulator", simulator))
+        if block
+    ]
+    raw = []
+    for path in _RAW_MODEL_PATHS:
+        node: Any = definition
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, dict) and "factory" not in node:
+            where = ".".join(("definition", *path, "model"))
+            raw.append((where, str(node.get("service") or "ollama"), node.get("model")))
+    return retiring_warnings(*typed, *raw)
+
+
 # Every place pipecat will read a `factory` from, and therefore every place a
 # stored definition could smuggle one in. `factory` is a dotted path pipecat
 # hands to `importlib.import_module`, so a definition carrying one turns a

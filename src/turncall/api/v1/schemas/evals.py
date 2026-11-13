@@ -206,22 +206,13 @@ class EvalScenarioResponse(BaseModel):
 
     @model_validator(mode="after")
     def _derive_warnings(self) -> "EvalScenarioResponse":
-        from turncall.evals.scenario import assertion_warnings
-        from turncall.services.llm_models import retiring_warning
+        from turncall.evals.scenario import assertion_warnings, retiring_model_warnings
 
         if self.warnings:
             return self
-        # And a judge or a persona naming a model its vendor retires (#458).
-        retiring = [
-            retiring_warning(
-                f"{role}.model", str(block.get("provider")), block.get("model")
-            )
-            for role, block in (("judge", self.judge), ("simulator", self.simulator))
-            if block
-        ]
         found = [
             *assertion_warnings(self.definition, name=self.name),
-            *(warning for warning in retiring if warning),
+            *retiring_model_warnings(self.definition, self.judge, self.simulator),
         ]
         return self.model_copy(update={"warnings": found}) if found else self
 

@@ -731,7 +731,11 @@ async def complete_text(
     # before dispatching, and hand every branch the same value. See
     # services/llm_models.py.
     config = config.model_copy(
-        update={"model": resolve_llm_model(config.provider, config.model)}
+        update={
+            "model": resolve_llm_model(
+                config.provider, config.model, base_url=config.base_url
+            )
+        }
     )
 
     credentials = credentials or current()

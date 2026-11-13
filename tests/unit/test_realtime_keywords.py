@@ -22,11 +22,15 @@ from turncall.orchestrator.pipeline_factory import create_pipeline
 pytestmark = pytest.mark.unit
 
 
-def _agent(provider: str = "openai", keyterms: list[str] | None = None) -> AgentConfig:
+def _agent(
+    provider: str = "openai",
+    keyterms: list[str] | None = None,
+    base_url: str | None = None,
+) -> AgentConfig:
     return AgentConfig.model_validate(
         {
             "pipeline_mode": "s2s",
-            "s2s": {"provider": provider},
+            "s2s": {"provider": provider, "base_url": base_url},
             "stt": {"keyterms": keyterms or []},
         }
     ).model_copy(
@@ -83,6 +87,21 @@ class TestKeytermsOnRealtime:
         assert sent["keywords"] == ["Acme"]
         assert any("openai_realtime_keywords_dropped" in line for line in said)
 
+    def test_duplicates_are_sent_once_keeping_the_first(self) -> None:
+        # A call-init inline agent skips the API's dedupe.
+        sent = _transcription(_agent(keyterms=["Acme", "Nguyen", "Acme"]))
+
+        assert sent["keywords"] == ["Acme", "Nguyen"]
+
+    def test_through_a_gateway_no_keywords_and_no_pinned_model(self) -> None:
+        sent = _transcription(
+            _agent(keyterms=["Acme"], base_url="wss://gateway.example.com/v1/realtime")
+        )
+
+        # The gateway may not serve gpt-transcribe: pipecat's default stays.
+        assert "keywords" not in sent
+        assert sent["model"] == "gpt-realtime-whisper"
+
     def test_only_unsendable_keyterms_leave_the_default_transcription(self) -> None:
         sent = _transcription(_agent(keyterms=["a<b"]))
 
@@ -107,9 +126,38 @@ class TestKeytermsIgnoredWarning:
         assert warning["provider"] == provider
         assert provider in warning["message"]
 
+    def test_a_gateway_says_so_naming_it(self) -> None:
+        [warning] = config_warnings(
+            _agent(keyterms=["Acme"], base_url="wss://gateway.example.com/v1/realtime")
+        )
+
+        assert warning["code"] == "keyterms_ignored_on_s2s"
+        assert "gateway.example.com" in warning["message"]
+
+    def test_the_build_logs_keyterms_skipped(self) -> None:
+        said: list[str] = []
+        sink = logger.add(lambda m: said.append(str(m)), level="WARNING")
+        try:
+            _session_update(_agent(keyterms=["Acme"], base_url="wss://gw.example.com"))
+        finally:
+            logger.remove(sink)
+
+        assert any(
+            "keyterms_skipped" in line and "gw.example.com" in line for line in said
+        )
+
     def test_realtime_cascade_and_no_keyterms_say_nothing(self) -> None:
         cascade = AgentConfig.model_validate({"stt": {"keyterms": ["Acme"]}})
 
         assert config_warnings(_agent("openai", keyterms=["Acme"])) == []
         assert config_warnings(cascade) == []
         assert config_warnings(_agent("google")) == []
+
+
+def test_a_dropped_keyterm_is_on_the_agent_read() -> None:
+    """The build drops it and logs; the author reads it on the agent."""
+    [warning] = config_warnings(_agent(keyterms=["Acme", "a<b>", "two\nlines"]))
+
+    assert warning["code"] == "keyterms_unsendable_on_s2s"
+    assert warning["keyterms"] == ["a<b>", "two\nlines"]
+    assert warning["provider"] == "openai"

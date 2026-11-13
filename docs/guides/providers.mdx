@@ -105,8 +105,11 @@ On a [speech-to-speech](/guides/s2s) agent only OpenAI Realtime
 (`s2s.provider: "openai"`) uses `stt.keyterms`: they become its input
 transcription `keywords`, and the caller is transcribed by `gpt-transcribe`
 (the default model takes no keywords). A term holding `<`, `>` or a line break
-is dropped with a warning, since OpenAI refuses the whole session over one. On
-every other S2S provider they are ignored, and the agent read carries a
+is dropped, since OpenAI refuses the whole session over one, and the agent read
+carries a `keyterms_unsendable_on_s2s` warning naming it. Through a gateway
+(`s2s.base_url`) none are sent and the transcription model is left at its
+default, since the gateway may not serve `gpt-transcribe`. There, and on every
+other S2S provider, they are ignored, and the agent read carries a
 `keyterms_ignored_on_s2s` warning.
 
 <Warning>

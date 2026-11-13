@@ -552,7 +552,7 @@ def _create_llm_service(
     # all of them; see services/llm_models.py. Resolved once here so every
     # branch below — and `is_anthropic_model`, which reads the name to decide
     # whether Bedrock gets a temperature — sees the same value.
-    model = resolve_llm_model(provider, config.llm.model)
+    model = resolve_llm_model(provider, config.llm.model, base_url=config.llm.base_url)
 
     if provider == "openrouter":
         # OpenRouter is OpenAI-compatible; fallback_models ride in extra_body as
@@ -740,7 +740,8 @@ def _create_llm_service(
 
 
 def _llm_label(llm: LLMConfig) -> str:
-    return f"{llm.provider}/{resolve_llm_model(llm.provider, llm.model)}"
+    model = resolve_llm_model(llm.provider, llm.model, base_url=llm.base_url)
+    return f"{llm.provider}/{model}"
 
 
 def _create_llm_stage(
@@ -1885,7 +1886,7 @@ def create_pipeline(
     # runs something else entirely, and a log that says otherwise sends the
     # next person looking in the wrong place. Safe to resolve again here — the
     # service was already built from it, so it cannot raise now.
-    llm_info = f"{config.llm.provider}/{resolve_llm_model(config.llm.provider, config.llm.model)}"
+    llm_info = _llm_label(config.llm)
     if config.llm.base_url:
         llm_info += f" @ {config.llm.base_url}"
     logger.info(

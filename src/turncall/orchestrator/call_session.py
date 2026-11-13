@@ -401,14 +401,11 @@ class CallSession:
             # The provider refused this request's content (#456): not the
             # service's health, so the call goes on (and stays on this LLM),
             # but nothing answers the turn. Said, without failing the call.
-            await self._log_event(
-                CallEventType.ERROR_RAISED,
-                {
-                    "stage": str(processor),
-                    "error": readable_error(frame.error),
-                    "provider": provider_of(processor),
-                    "content_filtered": True,
-                },
+            await self._log_error(
+                str(processor),
+                readable_error(frame.error),
+                provider=provider_of(processor),
+                content_filtered=True,
             )
             return
         if not (frame.fatal or (processor is not None and not processor.is_usable)):
@@ -698,9 +695,12 @@ class CallSession:
         if self._error is not None or not self._call_context.records:
             return
         self._error = readable_error(error)
+        await self._log_error(stage, self._error, **detail)
+
+    async def _log_error(self, stage: str, error: str, **detail: Any) -> None:
+        """An `error.raised` on the call's event log, failing nothing itself."""
         await self._log_event(
-            CallEventType.ERROR_RAISED,
-            {"stage": stage, "error": self._error, **detail},
+            CallEventType.ERROR_RAISED, {"stage": stage, "error": error, **detail}
         )
 
 
