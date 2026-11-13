@@ -95,6 +95,7 @@ async def test_every_tts_provider_leaves_a_narration_unspoken(provider, monkeypa
         # Eleven Realtime's expressive tags (#468): lowercase words only.
         ("[friendly] Hello and welcome!", "Hello and welcome!"),
         ("Sure [laughs softly] we are open.", "Sure we are open."),
+        ("[Happy] We have sushi.", "We have sushi."),
         ("See note [1], ask [Your Name].", "See note [1], ask [Your Name]."),
     ],
 )

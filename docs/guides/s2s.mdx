@@ -301,7 +301,12 @@ a warning, as on every S2S provider.
 else the platform's `ELEVENLABS_API_KEY`. Two models:
 `eleven_realtime_v1_mini` (the default, for price and speed) and
 `eleven_realtime_v1_max`, which reasons before it answers — ElevenLabs
-recommends it for agents that lean on tools. Eleven Realtime is reaching
+recommends it for agents that lean on tools. That is not optional for an agent
+with a real prompt: measured on a restaurant agent (a 3,700-character prompt,
+`query_knowledge` and `end_call`), Max searched the menu and ended the call
+every time, and Mini never called a tool. It answered from what it guessed,
+inventing dishes, and left the caller to hang up. Use Mini for an agent that
+only talks. Eleven Realtime is reaching
 ElevenLabs workspaces gradually; a key on a workspace without it is refused
 when the call connects, as is one without the **ElevenAgents** permission.
 

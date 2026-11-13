@@ -26,7 +26,8 @@ them. They never reach the transcript.
 
 Eleven Realtime voices its replies itself and writes its expressive tags into
 the reply's transcript (`[friendly] Hello`, measured in #468). A lowercase
-word or words in brackets is such a tag; `[1]` or `[Your Name]` is not.
+word or words in brackets is such a tag, as is one capitalised word (`[Happy]`,
+also measured); `[1]` or `[Your Name]` is not.
 """
 
 import re
@@ -45,7 +46,7 @@ _CLOSE_AT_START = re.compile(r"^\s*(\*(?!\S)|[^\[]*\])")
 # Cartesia's SSML-style tags, the set pipecat strips from its word timestamps.
 _VOICE_TAG = re.compile(r"<\s*/?\s*(?:emotion|speed|volume|break|spell)\b[^>]*>", re.I)
 # Eleven Realtime's tags, as they arrive in its transcript.
-_AUDIO_TAG = re.compile(r"\[[a-z]+(?: [a-z]+)*\]")
+_AUDIO_TAG = re.compile(r"\[(?:[A-Za-z][a-z]*|[a-z]+(?: [a-z]+)+)\]")
 
 
 def _tidy(original: str, stripped: str) -> str:
