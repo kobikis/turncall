@@ -6,8 +6,13 @@ forever, while `agent_name` resolves to whatever is published at run time. An
 `inline` target has no row at all (ADR-0017), which is also the sandbox an
 operator points a scenario at when its tools have real side effects.
 
-Split out of `runner.py` for its size. The repositories are imported inside the
-functions, as they were, so importing this module pulls in no storage layer.
+Every target's config goes through agent acceptance (#479): `eval_target` for
+a stored agent, `eval_inline` for an inline one, so a config that cannot run
+errors the run, naming the field, before any iteration.
+
+Split out of `runner.py` for its size. The repositories and acceptance are
+imported inside the functions, as they were, so importing this module pulls in
+no storage layer.
 """
 
 from __future__ import annotations
@@ -59,14 +64,7 @@ async def _resolve_by_id(
     )
     if agent is None:
         raise TargetError(f"agent {raw_id} not found in this project")
-    blob = dict(agent.config_blob or {})
-    return ResolvedTarget(
-        project_id=project_id,
-        config=AgentConfig.model_validate(blob),
-        config_blob=blob,
-        agent_id=agent.id,
-        agent_version=agent.version,
-    )
+    return await _accepted_row(agent, project_id=project_id, named=str(agent.id))
 
 
 async def _resolve_by_name(
@@ -85,17 +83,50 @@ async def _resolve_by_name(
         # draft instead would answer a different question with the same green
         # tick.
         raise TargetError(f"agent {name!r} has no published version in {environment!r}")
+    return await _accepted_row(agent, project_id=project_id, named=repr(str(name)))
+
+
+async def _accepted(
+    blob: dict[str, Any], *, project_id: UUID, inline: bool, refused: str
+) -> AgentConfig:
+    """`blob` through agent acceptance (#479); a refusal is a `TargetError`
+    starting `refused`, naming the field — the run errors before an iteration
+    rather than halfway into a conversation."""
+    from turncall.services.agent_acceptance import (
+        AgentOrigin,
+        AgentRefusal,
+        accept_agent,
+    )
+
+    origin = AgentOrigin.EVAL_INLINE if inline else AgentOrigin.EVAL_TARGET
+    accepted = await accept_agent(
+        blob, project_id=project_id, origin=origin, session=None
+    )
+    if isinstance(accepted, AgentRefusal):
+        raise TargetError(f"{refused}: {accepted.describe()}")
+    return accepted.config
+
+
+async def _accepted_row(agent: Any, *, project_id: UUID, named: str) -> ResolvedTarget:
+    """A stored agent's config: the build's rules, not the API's schema — it
+    was saved through that, perhaps before one of its rules existed."""
     blob = dict(agent.config_blob or {})
+    config = await _accepted(
+        blob,
+        project_id=project_id,
+        inline=False,
+        refused=f"agent {named} (v{agent.version}) cannot run",
+    )
     return ResolvedTarget(
         project_id=project_id,
-        config=AgentConfig.model_validate(blob),
+        config=config,
         config_blob=blob,
         agent_id=agent.id,
         agent_version=agent.version,
     )
 
 
-def _resolve_inline(*, project_id: UUID, blob: Any) -> ResolvedTarget:
+async def _resolve_inline(*, project_id: UUID, blob: Any) -> ResolvedTarget:
     """An agent config with no row behind it — ADR-0017's case.
 
     `agent_id` stays None rather than carrying the zero-UUID sentinel: the
@@ -105,13 +136,15 @@ def _resolve_inline(*, project_id: UUID, blob: Any) -> ResolvedTarget:
     """
     if not isinstance(blob, dict) or not blob:
         raise TargetError("target type 'inline' needs an 'agent' configuration")
-    try:
-        config = AgentConfig.model_validate(blob)
-    except Exception as exc:
-        # Reached only if something slipped past the API's own validation —
-        # a run queued before a schema change, say. Better a clear errored run
-        # than a pipeline that fails halfway into a conversation.
-        raise TargetError(f"inline agent configuration is invalid: {exc}") from exc
+    # The API's 422 ran the same schema, so this refuses only what slipped
+    # past it — a run queued before a schema change, say. Better a clear
+    # errored run than a pipeline that fails halfway into a conversation.
+    config = await _accepted(
+        blob,
+        project_id=project_id,
+        inline=True,
+        refused="inline agent configuration is invalid",
+    )
     return ResolvedTarget(
         project_id=project_id,
         config=config,
@@ -144,7 +177,7 @@ async def resolve_target(
             environment=str(target.get("environment") or "production"),
         )
     if kind == "inline":
-        return _resolve_inline(project_id=project_id, blob=target.get("agent"))
+        return await _resolve_inline(project_id=project_id, blob=target.get("agent"))
     raise TargetError(
         f"unsupported target type {kind!r} — one of {', '.join(_TARGET_TYPES)}"
     )

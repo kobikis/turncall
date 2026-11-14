@@ -754,7 +754,11 @@ It authenticates nothing: what fronts it decides who calls.
   on any other. The other built-ins are refused.
 - `demo/agents.py` refuses at boot, naming the agent and field, an agent with a
   tool other than `end_call`, a webhook tool, MCP, KBs, ambience or an avatar;
-  `max_call_duration_seconds` is capped at `DEMO_MAX_CALL_SECONDS`.
+  `max_call_duration_seconds` is capped at `DEMO_MAX_CALL_SECONDS`. The file
+  goes through agent acceptance's `demo` row first (#479,
+  `agent_acceptance.accept_raw_config`: the whole schema, no event loop), which
+  keeps inline `knowledge_bases` — the schema's dump used to drop them, so the
+  KB refusal never fired.
 - Calls are counted (`drain.live_call`) and SIGTERM drains as in the API.
 - `tests/integration/test_demo_call.py`: an aiortc caller on the harness stubs,
   with DATABASE_URL and REDIS_URL pointing at nothing; fails on any error a
@@ -2068,7 +2072,12 @@ published — that is what `agent_name` is for. A name with nothing published
 the row can be deleted. An inline config is validated at the boundary by the
 same `AgentConfigSchema` an agent create uses (`extra="forbid"` included), runs
 with **`agent_id` null** (ADR-0017 — null is the honest answer, not missing
-data), and is snapshotted verbatim in `resolved_config`.
+data), and is snapshotted verbatim in `resolved_config`. The worker resolves
+every target through agent acceptance (#479): `agent`/`agent_name` as
+`eval_target` (the rules the build holds, not the schema a stored agent already
+passed), `inline` as `eval_inline` (the whole schema again, plain http allowed).
+A config that cannot run errors the run, naming the field
+(`agent 'support' (v3) cannot run: llm: ...`), before any iteration.
 
 ### Scenario from a real conversation (#78, #87)
 
