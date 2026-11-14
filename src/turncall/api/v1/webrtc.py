@@ -500,6 +500,14 @@ async def _resolve_agent(
     )
 
 
+def _no_valid_agent() -> ApiError:
+    return ApiError(
+        status_code=502,
+        code=ErrorCode.INTERNAL_ERROR,
+        message="server_url did not return a valid agent",
+    )
+
+
 async def _call_init_agent(
     session: AsyncSession,
     auth: Auth,
@@ -527,14 +535,12 @@ async def _call_init_agent(
         secret=server_url_secret,
         variables=variables or None,
     )
-    accepted = None
-    if response.success and response.data:
-        result = await resolve_call_init(
-            session, response.data, project_id=auth.project_id
-        )
-        accepted = await accept_call_init_agent(
-            session, result, project_id=auth.project_id, call_id=str(call_id)
-        )
+    if not (response.success and response.data):
+        raise _no_valid_agent()
+    result = await resolve_call_init(session, response.data, project_id=auth.project_id)
+    accepted = await accept_call_init_agent(
+        session, result, project_id=auth.project_id, call_id=str(call_id)
+    )
     if isinstance(accepted, AgentRefusal):
         raise ApiError(
             status_code=502,
@@ -543,11 +549,7 @@ async def _call_init_agent(
             details={"reason": accepted.reason, "field": accepted.field},
         )
     if accepted is None:
-        raise ApiError(
-            status_code=502,
-            code=ErrorCode.INTERNAL_ERROR,
-            message="server_url did not return a valid agent",
-        )
+        raise _no_valid_agent()
     return (
         accepted,
         result.agent.id if result.agent else None,

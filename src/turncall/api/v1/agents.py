@@ -28,6 +28,7 @@ from turncall.services.agent_acceptance import (
     accept_agent,
 )
 from turncall.services.audit_log import AuditTrail
+from turncall.storage.models import AgentRow
 from turncall.storage.repositories import (
     agent_repo,
     knowledge_repo,
@@ -269,6 +270,22 @@ async def list_agents(
     )
 
 
+async def _draft(session: AsyncSession, agent_id: UUID, project_id: UUID) -> AgentRow:
+    """The project's draft agent to update: a 404 for none, a 409 for one
+    published (or archived)."""
+    existing = await agent_repo.get_agent_by_id(
+        session, agent_id, project_id=project_id
+    )
+    if existing is None:
+        raise NotFoundError("Agent", str(agent_id))
+    if existing.state != "draft":
+        raise ConflictError(
+            "Cannot update a published agent. Create a new version instead.",
+            details={"state": existing.state, "version": existing.version},
+        )
+    return existing
+
+
 @router.put("/{agent_id}")
 async def update_agent(
     agent_id: UUID,
@@ -286,18 +303,7 @@ async def update_agent(
         if body.config is not None
         else None
     )
-    existing = await agent_repo.get_agent_by_id(
-        session, agent_id, project_id=auth.project_id
-    )
-    if existing is None:
-        raise NotFoundError("Agent", str(agent_id))
-
-    if existing.state != "draft":
-        raise ConflictError(
-            "Cannot update a published agent. Create a new version instead.",
-            details={"state": existing.state, "version": existing.version},
-        )
-
+    existing = await _draft(session, agent_id, auth.project_id)
     accepted = _accepted(outcome) if outcome is not None else None
     config_blob = dict(accepted.stored or {}) if accepted else existing.config_blob
     name = body.name or existing.name

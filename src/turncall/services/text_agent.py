@@ -24,6 +24,7 @@ from turncall.domain.session_state import is_session_expired
 from turncall.events.server_events import send_call_init
 from turncall.services.agent_acceptance import AcceptedAgent, AgentRefusal
 from turncall.services.call_init_resolver import (
+    CallInitResult,
     accept_call_init_agent,
     resolve_call_init,
 )
@@ -130,7 +131,15 @@ async def _ask_call_init(
             error=error,
         )
         raise ValueError(f"call-init named no agent for number: {number.e164_number}")
+    return _new_session_agent(accepted, result, session_id)
 
+
+def _new_session_agent(
+    accepted: AcceptedAgent, result: CallInitResult, session_id: UUID
+) -> TextAgent:
+    """The new session's agent, with what call-init answered for it to carry:
+    an inline config (ADR-0017), the variables, metadata and knowledge
+    context."""
     agent_id, config = accepted.agent_id, accepted.config
     inline = result.dynamic_config if agent_id is None else None
     stored = {
