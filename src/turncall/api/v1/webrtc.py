@@ -498,9 +498,14 @@ async def _resolve_agent(
         )
         if agent is None:
             raise NotFoundError("Agent", str(agent_id))
-    elif server_url:
+        config = AgentConfig.model_validate(agent.config_blob)
+    else:
         from turncall.events.server_events import send_call_init
-        from turncall.services.call_init_resolver import resolve_call_init
+        from turncall.services.agent_acceptance import AgentRefusal
+        from turncall.services.call_init_resolver import (
+            accept_call_init_agent,
+            resolve_call_init,
+        )
 
         response = await send_call_init(
             server_url,
@@ -511,27 +516,37 @@ async def _resolve_agent(
             secret=server_url_secret,
             variables=variables or None,
         )
+        accepted = None
         if response.success and response.data:
             result = await resolve_call_init(
                 session, response.data, project_id=auth.project_id
             )
+            # Before the slot and the row (#477): an agent that cannot run is
+            # refused here, saying why, never at build.
+            accepted = await accept_call_init_agent(
+                session, result, project_id=auth.project_id, call_id=str(call_id)
+            )
+            if isinstance(accepted, AgentRefusal):
+                raise ApiError(
+                    status_code=502,
+                    code=ErrorCode.INVALID_AGENT_CONFIG,
+                    message=f"server_url returned an agent that cannot run: "
+                    f"{accepted.reason}",
+                    details={"reason": accepted.reason, "field": accepted.field},
+                )
             agent = result.agent
             dynamic_config = result.dynamic_config
             template_variables = result.template_variables
             request_metadata = result.metadata
             knowledge_context = result.knowledge_context
 
-        if agent is None and dynamic_config is None:
+        if accepted is None:
             raise ApiError(
                 status_code=502,
                 code=ErrorCode.INTERNAL_ERROR,
                 message="server_url did not return a valid agent",
             )
-
-    if dynamic_config:
-        config = AgentConfig.model_validate(dynamic_config)
-    else:
-        config = AgentConfig.model_validate(agent.config_blob)
+        config = accepted.config
 
     agent_id_for_call = agent.id if agent else None
     return (

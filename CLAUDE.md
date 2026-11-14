@@ -231,7 +231,11 @@ them:
   weights, the bound agent), create the call row on its carrier, record
   `call.initializing` + `call.started` — is `services/inbound_call
   .open_inbound_call`, for every carrier's edge. An edge only answers numbers
-  bound on its own carrier.
+  bound on its own carrier. A number's stored agent (A/B pick included) is
+  looked up in the number's project and goes through agent acceptance (origin
+  `stored_call`, #480): one saved before a newer rule existed is refused there
+  (logged `agent_refused`), so the call is refused at the carrier and its slot
+  freed, never answered into a build that fails.
 - **Call control acts on the call's carrier**: `services/call_control
   ._carrier_adapter` picks the adapter (and account) by `calls.provider`.
   `services/twilio_accounts.TwilioAccount.adapter` and
@@ -782,12 +786,28 @@ Dynamic agent resolution before the pipeline starts. Works on all transports.
 Inbound call → resolve phone number → routing_target_type == "webhook"?
   → POST call-init to server_url
   → Parse response: agent_id | inline agent | variables | metadata | knowledge_context
+  → Agent acceptance (origin call_init): refused → no call row, slot freed
   → Fire call.initializing event (informational)
   → Store metadata + knowledge_context + dynamic_config on call record
   → Apply template variables → prepend knowledge_context to system_prompt
   → Fire call.started event
   → Start pipeline
 ```
+
+**Agent acceptance on every transport** (#476, #477): the agent an answer
+names goes through `call_init_resolver.accept_call_init_agent` (→
+`services/agent_acceptance.accept_agent`, origin `call_init`) before the call
+row is written: an `agent_id` outside the project, an inline config the domain
+model cannot read, or one breaking a provider rule or the procedures graph rule
+is refused, logged `agent_refused` with origin, project and reason, and the
+transport answers as for an answer naming no agent. Inbound phone calls (every
+carrier, `services/inbound_call`) are refused at the carrier, before the caller
+is answered; WebRTC answers `502 invalid_agent_config` whose `details` carry
+`{reason, field}` (an answer naming no agent stays `502 internal_error`);
+WhatsApp voice drops the call, as it always has, slot freed; an outbound dial
+runs the dial's agent; a text goes unanswered. An unknown top-level field is
+logged (`agent_unknown_field`) and dropped, and the call runs with its raw
+config stored as `dynamic_config` (ADR-0017).
 
 Template variables (`{{name}}`, `\w+` only — no spaces, no dots; an unsent one
 stays literal) live on the call row as `metadata_json["template_variables"]`
@@ -1364,8 +1384,10 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   `move_to_step` in `tools`; 422
   `validation_error`, also an eval `inline` target) and
   `pipeline_builder._check_procedures`, before `with_procedures`, which raises
-  `ValueError` → `pipeline_error` + `error.raised` for a call-init inline
-  agent. The domain `AgentConfig` never raises on procedures (it is parsed
+  `ValueError` → `pipeline_error` + `error.raised` for an agent that reaches
+  it unchecked. A call-init inline agent no longer does: agent acceptance
+  applies the same rule at call-init and the call is refused there (#476,
+  #477). The domain `AgentConfig` never raises on procedures (it is parsed
   before the build): an entry that cannot be read is kept as
   `Procedure(unreadable=<why>)` (`read_procedure`), which the rule names. A
   new check is one function in `_CHECKS`. On S2S the build skips them (no
@@ -1525,7 +1547,10 @@ task running the call can do — so they go through the call (#215, tracker
   agree. The 200's `details` is what it applied: `target_agent_id`,
   `target_assistant_name`, and the `tools` it now advertises. 404 for an agent
   outside the project; 409 on `openai_live` (refused like the tool), when the
-  call is not `in_progress`, or when the target cannot be loaded. The API never
+  call is not `in_progress`, or when the target cannot be loaded — or its
+  config is refused by agent acceptance (origin `handoff`, #480, in
+  `_prepare_handoff`, before the commit; the 409's message, like the tool's
+  result, carries the rule's reason, `HandoffNotPrepared`). The API never
   calls `call_control.handoff_to_agent` itself (`test_live_control_wiring.py`).
   Nothing is said on the switch: the new agent answers the caller's next turn,
   over the cleared context the tool path leaves too.

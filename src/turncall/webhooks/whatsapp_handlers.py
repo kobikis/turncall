@@ -288,11 +288,14 @@ async def _start_voice_pipeline(
         template_variables: dict[str, str] = {}
         request_metadata: dict = {}
         knowledge_context: str | None = None
+        config: AgentConfig | None = None
 
         if phone_row.routing_target_type == "webhook" and phone_row.server_url:
             # Dynamic agent resolution via server event
             from turncall.events.server_events import send_call_init
+            from turncall.services.agent_acceptance import AcceptedAgent
             from turncall.services.call_init_resolver import (
+                accept_call_init_agent,
                 resolve_call_init,
             )
 
@@ -309,16 +312,28 @@ async def _start_voice_pipeline(
                 result = await resolve_call_init(
                     db, response.data, project_id=phone_row.project_id
                 )
-                agent = result.agent
-                dynamic_config = result.dynamic_config
-                template_variables = result.template_variables
-                request_metadata = result.metadata
-                knowledge_context = result.knowledge_context
+                # Before the row and the pipeline (#477): an agent that cannot
+                # run is dropped like one never named, never failed at build.
+                accepted = await accept_call_init_agent(
+                    db,
+                    result,
+                    project_id=phone_row.project_id,
+                    call_id=str(call_id),
+                )
+                if isinstance(accepted, AcceptedAgent):
+                    agent = result.agent
+                    dynamic_config = result.dynamic_config
+                    template_variables = result.template_variables
+                    request_metadata = result.metadata
+                    knowledge_context = result.knowledge_context
+                    config = accepted.config
 
         elif phone_row.routing_target_type == "agent" and phone_row.routing_target_id:
             agent = await agent_repo.get_agent_by_id(db, phone_row.routing_target_id)
+            if agent is not None:
+                config = AgentConfig.model_validate(agent.config_blob)
 
-        if agent is None and dynamic_config is None:
+        if config is None:
             logger.warning(
                 "whatsapp_call_no_agent",
                 to_number=to_number,
@@ -327,12 +342,6 @@ async def _start_voice_pipeline(
             )
             await release_live_call(phone_row.project_id, call_id)
             return
-
-        # Build config from agent or inline dynamic config
-        if dynamic_config:
-            config = AgentConfig.model_validate(dynamic_config)
-        else:
-            config = AgentConfig.model_validate(agent.config_blob)
 
         # Apply template variables
         if template_variables:
