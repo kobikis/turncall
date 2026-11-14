@@ -81,11 +81,24 @@ class OriginPolicy:
     takes_agent_id: bool
     # The issue that wires the origin, or None once it is wired.
     wired_by: str | None
+    # Runs the API's whole schema (`AgentConfigSchema`), whose refusals keep
+    # the schema's own errors (#478). Its validators hold the provider and
+    # procedures rules themselves, stricter than the build's copies.
+    api_schema: bool = False
+    # Whether `knowledge_bases` may name the config's KBs. Not on a config
+    # saved as an agent row, whose KBs are its links — one source, never two
+    # that can disagree (#260). Checked with `api_schema` only.
+    inline_knowledge_bases: bool = True
 
 
 POLICIES: Mapping[AgentOrigin, OriginPolicy] = {
     AgentOrigin.API: OriginPolicy(
-        UnknownFields.REFUSE, plain_http=False, takes_agent_id=False, wired_by="#478"
+        UnknownFields.REFUSE,
+        plain_http=False,
+        takes_agent_id=False,
+        wired_by=None,
+        api_schema=True,
+        inline_knowledge_bases=False,
     ),
     AgentOrigin.CALL_INIT: OriginPolicy(
         UnknownFields.WARN, plain_http=True, takes_agent_id=True, wired_by=None
@@ -128,6 +141,8 @@ class AcceptedAgent:
     config: AgentConfig
     agent_id: UUID | None
     warnings: tuple[AgentWarning, ...] = ()
+    # The config as the API stores it (the schema's dump); `api_schema` only.
+    stored: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +151,9 @@ class AgentRefusal:
 
     reason: str
     field: str | None = None
+    # The schema's own errors, whole (`api_schema` only): the agent endpoints
+    # answer them as the request validation error they always were.
+    schema_errors: tuple[Mapping[str, Any], ...] = ()
 
 
 AgentSource = Mapping[str, Any] | UUID
@@ -163,6 +181,8 @@ async def accept_agent(
         if not policy.takes_agent_id or session is None:
             raise TypeError(f"origin {origin.value!r} takes no agent id here")
         return await _accept_stored(session, source, project_id=project_id)
+    if policy.api_schema:
+        return _accept_schema(source, policy)
     return _accept_config(
         source, agent_id=None, unknown_fields=policy.unknown_fields, kb_modes=None
     )
@@ -216,6 +236,42 @@ def _accept_config(
         *_s2s_warnings(config, modes),
     )
     return AcceptedAgent(config=config, agent_id=agent_id, warnings=warnings)
+
+
+def _accept_schema(raw: Any, policy: OriginPolicy) -> AcceptedAgent | AgentRefusal:
+    """The API's schema, whole: unknown fields are its `extra_forbidden`, and
+    plain http follows `plain_http_allowed` unless the origin allows it."""
+    from turncall.api.v1.schemas import INLINE_CONFIG
+    from turncall.api.v1.schemas.agents import AgentConfigSchema
+
+    try:
+        # `from_attributes` as FastAPI's body parsing validated it, so a
+        # refusal's errors read as they did there.
+        schema = AgentConfigSchema.model_validate(
+            raw,
+            from_attributes=True,
+            context=INLINE_CONFIG if policy.plain_http else None,
+        )
+    except ValidationError as invalid:
+        refusal = _unreadable(invalid)
+        errors = tuple(invalid.errors(include_url=False))
+        return AgentRefusal(refusal.reason, refusal.field, schema_errors=errors)
+    if schema.knowledge_bases and not policy.inline_knowledge_bases:
+        return AgentRefusal(INLINE_KNOWLEDGE_BASES, "knowledge_bases")
+    stored = schema.model_dump()
+    config = AgentConfig.model_validate(stored)
+    return AcceptedAgent(
+        config=config,
+        agent_id=None,
+        warnings=tuple(_s2s_warnings(config, [])),
+        stored=stored,
+    )
+
+
+INLINE_KNOWLEDGE_BASES = (
+    "knowledge_bases is for an inline agent only; link a knowledge base "
+    "to a stored agent with POST /v1/agents/{agent_id}/knowledge-bases"
+)
 
 
 def _unknown_fields(raw: Mapping[str, Any]) -> list[str]:
