@@ -20,6 +20,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequest,
     SmallWebRTCRequestHandler,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ErrorCode, NotFoundError
@@ -466,7 +467,7 @@ def _request_variables(raw: Any) -> dict[str, str]:
 
 
 async def _resolve_agent(
-    session: Any,
+    session: AsyncSession,
     auth: Auth,
     agent_id_str: str | None,
     server_url: str | None,
@@ -482,78 +483,83 @@ async def _resolve_agent(
     so it can answer with them in mind.
 
     Returns (accepted agent, agent_id, template_variables, metadata,
-    knowledge_context, dynamic_config). The last is the inline agent as call-init sent it, or None
-    for a stored agent — the caller persists it on the call row.
+    knowledge_context, dynamic_config). The last is the inline agent as
+    call-init sent it, or None for a stored agent — the caller persists it on
+    the call row.
     """
-    agent_id_for_call: UUID | None = None
-    dynamic_config = None
-    template_variables: dict[str, str] = {}
-    request_metadata: dict = {}
-    knowledge_context: str | None = None
-
     if agent_id_str:
         accepted = await _accepted_stored(session, UUID(agent_id_str), auth.project_id)
-        agent_id_for_call = accepted.agent_id
-    else:
-        from turncall.events.server_events import send_call_init
-        from turncall.services.agent_acceptance import AgentRefusal
-        from turncall.services.call_init_resolver import (
-            accept_call_init_agent,
-            resolve_call_init,
+        return accepted, accepted.agent_id, {}, {}, None, None
+    return await _call_init_agent(
+        session,
+        auth,
+        server_url,
+        server_url_secret,
+        variables,
+        call_id=call_id,
+    )
+
+
+async def _call_init_agent(
+    session: AsyncSession,
+    auth: Auth,
+    server_url: str | None,
+    server_url_secret: str | None,
+    variables: dict[str, str] | None,
+    *,
+    call_id: UUID,
+) -> tuple[AcceptedAgent, UUID | None, dict, dict, str | None, dict | None]:
+    """`_resolve_agent` for a request naming a `server_url`: the agent its
+    call-init answers, accepted before the slot and the row (#477) — one
+    that cannot run is refused here, saying why, never at build."""
+    from turncall.events.server_events import send_call_init
+    from turncall.services.call_init_resolver import (
+        accept_call_init_agent,
+        resolve_call_init,
+    )
+
+    response = await send_call_init(
+        server_url,
+        call_id=str(call_id),
+        from_number="",
+        to_number="",
+        transport_type="webrtc",
+        secret=server_url_secret,
+        variables=variables or None,
+    )
+    accepted = None
+    if response.success and response.data:
+        result = await resolve_call_init(
+            session, response.data, project_id=auth.project_id
         )
-
-        response = await send_call_init(
-            server_url,
-            call_id=str(call_id),
-            from_number="",
-            to_number="",
-            transport_type="webrtc",
-            secret=server_url_secret,
-            variables=variables or None,
+        accepted = await accept_call_init_agent(
+            session, result, project_id=auth.project_id, call_id=str(call_id)
         )
-        accepted = None
-        if response.success and response.data:
-            result = await resolve_call_init(
-                session, response.data, project_id=auth.project_id
-            )
-            # Before the slot and the row (#477): an agent that cannot run is
-            # refused here, saying why, never at build.
-            accepted = await accept_call_init_agent(
-                session, result, project_id=auth.project_id, call_id=str(call_id)
-            )
-            if isinstance(accepted, AgentRefusal):
-                raise ApiError(
-                    status_code=502,
-                    code=ErrorCode.INVALID_AGENT_CONFIG,
-                    message=f"server_url returned an agent that cannot run: "
-                    f"{accepted.reason}",
-                    details={"reason": accepted.reason, "field": accepted.field},
-                )
-            agent_id_for_call = result.agent.id if result.agent else None
-            dynamic_config = result.dynamic_config
-            template_variables = result.template_variables
-            request_metadata = result.metadata
-            knowledge_context = result.knowledge_context
-
-        if accepted is None:
-            raise ApiError(
-                status_code=502,
-                code=ErrorCode.INTERNAL_ERROR,
-                message="server_url did not return a valid agent",
-            )
-
+    if isinstance(accepted, AgentRefusal):
+        raise ApiError(
+            status_code=502,
+            code=ErrorCode.INVALID_AGENT_CONFIG,
+            message=f"server_url returned an agent that cannot run: {accepted.reason}",
+            details={"reason": accepted.reason, "field": accepted.field},
+        )
+    if accepted is None:
+        raise ApiError(
+            status_code=502,
+            code=ErrorCode.INTERNAL_ERROR,
+            message="server_url did not return a valid agent",
+        )
     return (
         accepted,
-        agent_id_for_call,
-        template_variables,
-        request_metadata,
-        knowledge_context,
-        dynamic_config,
+        result.agent.id if result.agent else None,
+        result.template_variables,
+        result.metadata,
+        result.knowledge_context,
+        result.dynamic_config,
     )
 
 
 async def _accepted_stored(
-    session: Any, agent_id: UUID, project_id: UUID
+    session: AsyncSession, agent_id: UUID, project_id: UUID
 ) -> AcceptedAgent:
     """The named agent through agent acceptance (`stored_call`, #481): one of
     another project, or none, is a 404 as before; one saved before a newer

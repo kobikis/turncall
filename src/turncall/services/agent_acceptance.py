@@ -51,6 +51,7 @@ from turncall.services.template_renderer import (
     prepend_knowledge_context,
     render_agent_config,
 )
+from turncall.storage.models import AgentRow
 from turncall.storage.repositories import agent_repo, knowledge_repo
 
 
@@ -280,10 +281,34 @@ def _accept_raw(
     )
 
 
+async def accept_agent_row(
+    session: AsyncSession,
+    row: AgentRow | None,
+    *,
+    agent_id: UUID,
+    project_id: UUID,
+    origin: AgentOrigin,
+) -> AcceptedAgent | AgentRefusal:
+    """`accept_agent` for an agent id whose row the caller has already read
+    (None: it named no agent), so it is not read twice. A row of another
+    project is refused exactly as a missing one."""
+    if not POLICIES[origin].takes_agent_id:
+        raise TypeError(f"origin {origin.value!r} takes no agent id here")
+    if row is not None and row.project_id != project_id:
+        row = None
+    return await _accept_row(session, row, agent_id=agent_id)
+
+
 async def _accept_stored(
     session: AsyncSession, agent_id: UUID, *, project_id: UUID
 ) -> AcceptedAgent | AgentRefusal:
     row = await agent_repo.get_agent_by_id(session, agent_id, project_id=project_id)
+    return await _accept_row(session, row, agent_id=agent_id)
+
+
+async def _accept_row(
+    session: AsyncSession, row: AgentRow | None, *, agent_id: UUID
+) -> AcceptedAgent | AgentRefusal:
     if row is None:
         return AgentRefusal(
             f"agent {agent_id} is not an agent of this project", field="agent_id"

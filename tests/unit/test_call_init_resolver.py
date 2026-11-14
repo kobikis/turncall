@@ -7,10 +7,14 @@ from uuid import UUID, uuid4
 import pytest
 from loguru import logger
 
+from tests.agent_table import agent_row, agent_table
+from turncall.services.agent_acceptance import AcceptedAgent, AgentRefusal
 from turncall.services.call_init_resolver import (
     CallInitResult,
+    accept_call_init_agent,
     resolve_call_init,
 )
+from turncall.storage.repositories import agent_repo
 
 PROJECT = uuid4()
 
@@ -160,16 +164,9 @@ class TestResolveCallInit:
             result.knowledge_context = "mutate"  # type: ignore[misc]
 
 
-def _agents_of(owner: UUID, agent: Any):
-    """`agent_repo.get_agent_by_id` over one agent owned by `owner`: found only
-    when the lookup is scoped to that project."""
-
-    async def _get(_session: Any, agent_id: UUID, *, project_id: Any = None) -> Any:
-        if agent_id == agent.id and project_id == owner:
-            return agent
-        return None
-
-    return _get
+@pytest.fixture
+def agents(monkeypatch: pytest.MonkeyPatch) -> dict[UUID, Any]:
+    return agent_table(monkeypatch)
 
 
 @pytest.mark.unit
@@ -179,46 +176,41 @@ class TestTheAgentIsTheProjects:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("key", ["agent_id", "assistant_id"])
-    async def test_another_projects_agent_resolves_to_none(self, key: str) -> None:
-        foreign = AsyncMock(id=uuid4(), config_blob={"system_prompt": "SECRET"})
-        with patch("turncall.services.call_init_resolver.agent_repo") as repo:
-            repo.get_agent_by_id = _agents_of(uuid4(), foreign)
-            result = await resolve_call_init(
-                AsyncMock(), {key: str(foreign.id)}, project_id=PROJECT
-            )
+    async def test_another_projects_agent_resolves_to_none(self, agents, key) -> None:
+        foreign = agent_row(uuid4(), {"system_prompt": "SECRET"})
+        agents[foreign.id] = foreign
+
+        result = await resolve_call_init(
+            AsyncMock(), {key: str(foreign.id)}, project_id=PROJECT
+        )
 
         assert result.agent is None
         assert result.dynamic_config is None
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("key", ["agent_id", "assistant_id"])
-    async def test_the_projects_own_agent_resolves(self, key: str) -> None:
-        own = AsyncMock(id=uuid4())
-        with patch("turncall.services.call_init_resolver.agent_repo") as repo:
-            repo.get_agent_by_id = _agents_of(PROJECT, own)
-            result = await resolve_call_init(
-                AsyncMock(), {key: str(own.id)}, project_id=PROJECT
-            )
+    async def test_the_projects_own_agent_resolves(self, agents, key) -> None:
+        own = agent_row(PROJECT)
+        agents[own.id] = own
+
+        result = await resolve_call_init(
+            AsyncMock(), {key: str(own.id)}, project_id=PROJECT
+        )
 
         assert result.agent is own
 
     @pytest.mark.asyncio
-    async def test_a_refused_id_is_logged_without_the_agents_config(self) -> None:
-        foreign = AsyncMock(id=uuid4(), config_blob={"system_prompt": "SECRET"})
-        lines: list[str] = []
-        sink = logger.add(
-            lambda m: lines.append(str(m)), level="WARNING", format="{message} {extra}"
-        )
-        try:
-            with patch("turncall.services.call_init_resolver.agent_repo") as repo:
-                repo.get_agent_by_id = _agents_of(uuid4(), foreign)
-                await resolve_call_init(
-                    AsyncMock(), {"agent_id": str(foreign.id)}, project_id=PROJECT
-                )
-        finally:
-            logger.remove(sink)
+    async def test_a_refused_id_is_logged_without_the_agents_config(
+        self, agents, logged
+    ) -> None:
+        foreign = agent_row(uuid4(), {"system_prompt": "SECRET"})
+        agents[foreign.id] = foreign
 
-        [line] = lines
+        await resolve_call_init(
+            AsyncMock(), {"agent_id": str(foreign.id)}, project_id=PROJECT
+        )
+
+        [line] = logged
         assert str(PROJECT) in line
         assert str(foreign.id) in line
         assert "SECRET" not in line
@@ -239,12 +231,8 @@ def logged():
 
 
 async def _accept_answer(answer: dict[str, Any], **context: str):
-    from turncall.services.call_init_resolver import accept_call_init_agent
-
     session = AsyncMock()
-    with patch("turncall.services.call_init_resolver.agent_repo") as repo:
-        repo.get_agent_by_id = AsyncMock(return_value=None)
-        result = await resolve_call_init(session, answer, project_id=PROJECT)
+    result = await resolve_call_init(session, answer, project_id=PROJECT)
     return await accept_call_init_agent(session, result, project_id=PROJECT, **context)
 
 
@@ -257,8 +245,6 @@ class TestAcceptCallInitAgent:
 
     @pytest.mark.asyncio
     async def test_an_inline_agent_is_accepted(self, logged) -> None:
-        from turncall.services.agent_acceptance import AcceptedAgent
-
         outcome = await _accept_answer({"agent": {"system_prompt": "Hi"}})
 
         assert isinstance(outcome, AcceptedAgent)
@@ -269,8 +255,6 @@ class TestAcceptCallInitAgent:
     async def test_a_refusal_is_logged_with_origin_project_and_reason(
         self, logged
     ) -> None:
-        from turncall.services.agent_acceptance import AgentRefusal
-
         outcome = await _accept_answer(
             {"agent": {"llm": {"provider": "xai", "base_url": "https://gw"}}},
             call_id="c-1",
@@ -285,8 +269,6 @@ class TestAcceptCallInitAgent:
 
     @pytest.mark.asyncio
     async def test_an_unknown_field_is_logged_once_naming_it(self, logged) -> None:
-        from turncall.services.agent_acceptance import AcceptedAgent
-
         outcome = await _accept_answer(
             {"agent": {"system_prompt": "Hi", "voice_style": "warm"}}
         )
@@ -299,8 +281,6 @@ class TestAcceptCallInitAgent:
     async def test_the_s2s_warnings_are_left_to_the_build_to_log(self, logged) -> None:
         """The build logs `skills_skipped` / `procedures_skipped` itself; a
         second line here would say it twice (#476)."""
-        from turncall.services.agent_acceptance import AcceptedAgent
-
         outcome = await _accept_answer(
             {"agent": {"pipeline_mode": "s2s", "skills": [{"skill": "billing"}]}}
         )
@@ -314,22 +294,43 @@ class TestAcceptCallInitAgent:
     async def test_an_agent_id_that_is_not_a_uuid_is_refused(
         self, key: str, logged
     ) -> None:
-        from turncall.services.agent_acceptance import AgentRefusal
-
         outcome = await _accept_answer({key: "not-a-uuid"})
 
         assert isinstance(outcome, AgentRefusal)
         assert outcome.field == "agent_id"
 
     @pytest.mark.asyncio
-    async def test_an_agent_id_outside_the_project_is_refused(self, logged) -> None:
-        from turncall.services.agent_acceptance import AgentRefusal
+    async def test_an_agent_id_outside_the_project_is_refused(
+        self, agents, logged
+    ) -> None:
+        foreign = agent_row(uuid4(), {"system_prompt": "Theirs"})
+        agents[foreign.id] = foreign
 
-        with patch("turncall.services.agent_acceptance.agent_repo") as repo:
-            repo.get_agent_by_id = AsyncMock(return_value=None)
-            outcome = await _accept_answer({"agent_id": str(uuid4())})
+        outcome = await _accept_answer({"agent_id": str(foreign.id)})
 
         assert isinstance(outcome, AgentRefusal)
         assert outcome.field == "agent_id"
-        repo.get_agent_by_id.assert_awaited_once()
-        assert repo.get_agent_by_id.await_args.kwargs == {"project_id": PROJECT}
+        assert "Theirs" not in outcome.reason
+
+    @pytest.mark.asyncio
+    async def test_the_projects_agent_is_accepted_from_the_row_read_once(
+        self, agents, monkeypatch
+    ) -> None:
+        """One lookup serves the resolver and acceptance (#474, T5)."""
+        own = agent_row(PROJECT, {"system_prompt": "Ours"})
+        agents[own.id] = own
+        reads: list[UUID] = []
+        table_read = agent_repo.get_agent_by_id
+
+        async def counted(session: Any, agent_id: UUID, **kwargs: Any) -> Any:
+            reads.append(agent_id)
+            return await table_read(session, agent_id, **kwargs)
+
+        monkeypatch.setattr(agent_repo, "get_agent_by_id", counted)
+
+        outcome = await _accept_answer({"agent_id": str(own.id)})
+
+        assert isinstance(outcome, AcceptedAgent)
+        assert outcome.agent_id == own.id
+        assert outcome.config.system_prompt == "Ours"
+        assert reads == [own.id]

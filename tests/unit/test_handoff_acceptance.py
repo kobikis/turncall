@@ -27,6 +27,7 @@ pytestmark = pytest.mark.unit
 XAI_BASE_URL = {"llm": {"provider": "xai", "base_url": "https://gw.example/v1"}}
 XAI_REASON = "base_url is not supported for the xai provider"
 STORED_ORIGINS = [AgentOrigin.HANDOFF, AgentOrigin.STORED_CALL]
+PROJECT = uuid4()
 
 
 # --- the origins -----------------------------------------------------------------
@@ -78,7 +79,7 @@ class _SessionFactory:
 def _context() -> SimpleNamespace:
     return SimpleNamespace(
         call_id=uuid4(),
-        project_id=uuid4(),
+        project_id=PROJECT,
         agent_id=uuid4(),
         session_factory=_SessionFactory(),
         mcp_manager=None,
@@ -91,12 +92,14 @@ def _context() -> SimpleNamespace:
 
 @contextmanager
 def _stored(blob: dict[str, Any] | None, kb_modes: list[str] | None = None):
-    """The agent table holding one agent with `blob` (None: none), linked to
-    knowledge bases in `kb_modes`."""
+    """The agent table holding one agent of `PROJECT` with `blob` (None:
+    none), linked to knowledge bases in `kb_modes`."""
     agent = (
         None
         if blob is None
-        else SimpleNamespace(id=uuid4(), name="Billing", config_blob=blob)
+        else SimpleNamespace(
+            id=uuid4(), project_id=PROJECT, name="Billing", config_blob=blob
+        )
     )
     modes = {agent.id: kb_modes} if agent is not None and kb_modes else {}
     with (
@@ -216,7 +219,7 @@ async def test_a_numbers_stored_agent_counts_its_linked_tool_knowledge_base(
 ) -> None:
     from turncall.services import inbound_call
 
-    number = SimpleNamespace(project_id=uuid4())
+    number = SimpleNamespace(project_id=PROJECT)
     with _stored(GPT_LIVE_1_ON_A_GATEWAY, kb_modes=kb_modes):
         agent = await inbound_call._stored_agent(
             MagicMock(), number, uuid4(), call_id=uuid4()

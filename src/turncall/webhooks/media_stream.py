@@ -21,6 +21,7 @@ from uuid import UUID
 
 from fastapi import WebSocket
 from loguru import logger
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.config import get_settings
 from turncall.orchestrator.call_session import fail_unstarted_call
@@ -42,6 +43,7 @@ from turncall.services.agent_acceptance import (
 from turncall.services.limits import hold_live_call, release_live_call
 from turncall.services.media_token import media_token_valid
 from turncall.storage.database import create_session_factory, get_engine
+from turncall.storage.models import CallRow
 
 
 class MediaStreamRefused(Exception):
@@ -130,16 +132,17 @@ async def run_media_stream(
         agent_id_str = (
             str(call_row.active_agent_id) if call_row.active_agent_id else "dynamic"
         )
-        outcome = await _accepted_agent(session, call_row)
-        if outcome is None:
+        origin = _agent_origin(call_row)
+        if origin is None:
             logger.error(
                 "media_stream_no_config",
                 agent_id=agent_id_str,
             )
             await release_live_call(call_row.project_id, call_id)
             return
+        outcome = await _accepted_agent(session, call_row, origin)
         if isinstance(outcome, AgentRefusal):
-            await _refuse(call_row, outcome, session_factory, stream)
+            await _refuse(call_row, outcome, origin, session_factory, stream)
             return
 
         metadata = call_row.metadata_json or {}
@@ -206,50 +209,51 @@ async def run_media_stream(
             await call_session.start()
 
 
+def _agent_origin(call_row: CallRow) -> AgentOrigin | None:
+    """Where the call record's agent came from: an inline one is still the
+    call-init answer's raw config (ADR-0017), a stored one the number's or
+    the dial's agent row. None when the record names no agent."""
+    if (call_row.metadata_json or {}).get("dynamic_config"):
+        return AgentOrigin.CALL_INIT
+    if call_row.active_agent_id:
+        return AgentOrigin.STORED_CALL
+    return None
+
+
 async def _accepted_agent(
-    session: Any, call_row: Any
-) -> AcceptedAgent | AgentRefusal | None:
-    """The call's agent through agent acceptance (#481), or None when the
-    call record names none.
+    session: AsyncSession, call_row: CallRow, origin: AgentOrigin
+) -> AcceptedAgent | AgentRefusal:
+    """The call's agent through agent acceptance (#481), as `origin` reads it.
 
     The call record's agent was accepted when the call was opened — call-init
     for an inline one, the number's stored agent, a dial's — and is accepted
     again here, since the build takes nothing else: an inline agent as
-    `call_init` (it is still the answer's raw config, ADR-0017), a stored one
-    by id within the call's project. Cheap, and what makes an outbound dial's
-    own agent (never accepted at the dial) and any future opener held to the
-    rules without remembering to be."""
-    dynamic = (call_row.metadata_json or {}).get("dynamic_config")
-    if dynamic:
-        return await accept_agent(
-            dynamic,
-            project_id=call_row.project_id,
-            origin=AgentOrigin.CALL_INIT,
-            session=session,
-        )
-    if call_row.active_agent_id:
-        return await accept_agent(
-            call_row.active_agent_id,
-            project_id=call_row.project_id,
-            origin=AgentOrigin.STORED_CALL,
-            session=session,
-        )
-    return None
+    `call_init`, a stored one by id within the call's project. Cheap, and
+    what makes an outbound dial's own agent (never accepted at the dial) and
+    any future opener held to the rules without remembering to be."""
+    source = (
+        call_row.metadata_json["dynamic_config"]
+        if origin is AgentOrigin.CALL_INIT
+        else call_row.active_agent_id
+    )
+    return await accept_agent(
+        source, project_id=call_row.project_id, origin=origin, session=session
+    )
 
 
 async def _refuse(
-    call_row: Any, refusal: AgentRefusal, session_factory: Any, stream: CarrierStream
+    call_row: CallRow,
+    refusal: AgentRefusal,
+    origin: AgentOrigin,
+    session_factory: async_sessionmaker[AsyncSession],
+    stream: CarrierStream,
 ) -> None:
     """A call whose agent cannot run: failed with the reason, as a build that
     raised was (`error.raised`, `call.ended`), and its slot freed. The carrier
     edge then closes the stream, which ends the call."""
     log_refusal(
         refusal,
-        origin=(
-            AgentOrigin.CALL_INIT
-            if (call_row.metadata_json or {}).get("dynamic_config")
-            else AgentOrigin.STORED_CALL
-        ),
+        origin=origin,
         project_id=call_row.project_id,
         call_id=str(call_row.id),
     )
