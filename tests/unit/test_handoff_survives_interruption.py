@@ -48,12 +48,16 @@ async def _queue_a_handoff(queue):
     )
 
     config = AgentConfig(tools=[_tool("refund")])
+    project_id = uuid4()  # the target is one of the call's project's agents
     agent = SimpleNamespace(
-        id=uuid4(), name="Billing", config_blob=config.model_dump(mode="json")
+        id=uuid4(),
+        project_id=project_id,
+        name="Billing",
+        config_blob=config.model_dump(mode="json"),
     )
     call_context = SimpleNamespace(
         call_id=uuid4(),
-        project_id=uuid4(),
+        project_id=project_id,
         agent_id=uuid4(),
         session_factory=_SessionFactory(),
         mcp_manager=None,
@@ -226,12 +230,16 @@ async def test_both_frames_of_an_api_handoff_survive_an_interruption():
         queue.put_nowait(frame)
 
     config = AgentConfig(tools=[_tool("refund")])
+    project_id = uuid4()  # the target is one of the call's project's agents
     agent = SimpleNamespace(
-        id=uuid4(), name="Billing", config_blob=config.model_dump(mode="json")
+        id=uuid4(),
+        project_id=project_id,
+        name="Billing",
+        config_blob=config.model_dump(mode="json"),
     )
     call_context = SimpleNamespace(
         call_id=uuid4(),
-        project_id=uuid4(),
+        project_id=project_id,
         agent_id=uuid4(),
         session_factory=_SessionFactory(),
         mcp_manager=None,

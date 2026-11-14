@@ -12,11 +12,11 @@ from turncall.api.audit import Audit
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.api.responses import ok, paginated
-from turncall.api.v1.schemas.agents import (
-    AgentResponse,
+from turncall.api.v1.schemas.agent_requests import (
     CreateAgentRequest,
     UpdateAgentRequest,
 )
+from turncall.api.v1.schemas.agents import AgentResponse
 from turncall.auth import Auth, AuthContext, WriteAuth
 from turncall.domain.enums import AuditAction, AuditResource
 from turncall.domain.models import RetentionConfig
