@@ -120,3 +120,22 @@ def test_a_file_with_no_agents_is_refused(tmp_path, content) -> None:
 def test_a_missing_file_is_refused(tmp_path) -> None:
     with pytest.raises(DemoAgentError, match="cannot read"):
         load_demo_agents(tmp_path / "absent.json", max_call_seconds=180)
+
+
+def test_inline_knowledge_bases_are_refused(tmp_path) -> None:
+    """The schema's dump used to drop them, so this refusal never fired (#479)."""
+    kb = {"knowledge_base_id": "00000000-0000-0000-0000-000000000002", "mode": "prompt"}
+    with pytest.raises(DemoAgentError, match="'a' uses knowledge bases"):
+        load_demo_agents(
+            _file(tmp_path, {"a": {**AGENT, "knowledge_bases": [kb]}}),
+            max_call_seconds=180,
+        )
+
+
+def test_a_provider_rule_names_the_agent_and_the_field(tmp_path) -> None:
+    broken = {**AGENT, "llm": {"provider": "xai", "base_url": "https://gw.example"}}
+    with pytest.raises(DemoAgentError) as raised:
+        load_demo_agents(_file(tmp_path, {"a": broken}), max_call_seconds=180)
+    assert str(raised.value) == (
+        "demo agent 'a' is invalid: llm: base_url is not supported for the xai provider"
+    )

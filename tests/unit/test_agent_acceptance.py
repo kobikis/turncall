@@ -82,8 +82,7 @@ def test_the_decided_rows_read_as_the_spec_decided_them() -> None:
 
 
 @pytest.mark.parametrize(
-    "origin",
-    [origin for origin in AgentOrigin if origin not in (CALL_INIT, AgentOrigin.API)],
+    "origin", [origin for origin in AgentOrigin if POLICIES[origin].wired_by]
 )
 async def test_an_origin_not_wired_yet_raises_rather_than_guessing(
     origin: AgentOrigin,

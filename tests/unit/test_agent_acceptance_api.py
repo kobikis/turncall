@@ -171,6 +171,7 @@ def test_only_the_api_origin_refuses_inline_knowledge_bases() -> None:
     refusing = {o for o, p in POLICIES.items() if not p.inline_knowledge_bases}
 
     assert refusing == {API}
+    assert POLICIES[API].full_schema is True
 
 
 async def test_an_empty_knowledge_bases_list_is_not_refused() -> None:
