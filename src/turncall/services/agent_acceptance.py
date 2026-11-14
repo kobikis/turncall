@@ -36,6 +36,10 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.domain.models import AgentConfig, SkillRef
+from turncall.services.agent_project_checks import (
+    has_project_checks,
+    project_refusal,
+)
 from turncall.services.agent_rules import (
     AgentRefusal,
     AgentWarning,
@@ -76,6 +80,13 @@ class OriginPolicy:
     Provider rules and the procedures graph rule are refused on every origin,
     and an agent id must be one of the project's wherever one is taken; those
     are not choices, so they are not columns.
+
+    The project checks — an ambience sound, the skills listed and a
+    procedure's handoff targets must be the project's — are the `api` row's
+    alone (`project_checks`), in the order the agent endpoints ran them.
+    Every other origin keeps what it did before: the call resolves each
+    against its project, and a call-init agent's skill that does not resolve
+    is a warning on the call, never a refusal, by design (#431).
     """
 
     unknown_fields: UnknownFields
@@ -95,6 +106,13 @@ class OriginPolicy:
     # saved as an agent row, whose KBs are its links — one source, never two
     # that can disagree (#260). Checked with `full_schema` only.
     inline_knowledge_bases: bool = True
+    # Check what the config names against the project (its ambience sound,
+    # skills and procedure handoff targets; `agent_project_checks`): only
+    # where it is saved as an agent row, at the API. Every other origin
+    # leaves them to the call, which resolves each against its own project —
+    # a call-init agent's skill that is not there is a warning, by design
+    # (#431).
+    project_checks: bool = False
 
 
 POLICIES: Mapping[AgentOrigin, OriginPolicy] = {
@@ -104,6 +122,7 @@ POLICIES: Mapping[AgentOrigin, OriginPolicy] = {
         takes_agent_id=False,
         full_schema=True,
         inline_knowledge_bases=False,
+        project_checks=True,
     ),
     AgentOrigin.CALL_INIT: OriginPolicy(
         UnknownFields.WARN, plain_http=True, takes_agent_id=True
@@ -215,22 +234,40 @@ async def accept_agent(
 
     An agent id resolves only within the project: another project's id is
     refused exactly as one naming no agent, and its config is never read.
-    `session` may be None for a raw config.
+    `session` may be None for a raw config, unless the origin's project
+    checks have something to look up.
     """
     policy = POLICIES[origin]
     if isinstance(source, UUID):
         if not policy.takes_agent_id or session is None:
             raise TypeError(f"origin {origin.value!r} takes no agent id here")
         return await _accept_stored(session, source, project_id=project_id)
-    return accept_raw_config(source, origin=origin)
+    outcome = _accept_raw(source, policy)
+    if not policy.project_checks or not isinstance(outcome, AcceptedAgent):
+        return outcome
+    if not has_project_checks(outcome.config):
+        return outcome
+    if session is None:
+        raise TypeError(f"origin {origin.value!r} checks its project: pass a session")
+    refusal = await project_refusal(session, project_id, outcome.config)
+    return outcome if refusal is None else refusal
 
 
 def accept_raw_config(
     raw: Mapping[str, Any], *, origin: AgentOrigin
 ) -> AcceptedAgent | AgentRefusal:
     """`accept_agent` for a raw config, which needs no project, database or
-    event loop — for a caller with none, like the demo loading its file."""
+    event loop — for a caller with none, like the demo loading its file. Not
+    for an origin with project checks (the API's), which needs both."""
     policy = POLICIES[origin]
+    if policy.project_checks:
+        raise TypeError(f"origin {origin.value!r} checks its project: use accept_agent")
+    return _accept_raw(raw, policy)
+
+
+def _accept_raw(
+    raw: Mapping[str, Any], policy: OriginPolicy
+) -> AcceptedAgent | AgentRefusal:
     if policy.full_schema:
         return _accept_schema(raw, policy)
     return _accept_config(

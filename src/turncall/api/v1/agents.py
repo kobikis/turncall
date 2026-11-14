@@ -19,9 +19,8 @@ from turncall.api.v1.schemas.agents import (
 )
 from turncall.auth import Auth, AuthContext, WriteAuth
 from turncall.domain.enums import AuditAction, AuditResource
-from turncall.domain.models import AgentConfig, RetentionConfig
-from turncall.domain.procedures import HANDOFF_TO_AGENT
-from turncall.services import audit_log, retention, skill_library, skills
+from turncall.domain.models import RetentionConfig
+from turncall.services import audit_log, retention
 from turncall.services.agent_acceptance import (
     AcceptedAgent,
     AgentOrigin,
@@ -31,9 +30,7 @@ from turncall.services.agent_acceptance import (
 from turncall.services.audit_log import AuditTrail
 from turncall.storage.repositories import (
     agent_repo,
-    ambience_repo,
     knowledge_repo,
-    skill_repo,
 )
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -60,99 +57,17 @@ async def _accept(
 
 
 def _accepted(outcome: AcceptedAgent | AgentRefusal) -> AcceptedAgent:
-    """An accepted agent, or the refusal (inline knowledge bases) as an
-    `invalid_agent_config` naming its field."""
+    """An accepted agent, or the refusal — inline knowledge bases, or one of
+    the project checks (ambience, skills, escalation targets) — as an
+    `invalid_agent_config` with its details."""
     if isinstance(outcome, AcceptedAgent):
         return outcome
     raise ApiError(
         status_code=422,
         code=ErrorCode.INVALID_AGENT_CONFIG,
         message=outcome.reason,
-        details={"field": outcome.field},
+        details=dict(outcome.details or {"field": outcome.field}),
     )
-
-
-async def _check_ambience(
-    session: AsyncSession, project_id: UUID, config: AgentConfig | None
-) -> None:
-    """A typo'd sound id fails here, at save, rather than silently on a call."""
-    if config is None or config.ambience is None:
-        return
-    sound = config.ambience.sound
-    if await ambience_repo.get_by_id(session, sound, project_id=project_id) is None:
-        raise ApiError(
-            status_code=422,
-            code=ErrorCode.INVALID_AGENT_CONFIG,
-            message=f"ambience.sound {sound} is not an ambience sound in this project",
-            details={"field": "ambience.sound", "sound": str(sound)},
-        )
-
-
-async def _check_skills(
-    session: AsyncSession, project_id: UUID, config: AgentConfig | None
-) -> None:
-    """The skills an agent lists must be live where the project's skills come
-    from — itself, or its skill library (#432) — or, pinned, name a
-    published or archived version of that skill there (#426) — and bring no
-    tool whose name is taken (#428): checked against the version each
-    resolves to now, at save, rather than skipped or dropped on a call."""
-    if config is None or not config.skills:
-        return
-    source = await skill_library.skill_source(session, project_id)
-    names = {ref.skill for ref in config.skills}
-    # The lock a skill delete takes, in the project holding the skill: a
-    # delete racing this save either lands first and is seen below, or waits
-    # and then sees this agent.
-    if source.project_id is not None:
-        for name in sorted(names):
-            await skill_repo.lock_name(session, source.project_id, name)
-    refusal = await skills.attachment_refusal(
-        session, source, config.skills, [tool.name for tool in config.tools]
-    )
-    if refusal is not None:
-        raise ApiError(
-            status_code=422,
-            code=ErrorCode.INVALID_AGENT_CONFIG,
-            message=refusal.message,
-            details=refusal.details,
-        )
-
-
-async def _check_escalations(
-    session: AsyncSession, project_id: UUID, config: AgentConfig | None
-) -> None:
-    """A procedure's handoff escalation names an agent of this project
-    (#448): a typo'd id fails here rather than as a refused handoff on the
-    call that needed it."""
-    if config is None:
-        return
-    for index, procedure in enumerate(config.procedures):
-        for at, step in enumerate(procedure.steps):
-            action = step.escalate.action() if step.escalate else None
-            if action is None or action[0] != HANDOFF_TO_AGENT:
-                continue
-            agent_id = action[1]["agent_id"]
-            agent = await agent_repo.get_agent_by_id(
-                session, UUID(agent_id), project_id=project_id
-            )
-            if agent is not None:
-                continue
-            raise ApiError(
-                status_code=422,
-                code=ErrorCode.INVALID_AGENT_CONFIG,
-                message=(
-                    f"procedures[{index}] '{procedure.name}': step '{step.id}' "
-                    f"hands off to '{agent_id}', which is not an agent in this "
-                    "project"
-                ),
-                details={
-                    "field": (
-                        f"procedures[{index}].steps[{at}].escalate."
-                        f"{HANDOFF_TO_AGENT}.agent_id"
-                    ),
-                    "agent_id": agent_id,
-                },
-            )
 
 
 # Changing what an agent keeps needs an admin key (#316): its `retention`
@@ -281,9 +196,6 @@ async def create_agent(
     """Create a new draft agent."""
     accepted = _accepted(await _accept(body.config, auth.project_id, session))
     config_blob = dict(accepted.stored or {})
-    await _check_ambience(session, auth.project_id, accepted.config)
-    await _check_skills(session, auth.project_id, accepted.config)
-    await _check_escalations(session, auth.project_id, accepted.config)
     before = await _retention_before(session, auth, {body.name})
     _refuse_written_retention(before, body.name, config_blob)
     next_version = await agent_repo.get_next_version(
@@ -367,7 +279,8 @@ async def update_agent(
 ) -> dict:
     """Update a draft agent's config. Published agents cannot be updated."""
     # Before the agent is looked up: a config the schema refuses is a 422
-    # for any agent id, as when body parsing refused it.
+    # for any agent id, as when body parsing refused it. Any other refusal
+    # is answered after the 404 and the 409, as it always was.
     outcome = (
         await _accept(body.config, auth.project_id, session)
         if body.config is not None
@@ -386,10 +299,6 @@ async def update_agent(
         )
 
     accepted = _accepted(outcome) if outcome is not None else None
-    config = accepted.config if accepted else None
-    await _check_ambience(session, auth.project_id, config)
-    await _check_skills(session, auth.project_id, config)
-    await _check_escalations(session, auth.project_id, config)
     config_blob = dict(accepted.stored or {}) if accepted else existing.config_blob
     name = body.name or existing.name
     before = await _retention_before(session, auth, {existing.name, name})

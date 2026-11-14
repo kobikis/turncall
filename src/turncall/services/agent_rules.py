@@ -60,6 +60,9 @@ class AgentRefusal:
     # The schema's own errors, whole (`full_schema` only): the agent endpoints
     # answer them as the request validation error they always were.
     schema_errors: tuple[Mapping[str, Any], ...] = ()
+    # The 422's `details` when they say more than the field (the `api`
+    # origin's project checks); None: `{"field": field}`.
+    details: Mapping[str, Any] | None = None
 
     def describe(self) -> str:
         """The reason with the field it names in front, once."""
