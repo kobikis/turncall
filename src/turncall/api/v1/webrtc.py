@@ -512,7 +512,9 @@ async def _resolve_agent(
             variables=variables or None,
         )
         if response.success and response.data:
-            result = await resolve_call_init(session, response.data)
+            result = await resolve_call_init(
+                session, response.data, project_id=auth.project_id
+            )
             agent = result.agent
             dynamic_config = result.dynamic_config
             template_variables = result.template_variables

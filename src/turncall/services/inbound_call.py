@@ -70,7 +70,9 @@ async def _resolve_agent(
             secret=number.server_url_secret,
         )
         if response.success and response.data:
-            result = await resolve_call_init(session, response.data)
+            result = await resolve_call_init(
+                session, response.data, project_id=number.project_id
+            )
             if result.agent is not None or result.dynamic_config is not None:
                 return _Resolved(
                     result.agent,

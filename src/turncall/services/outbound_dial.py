@@ -210,7 +210,9 @@ async def _call_init(
     )
     chosen = None
     if response.success and isinstance(response.data, dict):
-        result = await resolve_call_init(session, response.data)
+        result = await resolve_call_init(
+            session, response.data, project_id=project_id
+        )
         chosen = usable_agent(response.data, result, project_id, default=agent_id)
     if chosen is None:
         logger.warning(

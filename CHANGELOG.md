@@ -11,6 +11,20 @@ and is not part of this repository's history.
 
 ## [Unreleased]
 
+### Security
+
+- **A call-init `agent_id` resolves only in the call's own project** (#475).
+  The lookup had no project filter, so on an inbound phone call (every
+  carrier), a WebRTC connect and a WhatsApp voice call, a call-init answer
+  naming another project's agent id ran that agent, with its prompt, tools,
+  knowledge bases and credentials. Another project's id (the deprecated
+  `assistant_id` too) now resolves to no agent, and each transport answers as
+  it does for any call-init answer naming no usable agent: the inbound call is
+  refused at the carrier, WebRTC answers `502`, a WhatsApp voice call frees
+  its live-call slot and runs nothing, an outbound dial falls back to its own
+  agent, a text goes unanswered. Logged as `call_init_agent_not_in_project`
+  with the project and the id.
+
 ## [2.2.0]
 
 Guided procedures, skills and skill libraries, Eleven Realtime, pipecat 1.16,

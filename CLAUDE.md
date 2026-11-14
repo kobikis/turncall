@@ -821,6 +821,11 @@ A number with any other routing never runs call-init.
 }
 ```
 
+`agent_id` (and the deprecated `assistant_id`) resolves only within the
+project of the number or WebRTC request that ran call-init (#475,
+`resolve_call_init(..., project_id=)`): another project's id is no agent, and
+the transport refuses as for an answer naming none.
+
 ### An inline agent has no agent row
 
 `agent` (inline config) instead of `agent_id` means there is nothing in `agents`

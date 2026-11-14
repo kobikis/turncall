@@ -135,7 +135,7 @@ async def test_call_init_is_shown_them(monkeypatch):
     call_id = uuid.uuid4()
     await webrtc._resolve_agent(
         AsyncMock(),
-        None,
+        SimpleNamespace(project_id=uuid.uuid4()),
         None,
         "https://init.example",
         "s",

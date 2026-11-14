@@ -32,6 +32,8 @@ class CallInitResult:
 async def resolve_call_init(
     session: AsyncSession,
     response_data: dict[str, Any],
+    *,
+    project_id: UUID,
 ) -> CallInitResult:
     """Parse a call-init response into a structured result.
 
@@ -42,9 +44,16 @@ async def resolve_call_init(
       - metadata: arbitrary dict stored on the call record
       - dynamic_data.knowledge_context: string prepended to system prompt
 
+    An agent id resolves only within `project_id`, the project of the number
+    (or WebRTC request) call-init ran for (#475): an id is not a capability —
+    it rides in webhooks, call reads and logs — so another project's resolves
+    to no agent, and the transport refuses the call as it refuses any answer
+    naming no usable agent.
+
     Args:
         session: Active database session for agent lookup.
         response_data: The JSON response body from the developer's server.
+        project_id: The project the call (or text session) belongs to.
 
     Returns:
         Frozen CallInitResult with all parsed fields.
@@ -77,12 +86,22 @@ async def resolve_call_init(
     resolved_id = response_data.get("agent_id") or response_data.get("assistant_id")
     if resolved_id:
         try:
-            agent = await agent_repo.get_agent_by_id(session, UUID(resolved_id))
+            agent = await agent_repo.get_agent_by_id(
+                session, UUID(resolved_id), project_id=project_id
+            )
         except (ValueError, TypeError):
             logger.warning(
                 "call_init_invalid_agent_id",
                 agent_id=resolved_id,
             )
+        else:
+            if agent is None:
+                # Never the agent's config: it may be another project's.
+                logger.warning(
+                    "call_init_agent_not_in_project: no agent runs",
+                    agent_id=str(resolved_id),
+                    project_id=str(project_id),
+                )
     else:
         inline = response_data.get("agent") or response_data.get("assistant")
         if inline:
