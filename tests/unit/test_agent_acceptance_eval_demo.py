@@ -47,9 +47,7 @@ async def _accepted(config: Any, origin: AgentOrigin) -> AcceptedAgent:
     return outcome
 
 
-def test_the_three_rows_are_wired_with_the_full_schema_only_where_it_ran() -> None:
-    for origin in (EVAL_TARGET, *SCHEMA_ORIGINS):
-        assert POLICIES[origin].wired_by is None
+def test_the_full_schema_runs_only_where_it_ran_before_acceptance() -> None:
     assert POLICIES[EVAL_TARGET].full_schema is False
     assert POLICIES[EVAL_TARGET].unknown_fields is UnknownFields.WARN
     for origin in SCHEMA_ORIGINS:

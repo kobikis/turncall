@@ -4,8 +4,7 @@
 work runs in and the **origin** — where the config came from — and answers an
 `AcceptedAgent` (the parsed domain config, the agent id or None for an inline
 agent, and warnings) or an `AgentRefusal` (a reason and the field it names).
-It never raises for a config that cannot run; only for the database, and for
-an origin no slice has wired yet.
+It never raises for a config that cannot run; only for the database.
 
 The origin decides only what is refused and what is warned about, and that
 choice is `POLICIES`, one row per `AgentOrigin`. The rules themselves are not
@@ -103,8 +102,6 @@ class OriginPolicy:
     plain_http: bool
     # Whether the source may be an agent id rather than a raw config.
     takes_agent_id: bool
-    # The issue that wires the origin, or None once it is wired.
-    wired_by: str | None
     # Run the API's whole `AgentConfigSchema` (its allowlists, required
     # models, strict nested sections): agent create and update (#478), and
     # `eval_inline` and `demo`, as each did before acceptance (#479). A
@@ -123,38 +120,35 @@ POLICIES: Mapping[AgentOrigin, OriginPolicy] = {
         UnknownFields.REFUSE,
         plain_http=False,
         takes_agent_id=False,
-        wired_by=None,
         full_schema=True,
         inline_knowledge_bases=False,
     ),
     AgentOrigin.CALL_INIT: OriginPolicy(
-        UnknownFields.WARN, plain_http=True, takes_agent_id=True, wired_by=None
+        UnknownFields.WARN, plain_http=True, takes_agent_id=True
     ),
     # A stored config was written through the schema, so an unknown key there
     # is one a later release removed: nothing to refuse the call over.
     AgentOrigin.HANDOFF: OriginPolicy(
-        UnknownFields.WARN, plain_http=True, takes_agent_id=True, wired_by=None
+        UnknownFields.WARN, plain_http=True, takes_agent_id=True
     ),
     # A stored config, like a handoff's; the eval looks the row up itself.
     AgentOrigin.EVAL_TARGET: OriginPolicy(
-        UnknownFields.WARN, plain_http=True, takes_agent_id=True, wired_by=None
+        UnknownFields.WARN, plain_http=True, takes_agent_id=True
     ),
     AgentOrigin.EVAL_INLINE: OriginPolicy(
         UnknownFields.REFUSE,
         plain_http=True,
         takes_agent_id=False,
-        wired_by=None,
         full_schema=True,
     ),
     AgentOrigin.DEMO: OriginPolicy(
         UnknownFields.REFUSE,
         plain_http=True,
         takes_agent_id=False,
-        wired_by=None,
         full_schema=True,
     ),
     AgentOrigin.STORED_CALL: OriginPolicy(
-        UnknownFields.WARN, plain_http=True, takes_agent_id=True, wired_by=None
+        UnknownFields.WARN, plain_http=True, takes_agent_id=True
     ),
 }
 
@@ -251,7 +245,7 @@ async def accept_agent(
     refused exactly as one naming no agent, and its config is never read.
     `session` may be None for a raw config.
     """
-    policy = _wired(origin)
+    policy = POLICIES[origin]
     if isinstance(source, UUID):
         if not policy.takes_agent_id or session is None:
             raise TypeError(f"origin {origin.value!r} takes no agent id here")
@@ -264,21 +258,12 @@ def accept_raw_config(
 ) -> AcceptedAgent | AgentRefusal:
     """`accept_agent` for a raw config, which needs no project, database or
     event loop — for a caller with none, like the demo loading its file."""
-    policy = _wired(origin)
+    policy = POLICIES[origin]
     if policy.full_schema:
         return _accept_schema(raw, policy)
     return _accept_config(
         raw, agent_id=None, unknown_fields=policy.unknown_fields, kb_modes=None
     )
-
-
-def _wired(origin: AgentOrigin) -> OriginPolicy:
-    policy = POLICIES[origin]
-    if policy.wired_by is not None:
-        raise NotImplementedError(
-            f"agent acceptance for origin {origin.value!r} lands with {policy.wired_by}"
-        )
-    return policy
 
 
 async def _accept_stored(

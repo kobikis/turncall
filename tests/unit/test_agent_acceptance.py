@@ -1,9 +1,7 @@
 """Agent acceptance (#474, #476): whether an agent config can run.
 
 Every case sends a config in through `accept_agent` and reads what comes out
-— an accepted agent with these warnings, or a refusal naming this field. Only
-the `call_init` origin is wired so far; the others raise until their slice
-(#477-#481) wires them.
+— an accepted agent with these warnings, or a refusal naming this field.
 """
 
 import uuid
@@ -79,16 +77,6 @@ def test_the_decided_rows_read_as_the_spec_decided_them() -> None:
     assert POLICIES[AgentOrigin.API].plain_http is False
     for inline in (CALL_INIT, AgentOrigin.EVAL_INLINE, AgentOrigin.DEMO):
         assert POLICIES[inline].plain_http is True
-
-
-@pytest.mark.parametrize(
-    "origin", [origin for origin in AgentOrigin if POLICIES[origin].wired_by]
-)
-async def test_an_origin_not_wired_yet_raises_rather_than_guessing(
-    origin: AgentOrigin,
-) -> None:
-    with pytest.raises(NotImplementedError, match=origin.value):
-        await _accept({"system_prompt": "hi"}, origin=origin)
 
 
 # --- what an inline call-init agent is ------------------------------------------
