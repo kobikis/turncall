@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.domain.enums import CallDirection, CallEventType
 from turncall.services import telemetry_redaction
+from turncall.services.agent_acceptance import AcceptedAgent
 from turncall.services.limits import admit_inbound_call, release_live_call
 from turncall.storage.models import CallRow, PhoneNumberRow
 from turncall.storage.repositories import agent_repo, call_repo
@@ -58,7 +59,10 @@ async def _resolve_agent(
 ) -> _Resolved | InboundRefusal:
     if number.routing_target_type == "webhook" and number.server_url:
         from turncall.events.server_events import send_call_init
-        from turncall.services.call_init_resolver import resolve_call_init
+        from turncall.services.call_init_resolver import (
+            accept_call_init_agent,
+            resolve_call_init,
+        )
 
         response = await send_call_init(
             number.server_url,
@@ -73,7 +77,12 @@ async def _resolve_agent(
             result = await resolve_call_init(
                 session, response.data, project_id=number.project_id
             )
-            if result.agent is not None or result.dynamic_config is not None:
+            # Before the row and before the caller is answered (#477): an
+            # agent that cannot run is refused here, never at build.
+            accepted = await accept_call_init_agent(
+                session, result, project_id=number.project_id, call_id=str(call_id)
+            )
+            if isinstance(accepted, AcceptedAgent):
                 return _Resolved(
                     result.agent,
                     result.dynamic_config,

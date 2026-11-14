@@ -778,12 +778,28 @@ Dynamic agent resolution before the pipeline starts. Works on all transports.
 Inbound call → resolve phone number → routing_target_type == "webhook"?
   → POST call-init to server_url
   → Parse response: agent_id | inline agent | variables | metadata | knowledge_context
+  → Agent acceptance (origin call_init): refused → no call row, slot freed
   → Fire call.initializing event (informational)
   → Store metadata + knowledge_context + dynamic_config on call record
   → Apply template variables → prepend knowledge_context to system_prompt
   → Fire call.started event
   → Start pipeline
 ```
+
+**Agent acceptance on every transport** (#476, #477): the agent an answer
+names goes through `call_init_resolver.accept_call_init_agent` (→
+`services/agent_acceptance.accept_agent`, origin `call_init`) before the call
+row is written: an `agent_id` outside the project, an inline config the domain
+model cannot read, or one breaking a provider rule or the procedures graph rule
+is refused, logged `agent_refused` with origin, project and reason, and the
+transport answers as for an answer naming no agent. Inbound phone calls (every
+carrier, `services/inbound_call`) are refused at the carrier, before the caller
+is answered; WebRTC answers `502 invalid_agent_config` whose `details` carry
+`{reason, field}` (an answer naming no agent stays `502 internal_error`);
+WhatsApp voice drops the call, as it always has, slot freed; an outbound dial
+runs the dial's agent; a text goes unanswered. An unknown top-level field is
+logged (`agent_unknown_field`) and dropped, and the call runs with its raw
+config stored as `dynamic_config` (ADR-0017).
 
 Template variables (`{{name}}`, `\w+` only — no spaces, no dots; an unsent one
 stays literal) live on the call row as `metadata_json["template_variables"]`
@@ -1360,8 +1376,10 @@ A/B-routes with the agent, and a call-init inline agent carries its own.
   `move_to_step` in `tools`; 422
   `validation_error`, also an eval `inline` target) and
   `pipeline_builder._check_procedures`, before `with_procedures`, which raises
-  `ValueError` → `pipeline_error` + `error.raised` for a call-init inline
-  agent. The domain `AgentConfig` never raises on procedures (it is parsed
+  `ValueError` → `pipeline_error` + `error.raised` for an agent that reaches
+  it unchecked. A call-init inline agent no longer does: agent acceptance
+  applies the same rule at call-init and the call is refused there (#476,
+  #477). The domain `AgentConfig` never raises on procedures (it is parsed
   before the build): an entry that cannot be read is kept as
   `Procedure(unreadable=<why>)` (`read_procedure`), which the rule names. A
   new check is one function in `_CHECKS`. On S2S the build skips them (no
