@@ -11,9 +11,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pydantic import ValidationError
-
 from turncall.domain.models import AgentConfig
+from turncall.services.agent_acceptance import (
+    AgentOrigin,
+    AgentRefusal,
+    accept_raw_config,
+)
 
 # The one built-in a demo call can run: it has nothing to record, only a
 # goodbye to say. Every other built-in acts on a call row, a carrier or
@@ -44,18 +47,13 @@ def load_demo_agents(
 
 
 def _demo_agent(name: str, blob: Any, max_call_seconds: int) -> AgentConfig:
-    # The API's schema first: it forbids unknown fields, so a typo is an error
-    # here rather than a setting silently ignored on the call. An inline
-    # config, so a plain http:// URL is not refused (#340).
-    from turncall.api.v1.schemas import INLINE_CONFIG
-    from turncall.api.v1.schemas.agents import AgentConfigSchema
-
-    try:
-        config = AgentConfig.model_validate(
-            AgentConfigSchema.model_validate(blob, context=INLINE_CONFIG).model_dump()
-        )
-    except ValidationError as exc:
-        raise DemoAgentError(f"demo agent {name!r} is invalid: {exc}") from exc
+    # Agent acceptance's `demo` row (#479): the API's whole schema, which
+    # forbids unknown fields, so a typo is an error here rather than a setting
+    # silently ignored on the call; plain http:// is not refused (#340).
+    accepted = accept_raw_config(blob, origin=AgentOrigin.DEMO)
+    if isinstance(accepted, AgentRefusal):
+        raise DemoAgentError(f"demo agent {name!r} is invalid: {accepted.describe()}")
+    config = accepted.config
     unusable = _needs_a_platform(config)
     if unusable:
         raise DemoAgentError(

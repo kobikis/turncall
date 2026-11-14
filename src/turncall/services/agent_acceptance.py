@@ -81,6 +81,11 @@ class OriginPolicy:
     takes_agent_id: bool
     # The issue that wires the origin, or None once it is wired.
     wired_by: str | None
+    # Run the API's whole `AgentConfigSchema` (its allowlists, required
+    # models, strict nested sections), as `eval_inline` and `demo` did before
+    # acceptance (#479). The config that runs is then the one a save would
+    # store, inline knowledge bases kept.
+    full_schema: bool = False
 
 
 POLICIES: Mapping[AgentOrigin, OriginPolicy] = {
@@ -95,14 +100,23 @@ POLICIES: Mapping[AgentOrigin, OriginPolicy] = {
     AgentOrigin.HANDOFF: OriginPolicy(
         UnknownFields.WARN, plain_http=True, takes_agent_id=True, wired_by="#480"
     ),
+    # A stored config, like a handoff's; the eval looks the row up itself.
     AgentOrigin.EVAL_TARGET: OriginPolicy(
-        UnknownFields.WARN, plain_http=True, takes_agent_id=True, wired_by="#479"
+        UnknownFields.WARN, plain_http=True, takes_agent_id=True, wired_by=None
     ),
     AgentOrigin.EVAL_INLINE: OriginPolicy(
-        UnknownFields.REFUSE, plain_http=True, takes_agent_id=False, wired_by="#479"
+        UnknownFields.REFUSE,
+        plain_http=True,
+        takes_agent_id=False,
+        wired_by=None,
+        full_schema=True,
     ),
     AgentOrigin.DEMO: OriginPolicy(
-        UnknownFields.REFUSE, plain_http=True, takes_agent_id=False, wired_by="#479"
+        UnknownFields.REFUSE,
+        plain_http=True,
+        takes_agent_id=False,
+        wired_by=None,
+        full_schema=True,
     ),
     AgentOrigin.STORED_CALL: OriginPolicy(
         UnknownFields.WARN, plain_http=True, takes_agent_id=True, wired_by="#480"
@@ -137,6 +151,12 @@ class AgentRefusal:
     reason: str
     field: str | None = None
 
+    def describe(self) -> str:
+        """The reason with the field it names in front, once."""
+        if self.field is None or self.reason.startswith(self.field):
+            return self.reason
+        return f"{self.field}: {self.reason}"
+
 
 AgentSource = Mapping[str, Any] | UUID
 
@@ -154,18 +174,45 @@ async def accept_agent(
     refused exactly as one naming no agent, and its config is never read.
     `session` may be None for a raw config.
     """
+    policy = _wired(origin)
+    if isinstance(source, UUID):
+        if not policy.takes_agent_id or session is None:
+            raise TypeError(f"origin {origin.value!r} takes no agent id here")
+        return await _accept_stored(session, source, project_id=project_id)
+    return accept_raw_config(source, origin=origin)
+
+
+def accept_raw_config(
+    raw: Mapping[str, Any], *, origin: AgentOrigin
+) -> AcceptedAgent | AgentRefusal:
+    """`accept_agent` for a raw config, which needs no project, database or
+    event loop — for a caller with none, like the demo loading its file."""
+    policy = _wired(origin)
+    return _accept_config(
+        raw,
+        agent_id=None,
+        unknown_fields=policy.unknown_fields,
+        kb_modes=None,
+        schema=_schema_context(policy),
+    )
+
+
+def _wired(origin: AgentOrigin) -> OriginPolicy:
     policy = POLICIES[origin]
     if policy.wired_by is not None:
         raise NotImplementedError(
             f"agent acceptance for origin {origin.value!r} lands with {policy.wired_by}"
         )
-    if isinstance(source, UUID):
-        if not policy.takes_agent_id or session is None:
-            raise TypeError(f"origin {origin.value!r} takes no agent id here")
-        return await _accept_stored(session, source, project_id=project_id)
-    return _accept_config(
-        source, agent_id=None, unknown_fields=policy.unknown_fields, kb_modes=None
-    )
+    return policy
+
+
+def _schema_context(policy: OriginPolicy) -> dict[str, Any] | None:
+    """The validation context the full schema runs in; None: it does not."""
+    if not policy.full_schema:
+        return None
+    from turncall.api.v1.schemas import INLINE_CONFIG
+
+    return dict(INLINE_CONFIG) if policy.plain_http else {}
 
 
 async def _accept_stored(
@@ -192,14 +239,21 @@ def _accept_config(
     agent_id: UUID | None,
     unknown_fields: UnknownFields | None,
     kb_modes: list[str] | None,
+    schema: dict[str, Any] | None = None,
 ) -> AcceptedAgent | AgentRefusal:
     """`unknown_fields` None: the keys are not checked. `kb_modes` None: an
-    inline config, whose own `knowledge_bases` name them."""
+    inline config, whose own `knowledge_bases` name them. `schema`: the
+    context the full API schema runs in, None for none."""
     if not isinstance(raw, Mapping):
         return AgentRefusal("the agent config must be a JSON object")
     unknown = _unknown_fields(raw) if unknown_fields is not None else []
     if unknown and unknown_fields is UnknownFields.REFUSE:
         return AgentRefusal(f"{unknown[0]} is not an agent config field", unknown[0])
+    if schema is not None:
+        stored = _as_a_save_would_store(raw, schema)
+        if isinstance(stored, AgentRefusal):
+            return stored
+        raw = stored
     try:
         config = AgentConfig.model_validate(dict(raw))
     except ValidationError as invalid:
@@ -216,6 +270,23 @@ def _accept_config(
         *_s2s_warnings(config, modes),
     )
     return AcceptedAgent(config=config, agent_id=agent_id, warnings=warnings)
+
+
+def _as_a_save_would_store(
+    raw: Mapping[str, Any], context: dict[str, Any]
+) -> dict[str, Any] | AgentRefusal:
+    """`raw` through the API's schema: its dump (the normal form a save
+    stores), with the inline knowledge bases the dump leaves out put back."""
+    from turncall.api.v1.schemas.agents import AgentConfigSchema
+
+    try:
+        checked = AgentConfigSchema.model_validate(dict(raw), context=context)
+    except ValidationError as invalid:
+        return _unreadable(invalid)
+    return {
+        **checked.model_dump(),
+        "knowledge_bases": [kb.model_dump() for kb in checked.knowledge_bases],
+    }
 
 
 def _unknown_fields(raw: Mapping[str, Any]) -> list[str]:
@@ -235,7 +306,8 @@ def _unknown_field_warning(name: str) -> AgentWarning:
 def _unreadable(invalid: ValidationError) -> AgentRefusal:
     error = invalid.errors()[0]
     field = _path(error["loc"])
-    message = error["msg"]
+    # A validator's ValueError reads "Value error, <its message>".
+    message = error["msg"].removeprefix("Value error, ")
     return AgentRefusal(f"{field}: {message}" if field else message, field or None)
 
 
