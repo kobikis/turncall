@@ -240,7 +240,9 @@ them:
   agent whose only tool is a linked tool-mode KB gets a client delegate, and
   its `llm` the xAI rule (#484). `mcp_servers` count as tools before
   discovery, as at the API's save, so one whose servers would return none is
-  refused all the same (documented in `services/agent_acceptance`).
+  refused all the same; so does an inline agent's tool-mode KB before it
+  resolves, so one whose only KB is not the project's is refused too
+  (documented in `services/agent_rules`).
 - **Call control acts on the call's carrier**: `services/call_control
   ._carrier_adapter` picks the adapter (and account) by `calls.provider`.
   `services/twilio_accounts.TwilioAccount.adapter` and

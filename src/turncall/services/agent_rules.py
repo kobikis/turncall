@@ -13,14 +13,21 @@ when it has tools (#244). The build decides that from the tools it
 advertises; acceptance predicts them before anything connects (#484), from
 the config's `tools`, its `mcp_servers`, and a tool-mode knowledge base —
 an inline config's own `knowledge_bases`, or a stored agent's links, which
-live outside its config (#260) and are read with it. MCP servers count as
-tools **before discovery**, as at the API's save: acceptance runs before
-any server connects, so it cannot know what discovery will return. An agent
-whose servers answer with no tools (down, or past
-`MCP_CONNECT_TIMEOUT_SECONDS`) builds no delegate, yet is refused here for a
-broken `llm`. That is the accepted cost: the config is broken either way, and
-checking after discovery would put the rule back in the build, which #481
-empties.
+live outside its config (#260) and are read with it. Two predictions can
+refuse, for a broken `llm`, a config whose call would build no delegate:
+
+- MCP servers count as tools **before discovery**, as at the API's save:
+  acceptance runs before any server connects, so it cannot know what
+  discovery will return. An agent whose servers answer with no tools (down,
+  or past `MCP_CONNECT_TIMEOUT_SECONDS`) builds no delegate.
+- An inline config's tool-mode knowledge base counts **before it
+  resolves**: the build resolves each against the call's project and skips
+  one that is not there (a warning, never a failed call, #260), so an agent
+  whose only tool is a KB that will not resolve builds no delegate.
+
+That is the accepted cost: the config is broken either way, and checking
+after discovery or resolution would put the rule back in the build, which
+#481 empties.
 """
 
 from __future__ import annotations

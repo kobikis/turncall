@@ -624,3 +624,31 @@ async def test_an_inline_tool_knowledge_base_gives_gpt_live_1_its_delegate() -> 
     )
 
     assert (refusal.field, refusal.reason) == ("llm", XAI_GATEWAY_REASON)
+
+
+class _NoDatabase:
+    """A session no read may touch: acceptance resolves no knowledge base."""
+
+    def __getattr__(self, name: str) -> Any:
+        raise AssertionError(f"acceptance read the database ({name})")
+
+
+async def test_an_inline_tool_knowledge_base_counts_before_it_resolves() -> None:
+    """Pinned over-refusal, beside MCP's: the build resolves an inline KB
+    against the call's project and skips one that is not there (#260), so a
+    call whose only tool-mode KB will not resolve builds no delegate. It
+    counts here all the same, read from the config alone: acceptance runs
+    before anything resolves, and the `llm` is broken either way."""
+    refusal = await _accept(
+        {
+            **GPT_LIVE_1,
+            "knowledge_bases": [
+                {"knowledge_base_id": str(uuid.uuid4()), "mode": "tool"}
+            ],
+            "llm": XAI_GATEWAY_LLM,
+        },
+        session=_NoDatabase(),
+    )
+
+    assert isinstance(refusal, AgentRefusal), refusal
+    assert (refusal.field, refusal.reason) == ("llm", XAI_GATEWAY_REASON)
