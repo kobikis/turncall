@@ -22,7 +22,11 @@ from turncall.domain.enums import ChatChannel
 from turncall.domain.models import AgentConfig
 from turncall.domain.session_state import is_session_expired
 from turncall.events.server_events import send_call_init
-from turncall.services.call_init_resolver import resolve_call_init, usable_agent
+from turncall.services.agent_acceptance import AcceptedAgent, AgentRefusal
+from turncall.services.call_init_resolver import (
+    accept_call_init_agent,
+    resolve_call_init,
+)
 from turncall.storage.models import PhoneNumberRow, SmsSessionRow
 from turncall.storage.repositories import sms_session_repo
 from turncall.storage.repositories.agent_repo import get_agent_by_id
@@ -108,22 +112,27 @@ async def _ask_call_init(
         transport_type=CALL_INIT_TYPES[channel],
         secret=number.server_url_secret,
     )
-    chosen = None
+    accepted = None
+    error = response.error
     if response.success and isinstance(response.data, dict):
         result = await resolve_call_init(
             db, response.data, project_id=number.project_id
         )
-        chosen = usable_agent(response.data, result, number.project_id, default=None)
-    if chosen is None or chosen == (None, None):
+        accepted = await accept_call_init_agent(
+            db, result, project_id=number.project_id, session_id=str(session_id)
+        )
+        if isinstance(accepted, AgentRefusal):
+            error = accepted.reason
+    if not isinstance(accepted, AcceptedAgent):
         logger.warning(
             "text_call_init_no_agent: message unanswered",
             server_url=number.server_url,
-            error=response.error,
+            error=error,
         )
         raise ValueError(f"call-init named no agent for number: {number.e164_number}")
 
-    agent_id, inline = chosen
-    config = AgentConfig.model_validate(inline or result.agent.config_blob)
+    agent_id, config = accepted.agent_id, accepted.config
+    inline = result.dynamic_config if agent_id is None else None
     stored = {
         DYNAMIC_CONFIG: inline,
         "template_variables": result.template_variables,

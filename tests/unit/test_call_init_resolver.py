@@ -222,3 +222,114 @@ class TestTheAgentIsTheProjects:
         assert str(PROJECT) in line
         assert str(foreign.id) in line
         assert "SECRET" not in line
+
+
+# --- accepting the agent a call-init answer names (#476) --------------------------
+
+
+@pytest.fixture
+def logged():
+    """Every WARNING line, message and extras both."""
+    lines: list[str] = []
+    sink = logger.add(
+        lambda m: lines.append(str(m)), level="WARNING", format="{message} {extra}"
+    )
+    yield lines
+    logger.remove(sink)
+
+
+async def _accept_answer(answer: dict[str, Any], **context: str):
+    from turncall.services.call_init_resolver import accept_call_init_agent
+
+    session = AsyncMock()
+    with patch("turncall.services.call_init_resolver.agent_repo") as repo:
+        repo.get_agent_by_id = AsyncMock(return_value=None)
+        result = await resolve_call_init(session, answer, project_id=PROJECT)
+    return await accept_call_init_agent(session, result, project_id=PROJECT, **context)
+
+
+@pytest.mark.unit
+class TestAcceptCallInitAgent:
+    @pytest.mark.asyncio
+    async def test_an_answer_naming_no_agent_is_none(self, logged) -> None:
+        assert await _accept_answer({"variables": {"name": "Ada"}}) is None
+        assert logged == []
+
+    @pytest.mark.asyncio
+    async def test_an_inline_agent_is_accepted(self, logged) -> None:
+        from turncall.services.agent_acceptance import AcceptedAgent
+
+        outcome = await _accept_answer({"agent": {"system_prompt": "Hi"}})
+
+        assert isinstance(outcome, AcceptedAgent)
+        assert outcome.agent_id is None
+        assert logged == []
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_is_logged_with_origin_project_and_reason(
+        self, logged
+    ) -> None:
+        from turncall.services.agent_acceptance import AgentRefusal
+
+        outcome = await _accept_answer(
+            {"agent": {"llm": {"provider": "xai", "base_url": "https://gw"}}},
+            call_id="c-1",
+        )
+
+        assert isinstance(outcome, AgentRefusal)
+        [line] = logged
+        assert "origin=call_init" in line
+        assert f"project_id={PROJECT}" in line
+        assert "base_url is not supported for the xai provider" in line
+        assert "c-1" in line
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_field_is_logged_once_naming_it(self, logged) -> None:
+        from turncall.services.agent_acceptance import AcceptedAgent
+
+        outcome = await _accept_answer(
+            {"agent": {"system_prompt": "Hi", "voice_style": "warm"}}
+        )
+
+        assert isinstance(outcome, AcceptedAgent)
+        [line] = logged
+        assert "voice_style" in line
+
+    @pytest.mark.asyncio
+    async def test_the_s2s_warnings_are_left_to_the_build_to_log(self, logged) -> None:
+        """The build logs `skills_skipped` / `procedures_skipped` itself; a
+        second line here would say it twice (#476)."""
+        from turncall.services.agent_acceptance import AcceptedAgent
+
+        outcome = await _accept_answer(
+            {"agent": {"pipeline_mode": "s2s", "skills": [{"skill": "billing"}]}}
+        )
+
+        assert isinstance(outcome, AcceptedAgent)
+        assert [w.code for w in outcome.warnings] == ["skills_ignored_on_s2s"]
+        assert logged == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("key", ["agent_id", "assistant_id"])
+    async def test_an_agent_id_that_is_not_a_uuid_is_refused(
+        self, key: str, logged
+    ) -> None:
+        from turncall.services.agent_acceptance import AgentRefusal
+
+        outcome = await _accept_answer({key: "not-a-uuid"})
+
+        assert isinstance(outcome, AgentRefusal)
+        assert outcome.field == "agent_id"
+
+    @pytest.mark.asyncio
+    async def test_an_agent_id_outside_the_project_is_refused(self, logged) -> None:
+        from turncall.services.agent_acceptance import AgentRefusal
+
+        with patch("turncall.services.agent_acceptance.agent_repo") as repo:
+            repo.get_agent_by_id = AsyncMock(return_value=None)
+            outcome = await _accept_answer({"agent_id": str(uuid4())})
+
+        assert isinstance(outcome, AgentRefusal)
+        assert outcome.field == "agent_id"
+        repo.get_agent_by_id.assert_awaited_once()
+        assert repo.get_agent_by_id.await_args.kwargs == {"project_id": PROJECT}

@@ -24,7 +24,11 @@ from turncall.domain.carriers import TELNYX, TWILIO
 from turncall.domain.enums import CallDirection, CallEventType
 from turncall.domain.errors import PicklableError
 from turncall.events.server_events import send_call_init
-from turncall.services.call_init_resolver import resolve_call_init, usable_agent
+from turncall.services.agent_acceptance import AgentRefusal
+from turncall.services.call_init_resolver import (
+    accept_call_init_agent,
+    resolve_call_init,
+)
 from turncall.services.limits import admit_outbound_call, release_live_call
 from turncall.services.telnyx_accounts import CONNECTION_KEY
 from turncall.services.telnyx_accounts import (
@@ -208,21 +212,19 @@ async def _call_init(
         agent_id=str(agent_id),
         variables=dial_variables,
     )
-    chosen = None
-    if response.success and isinstance(response.data, dict):
-        result = await resolve_call_init(
-            session, response.data, project_id=project_id
-        )
-        chosen = usable_agent(response.data, result, project_id, default=agent_id)
-    if chosen is None:
-        logger.warning(
-            "outbound_call_init_unusable: the dial's agent runs",
-            call_id=str(call_id),
-            error=response.error,
-        )
-        return agent_id, metadata
+    if not (response.success and isinstance(response.data, dict)):
+        return _dials_own(agent_id, metadata, call_id=call_id, error=response.error)
+    result = await resolve_call_init(session, response.data, project_id=project_id)
+    accepted = await accept_call_init_agent(
+        session, result, project_id=project_id, call_id=str(call_id)
+    )
+    if isinstance(accepted, AgentRefusal):
+        return _dials_own(agent_id, metadata, call_id=call_id, error=accepted.reason)
 
-    runs_as, dynamic_config = chosen
+    runs_as, dynamic_config = agent_id, None
+    if accepted is not None:
+        runs_as = accepted.agent_id
+        dynamic_config = result.dynamic_config if runs_as is None else None
     added = {
         "dynamic_config": dynamic_config,
         "knowledge_context": result.knowledge_context,
@@ -236,6 +238,19 @@ async def _call_init(
             own = metadata.get(key)
             merged[key] = {**theirs, **(own if isinstance(own, dict) else {})}
     return runs_as, merged
+
+
+def _dials_own(
+    agent_id: UUID, metadata: dict[str, Any], *, call_id: UUID, error: str | None
+) -> tuple[UUID, dict[str, Any]]:
+    """A call-init that failed or named an agent that cannot run: the dial's
+    agent runs, with the dial's metadata and none of the answer."""
+    logger.warning(
+        "outbound_call_init_unusable: the dial's agent runs",
+        call_id=str(call_id),
+        error=error,
+    )
+    return agent_id, metadata
 
 
 class DialNotRecorded(PicklableError):

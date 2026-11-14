@@ -194,7 +194,7 @@ def test_every_transport_persists_the_inline_config(label: str, path: Path) -> N
 # --- procedures on an inline agent (#444) -------------------------------------
 #
 # Every voice transport parses the inline config as an `AgentConfig` before the
-# build (`media_stream`, and `usable_agent` for an outbound dial), outside
+# build (`media_stream`, and agent acceptance for an outbound dial), outside
 # `build_call_pipeline`. A raise there fails the call with no `error.raised`
 # and no `pipeline_error`; a silent drop runs it without its procedure. So the
 # domain model accepts any procedures, broken ones included, and the build's

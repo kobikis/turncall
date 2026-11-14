@@ -485,10 +485,14 @@ row's keys.
 - **SMS / WhatsApp text on a webhook-routed number** (`services/text_agent.py`):
   call-init runs **once per session**, on the message that opens it, with the
   new session's id as `call.id`. A later message in the session runs on what
-  it stored, never asking again. `call_init_resolver.usable_agent` decides what
-  can run, as for an outbound dial: an `agent_id` outside the number's project
-  or an inline config that does not validate is refused and the text goes
-  unanswered, no session created. An inline agent leaves `sms_sessions
+  it stored, never asking again. Agent acceptance decides what can run
+  (`call_init_resolver.accept_call_init_agent` → `services/agent_acceptance
+  .accept_agent`, origin `call_init`, #476), as for an outbound dial: an
+  `agent_id` outside the number's project, an inline config the domain model
+  cannot read, or one breaking a provider rule or the procedures graph rule is
+  refused (logged `agent_refused` with origin, project and reason) and the text
+  goes unanswered, no session created; an unknown top-level field is logged
+  (`agent_unknown_field`) and dropped. An inline agent leaves `sms_sessions
   .agent_id` **null** (nullable since `c4e8a2f6b1d3`) with its config in
   `metadata_json["dynamic_config"]` — ADR-0017's rule; no API read shows it.
   Its KBs come from `config.knowledge_bases`, resolved against the project.
