@@ -517,6 +517,35 @@ async def test_a_stored_agent_breaking_a_rule_is_refused_like_an_inline_one(
     assert refusal.field == "tts"
 
 
+@pytest.mark.parametrize(
+    "origin", [CALL_INIT, AgentOrigin.HANDOFF, AgentOrigin.STORED_CALL]
+)
+async def test_a_stored_blobs_unknown_keys_are_not_checked(
+    agents, origin: AgentOrigin
+) -> None:
+    """The schema wrote it: a key a later release removed is nothing to warn
+    about, by id on every origin."""
+    row = _row(PROJECT, {"system_prompt": "Stored", "voice_style": "warm"})
+    agents[row.id] = row
+
+    accepted = await _accept(row.id, session=object(), origin=origin)
+
+    assert isinstance(accepted, AcceptedAgent)
+    assert accepted.warnings == ()
+
+
+def test_an_origin_that_only_reads_stored_agents_says_it_checks_no_keys() -> None:
+    stored_only = (
+        AgentOrigin.HANDOFF,
+        AgentOrigin.EVAL_TARGET,
+        AgentOrigin.STORED_CALL,
+    )
+    for origin in stored_only:
+        assert POLICIES[origin].unknown_fields is UnknownFields.UNCHECKED
+    for origin in set(AgentOrigin) - set(stored_only):
+        assert POLICIES[origin].unknown_fields is not UnknownFields.UNCHECKED
+
+
 # --- gpt-live-1's client delegate: the predicate (#484) ---------------------------
 
 XAI_GATEWAY_LLM = {"provider": "xai", "base_url": "https://gw.example/v1"}

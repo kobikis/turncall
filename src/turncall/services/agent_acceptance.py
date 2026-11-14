@@ -67,10 +67,15 @@ class AgentOrigin(StrEnum):
 
 
 class UnknownFields(StrEnum):
-    """What a top-level key the config schema does not know becomes."""
+    """What a top-level key the config schema does not know becomes, in a
+    raw config. A stored agent's blob (an agent id, on any origin) is never
+    checked: the schema wrote it, so an unknown key there is one a later
+    release removed, nothing to refuse or warn about."""
 
     REFUSE = "refuse"
     WARN = "warn"  # warned about, then dropped by the domain parse
+    # Not checked: an origin that only ever reads a stored agent, by id.
+    UNCHECKED = "unchecked"
 
 
 @dataclass(frozen=True)
@@ -127,14 +132,14 @@ POLICIES: Mapping[AgentOrigin, OriginPolicy] = {
     AgentOrigin.CALL_INIT: OriginPolicy(
         UnknownFields.WARN, plain_http=True, takes_agent_id=True
     ),
-    # A stored config was written through the schema, so an unknown key there
-    # is one a later release removed: nothing to refuse the call over.
+    # A stored config was written through the schema, so its keys are not
+    # checked (`UnknownFields`).
     AgentOrigin.HANDOFF: OriginPolicy(
-        UnknownFields.WARN, plain_http=True, takes_agent_id=True
+        UnknownFields.UNCHECKED, plain_http=True, takes_agent_id=True
     ),
     # A stored config, like a handoff's; the eval looks the row up itself.
     AgentOrigin.EVAL_TARGET: OriginPolicy(
-        UnknownFields.WARN, plain_http=True, takes_agent_id=True
+        UnknownFields.UNCHECKED, plain_http=True, takes_agent_id=True
     ),
     AgentOrigin.EVAL_INLINE: OriginPolicy(
         UnknownFields.REFUSE,
@@ -149,7 +154,7 @@ POLICIES: Mapping[AgentOrigin, OriginPolicy] = {
         full_schema=True,
     ),
     AgentOrigin.STORED_CALL: OriginPolicy(
-        UnknownFields.WARN, plain_http=True, takes_agent_id=True
+        UnknownFields.UNCHECKED, plain_http=True, takes_agent_id=True
     ),
 }
 
@@ -284,11 +289,10 @@ async def _accept_stored(
             f"agent {agent_id} is not an agent of this project", field="agent_id"
         )
     modes = await knowledge_repo.kb_modes_by_agent(session, [row.id])
-    # A stored blob's keys are not checked: the schema wrote them.
     return _accept_config(
         row.config_blob,
         agent_id=row.id,
-        unknown_fields=None,
+        unknown_fields=UnknownFields.UNCHECKED,
         kb_modes=modes.get(row.id, []),
     )
 
@@ -297,14 +301,15 @@ def _accept_config(
     raw: Any,
     *,
     agent_id: UUID | None,
-    unknown_fields: UnknownFields | None,
+    unknown_fields: UnknownFields,
     kb_modes: list[str] | None,
 ) -> AcceptedAgent | AgentRefusal:
-    """`unknown_fields` None: the keys are not checked. `kb_modes` None: an
-    inline config, whose own `knowledge_bases` name them."""
+    """`kb_modes` None: an inline config, whose own `knowledge_bases` name
+    them."""
     if not isinstance(raw, Mapping):
         return AgentRefusal("the agent config must be a JSON object")
-    unknown = _unknown_fields(raw) if unknown_fields is not None else []
+    checked = unknown_fields is not UnknownFields.UNCHECKED
+    unknown = _unknown_fields(raw) if checked else []
     if unknown and unknown_fields is UnknownFields.REFUSE:
         return AgentRefusal(f"{unknown[0]} is not an agent config field", unknown[0])
     try:

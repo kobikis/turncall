@@ -49,7 +49,7 @@ async def _accepted(config: Any, origin: AgentOrigin) -> AcceptedAgent:
 
 def test_the_full_schema_runs_only_where_it_ran_before_acceptance() -> None:
     assert POLICIES[EVAL_TARGET].full_schema is False
-    assert POLICIES[EVAL_TARGET].unknown_fields is UnknownFields.WARN
+    assert POLICIES[EVAL_TARGET].unknown_fields is UnknownFields.UNCHECKED
     for origin in SCHEMA_ORIGINS:
         assert POLICIES[origin].full_schema is True
 
@@ -64,12 +64,12 @@ async def test_an_eval_target_breaking_a_provider_rule_is_refused_naming_it() ->
     assert refusal.describe() == "llm: base_url is not supported for the xai provider"
 
 
-async def test_an_eval_target_with_a_removed_field_is_warned_not_refused() -> None:
+async def test_an_eval_target_with_a_removed_field_is_not_refused() -> None:
     """A stored config was written through the schema: a key it no longer
-    knows is one a later release removed."""
+    knows is one a later release removed, not checked (#474, S6)."""
     accepted = await _accepted({"system_prompt": "hi", "retired": 1}, EVAL_TARGET)
 
-    assert [w.field for w in accepted.warnings] == ["retired"]
+    assert accepted.warnings == ()
 
 
 async def test_an_eval_target_is_not_held_to_the_schemas_allowlists() -> None:

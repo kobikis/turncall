@@ -48,7 +48,8 @@ async def test_a_stored_config_breaking_a_provider_rule_is_refused(origin) -> No
 
 @pytest.mark.parametrize("origin", STORED_ORIGINS)
 async def test_a_stored_config_with_a_retired_key_still_runs(origin) -> None:
-    """A key a later release removed is nothing to refuse the call over."""
+    """A key a later release removed is nothing to refuse the call over,
+    nor to warn about: a stored blob's keys are not checked (#474, S6)."""
     outcome = await accept_agent(
         {"system_prompt": "hi", "retired_setting": True},
         project_id=uuid4(),
@@ -57,7 +58,7 @@ async def test_a_stored_config_with_a_retired_key_still_runs(origin) -> None:
     )
 
     assert isinstance(outcome, AcceptedAgent), outcome
-    assert [w.field for w in outcome.warnings] == ["retired_setting"]
+    assert outcome.warnings == ()
 
 
 # --- the handoff's prepare step ----------------------------------------------------
