@@ -16,6 +16,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests.accepted import accepted
 from turncall.api.v1.schemas.evals import EvalRunResponse
 from turncall.domain.config_secrets import sanitize_config
 
@@ -132,7 +133,6 @@ class TestTheStoredSnapshot:
     async def test_the_run_row_stores_the_config_already_masked(self) -> None:
         """Nothing reads `resolved_config` back to execute anything, so the
         secret has no reason to sit in a JSONB column at all."""
-        from turncall.domain.models import AgentConfig
         from turncall.evals import runner as runner_mod
         from turncall.evals.targets import ResolvedTarget
 
@@ -141,7 +141,7 @@ class TestTheStoredSnapshot:
         started_payloads: list[dict] = []
         target = ResolvedTarget(
             project_id=run.project_id,
-            config=AgentConfig(),
+            agent=accepted(),
             config_blob=SECRETFUL,
             agent_id=uuid4(),
         )

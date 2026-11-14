@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from tests.accepted import accepted
 from tests.unit.test_webrtc_validation import _auth, _session_cm
-from turncall.domain.models import AgentConfig
 
 
 class FakeConnection:
@@ -47,7 +47,7 @@ def _connect(app, monkeypatch, resolved) -> dict:
     monkeypatch.setattr(webrtc, "create_whatsapp_transport", lambda *a, **k: None)
 
     async def _start(**kwargs):
-        seen["prompt"] = kwargs["config"].system_prompt
+        seen["prompt"] = kwargs["agent"].config.system_prompt
 
     monkeypatch.setattr(webrtc, "start_call_pipeline", _start)
 
@@ -92,7 +92,7 @@ def _connect(app, monkeypatch, resolved) -> dict:
 
 @pytest.mark.unit
 def test_the_requests_variables_render_the_agent(app, monkeypatch):
-    config = AgentConfig(system_prompt="Hi {{name}}, vip={{vip}}.")
+    config = accepted({"system_prompt": "Hi {{name}}, vip={{vip}}."})
     seen = _connect(app, monkeypatch, (config, uuid.uuid4(), {}, {}, None, None))
 
     assert seen["prompt"] == "Hi Ada, vip=True."
@@ -102,7 +102,7 @@ def test_the_requests_variables_render_the_agent(app, monkeypatch):
 
 @pytest.mark.unit
 def test_call_init_is_asked_with_the_id_the_call_gets(app, monkeypatch):
-    config = AgentConfig(system_prompt="Hi.")
+    config = accepted({"system_prompt": "Hi."})
     seen = _connect(app, monkeypatch, (config, None, {}, {}, None, {"x": 1}))
 
     assert seen["resolved_with"] == seen["call_id"]
@@ -110,7 +110,7 @@ def test_call_init_is_asked_with_the_id_the_call_gets(app, monkeypatch):
 
 @pytest.mark.unit
 def test_they_win_a_clash_with_call_inits(app, monkeypatch):
-    config = AgentConfig(system_prompt="{{name}} calls from {{caller_number}}.")
+    config = accepted({"system_prompt": "{{name}} calls from {{caller_number}}."})
     from_call_init = {"name": "Bob", "caller_number": "+1555"}
     seen = _connect(
         app, monkeypatch, (config, None, from_call_init, {}, None, {"x": 1})

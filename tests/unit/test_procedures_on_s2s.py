@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from loguru import logger
 
+from tests.accepted import accepted
 from tests.integration.test_procedures_api import procedure
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.config_warnings import config_warnings
@@ -75,7 +76,7 @@ async def _build(config: AgentConfig) -> tuple[Any, list[str]]:
             ),
         ):
             await pipeline_builder.build_call_pipeline(
-                config=config,
+                agent=accepted(config),
                 transport="T",
                 call_context=SimpleNamespace(
                     agent_id="a",

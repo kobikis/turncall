@@ -23,7 +23,6 @@ from turncall.api.deps import DbSession
 from turncall.api.errors import RateLimitedError
 from turncall.config import get_settings
 from turncall.domain.enums import CallDirection, CallEventType
-from turncall.domain.models import AgentConfig
 from turncall.orchestrator.ambience import build_ambience_mixer
 from turncall.orchestrator.pipeline_builder import start_call_pipeline
 from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
@@ -32,6 +31,12 @@ from turncall.orchestrator.transport_factory import (
     create_whatsapp_transport,
 )
 from turncall.services import telemetry_redaction
+from turncall.services.agent_acceptance import (
+    AcceptedAgent,
+    AgentOrigin,
+    AgentRefusal,
+    accept_agent,
+)
 from turncall.services.limits import admit_inbound_call, release_live_call
 from turncall.services.webhook_verification import (
     refused_webhooks,
@@ -227,7 +232,7 @@ class _WhatsAppCall:
     from_number: str
     to_number: str
     whatsapp_call_id: str
-    config: AgentConfig
+    agent: AcceptedAgent
     agent_id: UUID | None = None
     agent_name: str = "dynamic"
     dynamic_config: dict[str, Any] | None = None
@@ -312,7 +317,6 @@ async def _resolve_agent(
     )
     if phone_row.routing_target_type == "webhook" and phone_row.server_url:
         from turncall.events.server_events import send_call_init
-        from turncall.services.agent_acceptance import AcceptedAgent
         from turncall.services.call_init_resolver import (
             accept_call_init_agent,
             resolve_call_init,
@@ -340,7 +344,7 @@ async def _resolve_agent(
         if not isinstance(accepted, AcceptedAgent):
             return None
         return call(
-            config=accepted.config,
+            agent=accepted,
             agent_id=result.agent.id if result.agent else None,
             agent_name=result.agent.name if result.agent else "dynamic",
             dynamic_config=result.dynamic_config,
@@ -350,14 +354,44 @@ async def _resolve_agent(
         )
 
     if phone_row.routing_target_type == "agent" and phone_row.routing_target_id:
-        agent = await agent_repo.get_agent_by_id(session, phone_row.routing_target_id)
-        if agent is not None:
-            return call(
-                config=AgentConfig.model_validate(agent.config_blob),
-                agent_id=agent.id,
-                agent_name=agent.name,
-            )
+        return await _stored_call(session, phone_row, call, call_id=call_id)
     return None
+
+
+async def _stored_call(
+    session: AsyncSession, phone_row: Any, call: Any, *, call_id: UUID
+) -> _WhatsAppCall | None:
+    """The number's own agent through agent acceptance (`stored_call`, #481),
+    within the number's project: one saved before a newer rule existed is
+    refused here — the call rejected unanswered, as one with no agent is —
+    rather than failing in the build after it was answered."""
+    agent_id = phone_row.routing_target_id
+    outcome = await accept_agent(
+        agent_id,
+        project_id=phone_row.project_id,
+        origin=AgentOrigin.STORED_CALL,
+        session=session,
+    )
+    if isinstance(outcome, AgentRefusal):
+        logger.warning(
+            "agent_refused origin={origin} project_id={project_id} "
+            "field={field}: {reason}",
+            origin=AgentOrigin.STORED_CALL.value,
+            project_id=str(phone_row.project_id),
+            field=outcome.field,
+            reason=outcome.reason,
+            call_id=str(call_id),
+            agent_id=str(agent_id),
+        )
+        return None
+    row = await agent_repo.get_agent_by_id(
+        session, agent_id, project_id=phone_row.project_id
+    )
+    return call(
+        agent=outcome,
+        agent_id=outcome.agent_id,
+        agent_name=row.name if row is not None else "dynamic",
+    )
 
 
 async def _reject(http_session: aiohttp.ClientSession, whatsapp_call_id: str) -> None:
@@ -413,7 +447,6 @@ async def _start_voice_pipeline(connection: object, call: _WhatsAppCall) -> None
     from_number = call.from_number
     to_number = call.to_number
     whatsapp_call_id = call.whatsapp_call_id
-    config = call.config
     template_variables = call.template_variables
     knowledge_context = call.knowledge_context
     dynamic_config = call.dynamic_config
@@ -422,17 +455,11 @@ async def _start_voice_pipeline(connection: object, call: _WhatsAppCall) -> None
     async with session_factory() as db:
         await telemetry_redaction.for_project(call.project_id, session=db)
 
-        # Apply template variables
-        if template_variables:
-            from turncall.services.template_renderer import render_agent_config
-
-            config = render_agent_config(config, template_variables)
-
-        # Apply knowledge context
-        if knowledge_context:
-            from turncall.services.template_renderer import prepend_knowledge_context
-
-            config = prepend_knowledge_context(config, knowledge_context)
+        # The call's variables and knowledge context, onto the accepted agent.
+        agent = call.agent.rendered(
+            template_variables, knowledge_context=knowledge_context
+        )
+        config = agent.config
 
         # Create call record
         agent_id_for_call = call.agent_id
@@ -508,7 +535,7 @@ async def _start_voice_pipeline(connection: object, call: _WhatsAppCall) -> None
     transport = create_whatsapp_transport(connection, mixer=mixer)
 
     await start_call_pipeline(
-        config=config,
+        agent=agent,
         transport=transport,
         call_context=call_context,
         settings=settings,

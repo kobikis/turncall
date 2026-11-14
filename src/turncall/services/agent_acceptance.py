@@ -14,12 +14,17 @@ rewritten here: each keeps its own function and message
 `deepgram_flux.mixes_flux`, `eleven_realtime`'s, the domain
 `procedures_refusal`), so the API and this module say the same words.
 
-`call_init` (#476) is the domain model's parse plus the rules the build holds
+`call_init` (#476) is the domain model's parse plus the rules the build held
 for an inline agent, applied where the build would meet them — an S2S rule
 only on an S2S agent, the TTS's only on cascade — so nothing that builds
-today is refused (#474 story 29). The full API schema is not run on it: its
-allowlists and required models refuse configs that run. The build keeps its
-copies until #481.
+is refused (#474 story 29). The full API schema is not run on it: its
+allowlists and required models refuse configs that run.
+
+The build holds no copy of any rule (#481): `build_call_pipeline` takes an
+`AcceptedAgent`, which only this module constructs, so a config reaches the
+pipeline only past acceptance (ADR-0017's addendum). What a caller still does
+to one before the build — render `{{variables}}`, pin a run's skills, cap the
+demo's duration — is a method below that changes nothing a rule reads.
 
 The agent's `llm` rules apply only where an `llm` is built: on cascade, and
 on gpt-live-1 (`openai_live`) when it gets a client delegate, which it does
@@ -48,7 +53,7 @@ from uuid import UUID
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from turncall.domain.models import AgentConfig, resolve_delegation
+from turncall.domain.models import AgentConfig, SkillRef, resolve_delegation
 from turncall.domain.procedure_graph import procedures_refusal
 from turncall.orchestrator import eleven_realtime, grok_voice, xai_config
 from turncall.orchestrator.config_warnings import (
@@ -57,6 +62,10 @@ from turncall.orchestrator.config_warnings import (
     skills_on_s2s_warning,
 )
 from turncall.orchestrator.deepgram_flux import MIXED_FLUX_GROUP, mixes_flux
+from turncall.services.template_renderer import (
+    prepend_knowledge_context,
+    render_agent_config,
+)
 from turncall.storage.repositories import agent_repo, knowledge_repo
 
 
@@ -170,6 +179,43 @@ class AcceptedAgent:
     warnings: tuple[AgentWarning, ...] = ()
     # The config as the API stores it (the schema's dump); `full_schema` only.
     stored: Mapping[str, Any] | None = None
+
+    # What a caller may still do to an accepted agent before the build (#481).
+    # Each changes nothing a rule reads, so the answer still holds; anything
+    # else is a new config, which goes through `accept_agent` again.
+
+    def rendered(
+        self,
+        variables: Mapping[str, str] | None,
+        knowledge_context: str | None = None,
+    ) -> AcceptedAgent:
+        """The call's `{{variables}}` and call-init `knowledge_context`
+        applied: text only (the prompt, the first message, tool descriptions,
+        delegation instructions, procedure step text)."""
+        config = self.config
+        if variables:
+            config = render_agent_config(config, dict(variables))
+        if knowledge_context:
+            config = prepend_knowledge_context(config, knowledge_context)
+        return self if config is self.config else replace(self, config=config)
+
+    def with_skills(self, skills: Sequence[SkillRef]) -> AcceptedAgent:
+        """The skills list replaced — an eval run's pinned versions (#431).
+        No acceptance rule reads it; a skill resolves when the call builds."""
+        return replace(
+            self, config=self.config.model_copy(update={"skills": list(skills)})
+        )
+
+    def capped(self, max_call_duration_seconds: int) -> AcceptedAgent:
+        """The call's length capped (the demo's `DEMO_MAX_CALL_SECONDS`).
+        Lowering it can only pass a rule that reads it (Eleven Realtime's)."""
+        seconds = min(self.config.max_call_duration_seconds, max_call_duration_seconds)
+        return replace(
+            self,
+            config=self.config.model_copy(
+                update={"max_call_duration_seconds": seconds}
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -448,7 +494,7 @@ def _realtime(config: AgentConfig, _kb_modes: Sequence[str]) -> Iterator[AgentRe
 def _procedures(
     config: AgentConfig, _kb_modes: Sequence[str]
 ) -> Iterator[AgentRefusal]:
-    """The domain graph rule, as the build applies it: no step-tool check
+    """The domain graph rule, as the build applied it: no step-tool check
     (#447 is the API's), and none on S2S, which follows no procedure."""
     if config.pipeline_mode == "s2s":
         return

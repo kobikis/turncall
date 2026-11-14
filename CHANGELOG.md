@@ -25,6 +25,19 @@ and is not part of this repository's history.
   agent, a text goes unanswered. Logged as `call_init_agent_not_in_project`
   with the project and the id.
 
+### Changed
+
+- **The pipeline build takes only an accepted agent** (#481, parent #474).
+  The build's own copies of the provider rules (xAI LLM/TTS, Grok Voice,
+  Eleven Realtime, the Flux group, procedures) are gone: agent acceptance
+  applies them before anything is built, in the same words. A stored agent
+  saved before a newer rule is now refused wherever it is run: a WebRTC
+  connect naming it answers `422 invalid_agent_config` with
+  `details.reason`/`field` (was a `500 pipeline_start_failed`), a WhatsApp
+  number bound to it rejects the call unanswered, and an outbound dial's own
+  agent fails the call with `error.raised` when its media stream opens. An
+  eval target pinned by id is accepted with its linked knowledge bases.
+
 ## [2.2.0]
 
 Guided procedures, skills and skill libraries, Eleven Realtime, pipecat 1.16,

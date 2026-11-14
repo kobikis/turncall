@@ -1,11 +1,10 @@
-"""The rule a procedure graph is held to (#444): one function, applied twice.
+"""The rule a procedure graph is held to (#444): one function.
 
-The agent API runs it at save and answers 422 (`AgentConfigSchema`); the
-pipeline build runs it for a call-init inline agent, which skipped that
-schema, and fails the call as `pipeline_error` naming the same problem
-(`pipeline_builder._assemble`) — the `xai_config` refusal pattern. So a
-stored agent never reaches a call with a broken graph, and an inline one
-never runs half of one.
+Agent acceptance (#474, #481) runs it for every config that runs, whatever
+its origin, refusing a call-init inline agent with a broken graph before the
+caller is answered; the agent API runs it at save too and answers 422
+(`AgentConfigSchema`), with the step-tool check only it can make. So no
+agent reaches a call with a broken graph, and none runs half of one.
 
 A refusal names the procedure by index and name and, where there is one, the
 step: `procedures[0] 'no_internet': step 'after_restart' moves to

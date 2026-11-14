@@ -23,7 +23,7 @@ from fastapi import WebSocket
 from loguru import logger
 
 from turncall.config import get_settings
-from turncall.domain.models import AgentConfig
+from turncall.orchestrator.call_session import fail_unstarted_call
 from turncall.orchestrator.pipeline_builder import build_call_pipeline
 from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
 from turncall.orchestrator.transport_factory import (
@@ -32,6 +32,12 @@ from turncall.orchestrator.transport_factory import (
     create_carrier_transport,
 )
 from turncall.services import drain
+from turncall.services.agent_acceptance import (
+    AcceptedAgent,
+    AgentOrigin,
+    AgentRefusal,
+    accept_agent,
+)
 from turncall.services.limits import hold_live_call, release_live_call
 from turncall.services.media_token import media_token_valid
 from turncall.storage.database import create_session_factory, get_engine
@@ -103,7 +109,7 @@ async def run_media_stream(
 
     # Resolve everything from the call record (project_id, agent_id, config)
     async with session_factory() as session:
-        from turncall.storage.repositories import agent_repo, call_repo
+        from turncall.storage.repositories import call_repo
 
         call_row = await call_repo.get_call_by_id(session, UUID(call_id_str))
         if call_row is None:
@@ -123,53 +129,24 @@ async def run_media_stream(
         agent_id_str = (
             str(call_row.active_agent_id) if call_row.active_agent_id else "dynamic"
         )
-        config = None
-
-        # Check for dynamic inline config in call metadata
-        if call_row.metadata_json.get("dynamic_config"):
-            dynamic = call_row.metadata_json["dynamic_config"]
-            config = AgentConfig.model_validate(dynamic)
-            logger.info("Using dynamic inline agent config")
-        elif call_row.active_agent_id:
-            agent = await agent_repo.get_agent_by_id(session, call_row.active_agent_id)
-            if agent is not None:
-                config = AgentConfig.model_validate(agent.config_blob)
-
-        if config is None:
+        outcome = await _accepted_agent(session, call_row)
+        if outcome is None:
             logger.error(
                 "media_stream_no_config",
                 agent_id=agent_id_str,
             )
             await release_live_call(call_row.project_id, call_id)
             return
+        if isinstance(outcome, AgentRefusal):
+            await _refuse(call_row, outcome, session_factory, stream)
+            return
 
-        # Apply template variables if stored in call metadata
-        template_variables = {}
-        if call_row and call_row.metadata_json:
-            template_variables = call_row.metadata_json.get("template_variables", {})
-
-        if template_variables:
-            from turncall.services.template_renderer import render_agent_config
-
-            config = render_agent_config(config, template_variables)
-            logger.info(
-                "Template variables applied: {keys}",
-                keys=list(template_variables.keys()),
-            )
-
-        # Apply knowledge_context if stored in call metadata
-        knowledge_context = (
-            call_row.metadata_json.get("knowledge_context")
-            if call_row.metadata_json
-            else None
+        metadata = call_row.metadata_json or {}
+        agent = outcome.rendered(
+            metadata.get("template_variables") or {},
+            knowledge_context=metadata.get("knowledge_context"),
         )
-        if knowledge_context:
-            from turncall.services.template_renderer import (
-                prepend_knowledge_context,
-            )
-
-            config = prepend_knowledge_context(config, knowledge_context)
-            logger.info("Knowledge context applied to system prompt")
+    config = agent.config
 
     # Live from here until the session has finalized: a SIGTERM waits (#199).
     with drain.live_call(call_id, config.max_call_duration_seconds):
@@ -217,7 +194,7 @@ async def run_media_stream(
             )
 
             call_session = await build_call_pipeline(
-                config=config,
+                agent=agent,
                 transport=transport,
                 call_context=call_context,
                 settings=settings,
@@ -226,3 +203,64 @@ async def run_media_stream(
             )
             # WS handler stays open for the call — await (don't fire-and-forget).
             await call_session.start()
+
+
+async def _accepted_agent(
+    session: Any, call_row: Any
+) -> AcceptedAgent | AgentRefusal | None:
+    """The call's agent through agent acceptance (#481), or None when the
+    call record names none.
+
+    The call record's agent was accepted when the call was opened — call-init
+    for an inline one, the number's stored agent, a dial's — and is accepted
+    again here, since the build takes nothing else: an inline agent as
+    `call_init` (it is still the answer's raw config, ADR-0017), a stored one
+    by id within the call's project. Cheap, and what makes an outbound dial's
+    own agent (never accepted at the dial) and any future opener held to the
+    rules without remembering to be."""
+    dynamic = (call_row.metadata_json or {}).get("dynamic_config")
+    if dynamic:
+        return await accept_agent(
+            dynamic,
+            project_id=call_row.project_id,
+            origin=AgentOrigin.CALL_INIT,
+            session=session,
+        )
+    if call_row.active_agent_id:
+        return await accept_agent(
+            call_row.active_agent_id,
+            project_id=call_row.project_id,
+            origin=AgentOrigin.STORED_CALL,
+            session=session,
+        )
+    return None
+
+
+async def _refuse(
+    call_row: Any, refusal: AgentRefusal, session_factory: Any, stream: CarrierStream
+) -> None:
+    """A call whose agent cannot run: failed with the reason, as a build that
+    raised was (`error.raised`, `call.ended`), and its slot freed. The carrier
+    edge then closes the stream, which ends the call."""
+    logger.warning(
+        "agent_refused origin={origin} project_id={project_id} field={field}: {reason}",
+        origin=(
+            AgentOrigin.CALL_INIT
+            if (call_row.metadata_json or {}).get("dynamic_config")
+            else AgentOrigin.STORED_CALL
+        ).value,
+        project_id=str(call_row.project_id),
+        field=refusal.field,
+        reason=refusal.reason,
+        call_id=str(call_row.id),
+    )
+    call_context = CallContext(
+        call_id=call_row.id,
+        project_id=call_row.project_id,
+        agent_id=call_row.active_agent_id or DYNAMIC_AGENT_ID,
+        call_sid=stream.call_sid or call_row.provider_call_sid or "",
+        stream_sid=stream.stream_id,
+        session_factory=session_factory,
+    )
+    await fail_unstarted_call(call_context, ValueError(refusal.describe()))
+    await release_live_call(call_row.project_id, call_row.id)

@@ -472,7 +472,9 @@ of it)
 **Accepted agent**:
 What [[agent acceptance]] answers for a config that can run: the parsed config,
 the agent id (none for an [[inline agent]]) and the warnings — what the call
-will ignore, such as a field the schema does not know.
+will ignore, such as a field the schema does not know. The pipeline build takes
+nothing else (#481): every voice call, handoff, eval iteration and demo call
+runs one, so the build holds no copy of any rule. Only acceptance makes one.
 
 **Agent refusal**:
 What [[agent acceptance]] answers for a config that cannot run: a reason, in the

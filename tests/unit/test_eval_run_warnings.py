@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests.accepted import accepted
 from turncall.domain.models import AgentConfig, MCPServerConfig, ToolDefinition
 from turncall.evals.run_warnings import (
     warn_ambience_skipped,
@@ -27,15 +28,17 @@ pytestmark = pytest.mark.unit
 def _target(*, tools=(), mcp_servers=()):
     return ResolvedTarget(
         project_id=uuid4(),
-        config=AgentConfig(
-            tools=[
-                ToolDefinition(name=n, description=n, parameters_schema={})
-                for n in tools
-            ],
-            mcp_servers=[
-                MCPServerConfig(name=n, transport="http", url="https://x/mcp")
-                for n in mcp_servers
-            ],
+        agent=accepted(
+            AgentConfig(
+                tools=[
+                    ToolDefinition(name=n, description=n, parameters_schema={})
+                    for n in tools
+                ],
+                mcp_servers=[
+                    MCPServerConfig(name=n, transport="http", url="https://x/mcp")
+                    for n in mcp_servers
+                ],
+            )
         ),
         config_blob={},
         agent_id=uuid4(),
@@ -99,7 +102,7 @@ class TestAmbienceIsSaidToBeSkipped:
         sound = uuid4()
         target = ResolvedTarget(
             project_id=target.project_id,
-            config=AgentConfig.model_validate({"ambience": {"sound": str(sound)}}),
+            agent=accepted({"ambience": {"sound": str(sound)}}),
             config_blob={},
             agent_id=target.agent_id,
         )
@@ -115,7 +118,7 @@ def _s2s_target(provider: str) -> ResolvedTarget:
     blob = {"pipeline_mode": "s2s", "s2s": {"provider": provider}}
     return ResolvedTarget(
         project_id=uuid4(),
-        config=AgentConfig.model_validate(blob),
+        agent=accepted(blob),
         config_blob=blob,
         agent_id=uuid4(),
     )
@@ -220,7 +223,7 @@ class TestTheyReachTheRunAndTheEvent:
 
         target = ResolvedTarget(
             project_id=uuid4(),
-            config=AgentConfig.model_validate({"ambience": {"sound": str(uuid4())}}),
+            agent=accepted({"ambience": {"sound": str(uuid4())}}),
             config_blob={},
             agent_id=uuid4(),
         )

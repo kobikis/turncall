@@ -17,6 +17,32 @@ from turncall.evals.targets import TargetError, resolve_target
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def no_knowledge_links():
+    """A stored target is accepted by id (#481), which reads its linked
+    knowledge bases' modes too: none here."""
+    with patch(
+        "turncall.storage.repositories.knowledge_repo.kb_modes_by_agent",
+        AsyncMock(return_value={}),
+    ):
+        yield
+
+
+def _published(agent):
+    """`agent` as the published version a name finds, and as the row its id
+    names when acceptance reads it back."""
+    return (
+        patch(
+            "turncall.storage.repositories.agent_repo.get_latest_published",
+            AsyncMock(return_value=agent),
+        ),
+        patch(
+            "turncall.storage.repositories.agent_repo.get_agent_by_id",
+            AsyncMock(return_value=agent),
+        ),
+    )
+
+
 class TestResolveTarget:
     async def test_an_agent_target_resolves_to_its_config(self) -> None:
         agent_id = project_id = uuid4()
@@ -68,8 +94,15 @@ class TestResolveTarget:
             id=agent_id, version=7, config_blob={"system_prompt": "live"}
         )
         latest = AsyncMock(return_value=published)
-        with patch(
-            "turncall.storage.repositories.agent_repo.get_latest_published", latest
+        with (
+            patch(
+                "turncall.storage.repositories.agent_repo.get_latest_published",
+                latest,
+            ),
+            patch(
+                "turncall.storage.repositories.agent_repo.get_agent_by_id",
+                AsyncMock(return_value=published),
+            ),
         ):
             resolved = await resolve_target(
                 AsyncMock(),
@@ -155,10 +188,8 @@ class TestAgentAcceptance:
 
     async def test_a_published_name_that_cannot_run_names_the_field(self) -> None:
         agent = SimpleNamespace(id=uuid4(), version=4, config_blob=XAI_GATEWAY)
-        with patch(
-            "turncall.storage.repositories.agent_repo.get_latest_published",
-            AsyncMock(return_value=agent),
-        ):
+        latest, by_id = _published(agent)
+        with latest, by_id:
             with pytest.raises(
                 TargetError, match=r"'support' \(v4\) cannot run: llm: "
             ):

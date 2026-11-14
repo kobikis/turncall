@@ -25,6 +25,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.tests.utils import SleepFrame, run_test
 
+from tests.accepted import accepted
 from turncall.domain.models import AgentConfig, AvatarConfig
 from turncall.orchestrator import pipeline_builder
 from turncall.orchestrator.pipeline_factory import CallContext
@@ -104,7 +105,7 @@ async def _build(config: AgentConfig, ctx: CallContext, **options: Any) -> Magic
         ),
     ):
         await pipeline_builder.build_call_pipeline(
-            config=config,
+            agent=accepted(config),
             transport="T",
             call_context=ctx,
             settings=SimpleNamespace(pipecat=SimpleNamespace(), byom=None),

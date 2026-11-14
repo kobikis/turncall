@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import pytest
 
-from turncall.domain.models import AgentConfig
+from tests.accepted import accepted
 from turncall.services import drain
 
 pytestmark = pytest.mark.unit
@@ -196,7 +196,7 @@ async def test_webrtc_and_whatsapp_calls_are_counted_while_they_run():
         pipeline_builder, "build_call_pipeline", new=AsyncMock(return_value=Session())
     ):
         await pipeline_builder.start_call_pipeline(
-            config=AgentConfig(),
+            agent=accepted(),
             transport="T",
             call_context=context,
             settings=SimpleNamespace(),

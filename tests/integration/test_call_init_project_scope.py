@@ -322,8 +322,8 @@ def whatsapp_voice(monkeypatch) -> WhatsAppLeg:
         leg.rejected.append(call_id)
         return {"success": True}
 
-    async def _start(*, config: Any, call_context: Any, **_kwargs: Any) -> None:
-        leg.started.append((config, call_context))
+    async def _start(*, agent: Any, call_context: Any, **_kwargs: Any) -> None:
+        leg.started.append((agent.config, call_context))
 
     monkeypatch.setattr(WhatsAppClient, "handle_webhook_request", _connected)
     monkeypatch.setattr(WhatsAppApi, "reject_call_to_whatsapp", _reject)

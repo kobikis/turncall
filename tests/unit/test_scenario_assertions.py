@@ -17,6 +17,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests.accepted import accepted
 from turncall.evals.scenario import assertion_warnings
 
 pytestmark = pytest.mark.unit
@@ -174,7 +175,6 @@ class TestItReachesBothSurfaces:
     async def test_the_run_carries_it_too(self) -> None:
         """The person reading a green verdict is not always the one who wrote
         the scenario."""
-        from turncall.domain.models import AgentConfig
         from turncall.evals import runner as runner_mod
         from turncall.evals.runner import ResolvedTarget
 
@@ -195,7 +195,7 @@ class TestItReachesBothSurfaces:
         start = AsyncMock()
         target = ResolvedTarget(
             project_id=run.project_id,
-            config=AgentConfig(),
+            agent=accepted(),
             config_blob={},
             agent_id=uuid4(),
         )

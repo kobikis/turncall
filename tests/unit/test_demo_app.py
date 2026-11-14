@@ -6,9 +6,9 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from tests.accepted import accepted
 from turncall.config.settings import Settings
 from turncall.demo.app import create_demo_app
-from turncall.domain.models import AgentConfig
 
 pytestmark = pytest.mark.unit
 
@@ -18,7 +18,7 @@ OFFER = {"sdp": "v=0", "type": "offer"}
 @pytest.fixture
 def http():
     app = create_demo_app(
-        {"front-desk": AgentConfig(), "restaurant": AgentConfig()}, Settings()
+        {"front-desk": accepted(), "restaurant": accepted()}, Settings()
     )
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://demo"
@@ -71,6 +71,6 @@ async def test_the_call_path_is_imported_at_startup_not_on_the_first_call(
     monkeypatch.setattr(
         demo_app, "import_call_path", lambda: loop.call_soon_threadsafe(warmed.set)
     )
-    app = create_demo_app({"front-desk": AgentConfig()}, Settings())
+    app = create_demo_app({"front-desk": accepted()}, Settings())
     async with app.router.lifespan_context(app):
         await asyncio.wait_for(warmed.wait(), timeout=5)

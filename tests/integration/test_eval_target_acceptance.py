@@ -100,3 +100,71 @@ async def test_a_published_agent_that_cannot_run_errors_the_run_naming_the_field
     )
     assert (finished.passed_count, finished.failed_count) == (0, 0)
     assert finished.results == []
+
+
+async def test_a_pinned_agent_is_accepted_with_its_linked_knowledge_bases(
+    factory,
+) -> None:
+    """By id (#481), as a call's stored agent is (#484): an `openai_live`
+    agent whose only tool is a linked tool-mode knowledge base gets a client
+    delegate built from its `llm`, so that `llm` is held to the rules — the
+    link lives outside the config, where a check of the blob alone missed it."""
+    from turncall.storage.models import AgentKnowledgeBaseRow, KnowledgeBaseRow
+
+    async with factory() as session:
+        project = ProjectRow(name=f"eval-acceptance-{uuid4().hex[:8]}")
+        session.add(project)
+        await session.flush()
+        agent = AgentRow(
+            project_id=project.id,
+            name="live",
+            environment="production",
+            version=1,
+            state="draft",
+            config_blob={
+                "system_prompt": "You are the support agent.",
+                "pipeline_mode": "s2s",
+                "s2s": {"provider": "openai_live"},
+                "llm": {"provider": "xai", "base_url": "https://gateway.example/v1"},
+            },
+        )
+        kb = KnowledgeBaseRow(project_id=project.id, name="faq")
+        session.add_all([agent, kb])
+        await session.flush()
+        session.add(
+            AgentKnowledgeBaseRow(
+                agent_id=agent.id, knowledge_base_id=kb.id, mode="tool"
+            )
+        )
+        run = await eval_repo.create_run(
+            session,
+            project_id=project.id,
+            scenario_id=None,
+            scenario_name="greets",
+            kind="script",
+            target={"type": "agent", "agent_id": str(agent.id)},
+            resolved_scenario={"definition": SCRIPTED},
+            modality="text",
+            iterations=1,
+        )
+        await session.commit()
+        run_id, agent_id = run.id, agent.id
+
+    executed: list[Any] = []
+
+    async def execute(*args: Any, **kwargs: Any) -> Any:
+        executed.append(args)
+        raise AssertionError("no iteration should run")
+
+    await execute_run(
+        run_id, session_factory=factory, settings=Settings(), execute=execute
+    )
+
+    async with factory() as session:
+        finished = await eval_repo.get_run(session, run_id)
+    assert executed == []
+    assert finished.status == EvalRunStatus.ERRORED.value
+    assert finished.error == (
+        f"agent {agent_id} (v1) cannot run: "
+        "llm: base_url is not supported for the xai provider"
+    )

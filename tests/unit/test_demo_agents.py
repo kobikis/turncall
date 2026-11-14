@@ -42,18 +42,18 @@ def test_agents_load_by_name_in_order(tmp_path) -> None:
         _file(tmp_path, {"b": AGENT, "a": AGENT}), max_call_seconds=180
     )
     assert list(agents) == ["b", "a"]
-    assert [t.name for t in agents["b"].tools] == ["end_call"]
+    assert [t.name for t in agents["b"].config.tools] == ["end_call"]
 
 
 def test_a_call_is_capped_at_the_demos_ceiling(tmp_path) -> None:
     agents = load_demo_agents(_file(tmp_path, {"a": AGENT}), max_call_seconds=120)
-    assert agents["a"].max_call_duration_seconds == 120
+    assert agents["a"].config.max_call_duration_seconds == 120
 
 
 def test_a_shorter_call_keeps_its_own_limit(tmp_path) -> None:
     short = {**AGENT, "max_call_duration_seconds": 60}
     agents = load_demo_agents(_file(tmp_path, {"a": short}), max_call_seconds=120)
-    assert agents["a"].max_call_duration_seconds == 60
+    assert agents["a"].config.max_call_duration_seconds == 60
 
 
 @pytest.mark.parametrize(

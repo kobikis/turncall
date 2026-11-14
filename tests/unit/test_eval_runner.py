@@ -16,6 +16,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests.accepted import accepted
 from tests.unit.eval_results import (
     failure,
     script_result,
@@ -23,7 +24,6 @@ from tests.unit.eval_results import (
     turn_result,
 )
 from turncall.domain.enums import EvalKind, EvalRunStatus
-from turncall.domain.models import AgentConfig
 from turncall.evals.runner import tool_policy_of
 from turncall.evals.snapshots import harness_config, resolved_scenario_snapshot
 from turncall.evals.targets import ResolvedTarget, TargetError
@@ -192,7 +192,7 @@ class TestExecuteRun:
         start = start or AsyncMock()
         target = ResolvedTarget(
             project_id=run_row.project_id,
-            config=AgentConfig(),
+            agent=accepted(),
             config_blob={"system_prompt": "hi"},
             agent_id=uuid4(),
         )
@@ -436,7 +436,7 @@ class TestExecuteRun:
         start = AsyncMock()
         finish = AsyncMock()
         target = ResolvedTarget(
-            project_id=run.project_id, config=AgentConfig(), config_blob={}
+            project_id=run.project_id, agent=accepted(), config_blob={}
         )
         with (
             patch(

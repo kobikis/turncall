@@ -169,10 +169,8 @@ def _create_openai_realtime(config: AgentConfig, api_key: str) -> Any:
     from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 
     s2s = config.s2s
-    # The API schema refuses it at save; a call-init inline agent reaches here
-    # unchecked, and would hand the OpenAI key to ElevenLabs (#465).
-    if problem := eleven_realtime.gateway_refusal(s2s):
-        raise ValueError(problem)
+    # Gateway mode aimed at ElevenLabs, which would hand it the OpenAI key
+    # (#465), never gets here: agent acceptance refuses it (#481).
 
     system_prompt = _build_s2s_system_prompt(config)
 
@@ -328,11 +326,8 @@ def _create_grok_realtime(config: AgentConfig, api_key: str) -> Any:
     from turncall.orchestrator import grok_realtime
 
     s2s = config.s2s
-    # The API schema refuses these at save; a call-init inline agent reaches
-    # here unchecked, and dropping what it asked for would be silent (#387).
-    problem = grok_voice.refusal(s2s)
-    if problem:
-        raise ValueError(problem)
+    # What Grok's session lacks never gets here: agent acceptance refuses it
+    # (`grok_voice.refusal`, #387, #481), so nothing asked for is dropped.
 
     model, voice = _own_defaults(s2s, model=_GROK_VOICE_MODEL, voice=_GROK_VOICE_VOICE)
 
@@ -368,11 +363,6 @@ def _create_eleven_realtime(config: AgentConfig, api_key: str) -> Any:
     from turncall.orchestrator.eleven_realtime_service import ElevenRealtime
 
     s2s = config.s2s
-    problem = eleven_realtime.refusal(s2s) or eleven_realtime.duration_refusal(
-        config.max_call_duration_seconds
-    )
-    if problem:
-        raise ValueError(problem)
 
     model, voice = _own_defaults(
         s2s, model=eleven_realtime.MODEL, voice=eleven_realtime.VOICE

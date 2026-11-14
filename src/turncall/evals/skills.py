@@ -83,15 +83,15 @@ async def resolve_run_skills(session: Any, target: ResolvedTarget) -> RunSkills:
     except Exception:
         logger.exception("eval_skills_unresolved", project_id=str(target.project_id))
         available = ()
-    pinned = config.model_copy(
-        update={"skills": [SkillRef(skill=s.name, version_id=s.id) for s in available]}
+    pinned = target.agent.with_skills(
+        [SkillRef(skill=s.name, version_id=s.id) for s in available]
     )
     resolved = {s.name for s in available}
     missing = list(
         dict.fromkeys(r.skill for r in config.skills if r.skill not in resolved)
     )
     return RunSkills(
-        target=replace(target, config=pinned),
+        target=replace(target, agent=pinned),
         available=available,
         warnings=[_skills_skipped(missing)] if missing else [],
         listed=True,
@@ -99,7 +99,7 @@ async def resolve_run_skills(session: Any, target: ResolvedTarget) -> RunSkills:
 
 
 def _without_skills(target: ResolvedTarget) -> ResolvedTarget:
-    return replace(target, config=target.config.model_copy(update={"skills": []}))
+    return replace(target, agent=target.agent.with_skills([]))
 
 
 def _skills_skipped(names: list[str]) -> dict[str, Any]:

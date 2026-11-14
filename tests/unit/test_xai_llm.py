@@ -8,6 +8,7 @@ refuses is HTTP 400 there too (measured, #392), read as one by the
 
 import pytest
 
+from tests.accepted import refusal
 from tests.conftest import creds
 from turncall.domain.models import AgentConfig, LLMConfig
 from turncall.orchestrator.pipeline_factory import _create_llm_service
@@ -312,37 +313,31 @@ class TestTheBoundary:
 
 
 @pytest.mark.unit
-class TestTheBuildHoldsTheSameRules:
-    """A call-init inline agent is validated by the domain model, not the API
-    schema, so the build refuses what the schema does (the Flux precedent)."""
+class TestAcceptanceHoldsTheSameRules:
+    """A call-init inline agent skips the API schema; agent acceptance refuses
+    what the schema does, at call-init, before anything is built (#481)."""
 
-    def test_minimal_effort_fails_the_build(self) -> None:
-        with pytest.raises(ValueError, match="minimal"):
-            _voice({"reasoning_effort": "minimal"}, xai="k")
+    def test_minimal_effort_is_refused(self) -> None:
+        refused = refusal({"llm": {"provider": "xai", "reasoning_effort": "minimal"}})
+        assert "minimal" in refused.reason
 
-    def test_a_base_url_fails_the_build(self) -> None:
-        with pytest.raises(ValueError, match="base_url is not supported for the xai"):
-            _voice({"base_url": "https://example.com/v1"}, xai="k")
+    def test_a_base_url_is_refused(self) -> None:
+        refused = refusal({"llm": {"provider": "xai", "base_url": "https://e.x/v1"}})
+        assert "base_url is not supported for the xai" in refused.reason
 
-    def test_a_failover_member_fails_the_build_too(self) -> None:
-        from turncall.orchestrator.pipeline_factory import _create_llm_stage
-
-        config = AgentConfig.model_validate(
+    def test_a_failover_member_is_refused_too(self) -> None:
+        refused = refusal(
             {"llm": {"failover": [{"provider": "xai", "reasoning_effort": "minimal"}]}}
         )
-        with pytest.raises(ValueError, match="minimal"):
-            _create_llm_stage(config, creds("sk-openai", xai="k"))
+        assert (refused.field, "minimal" in refused.reason) == ("llm.failover[0]", True)
 
-    def test_the_schema_and_the_build_give_one_verdict(self) -> None:
+    def test_the_schema_and_acceptance_give_one_verdict(self) -> None:
         from pydantic import ValidationError
 
         from turncall.api.v1.schemas.agents import AgentConfigSchema
 
+        config = {"llm": {"provider": "xai", "reasoning_effort": "minimal"}}
         with pytest.raises(ValidationError) as at_the_api:
-            AgentConfigSchema.model_validate(
-                {"llm": {"provider": "xai", "reasoning_effort": "minimal"}}
-            )
-        with pytest.raises(ValueError) as at_build:
-            _voice({"reasoning_effort": "minimal"}, xai="k")
+            AgentConfigSchema.model_validate(config)
 
-        assert str(at_build.value) in str(at_the_api.value)
+        assert refusal(config).reason in str(at_the_api.value)

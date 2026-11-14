@@ -13,6 +13,7 @@ from typing import Any
 
 from turncall.domain.models import AgentConfig
 from turncall.services.agent_acceptance import (
+    AcceptedAgent,
     AgentOrigin,
     AgentRefusal,
     accept_raw_config,
@@ -30,8 +31,9 @@ class DemoAgentError(ValueError):
 
 def load_demo_agents(
     path: str | Path, *, max_call_seconds: int
-) -> dict[str, AgentConfig]:
-    """The agents in `path`, by name, each capped at `max_call_seconds`."""
+) -> dict[str, AcceptedAgent]:
+    """The agents in `path`, by name, each accepted (the build takes nothing
+    else, #481) and capped at `max_call_seconds`."""
     try:
         raw = json.loads(Path(path).read_text())
     except (OSError, ValueError) as exc:
@@ -46,7 +48,7 @@ def load_demo_agents(
     }
 
 
-def _demo_agent(name: str, blob: Any, max_call_seconds: int) -> AgentConfig:
+def _demo_agent(name: str, blob: Any, max_call_seconds: int) -> AcceptedAgent:
     # Agent acceptance's `demo` row (#479): the API's whole schema, which
     # forbids unknown fields, so a typo is an error here rather than a setting
     # silently ignored on the call; plain http:// is not refused (#340).
@@ -60,13 +62,7 @@ def _demo_agent(name: str, blob: Any, max_call_seconds: int) -> AgentConfig:
             f"demo agent {name!r} uses {', '.join(unusable)}, which a demo call "
             "cannot run: it has no database, project or carrier behind it"
         )
-    return config.model_copy(
-        update={
-            "max_call_duration_seconds": min(
-                config.max_call_duration_seconds, max_call_seconds
-            )
-        }
-    )
+    return accepted.capped(max_call_seconds)
 
 
 def _needs_a_platform(config: AgentConfig) -> list[str]:

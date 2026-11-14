@@ -17,6 +17,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests.accepted import accepted
 from tests.conftest import creds
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator.pipeline_factory import create_pipeline
@@ -205,7 +206,7 @@ async def _assemble(
         patch("turncall.services.retrieval.build_knowledge_preamble", preamble),
     ):
         await pipeline_builder.build_call_pipeline(
-            config=config,
+            agent=accepted(config),
             transport="T",
             call_context=SimpleNamespace(
                 agent_id="a",
@@ -270,7 +271,7 @@ async def test_the_assembly_checks_the_delegates_key_for_a_tool_kb() -> None:
         pytest.raises(MissingProviderKeyError) as raised,
     ):
         await pipeline_builder.build_call_pipeline(
-            config=_config("openai_live", llm={"provider": "anthropic"}),
+            agent=accepted(_config("openai_live", llm={"provider": "anthropic"})),
             transport="T",
             call_context=SimpleNamespace(
                 agent_id="a",

@@ -12,10 +12,10 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from tests.accepted import accepted
 
 from turncall.config.settings import Settings
 from turncall.domain.enums import EvalKind, EvalModality
-from turncall.domain.models import AgentConfig
 from turncall.evals import scenario as scenario_mod
 from turncall.evals.harness import run_iteration
 from turncall.evals.runner import ResolvedTarget
@@ -70,7 +70,7 @@ async def test_an_unusable_llm_fails_over_and_the_turn_is_answered(
     }
     target = ResolvedTarget(
         project_id=uuid4(),
-        config=AgentConfig.model_validate(blob),
+        agent=accepted(blob),
         config_blob=blob,
         agent_id=None,
     )

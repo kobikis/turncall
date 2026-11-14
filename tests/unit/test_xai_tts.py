@@ -6,9 +6,12 @@ key and the settings. The audio itself is the live file's
 (`tests/live/test_live_xai_tts.py`).
 """
 
+import re
+
 import pytest
 from pydantic import ValidationError
 
+from tests.accepted import refusal
 from tests.conftest import creds
 from turncall.api.v1.schemas.agents import AgentConfigSchema
 from turncall.domain.models import AgentConfig, TTSConfig
@@ -135,22 +138,22 @@ class TestPronunciations:
         ), said
 
 
-class TestTheBuildHoldsTheSameRules:
-    """A call-init inline agent skips the API schema; the build refuses the
-    speed xAI would answer 400 to rather than lose every reply's audio."""
+class TestAcceptanceHoldsTheSameRules:
+    """A call-init inline agent skips the API schema; agent acceptance refuses
+    the speed xAI would answer 400 to, at call-init, rather than lose every
+    reply's audio (#481)."""
 
     @pytest.mark.parametrize("speed", [0.5, 1.6])
-    def test_a_speed_out_of_range_fails_the_build(self, speed) -> None:
-        with pytest.raises(ValueError, match=r"xai.*0\.7.*1\.5"):
-            _service(speed=speed)
+    def test_a_speed_out_of_range_is_refused(self, speed) -> None:
+        refused = refusal({"tts": {"provider": "xai", "speed": speed}})
+        assert re.search(r"xai.*0\.7.*1\.5", refused.reason)
 
-    def test_a_failover_member_fails_the_build_too(self) -> None:
-        from turncall.orchestrator.pipeline_factory import _create_tts_stage
-
+    def test_a_failover_member_is_refused_too(self) -> None:
         backup = TTSConfig(provider="xai", speed=2.0)
         config = AgentConfig(system_prompt="hi", tts=TTSConfig(failover=[backup]))
-        with pytest.raises(ValueError, match=r"xai.*0\.7.*1\.5"):
-            _create_tts_stage(config, creds(xai="xai-key"))
+        refused = refusal(config)
+        assert refused.field == "tts.failover[0]"
+        assert re.search(r"xai.*0\.7.*1\.5", refused.reason)
 
     @pytest.mark.parametrize("speed", [0.7, 1.5])
     def test_the_edges_of_the_range_build(self, speed) -> None:

@@ -27,12 +27,10 @@ from turncall.domain.models import (
 )
 from turncall.orchestrator.avatar_stage import avatar_stage, s2s_avatar_stage
 from turncall.orchestrator.deepgram_flux import (
-    MIXED_FLUX_GROUP,
     create_flux_stt,
     flux_turn_strategies,
     is_eager,
     is_flux,
-    mixes_flux,
 )
 from turncall.orchestrator.knowledge_processor import (
     KnowledgeTool,
@@ -433,13 +431,8 @@ def _create_stt_stage(
 ) -> Any:
     """The call's STT: the service itself, or it and its backups (#223). Each
     entry is built as `stt` would be, so its model resolves on its own terms.
-
-    A group mixing Flux with other models is refused here as well as at the
-    API: a call-init inline agent reaches the build without passing the API's
-    schema, and the call then fails at build, saying why, rather than leaving
-    every turn after a switch on a 5s timeout."""
-    if mixes_flux(config.stt):
-        raise ValueError(MIXED_FLUX_GROUP)
+    A group mixing Flux with other models never gets here: agent acceptance
+    refuses it (`deepgram_flux.mixes_flux`, #481)."""
     stt = _create_stt_service(config, credentials, sample_rate=sample_rate)
     if not config.stt.failover:
         return stt
@@ -1047,14 +1040,8 @@ def _create_xai_tts(
     borrowers `adapters/aiohttp_client` exists for."""
     from pipecat.services.xai.tts import XAIHttpTTSService
 
-    from turncall.orchestrator.xai_config import tts_refusal
-
-    # The API schema refuses it at save; a call-init inline agent reaches here
-    # unchecked, and xAI would answer every reply with a 400.
-    problem = tts_refusal(config.tts)
-    if problem:
-        raise ValueError(problem)
-
+    # A speed xAI would 400 never gets here: agent acceptance refuses it
+    # (`xai_config.tts_refusal`, #481).
     extra = config.tts.extra
     promoted = {k: extra[k] for k in _XAI_TTS_SETTINGS if k in extra}
     return XAIHttpTTSService(

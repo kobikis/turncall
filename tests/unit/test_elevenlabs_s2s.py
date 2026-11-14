@@ -5,11 +5,13 @@ sends. The socket itself is the live file's
 (`tests/live/test_live_elevenlabs_realtime.py`).
 """
 
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
+from tests.accepted import refusal
 from tests.conftest import creds
 from turncall.api.v1.schemas.agents import AgentConfigSchema
 from turncall.domain.models import AgentConfig, S2SConfig
@@ -148,15 +150,18 @@ class TestRefusals:
             _schema(s2s)
 
     @pytest.mark.parametrize(("s2s", "match"), _REFUSED)
-    def test_an_inline_agent_fails_the_build(self, s2s, match) -> None:
-        with pytest.raises(ValueError, match=match):
-            _service(_agent(**s2s))
+    def test_an_inline_agent_is_refused_at_call_init(self, s2s, match) -> None:
+        """Agent acceptance, not the build, refuses it (#481)."""
+        assert re.search(match, refusal(_agent(**s2s)).reason)
 
     def test_a_call_longer_than_a_session_is_refused(self) -> None:
         with pytest.raises(ValidationError, match="7200"):
             _schema({}, max_call_duration_seconds=7201)
-        with pytest.raises(ValueError, match="7200"):
-            _service(_agent(7201))
+        refused = refusal(_agent(7201))
+        assert (refused.field, "7200" in refused.reason) == (
+            "max_call_duration_seconds",
+            True,
+        )
 
     def test_temperature_is_allowed(self) -> None:
         assert _schema({"temperature": 0.5}).s2s.temperature == 0.5
@@ -170,8 +175,7 @@ class TestRefusals:
         with pytest.raises(ValidationError, match="'elevenlabs'"):
             AgentConfigSchema.model_validate({"pipeline_mode": "s2s", "s2s": gateway})
         config = _agent().model_copy(update={"s2s": S2SConfig(**gateway)})
-        with pytest.raises(ValueError, match="'elevenlabs'"):
-            create_s2s_service(config, creds("sk-openai"))
+        assert "'elevenlabs'" in refusal(config).reason
 
     def test_an_unknown_extra_key_is_dropped(self) -> None:
         from loguru import logger
