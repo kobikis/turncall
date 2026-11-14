@@ -14,6 +14,7 @@ skills, cap the duration) is a method on it that changes nothing a rule reads.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import inspect
 from pathlib import Path
 
@@ -77,6 +78,73 @@ def test_only_agent_acceptance_builds_an_accepted_agent() -> None:
             ):
                 builders.add(path.relative_to(SRC).as_posix())
     assert builders == {"services/agent_acceptance.py"}
+
+
+ACCEPTED_FIELDS = frozenset(f.name for f in dataclasses.fields(AcceptedAgent))
+
+
+def _replaces_accepted_fields(source: str) -> list[int]:
+    """The lines of `source` that copy a dataclass with an `AcceptedAgent`
+    field changed — `replace(...)`, `dataclasses.replace(...)`,
+    `copy.replace(...)`, `x.__replace__(...)` — or with changes nobody can
+    read (`**changes`). Without the types, a field name is the tell: no
+    other replace in the source changes one (rename it if a new one does)."""
+    lines = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        bare = isinstance(func, ast.Name) and func.id == "replace"
+        qualified = isinstance(func, ast.Attribute) and (
+            func.attr == "__replace__"
+            or (
+                func.attr == "replace"
+                and isinstance(func.value, ast.Name)
+                and func.value.id in ("dataclasses", "copy")
+            )
+        )
+        if not (bare or qualified):
+            continue
+        changed = {k.arg for k in node.keywords}
+        if None in changed or changed & ACCEPTED_FIELDS:
+            lines.append(node.lineno)
+    return lines
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "replace(agent, config=other)",
+        "dataclasses.replace(agent, agent_id=None)",
+        "copy.replace(agent, warnings=())",
+        "agent.__replace__(stored={})",
+        "replace(agent, **changes)",
+    ],
+)
+def test_the_guard_sees_a_replace_that_changes_an_accepted_field(source: str) -> None:
+    assert _replaces_accepted_fields(source) == [1]
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["replace(context, skills=s)", "text.replace('a', 'b')", "replace(agent)"],
+)
+def test_the_guard_leaves_other_replaces_alone(source: str) -> None:
+    assert _replaces_accepted_fields(source) == []
+
+
+def test_only_agent_acceptance_replaces_an_accepted_agents_fields() -> None:
+    """A copy with a field changed is a new config nothing checked, as much
+    as one built by hand."""
+    found = []
+    for path in _source_files():
+        where = path.relative_to(SRC).as_posix()
+        if where == "services/agent_acceptance.py":
+            continue
+        found += [
+            f"{where}:{line}" for line in _replaces_accepted_fields(path.read_text())
+        ]
+    assert found == []
 
 
 def test_the_build_holds_no_copy_of_a_rule() -> None:
