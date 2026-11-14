@@ -27,12 +27,14 @@ from loguru import logger
 from tests.harness import HARNESS_AGENT, Script, answer_outbound_call, run_app
 from tests.integration.test_call_init_project_scope import (
     _calls,
-    _connect_whatsapp,
-    _live_calls,
     _ring_refused,
     _route,
-    assert_whatsapp_rejected,
     no_peer,  # noqa: F401 - a fixture
+)
+from tests.integration.test_call_init_project_scope_whatsapp import (
+    _connect_whatsapp,
+    _live_calls,
+    assert_whatsapp_rejected,
     whatsapp_voice,  # noqa: F401 - a fixture
 )
 from tests.integration.test_handoff_stored_acceptance import _stored_before_the_rule

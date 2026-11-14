@@ -26,16 +26,18 @@ from tests.integration.test_call_init_project_scope import (
     SCRIPT,
     _calls,
     _connect,
-    _connect_whatsapp,
-    _live_calls,
     _ring_answered,
     _ring_refused,
     _route,
     _whatsapp_number,
     _wrap_voice_llm,
-    assert_whatsapp_rejected,
     no_peer,  # noqa: F401 - a fixture
     prompts,  # noqa: F401 - a fixture
+)
+from tests.integration.test_call_init_project_scope_whatsapp import (
+    _connect_whatsapp,
+    _live_calls,
+    assert_whatsapp_rejected,
     whatsapp_voice,  # noqa: F401 - a fixture
 )
 from tests.integration.test_live_call_limit import _whatsapp_connect
