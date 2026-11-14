@@ -93,7 +93,7 @@ POLICIES: Mapping[AgentOrigin, OriginPolicy] = {
     # A stored config was written through the schema, so an unknown key there
     # is one a later release removed: nothing to refuse the call over.
     AgentOrigin.HANDOFF: OriginPolicy(
-        UnknownFields.WARN, plain_http=True, takes_agent_id=True, wired_by="#480"
+        UnknownFields.WARN, plain_http=True, takes_agent_id=True, wired_by=None
     ),
     AgentOrigin.EVAL_TARGET: OriginPolicy(
         UnknownFields.WARN, plain_http=True, takes_agent_id=True, wired_by="#479"
@@ -105,7 +105,7 @@ POLICIES: Mapping[AgentOrigin, OriginPolicy] = {
         UnknownFields.REFUSE, plain_http=True, takes_agent_id=False, wired_by="#479"
     ),
     AgentOrigin.STORED_CALL: OriginPolicy(
-        UnknownFields.WARN, plain_http=True, takes_agent_id=True, wired_by="#480"
+        UnknownFields.WARN, plain_http=True, takes_agent_id=True, wired_by=None
     ),
 }
 

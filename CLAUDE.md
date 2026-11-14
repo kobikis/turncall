@@ -231,7 +231,11 @@ them:
   weights, the bound agent), create the call row on its carrier, record
   `call.initializing` + `call.started` — is `services/inbound_call
   .open_inbound_call`, for every carrier's edge. An edge only answers numbers
-  bound on its own carrier.
+  bound on its own carrier. A number's stored agent (A/B pick included) is
+  looked up in the number's project and goes through agent acceptance (origin
+  `stored_call`, #480): one saved before a newer rule existed is refused there
+  (logged `agent_refused`), so the call is refused at the carrier and its slot
+  freed, never answered into a build that fails.
 - **Call control acts on the call's carrier**: `services/call_control
   ._carrier_adapter` picks the adapter (and account) by `calls.provider`.
   `services/twilio_accounts.TwilioAccount.adapter` and
@@ -1521,7 +1525,10 @@ task running the call can do — so they go through the call (#215, tracker
   agree. The 200's `details` is what it applied: `target_agent_id`,
   `target_assistant_name`, and the `tools` it now advertises. 404 for an agent
   outside the project; 409 on `openai_live` (refused like the tool), when the
-  call is not `in_progress`, or when the target cannot be loaded. The API never
+  call is not `in_progress`, or when the target cannot be loaded — or its
+  config is refused by agent acceptance (origin `handoff`, #480, in
+  `_prepare_handoff`, before the commit; the 409's message, like the tool's
+  result, carries the rule's reason, `HandoffNotPrepared`). The API never
   calls `call_control.handoff_to_agent` itself (`test_live_control_wiring.py`).
   Nothing is said on the switch: the new agent answers the caller's next turn,
   over the cleared context the tool path leaves too.
