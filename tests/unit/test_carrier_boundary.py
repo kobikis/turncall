@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from tests.accepted import accepted
 from turncall.adapters.telephony.base import TelephonyAdapter
 from turncall.api.deps import get_session
 from turncall.api.v1.schemas.phone_numbers import (
@@ -86,7 +87,7 @@ async def _run_media_stream(carrier: str) -> MagicMock:
         active_agent_id=uuid.uuid4(),
         metadata_json={},
     )
-    agent = SimpleNamespace(config_blob={"system_prompt": "hi"})
+    agent = accepted({"system_prompt": "hi"})
     create = MagicMock(return_value="transport")
     session = SimpleNamespace(start=AsyncMock())
     with (
@@ -100,10 +101,7 @@ async def _run_media_stream(carrier: str) -> MagicMock:
             "turncall.storage.repositories.call_repo.attach_media",
             AsyncMock(return_value=True),
         ),
-        patch(
-            "turncall.storage.repositories.agent_repo.get_agent_by_id",
-            AsyncMock(return_value=agent),
-        ),
+        patch.object(media_stream, "accept_agent", AsyncMock(return_value=agent)),
         patch.object(media_stream, "create_carrier_transport", create),
         patch.object(
             media_stream, "build_call_pipeline", AsyncMock(return_value=session)

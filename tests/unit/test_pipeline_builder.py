@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.accepted import accepted
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator import pipeline_builder
 from turncall.services.credentials import Credentials, MissingProviderKeyError
@@ -49,7 +50,7 @@ async def test_forwards_kb_and_transport_options():
         ),
     ):
         out = await pipeline_builder.build_call_pipeline(
-            config=AgentConfig(),
+            agent=accepted(),
             transport="T",
             call_context=ctx,
             settings=_settings(),
@@ -107,7 +108,7 @@ async def test_registers_static_plus_mcp_tools():
         ),
     ):
         await pipeline_builder.build_call_pipeline(
-            config=cfg,
+            agent=accepted(cfg),
             transport="T",
             call_context=ctx,
             settings=_settings(),
@@ -145,7 +146,7 @@ async def test_a_build_that_raises_fails_the_call_and_still_raises():
         pytest.raises(RuntimeError, match="Missing credentials"),
     ):
         await pipeline_builder.build_call_pipeline(
-            config=AgentConfig(),
+            agent=accepted(),
             transport="T",
             call_context=ctx,
             settings=_settings(),
@@ -177,7 +178,7 @@ async def test_a_provider_with_no_key_is_named_before_anything_is_built():
         pytest.raises(MissingProviderKeyError, match="No API key for deepgram"),
     ):
         await pipeline_builder.build_call_pipeline(
-            config=AgentConfig(),
+            agent=accepted(),
             transport="T",
             call_context=ctx,
             settings=_settings(),
@@ -210,7 +211,7 @@ async def test_an_eval_does_not_need_the_speech_keys():
         ),
     ):
         out = await pipeline_builder.build_call_pipeline(
-            config=AgentConfig(),
+            agent=accepted(),
             transport="T",
             call_context=ctx,
             settings=_settings(),

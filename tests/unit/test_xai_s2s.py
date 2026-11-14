@@ -7,6 +7,7 @@ the voice, the instructions and the key. The socket itself is the live file's
 
 import asyncio
 import inspect
+import re
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -14,6 +15,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from tests.accepted import refusal
 from tests.conftest import creds
 from turncall.api.v1.schemas.agents import AgentConfigSchema
 from turncall.config.settings import Settings
@@ -326,13 +328,12 @@ class TestWhatGrokLacksIsRefused:
         assert schema.s2s.base_url == url
 
     @pytest.mark.parametrize(("field", "value"), _LACKED)
-    def test_a_call_init_agent_fails_at_build_rather_than_dropping_it(
+    def test_a_call_init_agent_is_refused_rather_than_dropping_it(
         self, field, value
     ) -> None:
-        """A call-init inline agent is validated by the domain model, not the
-        API schema, so the build applies the same rule (the Flux precedent)."""
-        with pytest.raises(ValueError, match=rf"s2s\.{field}"):
-            _service(_agent(**{field: value}))
+        """A call-init inline agent skips the API schema; agent acceptance
+        applies the same rule at call-init, before any build (#481)."""
+        assert re.search(rf"s2s\.{field}", refusal(_agent(**{field: value})).reason)
 
 
 class TestSessionExtras:
@@ -482,9 +483,9 @@ class TestSessionExtras:
         [loaded] = [x for x in result.stdout.splitlines() if x.startswith("LOADED=")]
         assert loaded == "LOADED=", loaded
 
-    def test_a_bad_value_on_a_call_init_agent_fails_at_build(self) -> None:
-        with pytest.raises(ValueError, match=r"s2s\.extra\.reasoning"):
-            _service(_agent(extra={"reasoning": {"effort": "low"}}))
+    def test_a_bad_value_on_a_call_init_agent_is_refused(self) -> None:
+        refused = refusal(_agent(extra={"reasoning": {"effort": "low"}}))
+        assert re.search(r"s2s\.extra\.reasoning", refused.reason)
 
 
 class TestTurnDetection:

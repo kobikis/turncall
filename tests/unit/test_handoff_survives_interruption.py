@@ -48,7 +48,9 @@ async def _queue_a_handoff(queue):
     )
 
     config = AgentConfig(tools=[_tool("refund")])
-    agent = SimpleNamespace(name="Billing", config_blob=config.model_dump(mode="json"))
+    agent = SimpleNamespace(
+        id=uuid4(), name="Billing", config_blob=config.model_dump(mode="json")
+    )
     call_context = SimpleNamespace(
         call_id=uuid4(),
         project_id=uuid4(),
@@ -70,6 +72,11 @@ async def _queue_a_handoff(queue):
         patch(
             "turncall.storage.repositories.agent_repo.get_agent_by_id",
             new=AsyncMock(return_value=agent),
+        ),
+        # Accepted by id, so its knowledge-base links are read too (#484).
+        patch(
+            "turncall.storage.repositories.knowledge_repo.kb_modes_by_agent",
+            new=AsyncMock(return_value={}),
         ),
         patch(
             "turncall.storage.repositories.call_repo.get_call_by_id",
@@ -219,7 +226,9 @@ async def test_both_frames_of_an_api_handoff_survive_an_interruption():
         queue.put_nowait(frame)
 
     config = AgentConfig(tools=[_tool("refund")])
-    agent = SimpleNamespace(name="Billing", config_blob=config.model_dump(mode="json"))
+    agent = SimpleNamespace(
+        id=uuid4(), name="Billing", config_blob=config.model_dump(mode="json")
+    )
     call_context = SimpleNamespace(
         call_id=uuid4(),
         project_id=uuid4(),
@@ -240,6 +249,11 @@ async def test_both_frames_of_an_api_handoff_survive_an_interruption():
         patch(
             "turncall.storage.repositories.agent_repo.get_agent_by_id",
             new=AsyncMock(return_value=agent),
+        ),
+        # Accepted by id, so its knowledge-base links are read too (#484).
+        patch(
+            "turncall.storage.repositories.knowledge_repo.kb_modes_by_agent",
+            new=AsyncMock(return_value={}),
         ),
         patch(
             "turncall.storage.repositories.call_repo.get_call_by_id",

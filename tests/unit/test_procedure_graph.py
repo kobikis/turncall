@@ -1,6 +1,7 @@
 """The rule a procedure graph is held to (#444): one pure function, applied at
-the agent API (422) and at the build (`pipeline_error`). Each refusal names
-the procedure and the step, so whoever reads it can find the mistake."""
+the agent API (422) and by agent acceptance for every config that runs (#481).
+Each refusal names the procedure and the step, so whoever reads it can find
+the mistake."""
 
 from typing import Any
 
@@ -220,10 +221,10 @@ def test_a_kind_or_start_mode_an_inline_agent_made_up():
 # --- an inline agent's entry that is not a procedure at all ------------------
 #
 # Its config arrives from call-init past any schema and is parsed as an
-# `AgentConfig` before the build, where a raise would fail the call before it
-# can say why. So the domain model keeps the entry, marked unreadable, and the
-# rule names it (story 19): a bad call-init answer is visible, never a call
-# silently running without its procedure.
+# `AgentConfig` by agent acceptance, where a raise would refuse the call
+# without saying why. So the domain model keeps the entry, marked unreadable,
+# and the rule names it (story 19): a bad call-init answer is visible, never a
+# call silently running without its procedure.
 
 
 def _inline(procedures: Any) -> list[Procedure]:

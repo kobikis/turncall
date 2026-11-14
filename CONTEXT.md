@@ -455,6 +455,32 @@ incomplete data — the honest answer to "which stored agent was this", which is
 call itself, so post-call work has something to read. See ADR-0017.
 _Avoid_: treating it as an unresolved agent, or filling the null with a sentinel
 
+**Agent acceptance**:
+Deciding whether an agent config can run, before anything runs it
+(`services/agent_acceptance.accept_agent`, #474). It takes a raw config or an
+agent id, the project and the **origin** (where the config came from: `api`,
+`call_init`, `handoff`, `eval_target`, `eval_inline`, `demo`, `stored_call`),
+and answers an [[accepted agent]] or an [[agent refusal]]. The origin decides
+only what is refused and what is warned about, in one table. An agent id from
+another project is refused like one naming no agent. The `api` origin (agent
+create and update, #478) runs the API's whole schema, so an unknown field and a
+plain `http://` URL outside development are refused there, and its errors are
+the endpoints' 422 `validation_error`, unchanged.
+_Avoid_: "admission", "admit" (taking a live-call slot), "validation" (one part
+of it)
+
+**Accepted agent**:
+What [[agent acceptance]] answers for a config that can run: the parsed config,
+the agent id (none for an [[inline agent]]) and the warnings — what the call
+will ignore, such as a field the schema does not know. The pipeline build takes
+nothing else (#481): every voice call, handoff, eval iteration and demo call
+runs one, so the build holds no copy of any rule. Only acceptance makes one.
+
+**Agent refusal**:
+What [[agent acceptance]] answers for a config that cannot run: a reason, in the
+rule's own words, and the field it names. Each transport answers it as it
+answers "no usable agent".
+
 ## Call transfer
 
 **Cold transfer** (= **blind transfer**):

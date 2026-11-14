@@ -15,6 +15,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from tests.accepted import accepted
 from tests.conftest import creds
 
 from turncall.config.settings import Settings
@@ -137,7 +138,7 @@ async def test_the_agent_opens_the_call_unprompted(
     }
     target = ResolvedTarget(
         project_id=uuid4(),
-        config=AgentConfig.model_validate(blob),
+        agent=accepted(blob),
         config_blob=blob,
         agent_id=None,
     )

@@ -157,7 +157,7 @@ async def run_iteration(
 
     async def build(websocket: Any, flags: Any) -> Any:
         return await build_call_pipeline(
-            config=target.config,
+            agent=target.agent,
             transport=create_eval_transport(websocket, flags, audio=audio),
             call_context=call_context,
             settings=settings,

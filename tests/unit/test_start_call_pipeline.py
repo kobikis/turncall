@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests.accepted import accepted
 from turncall.domain.models import AgentConfig, MCPServerConfig
 from turncall.orchestrator import pipeline_builder
 from turncall.orchestrator.pipeline_factory import CallContext
@@ -64,7 +65,7 @@ async def test_no_mcp_servers_skips_the_manager():
         patch("turncall.services.mcp_client.MCPSessionManager") as manager_cls,
     ):
         await pipeline_builder.start_call_pipeline(
-            config=AgentConfig(),
+            agent=accepted(),
             transport="T",
             call_context=_ctx(),
             settings=_settings(),
@@ -96,7 +97,7 @@ async def test_discovers_mcp_tools_and_puts_the_manager_on_the_context():
         patch("turncall.services.mcp_client.MCPSessionManager", return_value=manager),
     ):
         await pipeline_builder.start_call_pipeline(
-            config=config,
+            agent=accepted(config),
             transport="T",
             call_context=_ctx(),
             settings=_settings(),
@@ -131,7 +132,7 @@ async def test_connect_and_run_share_one_task():
         patch("turncall.services.mcp_client.MCPSessionManager", return_value=manager),
     ):
         await pipeline_builder.start_call_pipeline(
-            config=config,
+            agent=accepted(config),
             transport="T",
             call_context=_ctx(),
             settings=_settings(),
@@ -163,7 +164,7 @@ async def test_build_failure_propagates_and_closes_mcp():
         pytest.raises(RuntimeError, match="bad provider"),
     ):
         await pipeline_builder.start_call_pipeline(
-            config=config,
+            agent=accepted(config),
             transport="T",
             call_context=_ctx(),
             settings=_settings(),
@@ -200,7 +201,7 @@ async def test_cancellation_during_build_still_closes_mcp():
         )
         start = asyncio.create_task(
             pipeline_builder.start_call_pipeline(
-                config=config,
+                agent=accepted(config),
                 transport=SimpleNamespace(),
                 call_context=_ctx(),
                 settings=_settings(),
@@ -246,7 +247,7 @@ async def test_cancellation_during_build_releases_the_caller():
         )
         start = asyncio.create_task(
             pipeline_builder.start_call_pipeline(
-                config=config,
+                agent=accepted(config),
                 transport=SimpleNamespace(),
                 call_context=_ctx(),
                 settings=_settings(),

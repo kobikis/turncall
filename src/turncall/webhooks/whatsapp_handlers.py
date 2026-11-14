@@ -8,6 +8,8 @@ Handles:
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -21,7 +23,6 @@ from turncall.api.deps import DbSession
 from turncall.api.errors import RateLimitedError
 from turncall.config import get_settings
 from turncall.domain.enums import CallDirection, CallEventType
-from turncall.domain.models import AgentConfig
 from turncall.orchestrator.ambience import build_ambience_mixer
 from turncall.orchestrator.pipeline_builder import start_call_pipeline
 from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
@@ -30,6 +31,12 @@ from turncall.orchestrator.transport_factory import (
     create_whatsapp_transport,
 )
 from turncall.services import telemetry_redaction
+from turncall.services.agent_acceptance import (
+    AcceptedAgent,
+    AgentOrigin,
+    AgentRefusal,
+    accept_agent,
+)
 from turncall.services.limits import admit_inbound_call, release_live_call
 from turncall.services.webhook_verification import (
     refused_webhooks,
@@ -166,7 +173,7 @@ async def _handle_call_event(
     whatsapp_secret=None to avoid double validation inside Pipecat.
     """
     from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
-    from pipecat.transports.whatsapp.api import WhatsAppApi, WhatsAppWebhookRequest
+    from pipecat.transports.whatsapp.api import WhatsAppWebhookRequest
     from pipecat.transports.whatsapp.client import WhatsAppClient
 
     settings = get_settings()
@@ -182,39 +189,24 @@ async def _handle_call_event(
 
     webhook_request = WhatsAppWebhookRequest.model_validate(body)
 
-    # A connect over the project's live-call limit (#224) is rejected before
-    # it is accepted, so the caller is never answered only to be refused.
+    # A connect is admitted and its agent resolved before pipecat's client
+    # pre-accepts and accepts it: one over the project's live-call limit
+    # (#224), or with no agent that can run (#483), is rejected, so the caller
+    # is never answered only to be refused or left in silence.
     call_id = uuid4()
-    from_number, to_number, whatsapp_call_id = _call_parties(body)
-    phone_row = (
-        await phone_number_repo.get_by_e164(session, to_number)
-        if _is_connect(body)
-        else None
-    )
-    if phone_row is not None:
-        # This call's logs follow its project's redaction (#314).
-        await telemetry_redaction.for_project(phone_row.project_id, session=session)
-    if phone_row is not None and not await admit_inbound_call(
-        session,
-        project_id=phone_row.project_id,
-        call_id=call_id,
-        transport="whatsapp",
-        from_number=from_number,
-        to_number=to_number,
-        provider_call_id=whatsapp_call_id,
-    ):
-        api = WhatsAppApi(
-            settings.whatsapp.token, settings.whatsapp.phone_number_id, http_session
-        )
-        try:
-            await api.reject_call_to_whatsapp(whatsapp_call_id)
-        except Exception:
-            logger.exception("whatsapp_call_reject_error")
-        return JSONResponse({"status": "rejected"})
+    call: _WhatsAppCall | None = None
+    if _is_connect(body):
+        call = await _admit_connect(session, body, call_id)
+        if call is None:
+            await _reject(http_session, _call_parties(body)[2])
+            return JSONResponse({"status": "rejected"})
 
     async def on_connection(connection: SmallWebRTCConnection) -> None:
         """Callback invoked when a WhatsApp call is connected via WebRTC."""
-        await _start_voice_pipeline(connection, body, call_id)
+        if call is None:
+            logger.warning("whatsapp_connection_without_a_connect")
+            return
+        await _start_voice_pipeline(connection, call)
 
     try:
         await whatsapp_client.handle_webhook_request(
@@ -223,11 +215,198 @@ async def _handle_call_event(
         )
     except Exception:
         logger.exception("whatsapp_call_event_error")
-        if phone_row is not None:
-            await release_live_call(phone_row.project_id, call_id)
+        if call is not None:
+            await release_live_call(call.project_id, call_id)
         return JSONResponse({"status": "error"}, status_code=500)
 
     return JSONResponse({"status": "ok"})
+
+
+@dataclass(frozen=True)
+class _WhatsAppCall:
+    """A WhatsApp voice connect, admitted, with the agent it runs: resolved
+    before the caller is answered, so the connection only starts it."""
+
+    call_id: UUID
+    project_id: UUID
+    from_number: str
+    to_number: str
+    whatsapp_call_id: str
+    agent: AcceptedAgent
+    agent_id: UUID | None = None
+    agent_name: str = "dynamic"
+    dynamic_config: dict[str, Any] | None = None
+    template_variables: dict[str, str] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    knowledge_context: str | None = None
+
+
+async def _admit_connect(
+    session: AsyncSession, body: dict[str, Any], call_id: UUID
+) -> _WhatsAppCall | None:
+    """Admit a connect and resolve its agent, or None to reject it.
+
+    None for a number nobody bound, a project at its live-call limit (which
+    `admit_inbound_call` has announced as `call.rejected`), and a call with no
+    agent that can run, whose slot is freed here.
+    """
+    from_number, to_number, whatsapp_call_id = _call_parties(body)
+    phone_row = await phone_number_repo.get_by_e164(session, to_number)
+    if phone_row is None:
+        logger.warning(
+            "whatsapp_call_unknown_number",
+            to_number=to_number,
+            from_number=from_number,
+            whatsapp_call_id=whatsapp_call_id,
+        )
+        return None
+    # This call's logs follow its project's redaction (#314).
+    await telemetry_redaction.for_project(phone_row.project_id, session=session)
+    if not await admit_inbound_call(
+        session,
+        project_id=phone_row.project_id,
+        call_id=call_id,
+        transport="whatsapp",
+        from_number=from_number,
+        to_number=to_number,
+        provider_call_id=whatsapp_call_id,
+    ):
+        return None
+    try:
+        call = await _resolve_agent(
+            session,
+            phone_row,
+            call_id=call_id,
+            from_number=from_number,
+            to_number=to_number,
+            whatsapp_call_id=whatsapp_call_id,
+        )
+    except Exception:
+        logger.exception("whatsapp_call_agent_error", call_id=str(call_id))
+        call = None
+    if call is None:
+        logger.warning(
+            "whatsapp_call_no_agent",
+            to_number=to_number,
+            from_number=from_number,
+            whatsapp_call_id=whatsapp_call_id,
+        )
+        await release_live_call(phone_row.project_id, call_id)
+    return call
+
+
+async def _resolve_agent(
+    session: AsyncSession,
+    phone_row: Any,
+    *,
+    call_id: UUID,
+    from_number: str,
+    to_number: str,
+    whatsapp_call_id: str,
+) -> _WhatsAppCall | None:
+    """The call with the agent its number routes to, or None when none can
+    run: call-init failing, naming no agent or one acceptance refuses (#475,
+    #477), or a bound agent whose row is gone."""
+    call = partial(
+        _WhatsAppCall,
+        call_id=call_id,
+        project_id=phone_row.project_id,
+        from_number=from_number,
+        to_number=to_number,
+        whatsapp_call_id=whatsapp_call_id,
+    )
+    if phone_row.routing_target_type == "webhook" and phone_row.server_url:
+        from turncall.events.server_events import send_call_init
+        from turncall.services.call_init_resolver import (
+            accept_call_init_agent,
+            resolve_call_init,
+        )
+
+        response = await send_call_init(
+            phone_row.server_url,
+            call_id=str(call_id),
+            from_number=from_number,
+            to_number=to_number,
+            transport_type="inboundWhatsAppCall",
+            provider_call_id=whatsapp_call_id,
+            secret=getattr(phone_row, "server_url_secret", None),
+        )
+        if not (response.success and response.data):
+            return None
+        result = await resolve_call_init(
+            session, response.data, project_id=phone_row.project_id
+        )
+        # Before the row and the pipeline (#477): an agent that cannot run is
+        # refused like one never named, never failed at build.
+        accepted = await accept_call_init_agent(
+            session, result, project_id=phone_row.project_id, call_id=str(call_id)
+        )
+        if not isinstance(accepted, AcceptedAgent):
+            return None
+        return call(
+            agent=accepted,
+            agent_id=result.agent.id if result.agent else None,
+            agent_name=result.agent.name if result.agent else "dynamic",
+            dynamic_config=result.dynamic_config,
+            template_variables=result.template_variables,
+            metadata=result.metadata,
+            knowledge_context=result.knowledge_context,
+        )
+
+    if phone_row.routing_target_type == "agent" and phone_row.routing_target_id:
+        return await _stored_call(session, phone_row, call, call_id=call_id)
+    return None
+
+
+async def _stored_call(
+    session: AsyncSession, phone_row: Any, call: Any, *, call_id: UUID
+) -> _WhatsAppCall | None:
+    """The number's own agent through agent acceptance (`stored_call`, #481),
+    within the number's project: one saved before a newer rule existed is
+    refused here — the call rejected unanswered, as one with no agent is —
+    rather than failing in the build after it was answered."""
+    agent_id = phone_row.routing_target_id
+    outcome = await accept_agent(
+        agent_id,
+        project_id=phone_row.project_id,
+        origin=AgentOrigin.STORED_CALL,
+        session=session,
+    )
+    if isinstance(outcome, AgentRefusal):
+        logger.warning(
+            "agent_refused origin={origin} project_id={project_id} "
+            "field={field}: {reason}",
+            origin=AgentOrigin.STORED_CALL.value,
+            project_id=str(phone_row.project_id),
+            field=outcome.field,
+            reason=outcome.reason,
+            call_id=str(call_id),
+            agent_id=str(agent_id),
+        )
+        return None
+    row = await agent_repo.get_agent_by_id(
+        session, agent_id, project_id=phone_row.project_id
+    )
+    return call(
+        agent=outcome,
+        agent_id=outcome.agent_id,
+        agent_name=row.name if row is not None else "dynamic",
+    )
+
+
+async def _reject(http_session: aiohttp.ClientSession, whatsapp_call_id: str) -> None:
+    """Refuse a connect at WhatsApp, unanswered. Best effort: a refusal that
+    fails is logged."""
+    from pipecat.transports.whatsapp.api import WhatsAppApi
+
+    settings = get_settings()
+    api = WhatsAppApi(
+        settings.whatsapp.token, settings.whatsapp.phone_number_id, http_session
+    )
+    try:
+        await api.reject_call_to_whatsapp(whatsapp_call_id)
+    except Exception:
+        logger.exception("whatsapp_call_reject_error")
 
 
 def _call_parties(body: dict[str, Any]) -> tuple[str, str, str]:
@@ -259,93 +438,31 @@ def _is_connect(body: dict[str, Any]) -> bool:
     )
 
 
-async def _start_voice_pipeline(
-    connection: object,
-    body: dict[str, Any],
-    call_id: UUID,
-) -> None:
-    """Build and start a Pipecat voice pipeline for a WhatsApp call."""
+async def _start_voice_pipeline(connection: object, call: _WhatsAppCall) -> None:
+    """Build and start a Pipecat voice pipeline for an answered WhatsApp call,
+    on the agent resolved before it was answered."""
     settings = get_settings()
     engine = get_engine()
     session_factory = create_session_factory(engine)
-    from_number, to_number, whatsapp_call_id = _call_parties(body)
+    from_number = call.from_number
+    to_number = call.to_number
+    whatsapp_call_id = call.whatsapp_call_id
+    template_variables = call.template_variables
+    knowledge_context = call.knowledge_context
+    dynamic_config = call.dynamic_config
+    request_metadata = call.metadata
 
-    # Resolve phone number -> agent
     async with session_factory() as db:
-        phone_row = await phone_number_repo.get_by_e164(db, to_number)
-        if phone_row is None:
-            logger.warning(
-                "whatsapp_call_unknown_number",
-                to_number=to_number,
-                from_number=from_number,
-                whatsapp_call_id=whatsapp_call_id,
-            )
-            return
-        await telemetry_redaction.for_project(phone_row.project_id, session=db)
+        await telemetry_redaction.for_project(call.project_id, session=db)
 
-        agent = None
-        dynamic_config = None
-        template_variables: dict[str, str] = {}
-        request_metadata: dict = {}
-        knowledge_context: str | None = None
-
-        if phone_row.routing_target_type == "webhook" and phone_row.server_url:
-            # Dynamic agent resolution via server event
-            from turncall.events.server_events import send_call_init
-            from turncall.services.call_init_resolver import (
-                resolve_call_init,
-            )
-
-            response = await send_call_init(
-                phone_row.server_url,
-                call_id=str(call_id),
-                from_number=from_number,
-                to_number=to_number,
-                transport_type="inboundWhatsAppCall",
-                provider_call_id=whatsapp_call_id,
-                secret=getattr(phone_row, "server_url_secret", None),
-            )
-            if response.success and response.data:
-                result = await resolve_call_init(db, response.data)
-                agent = result.agent
-                dynamic_config = result.dynamic_config
-                template_variables = result.template_variables
-                request_metadata = result.metadata
-                knowledge_context = result.knowledge_context
-
-        elif phone_row.routing_target_type == "agent" and phone_row.routing_target_id:
-            agent = await agent_repo.get_agent_by_id(db, phone_row.routing_target_id)
-
-        if agent is None and dynamic_config is None:
-            logger.warning(
-                "whatsapp_call_no_agent",
-                to_number=to_number,
-                from_number=from_number,
-                whatsapp_call_id=whatsapp_call_id,
-            )
-            await release_live_call(phone_row.project_id, call_id)
-            return
-
-        # Build config from agent or inline dynamic config
-        if dynamic_config:
-            config = AgentConfig.model_validate(dynamic_config)
-        else:
-            config = AgentConfig.model_validate(agent.config_blob)
-
-        # Apply template variables
-        if template_variables:
-            from turncall.services.template_renderer import render_agent_config
-
-            config = render_agent_config(config, template_variables)
-
-        # Apply knowledge context
-        if knowledge_context:
-            from turncall.services.template_renderer import prepend_knowledge_context
-
-            config = prepend_knowledge_context(config, knowledge_context)
+        # The call's variables and knowledge context, onto the accepted agent.
+        agent = call.agent.rendered(
+            template_variables, knowledge_context=knowledge_context
+        )
+        config = agent.config
 
         # Create call record
-        agent_id_for_call = agent.id if agent else None
+        agent_id_for_call = call.agent_id
         call_metadata: dict = {
             "transport": "whatsapp",
             "whatsapp_call_id": whatsapp_call_id,
@@ -356,10 +473,10 @@ async def _start_voice_pipeline(
             **({"metadata": request_metadata} if request_metadata else {}),
             **({"knowledge_context": knowledge_context} if knowledge_context else {}),
         }
-        call = await call_repo.create_call(
+        call_row = await call_repo.create_call(
             db,
-            project_id=phone_row.project_id,
-            call_id=call_id,
+            project_id=call.project_id,
+            call_id=call.call_id,
             direction=CallDirection.INBOUND,
             from_number=from_number,
             to_number=to_number,
@@ -373,8 +490,8 @@ async def _start_voice_pipeline(
 
         await emit_call_event(
             db,
-            call_id=call.id,
-            project_id=phone_row.project_id,
+            call_id=call_row.id,
+            project_id=call.project_id,
             event_type=CallEventType.CALL_INITIALIZING,
             payload={
                 "from_number": from_number,
@@ -385,22 +502,22 @@ async def _start_voice_pipeline(
         )
         await emit_call_event(
             db,
-            call_id=call.id,
-            project_id=phone_row.project_id,
+            call_id=call_row.id,
+            project_id=call.project_id,
             event_type=CallEventType.CALL_STARTED,
             payload={
                 "whatsapp_call_id": whatsapp_call_id,
                 "from_number": from_number,
                 "to_number": to_number,
                 "agent_id": (str(agent_id_for_call) if agent_id_for_call else None),
-                "agent_name": agent.name if agent else "dynamic",
+                "agent_name": call.agent_name,
             },
         )
         await db.commit()
 
     call_context = CallContext(
-        call_id=call.id,
-        project_id=phone_row.project_id,
+        call_id=call_row.id,
+        project_id=call.project_id,
         agent_id=agent_id_for_call or DYNAMIC_AGENT_ID,
         call_sid=f"whatsapp:{whatsapp_call_id}",
         stream_sid=f"whatsapp:{whatsapp_call_id}",
@@ -418,7 +535,7 @@ async def _start_voice_pipeline(
     transport = create_whatsapp_transport(connection, mixer=mixer)
 
     await start_call_pipeline(
-        config=config,
+        agent=agent,
         transport=transport,
         call_context=call_context,
         settings=settings,
@@ -428,7 +545,7 @@ async def _start_voice_pipeline(
 
     logger.info(
         "whatsapp_voice_call_started",
-        call_id=str(call.id),
+        call_id=str(call_row.id),
         agent_id=str(agent_id_for_call) if agent_id_for_call else "dynamic",
         whatsapp_call_id=whatsapp_call_id,
     )

@@ -1,9 +1,8 @@
 """What an `xai` LLM or TTS config cannot run as (#393, #395).
 
-One rule, applied twice: at the API schema, and at build, since a call-init
-inline agent is validated by the domain model rather than that schema (the
-`grok_voice.refusal` and `deepgram_flux.mixes_flux` precedent). Imports no
-pipecat, so API validation loads none (#389).
+One rule, applied by agent acceptance (#474, #481) to every config that runs,
+whatever its origin, and by the API schema in the same words; the build
+assumes it passed. Imports no pipecat, so API validation loads none (#389).
 """
 
 from typing import Protocol

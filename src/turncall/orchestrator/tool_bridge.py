@@ -364,6 +364,15 @@ class PreparedHandoff(NamedTuple):
     procedures: Any | None = None
 
 
+class HandoffNotPrepared(NamedTuple):
+    """Why a handoff was not prepared, as the model and the API read it: the
+    target is not one of the project's, its config is refused by agent
+    acceptance (#480, in the refusal's own words), or it could not be built.
+    Nothing was committed, so the call stays on its current agent."""
+
+    message: str
+
+
 @dataclass(frozen=True)
 class SwitchInputs:
     """What the call's prompt and tools were built from besides its config,
@@ -465,7 +474,7 @@ async def _as_this_call(
 async def _prepare_handoff(
     args: dict[str, Any],
     call_context: CallContext,
-) -> PreparedHandoff | None:
+) -> PreparedHandoff | HandoffNotPrepared:
     """Read the target agent and build its frames, before the switch commits.
 
     All of the handoff's I/O and all of its fallible work, deliberately
@@ -476,14 +485,14 @@ async def _prepare_handoff(
     after it is the same divergence with a deterministic trigger. Either way
     the record says handed off and the live pipeline never changes. #144.
 
-    Returns None when the handoff cannot be prepared, having logged why; the
-    caller then leaves the pipeline alone.
+    The target's config goes through agent acceptance (`handoff` origin,
+    #480) here, so a stored agent a newer rule refuses fails the handoff with
+    that rule's reason. Returns `HandoffNotPrepared` when the handoff cannot
+    be prepared, having logged why; the caller then leaves the pipeline alone.
     """
-    from turncall.domain.models import AgentConfig
-
     target_id = args.get("agent_id") or args.get("assistant_id") or ""
     if not target_id:
-        return None
+        return HandoffNotPrepared(_not_prepared("no target agent_id was given"))
 
     try:
         async with call_context.session_factory() as session:
@@ -495,12 +504,13 @@ async def _prepare_handoff(
             )
             if target is None:
                 logger.warning("handoff_context: target agent not found")
-                return None
-            config = await _as_this_call(
-                session,
-                call_context.call_id,
-                AgentConfig.model_validate(target.config_blob),
-            )
+                return HandoffNotPrepared(
+                    _not_prepared("the target agent was not found in this project")
+                )
+            accepted = await _accept_target(session, target, call_context)
+            if isinstance(accepted, HandoffNotPrepared):
+                return accepted
+            config = await _as_this_call(session, call_context.call_id, accepted)
 
         from turncall.orchestrator.skill_loader import prepare_handoff_skills
 
@@ -512,7 +522,7 @@ async def _prepare_handoff(
         frames = build_switch_frames(config)
     except Exception:
         logger.exception("handoff_context: failed to prepare the handoff")
-        return None
+        return HandoffNotPrepared(_not_prepared("the target agent could not be loaded"))
 
     if config.mcp_servers:
         # MCP sessions belong to the agent the call started as — they aren't
@@ -632,16 +642,49 @@ class HandoffOutcome(NamedTuple):
 
 # A handoff that could not be prepared is never committed: the record would
 # say handed off while the pipeline stayed on the current agent. #144.
-_NOT_PREPARED = json.dumps(
-    {
-        "success": False,
-        "message": (
-            "The target agent was not found in this project or could not be "
-            "loaded; the call stays on the current agent"
-        ),
-        "details": None,
-    }
-)
+def _not_prepared(why: str) -> str:
+    return f"Cannot hand off: {why}; the call stays on the current agent"
+
+
+def _not_prepared_result(not_prepared: HandoffNotPrepared) -> str:
+    return json.dumps(
+        {"success": False, "message": not_prepared.message, "details": None}
+    )
+
+
+async def _accept_target(
+    session: Any, target: Any, call_context: CallContext
+) -> AgentConfig | HandoffNotPrepared:
+    """Agent acceptance for a handoff's stored target (#480): its config as
+    the build would read it, or the refusal's reason, logged. By id, so its
+    linked knowledge bases count too (#484)."""
+    from turncall.services.agent_acceptance import (
+        AgentOrigin,
+        AgentRefusal,
+        accept_agent,
+    )
+
+    outcome = await accept_agent(
+        target.id,
+        project_id=call_context.project_id,
+        origin=AgentOrigin.HANDOFF,
+        session=session,
+    )
+    if isinstance(outcome, AgentRefusal):
+        logger.warning(
+            "agent_refused origin={origin} project_id={project_id} "
+            "field={field}: {reason}",
+            origin=AgentOrigin.HANDOFF.value,
+            project_id=str(call_context.project_id),
+            field=outcome.field,
+            reason=outcome.reason,
+            call_id=str(call_context.call_id),
+            target_agent_id=str(getattr(target, "id", "")),
+        )
+        return HandoffNotPrepared(
+            _not_prepared(f"the target agent's config is refused: {outcome.reason}")
+        )
+    return outcome.config
 
 
 async def run_handoff(
@@ -655,8 +698,8 @@ async def run_handoff(
     call's `FunctionCallParams`, or what `live_control` found in the pipeline.
     """
     prepared = await _prepare_handoff(args, call_context)
-    if prepared is None:
-        return HandoffOutcome(_NOT_PREPARED, None)
+    if isinstance(prepared, HandoffNotPrepared):
+        return HandoffOutcome(_not_prepared_result(prepared), None)
     result = await _execute_builtin("handoff_to_agent", args, call_context)
     switched = await _complete_handoff(prepared, result, call_context, params)
     if switched and prepared.skills is not None and prepared.skills.available:

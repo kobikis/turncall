@@ -290,7 +290,7 @@ async def test_a_handoff_that_cannot_be_built_is_never_committed_to_the_pipeline
     ):
         prepared = await tool_bridge._prepare_handoff({"agent_id": str(uuid4())}, ctx)
 
-    assert prepared is None, (
+    assert isinstance(prepared, tool_bridge.HandoffNotPrepared), (
         "a handoff that cannot be built was still handed to the applier — it "
         "would raise after the switch was committed, stranding the pipeline "
         "on the previous agent"
@@ -467,7 +467,9 @@ async def test_a_handoff_that_could_not_be_prepared_is_never_committed():
     committed = AsyncMock()
 
     async def unprepared(*_a, **_k):
-        return None
+        return tool_bridge.HandoffNotPrepared(
+            "Cannot hand off: the target agent was not found in this project"
+        )
 
     with (
         patch.object(tool_bridge, "_prepare_handoff", new=unprepared),

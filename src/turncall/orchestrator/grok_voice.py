@@ -13,12 +13,11 @@ never a 422 — the AssemblyAI / Flux `stt.extra` rule — including the session
 other properties (`voice`, `tools`, `turn_detection`), which have homes of
 their own.
 
-One rule, applied twice: at the API schema, and at build, since a call-init
-inline agent is validated by the domain model rather than that schema (the
-`deepgram_flux.mixes_flux` precedent). The API schema imports this module and
-validates with it, so the refusal runs on TurnCall's own copy of the three
+One rule, applied by agent acceptance (#474, #481) to every config that runs,
+whatever its origin; the API schema validates with it too, so a save's 422
+says the same words. The refusal runs on TurnCall's own copy of the three
 fields (`_SessionExtras`) and never loads pipecat; only `session_extras`, at
-build, reads pipecat's model. `test_xai_s2s.py` holds the two to one verdict.
+build, reads pipecat's model, and the build assumes `refusal` passed.
 """
 
 from typing import Any, Literal, Protocol

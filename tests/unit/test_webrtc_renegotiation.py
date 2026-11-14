@@ -121,11 +121,11 @@ def test_pipecat_still_keeps_its_connections_where_we_look():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_a_started_call_is_held_until_its_connection_closes(app, monkeypatch):
+    from tests.accepted import accepted
     from tests.unit.test_webrtc_variables import _connect
     from turncall.api.v1 import webrtc
-    from turncall.domain.models import AgentConfig
 
-    resolved = (AgentConfig(system_prompt="Hi."), uuid.uuid4(), {}, {}, None, None)
+    resolved = (accepted({"system_prompt": "Hi."}), uuid.uuid4(), {}, {}, None, None)
     seen = _connect(app, monkeypatch, resolved)
 
     assert webrtc._calls_by_pc["pc"][0] == seen["call_id"]

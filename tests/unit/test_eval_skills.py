@@ -15,7 +15,8 @@ from uuid import uuid4
 
 import pytest
 
-from turncall.domain.models import AgentConfig, SkillRef, ToolDefinition
+from tests.accepted import accepted
+from turncall.domain.models import SkillRef, ToolDefinition
 from turncall.evals import skills as eval_skills
 from turncall.evals.run_warnings import warn_never_mocked, warn_unmatched_mocks
 from turncall.evals.targets import ResolvedTarget
@@ -50,7 +51,7 @@ def _target(**config) -> ResolvedTarget:
     blob = {"system_prompt": "hi", **config}
     return ResolvedTarget(
         project_id=uuid4(),
-        config=AgentConfig.model_validate(blob),
+        agent=accepted(blob),
         config_blob=blob,
     )
 
