@@ -5,8 +5,8 @@ voice transport that runs call-init: inbound phone calls on each carrier,
 WebRTC connect and WhatsApp voice. An agent breaking a provider rule is
 refused at call-init — before the caller is answered and before a call row is
 written — the way each transport refuses an answer naming no agent: at the
-carrier, with an error response that now says why (WebRTC), or by dropping the
-call (WhatsApp voice). Each frees the live-call slot. An agent with a field the
+carrier, with an error response that now says why (WebRTC), or by rejecting the
+call unanswered (WhatsApp voice, #483). Each frees the live-call slot. An agent with a field the
 config does not have runs, the field warned about, and its raw config is what
 the call row keeps (ADR-0017).
 """
@@ -26,12 +26,14 @@ from tests.integration.test_call_init_project_scope import (
     SCRIPT,
     _calls,
     _connect,
+    _connect_whatsapp,
     _live_calls,
     _ring_answered,
     _ring_refused,
     _route,
     _whatsapp_number,
     _wrap_voice_llm,
+    assert_whatsapp_rejected,
     no_peer,  # noqa: F401 - a fixture
     prompts,  # noqa: F401 - a fixture
     whatsapp_voice,  # noqa: F401 - a fixture
@@ -202,7 +204,7 @@ async def test_webrtc_runs_an_inline_agent_with_an_unknown_field(
 # -- WhatsApp voice ----------------------------------------------------------
 
 
-async def test_whatsapp_voice_refuses_an_inline_agent_breaking_a_provider_rule(
+async def test_whatsapp_voice_rejects_an_inline_agent_breaking_a_provider_rule(
     monkeypatch,
     redis_env,
     whatsapp_voice,  # noqa: F811 - the imported fixture
@@ -215,16 +217,11 @@ async def test_whatsapp_voice_refuses_an_inline_agent_breaking_a_provider_rule(
         ) as app,
     ):
         number = await _whatsapp_number(app, server.url)
-        r = await app.api.post("/webhooks/whatsapp", json=_whatsapp_connect(number))
-        slots = await _live_calls(app.project_id)
-        calls = await _calls(app)
+        outcome = await _connect_whatsapp(app, number)
         project_id = app.project_id
 
-    assert r.status_code == 200, r.text
     assert len(server.requests) == 1
-    assert whatsapp_voice == []  # no pipeline started
-    assert slots == 0
-    assert calls == []
+    assert_whatsapp_rejected(whatsapp_voice, outcome)
     _refused_line(warnings, project_id)
 
 
@@ -242,7 +239,7 @@ async def test_whatsapp_voice_runs_an_inline_agent_with_an_unknown_field(
     ):
         number = await _whatsapp_number(app, server.url)
         await app.api.post("/webhooks/whatsapp", json=_whatsapp_connect(number))
-        [(config, context)] = whatsapp_voice
+        [(config, context)] = whatsapp_voice.started
         stored = await _stored_metadata(str(context.call_id))
         read = (await app.api.get(f"/v1/calls/{context.call_id}")).json()["data"]
 

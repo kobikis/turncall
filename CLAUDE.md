@@ -627,10 +627,21 @@ Customer messages WhatsApp Business number → Meta POSTs /webhooks/whatsapp (fi
 ### WhatsApp Voice Flow
 ```
 Customer calls WhatsApp Business number → Meta POSTs /webhooks/whatsapp (field: "calls")
-  → validate X-Hub-Signature-256 → Pipecat WhatsAppClient handles WebRTC (SDP offer/answer)
+  → validate X-Hub-Signature-256 → resolve phone → live-call slot → agent (call-init + acceptance, or the bound agent)
+  → none of those? reject_call_to_whatsapp, slot freed, never answered
+  → Pipecat WhatsAppClient handles WebRTC (SDP offer/answer)
   → pre-accept + accept call via Cloud API → Pipecat pipeline (16kHz SmallWebRTCTransport)
   → on "terminate" event: cleanup
 ```
+
+A connect is refused **before** pipecat's client answers it (#483,
+`webhooks/whatsapp_handlers._admit_connect`): a number nobody bound, a
+project at its live-call limit (#224), and a call with no usable agent —
+call-init failing or naming none, another project's `agent_id` (#475), an
+agent acceptance refuses (#477), a bound agent whose row is gone — are
+rejected with `reject_call_to_whatsapp` and the slot freed. The agent is
+resolved there, once; the connection callback only writes the call row and
+starts the pipeline on it.
 
 ### WhatsApp Webhook Setup
 1. Set Callback URL: `https://<host>/webhooks/whatsapp`
