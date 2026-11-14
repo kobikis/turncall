@@ -20,11 +20,26 @@ only on an S2S agent, the TTS's only on cascade — so nothing that builds
 today is refused (#474 story 29). The full API schema is not run on it: its
 allowlists and required models refuse configs that run. The build keeps its
 copies until #481.
+
+The agent's `llm` rules apply only where an `llm` is built: on cascade, and
+on gpt-live-1 (`openai_live`) when it gets a client delegate, which it does
+when it has tools (#244). The build decides that from the tools it
+advertises; acceptance predicts them before anything connects (#484), from
+the config's `tools`, its `mcp_servers`, and a tool-mode knowledge base —
+an inline config's own `knowledge_bases`, or a stored agent's links, which
+live outside its config (#260) and are read with it. MCP servers count as
+tools **before discovery**, as at the API's save: acceptance runs before
+any server connects, so it cannot know what discovery will return. An agent
+whose servers answer with no tools (down, or past
+`MCP_CONNECT_TIMEOUT_SECONDS`) builds no delegate, yet is refused here for a
+broken `llm`. That is the accepted cost: the config is broken either way, and
+checking after discovery would put the rule back in the build, which #481
+empties.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -258,13 +273,13 @@ def _accept_config(
         config = AgentConfig.model_validate(dict(raw))
     except ValidationError as invalid:
         return _unreadable(invalid)
-    if (refusal := _first_rule_refusal(config)) is not None:
-        return refusal
     modes = (
         [str(kb.mode) for kb in config.knowledge_bases]
         if kb_modes is None
         else kb_modes
     )
+    if (refusal := _first_rule_refusal(config, modes)) is not None:
+        return refusal
     warnings = (
         *(_unknown_field_warning(name) for name in unknown),
         *_s2s_warnings(config, modes),
@@ -324,32 +339,35 @@ def _path(loc: tuple[Any, ...]) -> str:
 
 # --- the rules ------------------------------------------------------------------
 
-Rule = Callable[[AgentConfig], Iterator[AgentRefusal]]
+# A rule reads the config and the knowledge-base modes the call will have:
+# the inline config's own, or a stored agent's links (#260), which live
+# outside its config.
+Rule = Callable[[AgentConfig, Sequence[str]], Iterator[AgentRefusal]]
 
 
-def _first_rule_refusal(config: AgentConfig) -> AgentRefusal | None:
+def _first_rule_refusal(
+    config: AgentConfig, kb_modes: Sequence[str]
+) -> AgentRefusal | None:
     for rule in _RULES:
-        for refusal in rule(config):
+        for refusal in rule(config, kb_modes):
             return refusal
     return None
 
 
-def _builds_an_llm(config: AgentConfig) -> bool:
+def _builds_an_llm(config: AgentConfig, kb_modes: Sequence[str]) -> bool:
     """Cascade builds the agent's `llm`; so does gpt-live-1 for a client
-    delegate (#244). No other S2S agent builds it."""
+    delegate (#244). No other S2S agent builds it. Its tools are predicted
+    as the module docstring says: `tools`, `mcp_servers` before discovery,
+    and a tool-mode knowledge base, inline or linked (#484)."""
     if config.pipeline_mode != "s2s":
         return True
-    has_tools = bool(
-        config.tools
-        or config.mcp_servers
-        or any(str(kb.mode) == "tool" for kb in config.knowledge_bases)
-    )
+    has_tools = bool(config.tools or config.mcp_servers or "tool" in kb_modes)
     delegation = resolve_delegation(config.s2s, has_tools=has_tools)
     return delegation is not None and delegation.mode == "client"
 
 
-def _xai_llm(config: AgentConfig) -> Iterator[AgentRefusal]:
-    if not _builds_an_llm(config):
+def _xai_llm(config: AgentConfig, kb_modes: Sequence[str]) -> Iterator[AgentRefusal]:
+    if not _builds_an_llm(config, kb_modes):
         return
     members = [("llm", config.llm)] + [
         (f"llm.failover[{i}]", entry) for i, entry in enumerate(config.llm.failover)
@@ -359,7 +377,7 @@ def _xai_llm(config: AgentConfig) -> Iterator[AgentRefusal]:
             yield AgentRefusal(problem, field)
 
 
-def _xai_tts(config: AgentConfig) -> Iterator[AgentRefusal]:
+def _xai_tts(config: AgentConfig, _kb_modes: Sequence[str]) -> Iterator[AgentRefusal]:
     if config.pipeline_mode == "s2s":
         return
     members = [("tts", config.tts)] + [
@@ -370,12 +388,14 @@ def _xai_tts(config: AgentConfig) -> Iterator[AgentRefusal]:
             yield AgentRefusal(problem, field)
 
 
-def _flux_group(config: AgentConfig) -> Iterator[AgentRefusal]:
+def _flux_group(
+    config: AgentConfig, _kb_modes: Sequence[str]
+) -> Iterator[AgentRefusal]:
     if config.pipeline_mode != "s2s" and mixes_flux(config.stt):
         yield AgentRefusal(MIXED_FLUX_GROUP, "stt.failover")
 
 
-def _realtime(config: AgentConfig) -> Iterator[AgentRefusal]:
+def _realtime(config: AgentConfig, _kb_modes: Sequence[str]) -> Iterator[AgentRefusal]:
     if config.pipeline_mode != "s2s":
         return
     s2s = config.s2s
@@ -392,7 +412,9 @@ def _realtime(config: AgentConfig) -> Iterator[AgentRefusal]:
         yield AgentRefusal(problem, "s2s")
 
 
-def _procedures(config: AgentConfig) -> Iterator[AgentRefusal]:
+def _procedures(
+    config: AgentConfig, _kb_modes: Sequence[str]
+) -> Iterator[AgentRefusal]:
     """The domain graph rule, as the build applies it: no step-tool check
     (#447 is the API's), and none on S2S, which follows no procedure."""
     if config.pipeline_mode == "s2s":
@@ -404,7 +426,9 @@ def _procedures(config: AgentConfig) -> Iterator[AgentRefusal]:
 _RULES: tuple[Rule, ...] = (_flux_group, _xai_llm, _xai_tts, _realtime, _procedures)
 
 
-def _s2s_warnings(config: AgentConfig, kb_modes: list[str]) -> Iterator[AgentWarning]:
+def _s2s_warnings(
+    config: AgentConfig, kb_modes: Sequence[str]
+) -> Iterator[AgentWarning]:
     """What an S2S agent's call ignores. The build logs these itself
     (`skills_skipped`, `procedures_skipped`, the KB drop), so callers don't."""
     for warning in (

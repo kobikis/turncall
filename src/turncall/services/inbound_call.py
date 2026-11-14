@@ -136,11 +136,12 @@ async def _stored_agent(
     )
     if agent is None:
         return None
+    # By id, so its linked knowledge bases count too (#484).
     outcome = await accept_agent(
-        agent.config_blob,
+        agent.id,
         project_id=number.project_id,
         origin=AgentOrigin.STORED_CALL,
-        session=None,
+        session=session,
     )
     if isinstance(outcome, AgentRefusal):
         logger.warning(

@@ -235,7 +235,12 @@ them:
   looked up in the number's project and goes through agent acceptance (origin
   `stored_call`, #480): one saved before a newer rule existed is refused there
   (logged `agent_refused`), so the call is refused at the carrier and its slot
-  freed, never answered into a build that fails.
+  freed, never answered into a build that fails. It is accepted by id, as a
+  handoff's target is, so its linked knowledge bases count: a gpt-live-1
+  agent whose only tool is a linked tool-mode KB gets a client delegate, and
+  its `llm` the xAI rule (#484). `mcp_servers` count as tools before
+  discovery, as at the API's save, so one whose servers would return none is
+  refused all the same (documented in `services/agent_acceptance`).
 - **Call control acts on the call's carrier**: `services/call_control
   ._carrier_adapter` picks the adapter (and account) by `calls.provider`.
   `services/twilio_accounts.TwilioAccount.adapter` and

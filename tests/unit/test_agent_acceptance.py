@@ -527,3 +527,83 @@ async def test_a_stored_agent_breaking_a_rule_is_refused_like_an_inline_one(
 
     assert isinstance(refusal, AgentRefusal)
     assert refusal.field == "tts"
+
+
+# --- gpt-live-1's client delegate: the predicate (#484) ---------------------------
+
+XAI_GATEWAY_LLM = {"provider": "xai", "base_url": "https://gw.example/v1"}
+XAI_GATEWAY_REASON = "base_url is not supported for the xai provider"
+GPT_LIVE_1 = {"pipeline_mode": "s2s", "s2s": {"provider": "openai_live"}}
+
+
+@pytest.mark.parametrize("origin", [AgentOrigin.STORED_CALL, AgentOrigin.HANDOFF])
+async def test_a_linked_tool_knowledge_base_gives_gpt_live_1_its_delegate(
+    agents, origin
+) -> None:
+    """The build advertises `query_knowledge` for a linked tool-mode KB and
+    builds a client delegate from the agent's `llm`, so its rule applies."""
+    row = _row(PROJECT, {**GPT_LIVE_1, "llm": XAI_GATEWAY_LLM}, kb_modes=["tool"])
+    agents[row.id] = row
+
+    refusal = await _accept(row.id, origin=origin, session=object())
+
+    assert isinstance(refusal, AgentRefusal), refusal
+    assert (refusal.field, refusal.reason) == ("llm", XAI_GATEWAY_REASON)
+
+
+async def test_a_linked_tool_knowledge_base_with_a_sound_delegate_is_accepted(
+    agents,
+) -> None:
+    row = _row(
+        PROJECT,
+        {**GPT_LIVE_1, "llm": {"provider": "xai", "model": "grok-4.20-non-reasoning"}},
+        kb_modes=["tool"],
+    )
+    agents[row.id] = row
+
+    accepted = await _accept(row.id, origin=AgentOrigin.STORED_CALL, session=object())
+
+    assert isinstance(accepted, AcceptedAgent), accepted
+
+
+@pytest.mark.parametrize("modes", [[], ["prompt"], ["auto"]])
+async def test_a_linked_knowledge_base_searched_by_no_tool_builds_no_delegate(
+    agents, modes
+) -> None:
+    row = _row(PROJECT, {**GPT_LIVE_1, "llm": XAI_GATEWAY_LLM}, kb_modes=modes)
+    agents[row.id] = row
+
+    accepted = await _accept(row.id, origin=AgentOrigin.STORED_CALL, session=object())
+
+    assert isinstance(accepted, AcceptedAgent), accepted
+
+
+async def test_mcp_servers_count_as_tools_before_discovery() -> None:
+    """Pinned over-refusal: acceptance runs before MCP connects, so servers
+    are "may have tools", as at the API's save — a call whose discovery would
+    have come back empty, and built no delegate, is refused all the same."""
+    refusal = await _refused(
+        {
+            **GPT_LIVE_1,
+            "mcp_servers": [
+                {"name": "crm", "transport": "http", "url": "https://mcp.example/mcp"}
+            ],
+            "llm": XAI_GATEWAY_LLM,
+        }
+    )
+
+    assert (refusal.field, refusal.reason) == ("llm", XAI_GATEWAY_REASON)
+
+
+async def test_an_inline_tool_knowledge_base_gives_gpt_live_1_its_delegate() -> None:
+    refusal = await _refused(
+        {
+            **GPT_LIVE_1,
+            "knowledge_bases": [
+                {"knowledge_base_id": str(uuid.uuid4()), "mode": "tool"}
+            ],
+            "llm": XAI_GATEWAY_LLM,
+        }
+    )
+
+    assert (refusal.field, refusal.reason) == ("llm", XAI_GATEWAY_REASON)

@@ -208,3 +208,69 @@ async def test_a_call_to_a_refused_stored_agent_is_refused_at_the_carrier(
     assert slots == 0
     assert calls == []  # refused before a row was written
     assert any("origin=stored_call" in w and XAI_REASON in w for w in warnings)
+
+
+async def _gpt_live_1_with_a_linked_tool_kb(app: Any, llm: dict[str, Any]) -> str:
+    """A stored gpt-live-1 agent whose only tool is a linked tool-mode
+    knowledge base, given `llm` straight in `agents` (#484)."""
+    from turncall.storage.database import get_session_factory
+    from turncall.storage.models import AgentRow
+
+    agent_id = await app.create_agent(
+        {
+            **HARNESS_AGENT,
+            "pipeline_mode": "s2s",
+            "s2s": {"provider": "openai_live"},
+        },
+        name="live",
+    )
+    kb = await app.api.post("/v1/knowledge-bases", json={"name": "faq"})
+    assert kb.status_code == 201, kb.text
+    link = await app.api.post(
+        f"/v1/agents/{agent_id}/knowledge-bases",
+        json={
+            "knowledge_base_id": kb.json()["data"]["id"],
+            "mode": "tool",
+            "tool_description": "Search the FAQ",
+        },
+    )
+    assert link.status_code == 201, link.text
+    async with get_session_factory()() as session:
+        row = await session.get(AgentRow, uuid.UUID(agent_id))
+        row.config_blob = {**row.config_blob, "llm": llm}
+        await session.commit()
+    return agent_id
+
+
+@pytest.mark.parametrize(
+    ("llm", "refused"),
+    [
+        ({"provider": "xai", "base_url": "https://gw.example/v1"}, True),
+        ({"provider": "xai", "model": "grok-4.20-non-reasoning"}, False),
+    ],
+    ids=["broken_delegate", "sound_delegate"],
+)
+async def test_a_linked_tool_knowledge_base_gives_gpt_live_1_its_delegates_rule(
+    monkeypatch, redis_env, warnings, llm, refused
+):
+    """The link lives outside the config, yet the call builds a client
+    delegate from the agent's `llm` for it: acceptance reads the link."""
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        agent_id = await _gpt_live_1_with_a_linked_tool_kb(app, llm)
+        number = await app.bind_number(agent_id)
+        voice_url = app.carrier.number(number).voice_url
+        answered = await post_signed(
+            app.api, app.carrier, voice_url, ring(app.carrier, number)
+        )
+
+    assert answered.status_code == 200, answered.text
+    twiml = ET.fromstring(answered.text)
+    assert (twiml.find("Connect") is None) is refused, answered.text
+    refusals = [w for w in warnings if "origin=stored_call" in w]
+    if refused:
+        assert twiml.findtext("Say") == "This agent is not available."
+        assert any(XAI_REASON in w and "field=llm" in w for w in refusals), refusals
+    else:
+        assert refusals == []

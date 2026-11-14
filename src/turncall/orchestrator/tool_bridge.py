@@ -507,7 +507,7 @@ async def _prepare_handoff(
                 return HandoffNotPrepared(
                     _not_prepared("the target agent was not found in this project")
                 )
-            accepted = await _accept_target(target, call_context)
+            accepted = await _accept_target(session, target, call_context)
             if isinstance(accepted, HandoffNotPrepared):
                 return accepted
             config = await _as_this_call(session, call_context.call_id, accepted)
@@ -653,10 +653,11 @@ def _not_prepared_result(not_prepared: HandoffNotPrepared) -> str:
 
 
 async def _accept_target(
-    target: Any, call_context: CallContext
+    session: Any, target: Any, call_context: CallContext
 ) -> AgentConfig | HandoffNotPrepared:
     """Agent acceptance for a handoff's stored target (#480): its config as
-    the build would read it, or the refusal's reason, logged."""
+    the build would read it, or the refusal's reason, logged. By id, so its
+    linked knowledge bases count too (#484)."""
     from turncall.services.agent_acceptance import (
         AgentOrigin,
         AgentRefusal,
@@ -664,10 +665,10 @@ async def _accept_target(
     )
 
     outcome = await accept_agent(
-        target.config_blob,
+        target.id,
         project_id=call_context.project_id,
         origin=AgentOrigin.HANDOFF,
-        session=None,
+        session=session,
     )
     if isinstance(outcome, AgentRefusal):
         logger.warning(

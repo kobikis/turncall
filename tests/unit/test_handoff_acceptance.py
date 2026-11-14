@@ -7,6 +7,7 @@ anything is committed — and says why, instead of an opaque "could not be
 loaded"; the call stays where it was.
 """
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -87,16 +88,27 @@ def _context() -> SimpleNamespace:
     )
 
 
-def _stored(blob: dict[str, Any] | None):
+@contextmanager
+def _stored(blob: dict[str, Any] | None, kb_modes: list[str] | None = None):
+    """The agent table holding one agent with `blob` (None: none), linked to
+    knowledge bases in `kb_modes`."""
     agent = (
         None
         if blob is None
         else SimpleNamespace(id=uuid4(), name="Billing", config_blob=blob)
     )
-    return patch(
-        "turncall.storage.repositories.agent_repo.get_agent_by_id",
-        new=AsyncMock(return_value=agent),
-    )
+    modes = {agent.id: kb_modes} if agent is not None and kb_modes else {}
+    with (
+        patch(
+            "turncall.storage.repositories.agent_repo.get_agent_by_id",
+            new=AsyncMock(return_value=agent),
+        ),
+        patch(
+            "turncall.storage.repositories.knowledge_repo.kb_modes_by_agent",
+            new=AsyncMock(return_value=modes),
+        ),
+    ):
+        yield
 
 
 async def test_prepare_refuses_a_target_breaking_a_rule_with_its_reason() -> None:
@@ -171,3 +183,42 @@ async def test_the_live_api_refusal_carries_the_reason() -> None:
         pytest.raises(ControlRefused, match=XAI_REASON),
     ):
         await handler({"agent_id": str(uuid4())})
+
+
+# --- gpt-live-1 whose only tool is a linked knowledge base (#484) -----------------
+
+GPT_LIVE_1_ON_A_GATEWAY = {
+    "system_prompt": "B",
+    "pipeline_mode": "s2s",
+    "s2s": {"provider": "openai_live"},
+    **XAI_BASE_URL,
+}
+
+
+async def test_prepare_counts_the_targets_linked_tool_knowledge_base() -> None:
+    """Its `query_knowledge` gives gpt-live-1 a client delegate built from the
+    target's `llm`, so the xAI rule refuses the handoff."""
+    from turncall.orchestrator import tool_bridge
+
+    with _stored(GPT_LIVE_1_ON_A_GATEWAY, kb_modes=["tool"]):
+        prepared = await tool_bridge._prepare_handoff(
+            {"agent_id": str(uuid4())}, _context()
+        )
+
+    assert isinstance(prepared, tool_bridge.HandoffNotPrepared), prepared
+    assert XAI_REASON in prepared.message
+
+
+@pytest.mark.parametrize(("kb_modes", "refused"), [(["tool"], True), ([], False)])
+async def test_a_numbers_stored_agent_counts_its_linked_tool_knowledge_base(
+    kb_modes, refused
+) -> None:
+    from turncall.services import inbound_call
+
+    number = SimpleNamespace(project_id=uuid4())
+    with _stored(GPT_LIVE_1_ON_A_GATEWAY, kb_modes=kb_modes):
+        agent = await inbound_call._stored_agent(
+            MagicMock(), number, uuid4(), call_id=uuid4()
+        )
+
+    assert (agent is None) is refused
