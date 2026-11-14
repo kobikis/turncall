@@ -37,6 +37,7 @@ from turncall.services.agent_acceptance import (
     AgentOrigin,
     AgentRefusal,
     accept_agent,
+    log_refusal,
 )
 from turncall.services.limits import hold_live_call, release_live_call
 from turncall.services.media_token import media_token_valid
@@ -242,16 +243,14 @@ async def _refuse(
     """A call whose agent cannot run: failed with the reason, as a build that
     raised was (`error.raised`, `call.ended`), and its slot freed. The carrier
     edge then closes the stream, which ends the call."""
-    logger.warning(
-        "agent_refused origin={origin} project_id={project_id} field={field}: {reason}",
+    log_refusal(
+        refusal,
         origin=(
             AgentOrigin.CALL_INIT
             if (call_row.metadata_json or {}).get("dynamic_config")
             else AgentOrigin.STORED_CALL
-        ).value,
-        project_id=str(call_row.project_id),
-        field=refusal.field,
-        reason=refusal.reason,
+        ),
+        project_id=call_row.project_id,
         call_id=str(call_row.id),
     )
     call_context = CallContext(

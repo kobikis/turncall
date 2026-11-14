@@ -31,6 +31,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
+from loguru import logger
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -185,6 +186,22 @@ class AcceptedAgent:
 
 
 AgentSource = Mapping[str, Any] | UUID
+
+
+def log_refusal(
+    refusal: AgentRefusal, *, origin: AgentOrigin, project_id: UUID, **ids: str
+) -> None:
+    """The one `agent_refused` line, with the origin, the project, the
+    field and the reason, plus `ids` (the call, session or agent it was
+    for). Logged as the caller's, so the line names where it was refused."""
+    logger.opt(depth=1).warning(
+        "agent_refused origin={origin} project_id={project_id} field={field}: {reason}",
+        origin=origin.value,
+        project_id=str(project_id),
+        field=refusal.field,
+        reason=refusal.reason,
+        **ids,
+    )
 
 
 async def accept_agent(

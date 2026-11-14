@@ -129,6 +129,7 @@ async def _stored_agent(
         AgentOrigin,
         AgentRefusal,
         accept_agent,
+        log_refusal,
     )
 
     agent = await agent_repo.get_agent_by_id(
@@ -144,13 +145,10 @@ async def _stored_agent(
         session=session,
     )
     if isinstance(outcome, AgentRefusal):
-        logger.warning(
-            "agent_refused origin={origin} project_id={project_id} "
-            "field={field}: {reason}",
-            origin=AgentOrigin.STORED_CALL.value,
-            project_id=str(number.project_id),
-            field=outcome.field,
-            reason=outcome.reason,
+        log_refusal(
+            outcome,
+            origin=AgentOrigin.STORED_CALL,
+            project_id=number.project_id,
             call_id=str(call_id),
             agent_id=str(agent_id),
         )

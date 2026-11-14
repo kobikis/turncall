@@ -36,6 +36,7 @@ from turncall.services.agent_acceptance import (
     AgentOrigin,
     AgentRefusal,
     accept_agent,
+    log_refusal,
 )
 from turncall.services.limits import admit_inbound_call, release_live_call
 from turncall.services.webhook_verification import (
@@ -373,13 +374,10 @@ async def _stored_call(
         session=session,
     )
     if isinstance(outcome, AgentRefusal):
-        logger.warning(
-            "agent_refused origin={origin} project_id={project_id} "
-            "field={field}: {reason}",
-            origin=AgentOrigin.STORED_CALL.value,
-            project_id=str(phone_row.project_id),
-            field=outcome.field,
-            reason=outcome.reason,
+        log_refusal(
+            outcome,
+            origin=AgentOrigin.STORED_CALL,
+            project_id=phone_row.project_id,
             call_id=str(call_id),
             agent_id=str(agent_id),
         )

@@ -20,6 +20,7 @@ from turncall.services.agent_acceptance import (
     AgentOrigin,
     AgentRefusal,
     accept_agent,
+    log_refusal,
 )
 from turncall.storage.repositories import agent_repo
 
@@ -144,14 +145,8 @@ async def accept_call_init_agent(
     """
     outcome = await _accept_named(session, result, project_id=project_id)
     if isinstance(outcome, AgentRefusal):
-        logger.warning(
-            "agent_refused origin={origin} project_id={project_id} "
-            "field={field}: {reason}",
-            origin=AgentOrigin.CALL_INIT.value,
-            project_id=str(project_id),
-            field=outcome.field,
-            reason=outcome.reason,
-            **context,
+        log_refusal(
+            outcome, origin=AgentOrigin.CALL_INIT, project_id=project_id, **context
         )
     elif isinstance(outcome, AcceptedAgent):
         for warning in outcome.warnings:

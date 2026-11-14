@@ -40,6 +40,7 @@ from turncall.services.agent_acceptance import (
     AgentOrigin,
     AgentRefusal,
     accept_agent,
+    log_refusal,
 )
 from turncall.services.credentials import MissingProviderKeyError
 from turncall.services.limits import admit_live_call, release_live_call
@@ -564,13 +565,10 @@ async def _accepted_stored(
     if isinstance(outcome, AgentRefusal):
         if outcome.field == "agent_id":
             raise NotFoundError("Agent", str(agent_id))
-        logger.warning(
-            "agent_refused origin={origin} project_id={project_id} "
-            "field={field}: {reason}",
-            origin=AgentOrigin.STORED_CALL.value,
-            project_id=str(project_id),
-            field=outcome.field,
-            reason=outcome.reason,
+        log_refusal(
+            outcome,
+            origin=AgentOrigin.STORED_CALL,
+            project_id=project_id,
             agent_id=str(agent_id),
         )
         raise ApiError(

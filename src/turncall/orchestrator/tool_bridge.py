@@ -662,6 +662,7 @@ async def _accept_target(
         AgentOrigin,
         AgentRefusal,
         accept_agent,
+        log_refusal,
     )
 
     outcome = await accept_agent(
@@ -671,15 +672,12 @@ async def _accept_target(
         session=session,
     )
     if isinstance(outcome, AgentRefusal):
-        logger.warning(
-            "agent_refused origin={origin} project_id={project_id} "
-            "field={field}: {reason}",
-            origin=AgentOrigin.HANDOFF.value,
-            project_id=str(call_context.project_id),
-            field=outcome.field,
-            reason=outcome.reason,
+        log_refusal(
+            outcome,
+            origin=AgentOrigin.HANDOFF,
+            project_id=call_context.project_id,
             call_id=str(call_context.call_id),
-            target_agent_id=str(getattr(target, "id", "")),
+            target_agent_id=str(target.id),
         )
         return HandoffNotPrepared(
             _not_prepared(f"the target agent's config is refused: {outcome.reason}")
