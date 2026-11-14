@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter
+from fastapi.exceptions import RequestValidationError
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,17 +13,21 @@ from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.api.responses import ok, paginated
 from turncall.api.v1.schemas.agents import (
-    AgentConfigSchema,
     AgentResponse,
     CreateAgentRequest,
     UpdateAgentRequest,
 )
-from turncall.api.v1.schemas.procedures import domain_procedures
 from turncall.auth import Auth, AuthContext, WriteAuth
 from turncall.domain.enums import AuditAction, AuditResource
-from turncall.domain.models import RetentionConfig
+from turncall.domain.models import AgentConfig, RetentionConfig
 from turncall.domain.procedures import HANDOFF_TO_AGENT
 from turncall.services import audit_log, retention, skill_library, skills
+from turncall.services.agent_acceptance import (
+    AcceptedAgent,
+    AgentOrigin,
+    AgentRefusal,
+    accept_agent,
+)
 from turncall.services.audit_log import AuditTrail
 from turncall.storage.repositories import (
     agent_repo,
@@ -34,8 +39,41 @@ from turncall.storage.repositories import (
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 
+async def _accept(
+    raw: Any, project_id: UUID, session: AsyncSession | None
+) -> AcceptedAgent | AgentRefusal:
+    """The config sent, through agent acceptance (`api` origin, #478). The
+    schema's errors are raised here as the request validation error body
+    parsing raised before, under `body.config`, ahead of everything the
+    handler checks; any other refusal is returned for `_accepted`."""
+    outcome = await accept_agent(
+        raw, project_id=project_id, origin=AgentOrigin.API, session=session
+    )
+    if isinstance(outcome, AgentRefusal) and outcome.schema_errors:
+        raise RequestValidationError(
+            [
+                {**error, "loc": ("body", "config", *error["loc"])}
+                for error in outcome.schema_errors
+            ]
+        )
+    return outcome
+
+
+def _accepted(outcome: AcceptedAgent | AgentRefusal) -> AcceptedAgent:
+    """An accepted agent, or the refusal (inline knowledge bases) as an
+    `invalid_agent_config` naming its field."""
+    if isinstance(outcome, AcceptedAgent):
+        return outcome
+    raise ApiError(
+        status_code=422,
+        code=ErrorCode.INVALID_AGENT_CONFIG,
+        message=outcome.reason,
+        details={"field": outcome.field},
+    )
+
+
 async def _check_ambience(
-    session: AsyncSession, project_id: UUID, config: AgentConfigSchema | None
+    session: AsyncSession, project_id: UUID, config: AgentConfig | None
 ) -> None:
     """A typo'd sound id fails here, at save, rather than silently on a call."""
     if config is None or config.ambience is None:
@@ -51,7 +89,7 @@ async def _check_ambience(
 
 
 async def _check_skills(
-    session: AsyncSession, project_id: UUID, config: AgentConfigSchema | None
+    session: AsyncSession, project_id: UUID, config: AgentConfig | None
 ) -> None:
     """The skills an agent lists must be live where the project's skills come
     from — itself, or its skill library (#432) — or, pinned, name a
@@ -81,14 +119,14 @@ async def _check_skills(
 
 
 async def _check_escalations(
-    session: AsyncSession, project_id: UUID, config: AgentConfigSchema | None
+    session: AsyncSession, project_id: UUID, config: AgentConfig | None
 ) -> None:
     """A procedure's handoff escalation names an agent of this project
     (#448): a typo'd id fails here rather than as a refused handoff on the
     call that needed it."""
     if config is None:
         return
-    for index, procedure in enumerate(domain_procedures(config.procedures)):
+    for index, procedure in enumerate(config.procedures):
         for at, step in enumerate(procedure.steps):
             action = step.escalate.action() if step.escalate else None
             if action is None or action[0] != HANDOFF_TO_AGENT:
@@ -115,22 +153,6 @@ async def _check_escalations(
                     "agent_id": agent_id,
                 },
             )
-
-
-def _refuse_inline_knowledge_bases(config: AgentConfigSchema | None) -> None:
-    """A stored agent's KBs are its links — one source, never two that can
-    disagree (#260). `knowledge_bases` is for an agent with no row."""
-    if config is None or not config.knowledge_bases:
-        return
-    raise ApiError(
-        status_code=422,
-        code=ErrorCode.INVALID_AGENT_CONFIG,
-        message=(
-            "knowledge_bases is for an inline agent only; link a knowledge base "
-            "to a stored agent with POST /v1/agents/{agent_id}/knowledge-bases"
-        ),
-        details={"field": "knowledge_bases"},
-    )
 
 
 # Changing what an agent keeps needs an admin key (#316): its `retention`
@@ -257,12 +279,13 @@ async def create_agent(
     audit: Audit,
 ) -> dict:
     """Create a new draft agent."""
-    _refuse_inline_knowledge_bases(body.config)
-    await _check_ambience(session, auth.project_id, body.config)
-    await _check_skills(session, auth.project_id, body.config)
-    await _check_escalations(session, auth.project_id, body.config)
+    accepted = _accepted(await _accept(body.config, auth.project_id, session))
+    config_blob = dict(accepted.stored or {})
+    await _check_ambience(session, auth.project_id, accepted.config)
+    await _check_skills(session, auth.project_id, accepted.config)
+    await _check_escalations(session, auth.project_id, accepted.config)
     before = await _retention_before(session, auth, {body.name})
-    _refuse_written_retention(before, body.name, body.config.model_dump())
+    _refuse_written_retention(before, body.name, config_blob)
     next_version = await agent_repo.get_next_version(
         session, auth.project_id, body.name
     )
@@ -273,7 +296,7 @@ async def create_agent(
         name=body.name,
         environment=body.environment,
         version=next_version,
-        config_blob=body.config.model_dump(),
+        config_blob=config_blob,
     )
     await _refuse_applied_change(session, auth, before)
     audit.record(
@@ -343,6 +366,13 @@ async def update_agent(
     audit: Audit,
 ) -> dict:
     """Update a draft agent's config. Published agents cannot be updated."""
+    # Before the agent is looked up: a config the schema refuses is a 422
+    # for any agent id, as when body parsing refused it.
+    outcome = (
+        await _accept(body.config, auth.project_id, session)
+        if body.config is not None
+        else None
+    )
     existing = await agent_repo.get_agent_by_id(
         session, agent_id, project_id=auth.project_id
     )
@@ -355,11 +385,12 @@ async def update_agent(
             details={"state": existing.state, "version": existing.version},
         )
 
-    _refuse_inline_knowledge_bases(body.config)
-    await _check_ambience(session, auth.project_id, body.config)
-    await _check_skills(session, auth.project_id, body.config)
-    await _check_escalations(session, auth.project_id, body.config)
-    config_blob = body.config.model_dump() if body.config else existing.config_blob
+    accepted = _accepted(outcome) if outcome is not None else None
+    config = accepted.config if accepted else None
+    await _check_ambience(session, auth.project_id, config)
+    await _check_skills(session, auth.project_id, config)
+    await _check_escalations(session, auth.project_id, config)
+    config_blob = dict(accepted.stored or {}) if accepted else existing.config_blob
     name = body.name or existing.name
     before = await _retention_before(session, auth, {existing.name, name})
     _refuse_written_retention(before, name, config_blob, own=existing.config_blob)
