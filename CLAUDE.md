@@ -822,7 +822,8 @@ transport answers as for an answer naming no agent. Inbound phone calls (every
 carrier, `services/inbound_call`) are refused at the carrier, before the caller
 is answered; WebRTC answers `502 invalid_agent_config` whose `details` carry
 `{reason, field}` (an answer naming no agent stays `502 internal_error`);
-WhatsApp voice drops the call, as it always has, slot freed; an outbound dial
+WhatsApp voice rejects the call unanswered (`reject_call_to_whatsapp`, #483),
+slot freed; an outbound dial
 runs the dial's agent; a text goes unanswered. An unknown top-level field is
 logged (`agent_unknown_field`) and dropped, and the call runs with its raw
 config stored as `dynamic_config` (ADR-0017).
@@ -2108,8 +2109,8 @@ same `AgentConfigSchema` an agent create uses (`extra="forbid"` included), runs
 with **`agent_id` null** (ADR-0017 — null is the honest answer, not missing
 data), and is snapshotted verbatim in `resolved_config`. The worker resolves
 every target through agent acceptance (#479): `agent`/`agent_name` as
-`eval_target` (the rules the build holds, not the schema a stored agent already
-passed), `inline` as `eval_inline` (the whole schema again, plain http allowed).
+`eval_target` (the provider and procedures rules every origin applies, not
+the schema a stored agent already passed), `inline` as `eval_inline` (the whole schema again, plain http allowed).
 A config that cannot run errors the run, naming the field
 (`agent 'support' (v3) cannot run: llm: ...`), before any iteration.
 

@@ -20,8 +20,9 @@ and is not part of this repository's history.
   knowledge bases and credentials. Another project's id (the deprecated
   `assistant_id` too) now resolves to no agent, and each transport answers as
   it does for any call-init answer naming no usable agent: the inbound call is
-  refused at the carrier, WebRTC answers `502`, a WhatsApp voice call frees
-  its live-call slot and runs nothing, an outbound dial falls back to its own
+  refused at the carrier, WebRTC answers `502`, a WhatsApp voice call is
+  rejected unanswered and frees its live-call slot (#483), an outbound dial
+  falls back to its own
   agent, a text goes unanswered. Logged as `call_init_agent_not_in_project`
   with the project and the id.
 
@@ -37,6 +38,11 @@ and is not part of this repository's history.
   number bound to it rejects the call unanswered, and an outbound dial's own
   agent fails the call with `error.raised` when its media stream opens. An
   eval target pinned by id is accepted with its linked knowledge bases.
+- **`turncall-demo` refuses an agents file whose agent has `knowledge_bases`**
+  (#479, parent #474). The demo has no database to search them in, and they
+  used to be dropped without a word, so the agent answered as if it had none.
+  Now it refuses to boot, naming the agent and the field, as it already did
+  for MCP servers, ambience and an avatar. Remove the field from the file.
 
 ## [2.2.0]
 

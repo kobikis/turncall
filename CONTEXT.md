@@ -465,7 +465,10 @@ only what is refused and what is warned about, in one table. An agent id from
 another project is refused like one naming no agent. The `api` origin (agent
 create and update, #478) runs the API's whole schema, so an unknown field and a
 plain `http://` URL outside development are refused there, and its errors are
-the endpoints' 422 `validation_error`, unchanged.
+the endpoints' 422 `validation_error`, unchanged. It alone checks what the
+config names against the project — its ambience sound, skills and procedure
+handoff targets — as the endpoints did; a call resolves those itself. A stored
+agent's keys are never checked: the schema wrote them.
 _Avoid_: "admission", "admit" (taking a live-call slot), "validation" (one part
 of it)
 
