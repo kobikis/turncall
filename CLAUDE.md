@@ -649,14 +649,19 @@ Customer calls WhatsApp Business number → Meta POSTs /webhooks/whatsapp (field
   → on "terminate" event: cleanup
 ```
 
-A connect is refused **before** pipecat's client answers it (#483,
-`webhooks/whatsapp_handlers._admit_connect`): a number nobody bound, a
-project at its live-call limit (#224), and a call with no usable agent —
-call-init failing or naming none, another project's `agent_id` (#475), an
-agent acceptance refuses (#477), a bound agent whose row is gone — are
-rejected with `reject_call_to_whatsapp` and the slot freed. The agent is
-resolved there, once; the connection callback only writes the call row and
-starts the pipeline on it.
+A connect is opened **before** pipecat's client answers it (#483, #494,
+`webhooks/whatsapp_handlers._open_connect`), through `services/call_opening
+.open_call` like every inbound call (call-init's agent, else the bound one;
+no A/B weights, which are a phone call's): a number nobody
+bound, a project at its live-call limit (#224), and a call with no usable
+agent — call-init failing or naming none, another project's `agent_id`
+(#475), an agent acceptance refuses (#477), a bound agent whose row is gone —
+are rejected with `reject_call_to_whatsapp`, the slot freed and no row. The
+connection callback only runs the opened call (`CallToRun.of` → `run_call`);
+a connect pipecat's client then fails to answer has its slot freed and its
+call failed. The row keeps the default carrier and no `provider_call_sid`
+(WhatsApp's call id is `metadata.whatsapp_call_id`), so no carrier hang-up
+acts on it.
 
 ### WhatsApp Webhook Setup
 1. Set Callback URL: `https://<host>/webhooks/whatsapp`

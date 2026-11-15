@@ -21,6 +21,32 @@ def _auth(app):
     app.app.dependency_overrides[get_session] = lambda: AsyncMock()
 
 
+def fake_open_call(seen: dict | None = None) -> AsyncMock:
+    """`open_call` with no database or Redis: the source's agent, chosen as
+    the real one chooses it, and the call opened under a fresh id."""
+    from turncall.services.call_opening import OpenedCall
+
+    async def _open(source, *, project_id, session, announce_busy=True):
+        call_id = uuid.uuid4()
+        chosen = await source.choose_agent(
+            session, project_id=project_id, call_id=call_id
+        )
+        opened = OpenedCall(
+            call_id=call_id,
+            project_id=project_id,
+            agent=chosen.agent,
+            agent_name=chosen.name,
+            metadata=chosen.metadata,
+            parties=source.parties,
+            handles=source.handles,
+        )
+        if seen is not None:
+            seen["opened"] = opened
+        return opened
+
+    return AsyncMock(side_effect=_open)
+
+
 @pytest.mark.unit
 def test_non_json_body_is_400(app):
     _auth(app)
@@ -83,11 +109,13 @@ def test_a_pipeline_that_cannot_start_is_an_error_not_a_dead_answer(app, monkeyp
 
     from tests.accepted import accepted
     from turncall.api.v1 import webrtc
+    from turncall.services.call_opening import ChosenAgent
 
     _auth(app)
-    resolved = (accepted(), uuid.uuid4(), None, None, None, None)
+    resolved = ChosenAgent(accepted(), None)
     monkeypatch.setattr(webrtc, "_resolve_agent", AsyncMock(return_value=resolved))
-    monkeypatch.setattr(webrtc, "admit_live_call", AsyncMock())
+    seen: dict = {}
+    monkeypatch.setattr(webrtc, "open_call", fake_open_call(seen))
     monkeypatch.setattr(webrtc, "get_engine", lambda: None)
     monkeypatch.setattr(webrtc, "create_session_factory", lambda _e: _session_cm)
     monkeypatch.setattr(webrtc, "create_whatsapp_transport", lambda *a, **k: None)
@@ -95,18 +123,6 @@ def test_a_pipeline_that_cannot_start_is_an_error_not_a_dead_answer(app, monkeyp
         webrtc,
         "run_call",
         AsyncMock(side_effect=RuntimeError("Missing credentials")),
-    )
-    call_id = uuid.uuid4()
-    monkeypatch.setattr(
-        "turncall.storage.repositories.call_repo.create_call",
-        AsyncMock(return_value=SimpleNamespace(id=call_id)),
-    )
-    monkeypatch.setattr(
-        "turncall.storage.repositories.call_repo.get_next_sequence_number",
-        AsyncMock(return_value=1),
-    )
-    monkeypatch.setattr(
-        "turncall.storage.repositories.call_repo.create_call_event", AsyncMock()
     )
     connection = SimpleNamespace(disconnect=AsyncMock())
 
@@ -126,7 +142,7 @@ def test_a_pipeline_that_cannot_start_is_an_error_not_a_dead_answer(app, monkeyp
     assert r.status_code == 500, r.text
     assert r.json()["code"] == "pipeline_start_failed"
     assert "Missing credentials" in r.json()["error"]
-    assert str(call_id) in r.json()["error"]
+    assert str(seen["opened"].call_id) in r.json()["error"]
     connection.disconnect.assert_awaited_once()
 
 
@@ -149,12 +165,14 @@ def test_a_missing_key_rides_back_as_a_list(app, monkeypatch):
 
     from tests.accepted import accepted
     from turncall.api.v1 import webrtc
+    from turncall.services.call_opening import ChosenAgent
     from turncall.services.credentials import MissingProviderKeyError
 
     _auth(app)
-    resolved = (accepted(), uuid.uuid4(), None, None, None, None)
+    resolved = ChosenAgent(accepted(), None)
     monkeypatch.setattr(webrtc, "_resolve_agent", AsyncMock(return_value=resolved))
-    monkeypatch.setattr(webrtc, "admit_live_call", AsyncMock())
+    seen: dict = {}
+    monkeypatch.setattr(webrtc, "open_call", fake_open_call(seen))
     monkeypatch.setattr(webrtc, "get_engine", lambda: None)
     monkeypatch.setattr(webrtc, "create_session_factory", lambda _e: _session_cm)
     monkeypatch.setattr(webrtc, "create_whatsapp_transport", lambda *a, **k: None)
@@ -162,17 +180,6 @@ def test_a_missing_key_rides_back_as_a_list(app, monkeypatch):
         webrtc,
         "run_call",
         AsyncMock(side_effect=MissingProviderKeyError(["deepgram"])),
-    )
-    monkeypatch.setattr(
-        "turncall.storage.repositories.call_repo.create_call",
-        AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())),
-    )
-    monkeypatch.setattr(
-        "turncall.storage.repositories.call_repo.get_next_sequence_number",
-        AsyncMock(return_value=1),
-    )
-    monkeypatch.setattr(
-        "turncall.storage.repositories.call_repo.create_call_event", AsyncMock()
     )
 
     async def handle(_request, callback):

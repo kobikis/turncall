@@ -169,19 +169,6 @@ async def hold_live_call(project_id: UUID, call_id: UUID) -> AsyncIterator[None]
         await release_live_call(project_id, call_id)
 
 
-async def admit_live_call(
-    session: AsyncSession, *, project_id: UUID, call_id: UUID
-) -> None:
-    """Take a live-call slot for a call an API request starts (a WebRTC
-    connect), or raise 429 `rate_limited`."""
-    limits = await limits_for_project(session, project_id)
-    if not await claim_live_call(project_id, call_id, limits.live_calls):
-        raise RateLimitedError(
-            f"This project is at its limit of {limits.live_calls} live calls",
-            {"limit": "live_calls", "max": limits.live_calls},
-        )
-
-
 async def reserve_dial(
     session: AsyncSession,
     *,

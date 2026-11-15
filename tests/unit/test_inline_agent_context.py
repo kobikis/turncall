@@ -168,12 +168,11 @@ def _metadata_keys(path: Path) -> set[str]:
 
 # Not VOICE_PATHS: the file that builds the CallContext is not always the one
 # that creates the call row. A carrier answers the inbound webhook in one
-# request and opens the media stream in another; every carrier's inbound edge
-# creates its row through the shared `services/call_opening.py`.
+# request and opens the media stream in another; every inbound voice edge —
+# each carrier's, WebRTC and WhatsApp voice (#494) — creates its row through
+# the shared `services/call_opening.py`.
 CALL_ROW_PATHS = [
-    ("carrier inbound", _SRC / "services" / "call_opening.py"),
-    ("whatsapp", _SRC / "webhooks" / "whatsapp_handlers.py"),
-    ("webrtc", _SRC / "api" / "v1" / "webrtc.py"),
+    ("inbound", _SRC / "services" / "call_opening.py"),
 ]
 
 

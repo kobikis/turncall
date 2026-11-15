@@ -12,7 +12,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from tests.accepted import accepted
-from tests.unit.test_webrtc_validation import _auth, _session_cm
+from tests.unit.test_webrtc_validation import _auth, _session_cm, fake_open_call
+from turncall.services.call_opening import CallMetadata, ChosenAgent
 
 
 class FakeConnection:
@@ -33,6 +34,10 @@ class FakeConnection:
         return register
 
 
+def _chosen(config, **metadata) -> ChosenAgent:
+    return ChosenAgent(config, None, CallMetadata(**metadata))
+
+
 def _connect(app, monkeypatch, resolved) -> dict:
     """POST a connect with variables; what the pipeline and call row got."""
     from turncall.api.v1 import webrtc
@@ -40,7 +45,7 @@ def _connect(app, monkeypatch, resolved) -> dict:
     _auth(app)
     seen: dict = {}
     monkeypatch.setattr(webrtc, "_resolve_agent", AsyncMock(return_value=resolved))
-    monkeypatch.setattr(webrtc, "admit_live_call", AsyncMock())
+    monkeypatch.setattr(webrtc, "open_call", fake_open_call(seen))
     monkeypatch.setattr(webrtc, "get_engine", lambda: None)
     monkeypatch.setattr(webrtc, "create_session_factory", lambda _e: _session_cm)
     monkeypatch.setattr(webrtc, "create_whatsapp_transport", lambda *a, **k: None)
@@ -49,22 +54,6 @@ def _connect(app, monkeypatch, resolved) -> dict:
         seen["prompt"] = opened.agent.config.system_prompt
 
     monkeypatch.setattr(webrtc, "run_call", _start)
-
-    async def _create_call(_s, **kwargs):
-        seen["metadata"] = kwargs["metadata_json"]
-        seen["call_id"] = kwargs["call_id"]
-        return SimpleNamespace(id=kwargs["call_id"])
-
-    monkeypatch.setattr(
-        "turncall.storage.repositories.call_repo.create_call", _create_call
-    )
-    monkeypatch.setattr(
-        "turncall.storage.repositories.call_repo.get_next_sequence_number",
-        AsyncMock(return_value=1),
-    )
-    monkeypatch.setattr(
-        "turncall.storage.repositories.call_repo.create_call_event", AsyncMock()
-    )
 
     async def handle(_request, callback):
         seen["connection"] = FakeConnection()
@@ -86,13 +75,16 @@ def _connect(app, monkeypatch, resolved) -> dict:
     )
     assert r.status_code == 200, r.text
     seen["resolved_with"] = webrtc._resolve_agent.await_args.kwargs["call_id"]
+    seen["call_id"] = seen["opened"].call_id
+    # What the call row is written with.
+    seen["metadata"] = seen["opened"].metadata.row_json()
     return seen
 
 
 @pytest.mark.unit
 def test_the_requests_variables_render_the_agent(app, monkeypatch):
     config = accepted({"system_prompt": "Hi {{name}}, vip={{vip}}."})
-    seen = _connect(app, monkeypatch, (config, uuid.uuid4(), {}, {}, None, None))
+    seen = _connect(app, monkeypatch, _chosen(config))
 
     assert seen["prompt"] == "Hi Ada, vip=True."
     # On the call row, where a handoff and post-call work read them.
@@ -102,7 +94,7 @@ def test_the_requests_variables_render_the_agent(app, monkeypatch):
 @pytest.mark.unit
 def test_call_init_is_asked_with_the_id_the_call_gets(app, monkeypatch):
     config = accepted({"system_prompt": "Hi."})
-    seen = _connect(app, monkeypatch, (config, None, {}, {}, None, {"x": 1}))
+    seen = _connect(app, monkeypatch, _chosen(config, dynamic_config={"x": 1}))
 
     assert seen["resolved_with"] == seen["call_id"]
 
@@ -112,7 +104,9 @@ def test_they_win_a_clash_with_call_inits(app, monkeypatch):
     config = accepted({"system_prompt": "{{name}} calls from {{caller_number}}."})
     from_call_init = {"name": "Bob", "caller_number": "+1555"}
     seen = _connect(
-        app, monkeypatch, (config, None, from_call_init, {}, None, {"x": 1})
+        app,
+        monkeypatch,
+        _chosen(config, dynamic_config={"x": 1}, template_variables=from_call_init),
     )
 
     assert seen["prompt"] == "Ada calls from +1555."
