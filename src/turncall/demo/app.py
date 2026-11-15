@@ -3,9 +3,10 @@
 Speaks what pipecat's browser `SmallWebRTCTransport` sends — the same
 `POST`/`PATCH /connect` pair as `/v1/webrtc/connect` — but authenticates
 nothing, stores nothing and reaches no project: whatever fronts it (the
-website's Worker) decides who may call. Each call runs the real pipeline
-(`build_call_pipeline`) with no database behind it, so `CallContext.records`
-is false and nothing is written anywhere.
+website's Worker) decides who may call. Each call runs through the running
+module (`run_call`) like any other voice call, with no database behind it:
+no row, no live-call slot, and `CallContext.records` false, so nothing is
+written anywhere.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import fields
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -66,7 +68,6 @@ def create_demo_app(agents: dict[str, AcceptedAgent], settings: Settings) -> Fas
     # Calls held, counted from the offer — before anything awaits — so two
     # offers at once cannot both take the last place.
     held = {"calls": 0}
-    running: set[asyncio.Task[None]] = set()
     default = next(iter(agents))
 
     def release() -> None:
@@ -133,14 +134,11 @@ def create_demo_app(agents: dict[str, AcceptedAgent], settings: Settings) -> Fas
 
         async def on_connection(connection: Any) -> None:
             try:
-                session = await _build_call(agent, connection, settings)
+                task = await _start_call(agent, connection, settings)
             except Exception as exc:
                 logger.exception("demo_call_build_failed", agent=name)
                 failure.append((connection, exc))
                 raise
-            task = asyncio.create_task(_run(session, agent))
-            running.add(task)
-            task.add_done_callback(running.discard)
             task.add_done_callback(lambda _task: release())
             started.append(task)
             logger.info("demo_call_started", agent=name, pc_id=connection.pc_id)
@@ -196,42 +194,44 @@ def import_call_path() -> None:
     """
     from pipecat.audio.vad import silero  # noqa: F401
 
-    from turncall.orchestrator import pipeline_builder  # noqa: F401
+    from turncall.orchestrator import call_runner  # noqa: F401
 
 
-async def _run(session: Any, agent: AcceptedAgent) -> None:
-    # Counted, so a SIGTERM waits for it.
-    with drain.live_call(session.call_id, agent.config.max_call_duration_seconds):
-        await session.start()
-
-
-async def _build_call(agent: AcceptedAgent, connection: Any, settings: Settings) -> Any:
-    """The call's CallSession, built and not yet started."""
-    from turncall.orchestrator.pipeline_builder import build_call_pipeline
-    from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
+async def _start_call(
+    agent: AcceptedAgent, connection: Any, settings: Settings
+) -> asyncio.Task[None]:
+    """Run the call through the running module, with no database: no row, no
+    live-call slot, nothing recorded — but counted, so a SIGTERM waits for it.
+    Returns the call's task once its pipeline is built, or raises what the
+    build raised."""
+    from turncall.orchestrator.call_runner import (
+        CallToRun,
+        TransportFactory,
+        run_call,
+    )
     from turncall.orchestrator.transport_factory import (
         WEBRTC_SAMPLE_RATE,
         create_whatsapp_transport,
     )
 
-    call_context = CallContext(
+    call = CallToRun(
         call_id=uuid4(),
         project_id=DEMO_PROJECT_ID,
-        agent_id=DYNAMIC_AGENT_ID,
+        agent=agent,
+        agent_id=None,
         call_sid="webrtc",
         stream_sid="webrtc",
         session_factory=None,
     )
-    return await build_call_pipeline(
-        agent=agent,
-        # No room to mix in: the demo refuses an agent with ambience, whose
-        # sound lives in a project's storage.
-        transport=create_whatsapp_transport(connection, mixer=None),
-        call_context=call_context,
-        settings=settings,
-        session_factory=None,
-        audio_sample_rate=WEBRTC_SAMPLE_RATE,
+    # No room to mix in: the demo refuses an agent with ambience, whose sound
+    # lives in a project's storage, so the mixer `run_call` hands over is None.
+    transport = TransportFactory(
+        make=partial(create_whatsapp_transport, connection),
+        sample_rate=WEBRTC_SAMPLE_RATE,
     )
+    task = await run_call(call, transport, own_task=True, settings=settings)
+    assert task is not None  # own_task always answers the call's task
+    return task
 
 
 async def _answer(handler: Any, offer: Any, on_connection: Any) -> JSONResponse:
