@@ -54,8 +54,10 @@ def _calling(name: str) -> dict[str, ast.Module]:
 
 
 def test_every_call_row_is_created_under_a_slot():
-    creators = _calling("create_call")
-    assert len(creators) >= 4, creators  # Twilio, outbound, WebRTC, WhatsApp
+    # The opening module's write (#495) creates the outbound dial's row.
+    creators = _calling("create_call") | _calling("write_call_row")
+    # The opening module (every carrier), outbound, WebRTC, WhatsApp.
+    assert len(creators) >= 4, creators
     for rel, tree in creators.items():
         names = {_name(c) for c in _calls(tree)}
         assert names & ADMISSIONS, f"{rel} writes a call row without taking a slot"

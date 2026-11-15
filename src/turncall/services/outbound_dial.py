@@ -13,7 +13,8 @@ apply to its target (#227).
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, NamedTuple
 from uuid import UUID, uuid4
 
 from loguru import logger
@@ -21,13 +22,21 @@ from loguru import logger
 from turncall.api.errors import ApiError, ConflictError, ErrorCode, NotFoundError
 from turncall.config import get_settings
 from turncall.domain.carriers import TELNYX, TWILIO
-from turncall.domain.enums import CallDirection, CallEventType
+from turncall.domain.enums import CallDirection
 from turncall.domain.errors import PicklableError
 from turncall.events.server_events import send_call_init
 from turncall.services.agent_acceptance import AgentRefusal
 from turncall.services.call_init_resolver import (
     accept_call_init_agent,
     resolve_call_init,
+)
+from turncall.services.call_opening import (
+    CallMetadata,
+    CallParties,
+    CallStart,
+    EdgeHandles,
+    write_call_row,
+    write_call_start,
 )
 from turncall.services.limits import admit_outbound_call, release_live_call
 from turncall.services.telnyx_accounts import CONNECTION_KEY
@@ -132,24 +141,22 @@ async def place_outbound_call(
         # After admission: a dial the limits refuse asks the customer's server
         # nothing, and a campaign's reservation (a one-second window) is
         # re-taken before call-init's latency, not after it.
-        runs_as, metadata = await _call_init(
+        runs_as = await _call_init(
             session,
             phone_number,
             project_id=project_id,
-            agent_id=agent.id,
+            dialled_as=_RunsAs(agent.id, agent.name, metadata),
             call_id=call_id,
             to_number=to_number,
-            metadata=metadata,
+        )
+        start = _call_start(
+            call_id, project_id, runs_as, phone_number=phone_number, to_number=to_number
         )
         call, provider_call_sid = await _dial(
             session,
-            call_id=call_id,
-            project_id=project_id,
-            agent_id=runs_as,
+            start,
             phone_number=phone_number,
             account=account,
-            to_number=to_number,
-            metadata=metadata,
             before_carrier=before_carrier,
         )
     except BaseException:
@@ -161,18 +168,42 @@ async def place_outbound_call(
     # ever holds it. Freeing it now would admit another dial into a slot a
     # live call is about to re-take — one call over the limit.
     try:
-        return await _record_dial(
-            session,
-            call,
-            project_id=project_id,
-            carrier=phone_number.provider,
-            provider_call_sid=provider_call_sid,
-            from_number=phone_number.e164_number,
-            to_number=to_number,
-            agent_id=runs_as,
-        )
+        return await _record_dial(session, call, start, provider_call_sid)
     except Exception as exc:
         raise DialNotRecorded(call_id, provider_call_sid) from exc
+
+
+class _RunsAs(NamedTuple):
+    """The agent a dial runs (None for an inline one), its row's name, and
+    the call row's metadata."""
+
+    agent_id: UUID | None
+    name: str | None
+    metadata: dict[str, Any]
+
+
+def _call_start(
+    call_id: UUID,
+    project_id: UUID,
+    runs_as: _RunsAs,
+    *,
+    phone_number: PhoneNumberRow,
+    to_number: str,
+) -> CallStart:
+    """What the dial's row and start events are written from, by the same
+    write an inbound call's are. The dial's metadata is kept as it was sent:
+    what the module does not read rides on the row as the edge's own."""
+    metadata, own = CallMetadata.split(runs_as.metadata)
+    return CallStart(
+        call_id=call_id,
+        project_id=project_id,
+        agent_id=runs_as.agent_id,
+        agent_name=runs_as.name,
+        metadata=metadata,
+        parties=CallParties(from_number=phone_number.e164_number, to_number=to_number),
+        handles=EdgeHandles(carrier=phone_number.provider, row_metadata=own),
+        direction=CallDirection.OUTBOUND,
+    )
 
 
 async def _call_init(
@@ -180,11 +211,10 @@ async def _call_init(
     number: PhoneNumberRow,
     *,
     project_id: UUID,
-    agent_id: UUID,
+    dialled_as: _RunsAs,
     call_id: UUID,
     to_number: str,
-    metadata: dict[str, Any],
-) -> tuple[UUID | None, dict[str, Any]]:
+) -> _RunsAs:
     """The agent and metadata the call runs with (#277).
 
     A webhook-routed number asks its server, as on an inbound call, and the
@@ -196,7 +226,8 @@ async def _call_init(
     there is always one to run.
     """
     if not (number.routing_target_type == "webhook" and number.server_url):
-        return agent_id, metadata
+        return dialled_as
+    agent_id, metadata = dialled_as.agent_id, dialled_as.metadata
     dial_variables = metadata.get("template_variables")
     if not isinstance(dial_variables, dict):
         dial_variables = {}
@@ -213,17 +244,18 @@ async def _call_init(
         variables=dial_variables,
     )
     if not (response.success and isinstance(response.data, dict)):
-        return _dials_own(agent_id, metadata, call_id=call_id, error=response.error)
+        return _dials_own(dialled_as, call_id=call_id, error=response.error)
     result = await resolve_call_init(session, response.data, project_id=project_id)
     accepted = await accept_call_init_agent(
         session, result, project_id=project_id, call_id=str(call_id)
     )
     if isinstance(accepted, AgentRefusal):
-        return _dials_own(agent_id, metadata, call_id=call_id, error=accepted.reason)
+        return _dials_own(dialled_as, call_id=call_id, error=accepted.reason)
 
-    runs_as, dynamic_config = agent_id, None
+    runs_as, name, dynamic_config = agent_id, dialled_as.name, None
     if accepted is not None:
         runs_as = accepted.agent_id
+        name = result.agent.name if result.agent else None
         dynamic_config = result.dynamic_config if runs_as is None else None
     added = {
         "dynamic_config": dynamic_config,
@@ -237,12 +269,10 @@ async def _call_init(
         if theirs:
             own = metadata.get(key)
             merged[key] = {**theirs, **(own if isinstance(own, dict) else {})}
-    return runs_as, merged
+    return _RunsAs(runs_as, name, merged)
 
 
-def _dials_own(
-    agent_id: UUID, metadata: dict[str, Any], *, call_id: UUID, error: str | None
-) -> tuple[UUID, dict[str, Any]]:
+def _dials_own(dialled_as: _RunsAs, *, call_id: UUID, error: str | None) -> _RunsAs:
     """A call-init that failed or named an agent that cannot run: the dial's
     agent runs, with the dial's metadata and none of the answer."""
     logger.warning(
@@ -250,7 +280,7 @@ def _dials_own(
         call_id=str(call_id),
         error=error,
     )
-    return agent_id, metadata
+    return dialled_as
 
 
 class DialNotRecorded(PicklableError):
@@ -308,29 +338,16 @@ async def _carrier_account(
 
 async def _dial(
     session: AsyncSession,
+    start: CallStart,
     *,
-    call_id: UUID,
-    project_id: UUID,
-    agent_id: UUID | None,
     phone_number: PhoneNumberRow,
     account: TwilioAccount | TelnyxAccount,
-    to_number: str,
-    metadata: dict[str, Any],
     before_carrier: Callable[[], Awaitable[None]] | None,
 ) -> tuple[CallRow, str]:
     """Write the call row and dial: the row, and the carrier's SID."""
     settings = get_settings()
-    call = await call_repo.create_call(
-        session,
-        project_id=project_id,
-        call_id=call_id,
-        direction=CallDirection.OUTBOUND,
-        from_number=phone_number.e164_number,
-        to_number=to_number,
-        active_agent_id=agent_id,
-        metadata_json=metadata,
-        carrier=phone_number.provider,
-    )
+    call = await write_call_row(session, start)
+    to_number = start.parties.to_number
 
     # Build webhook URLs from the configured public base — NEVER the client Host
     # header, which a caller can spoof to make the carrier fetch call TwiML (or
@@ -349,7 +366,7 @@ async def _dial(
             account.adapter(),
             from_number=phone_number.e164_number,
             to_number=to_number,
-            connection_id=metadata[CONNECTION_KEY],
+            connection_id=start.handles.row_metadata[CONNECTION_KEY],
             base_url=base_url,
             call_id=call.id,
         )
@@ -364,17 +381,10 @@ async def _dial(
 
 
 async def _record_dial(
-    session: AsyncSession,
-    call: CallRow,
-    *,
-    project_id: UUID,
-    carrier: str,
-    provider_call_sid: str,
-    from_number: str,
-    to_number: str,
-    agent_id: UUID | None,
+    session: AsyncSession, call: CallRow, start: CallStart, provider_call_sid: str
 ) -> CallRow:
-    """Put the carrier's SID on the call row and record `call.started`."""
+    """Put the carrier's SID on the call row and record its start, as an
+    inbound call's is recorded."""
     updated = await call_repo.update_call_status(
         session, call.id, status="initiated", provider_call_sid=provider_call_sid
     )
@@ -384,37 +394,8 @@ async def _record_dial(
         raise RuntimeError(
             f"outbound call {call.id} vanished after dialling {provider_call_sid}"
         )
-    # Recorded and dispatched, as an inbound call's are: call.started was
-    # stored only, and an outbound call had no call.initializing at all.
-    from turncall.events.emit import emit_call_event
-
-    await emit_call_event(
-        session,
-        call_id=call.id,
-        project_id=project_id,
-        event_type=CallEventType.CALL_INITIALIZING,
-        payload={
-            "from_number": from_number,
-            "to_number": to_number,
-            "direction": CallDirection.OUTBOUND.value,
-            "transport": carrier,
-        },
-    )
-    await emit_call_event(
-        session,
-        call_id=call.id,
-        project_id=project_id,
-        event_type=CallEventType.CALL_STARTED,
-        payload={
-            "provider_call_sid": provider_call_sid,
-            "from_number": from_number,
-            "to_number": to_number,
-            # None for call-init's inline agent (ADR-0017).
-            "agent_id": str(agent_id) if agent_id else None,
-            "direction": CallDirection.OUTBOUND.value,
-        },
-    )
-
+    handles = replace(start.handles, provider_call_sid=provider_call_sid)
+    await write_call_start(session, replace(start, handles=handles))
     logger.info(
         "outbound_call_created",
         call_id=str(call.id),
