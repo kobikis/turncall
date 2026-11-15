@@ -400,9 +400,7 @@ def _request_variables(raw: Any) -> dict[str, str]:
 # A browser call has no numbers and no carrier: its row keeps the default
 # carrier (`calls.provider`) as it always has, and its events say `webrtc`.
 _NO_NUMBERS = CallParties(from_number="", to_number="")
-_BROWSER = EdgeHandles(
-    carrier=DEFAULT_CARRIER, transport="webrtc"
-)
+_BROWSER = EdgeHandles(carrier=DEFAULT_CARRIER, transport="webrtc")
 
 
 @dataclass(frozen=True)

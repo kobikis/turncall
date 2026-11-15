@@ -31,10 +31,12 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from loguru import logger
+
 from turncall.config import get_settings
 from turncall.config.settings import Settings
 from turncall.orchestrator.ambience import build_ambience_mixer
-from turncall.orchestrator.call_session import CallSession
+from turncall.orchestrator.call_session import CallSession, finalize_call
 from turncall.orchestrator.pipeline_builder import build_call_pipeline
 from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
 from turncall.services import drain
@@ -202,11 +204,30 @@ async def _build(
             mcp_tools=mcp_tools or None,
             carries_video=make_transport.carries_video,
         )
+    except asyncio.CancelledError:
+        # No session exists to end the call, and the carrier's own ending
+        # cannot end one still at `initiated`: ended here, as a hangup during
+        # setup ends — completed, never `pipeline_error`. Shielded, since it
+        # runs while the task is being cancelled.
+        await asyncio.shield(_end_unstarted(call))
+        raise
     finally:
         # `except Exception` alone skipped this when the build was cancelled.
         if session is None and mcp_manager is not None:
             await mcp_manager.close()
     return session
+
+
+async def _end_unstarted(call: CallToRun) -> None:
+    """A call cancelled before its pipeline existed: ended, and `call.ended`
+    sent. Nothing with no database (the demo). Never raises: the caller is
+    re-raising the cancellation."""
+    if call.session_factory is None:
+        return
+    try:
+        await finalize_call(call.session_factory, call.call_id, failed=False)
+    except Exception:
+        logger.exception("call_end_unstarted_error", call_id=str(call.call_id))
 
 
 def _mcp_manager(call: CallToRun) -> Any | None:
