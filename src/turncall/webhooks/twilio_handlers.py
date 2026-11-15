@@ -282,24 +282,31 @@ async def inbound_voice_webhook(
             media_type=TWIML_CONTENT_TYPE,
         )
 
-    from turncall.services.inbound_call import InboundRefusal, open_inbound_call
-
-    call = await open_inbound_call(
-        session,
-        phone_number,
-        carrier=TWILIO,
-        from_number=from_number,
-        to_number=to_number,
-        provider_call_sid=call_sid,
+    from turncall.services.call_opening import (
+        CallParties,
+        CallRefusal,
+        EdgeHandles,
+        NumberSource,
+        open_call,
     )
-    if isinstance(call, InboundRefusal):
+
+    call = await open_call(
+        NumberSource(
+            phone_number,
+            CallParties(from_number=from_number, to_number=to_number),
+            EdgeHandles(carrier=TWILIO, provider_call_sid=call_sid),
+        ),
+        project_id=phone_number.project_id,
+        session=session,
+    )
+    if isinstance(call, CallRefusal):
         # Busy is refused unanswered; any other refusal is answered and told why.
         return Response(
             content=BUSY_TWIML if call.busy else _say_twiml(call.message, hangup=True),
             media_type=TWIML_CONTENT_TYPE,
         )
 
-    twiml = generate_media_stream_twiml(request, call.id)
+    twiml = generate_media_stream_twiml(request, call.call_id)
     return Response(content=twiml, media_type=TWIML_CONTENT_TYPE)
 
 

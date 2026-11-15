@@ -30,7 +30,7 @@ from turncall.api.v1.schemas.credentials import parse_credential
 from turncall.api.v1.schemas.phone_numbers import BindPhoneNumberRequest
 from turncall.orchestrator import transport_factory as tf
 from turncall.orchestrator.asterisk_serializer import AsteriskFrameSerializer
-from turncall.services.inbound_call import InboundRefusal
+from turncall.services.call_opening import CallRefusal, RefusalReason
 from turncall.services.media_token import media_token
 from turncall.webhooks import asterisk_edge
 from turncall.webhooks.asterisk_media_stream import (
@@ -278,14 +278,16 @@ async def _settle(edge: asterisk_edge.AriEdge) -> None:
 
 class TestTheAriEdge:
     async def test_a_call_it_cannot_take_goes_back_to_the_dialplan(self) -> None:
-        edge, adapter = _edge(InboundRefusal("This number is not configured."))
+        edge, adapter = _edge(
+            CallRefusal(RefusalReason.NO_AGENT, "This number is not configured.")
+        )
         edge._dispatch(_stasis_start())
         await _settle(edge)
         assert adapter.calls == [("continue_in_dialplan", "chan-1")]
         assert edge._calls == {}
 
     async def test_the_dialled_number_and_caller_are_read_as_e164(self) -> None:
-        edge, _ = _edge(InboundRefusal("no"))
+        edge, _ = _edge(CallRefusal(RefusalReason.NO_AGENT, "no"))
         edge._dispatch(_stasis_start())
         await _settle(edge)
         edge._admit_call.assert_awaited_once_with(  # type: ignore[attr-defined]

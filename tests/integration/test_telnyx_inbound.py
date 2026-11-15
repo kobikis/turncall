@@ -250,9 +250,9 @@ async def test_a_retried_call_initiated_opens_one_call(monkeypatch) -> None:
     row, a second `answer` for the same leg."""
     import asyncio
 
-    from turncall.services import inbound_call
+    from turncall.services.call_opening import NumberSource
 
-    resolve = inbound_call._resolve_agent
+    resolve = NumberSource.choose_agent
 
     async def slow_resolve(*args: Any, **kwargs: Any) -> Any:
         await asyncio.sleep(0.5)
@@ -265,7 +265,7 @@ async def test_a_retried_call_initiated_opens_one_call(monkeypatch) -> None:
         number = await telnyx.bind_number(
             app.api, app.carrier, await app.create_agent(AGENT)
         )
-        monkeypatch.setattr(inbound_call, "_resolve_agent", slow_resolve)
+        monkeypatch.setattr(NumberSource, "choose_agent", slow_resolve)
         body = _initiated(cc, number)
         first, retry = await asyncio.gather(
             telnyx.post_signed(app.api, app.carrier, body),

@@ -99,10 +99,11 @@ def _function(path: Path, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
 
 
 # Every function an inbound phone call's agent passes through. The carriers'
-# edges share `open_inbound_call` (ADR-0022), so it is checked once for all.
+# edges share `call_opening.open_call` (ADR-0022), so it is checked once for all.
 INBOUND_FUNCTIONS = [
     (_SRC / "webhooks" / "twilio_handlers.py", "inbound_voice_webhook"),
-    (_SRC / "services" / "inbound_call.py", "open_inbound_call"),
+    (_SRC / "services" / "call_opening.py", "open_call"),
+    (_SRC / "services" / "call_opening.py", "write_call"),
 ]
 
 
@@ -168,9 +169,9 @@ def _metadata_keys(path: Path) -> set[str]:
 # Not VOICE_PATHS: the file that builds the CallContext is not always the one
 # that creates the call row. A carrier answers the inbound webhook in one
 # request and opens the media stream in another; every carrier's inbound edge
-# creates its row through the shared `services/inbound_call.py`.
+# creates its row through the shared `services/call_opening.py`.
 CALL_ROW_PATHS = [
-    ("carrier inbound", _SRC / "services" / "inbound_call.py"),
+    ("carrier inbound", _SRC / "services" / "call_opening.py"),
     ("whatsapp", _SRC / "webhooks" / "whatsapp_handlers.py"),
     ("webrtc", _SRC / "api" / "v1" / "webrtc.py"),
 ]

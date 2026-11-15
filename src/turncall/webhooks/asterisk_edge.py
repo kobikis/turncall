@@ -7,7 +7,7 @@ then, per call:
 
 1. resolves the dialled number (the first Stasis argument, else the channel's
    extension) to an Asterisk-carrier number and admits the call exactly as
-   every carrier does (`services/inbound_call.py`). A call it cannot take is
+   every carrier does (`services/call_opening.py`). A call it cannot take is
    handed back to the dialplan at the priority after `Stasis()`, unanswered,
    so the PBX's own fallback (a queue, voicemail) gets it;
 2. answers the caller and asks for an external-media channel — chan_websocket,
@@ -54,7 +54,7 @@ from turncall.webhooks.asterisk_media_stream import media_channel_id
 if TYPE_CHECKING:
     from turncall.adapters.telephony.asterisk_adapter import AriAccount
     from turncall.services.asterisk_accounts import AccountKey
-    from turncall.services.inbound_call import InboundRefusal
+    from turncall.services.call_opening import CallRefusal
 
 CALL_ID_VARIABLE = "TURNCALL_CALL_ID"
 _MAX_BACKOFF_S = 30.0
@@ -162,12 +162,12 @@ class AriEdge:
     async def _admit(
         self, call: _Call, channel: dict[str, Any], args: list[str]
     ) -> None:
-        from turncall.services.inbound_call import InboundRefusal
+        from turncall.services.call_opening import CallRefusal
 
         dialled = _e164ish(args[0] if args else channel["dialplan"]["exten"])
         caller = _e164ish(channel.get("caller", {}).get("number", "")) or None
         admitted = await self._admit_call(call.caller_id, dialled, caller)
-        if isinstance(admitted, InboundRefusal):
+        if isinstance(admitted, CallRefusal):
             # Busy (over the live-call limit) included: unanswered, so the
             # PBX's own fallback takes it and no minute is spent saying no.
             logger.warning(
@@ -192,16 +192,25 @@ class AriEdge:
 
     async def _admit_call(
         self, caller_id: str, dialled: str, caller: str | None
-    ) -> tuple[UUID, UUID] | InboundRefusal:
+    ) -> tuple[UUID, UUID] | CallRefusal:
         """The call's id and project, or why this Asterisk cannot take it."""
-        from turncall.services.inbound_call import InboundRefusal, open_inbound_call
+        from turncall.services.call_opening import (
+            CallParties,
+            CallRefusal,
+            EdgeHandles,
+            NumberSource,
+            RefusalReason,
+            open_call,
+        )
         from turncall.storage.database import get_session_factory
         from turncall.storage.repositories import credential_repo, phone_number_repo
 
         async with get_session_factory()() as session:
             number = await phone_number_repo.get_by_e164(session, dialled)
             if number is None or number.provider != ASTERISK:
-                return InboundRefusal("This number is not configured.")
+                return CallRefusal(
+                    RefusalReason.NO_AGENT, "This number is not configured."
+                )
             if number.project_id not in self.projects and not (
                 None in self.projects
                 and ASTERISK
@@ -209,19 +218,22 @@ class AriEdge:
                     session, number.project_id
                 )
             ):
-                return InboundRefusal("This number's project rides another Asterisk.")
-            call = await open_inbound_call(
-                session,
-                number,
-                carrier=ASTERISK,
-                from_number=caller or "",
-                to_number=dialled,
-                provider_call_sid=caller_id,
+                return CallRefusal(
+                    RefusalReason.NO_AGENT,
+                    "This number's project rides another Asterisk.",
+                )
+            call = await open_call(
+                NumberSource(
+                    number,
+                    CallParties(from_number=caller or "", to_number=dialled),
+                    EdgeHandles(carrier=ASTERISK, provider_call_sid=caller_id),
+                ),
+                project_id=number.project_id,
+                session=session,
             )
-            if isinstance(call, InboundRefusal):
+            if isinstance(call, CallRefusal):
                 return call
-            await session.commit()
-            return call.id, call.project_id
+            return call.call_id, call.project_id
 
     async def _on_replaced(self, _event: dict[str, Any]) -> None:
         """ARI gives an app to one WebSocket at a time: the newest. This

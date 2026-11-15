@@ -229,8 +229,12 @@ them:
   into the PBX's dialplan, which has no briefing or message of ours to play.
 - **The shared middle of an inbound call** — resolve the agent (call-init, A/B
   weights, the bound agent), create the call row on its carrier, record
-  `call.initializing` + `call.started` — is `services/inbound_call
-  .open_inbound_call`, for every carrier's edge. An edge only answers numbers
+  `call.initializing` + `call.started` — is `services/call_opening
+  .open_call` (#490), for every carrier's edge: it takes a `NumberSource`
+  (the number, the `CallParties`, the edge's `EdgeHandles` — carrier, its call
+  id, keys of its own on the row's metadata), commits the row, and answers an
+  `OpenedCall` or a `CallRefusal` (`busy` over the limit), giving the slot
+  back on any failure before the commit. An edge only answers numbers
   bound on its own carrier. A number's stored agent (A/B pick included) is
   looked up in the number's project and goes through agent acceptance (origin
   `stored_call`, #480): one saved before a newer rule existed is refused there
@@ -257,7 +261,7 @@ them:
 ```
 Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
   → verify with the key of the project the call/number belongs to
-  → open_inbound_call (carrier "telnyx") → REST `answer` with stream_url
+  → open_call (carrier "telnyx") → REST `answer` with stream_url
   → Telnyx opens /ws/telnyx/media-stream/{call_id}/{token} → run_media_stream
      (pipecat TelnyxFrameSerializer, PCMU both ways)
   → stream ends → REST `hangup`; call.hangup is recorded on the event log
@@ -329,7 +333,7 @@ Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
   `user_busy`/`call_rejected` → `busy`, `not_found` → `failed` +
   `call.failed` — which is what a campaign's retry policy reads.
 - **The live-call limit** (#224) admits an inbound call in
-  `open_inbound_call`, ahead of call-init, for every carrier; an outbound one
+  `call_opening.open_call`, ahead of call-init, for every carrier; an outbound one
   in `place_outbound_call`, as on Twilio.
 - **DTMF** is the `send_dtmf` command; the stream keeps running.
 
@@ -410,7 +414,7 @@ the channel id. Verified against a real 23.4.1 by `tests/live/test_live_asterisk
   — or one over the project's live-call limit (#224; `call.rejected` with
   `transport: "asterisk"`) — is `continue`d **unanswered** to the dialplan's
   next priority, so the PBX's own fallback takes it. Admission is
-  `open_inbound_call`, as for every carrier.
+  `call_opening.open_call`, as for every carrier.
 - **The media route** is `/ws/asterisk-media` (`webhooks/asterisk_media_stream.py`):
   the PBX's `websocket_client.conf` entry (`ASTERISK_MEDIA_CONNECTION`,
   default `turncall`, `connection_type=per_call_config`) points its `uri` here.
@@ -819,7 +823,7 @@ row is written: an `agent_id` outside the project, an inline config the domain
 model cannot read, or one breaking a provider rule or the procedures graph rule
 is refused, logged `agent_refused` with origin, project and reason, and the
 transport answers as for an answer naming no agent. Inbound phone calls (every
-carrier, `services/inbound_call`) are refused at the carrier, before the caller
+carrier, `services/call_opening`) are refused at the carrier, before the caller
 is answered; WebRTC answers `502 invalid_agent_config` whose `details` carry
 `{reason, field}` (an answer naming no agent stays `502 internal_error`);
 WhatsApp voice rejects the call unanswered (`reject_call_to_whatsapp`, #483),
@@ -1824,7 +1828,7 @@ a guardrail must not take the phone line down.
 
 - **Live calls per project** (#224). Every voice call takes a slot under its
   call id *before* its row is written (`call_repo.create_call(call_id=)`):
-  inbound phone calls in `services/inbound_call.open_inbound_call` (every
+  inbound phone calls in `services/call_opening.open_call` (every
   carrier, #217) and WhatsApp voice in its webhook — over the limit, refused
   unanswered at the carrier (Twilio `<Reject reason="busy"/>`, Telnyx's
   `reject` command with cause `USER_BUSY`, Asterisk `continue` back to the
