@@ -446,7 +446,9 @@ async def write_call_start(session: AsyncSession, start: CallStart) -> None:
             "provider_call_sid": handles.provider_call_sid,
             "from_number": parties.from_number,
             "to_number": parties.to_number,
-            # agent_id is carried in the envelope (ADR-0007), not the payload.
+            # Also in the envelope (ADR-0007); kept here, where an outbound
+            # call's subscribers read it first. None for an inline agent.
+            "agent_id": str(start.agent_id) if start.agent_id else None,
             "agent_name": start.agent_name or "dynamic",
             "dynamic_config": bool(start.metadata.dynamic_config),
             "direction": start.direction.value,

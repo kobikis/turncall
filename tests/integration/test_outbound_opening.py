@@ -126,6 +126,8 @@ async def test_a_stored_agents_dial_starts_like_an_inbound_call(monkeypatch) -> 
     assert str(outbound["row"].active_agent_id) == agent_id
     assert outbound["events"]["call.started"]["agent_name"] != "dynamic"
     assert outbound["events"]["call.initializing"]["direction"] == "outbound"
+    # A field a subscriber already read is kept (#487: no API change).
+    assert outbound["events"]["call.started"]["agent_id"] == agent_id
 
 
 async def test_an_inline_agents_dial_starts_like_an_inbound_call(monkeypatch) -> None:
@@ -146,3 +148,4 @@ async def test_an_inline_agents_dial_starts_like_an_inbound_call(monkeypatch) ->
     assert outbound["row"].active_agent_id is None
     assert outbound["row"].metadata_json["dynamic_config"] == INLINE
     assert outbound["events"]["call.started"]["dynamic_config"] is True
+    assert outbound["events"]["call.started"]["agent_id"] is None
