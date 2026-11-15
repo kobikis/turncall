@@ -300,6 +300,28 @@ async def test_a_build_that_raises_reaches_the_edge_closes_mcp_and_frees_the_slo
     assert status == "failed"
 
 
+async def test_a_failure_before_the_build_reaches_the_edge_as_itself(monkeypatch):
+    """Nothing outside TurnCall fails before the build, so the fault is put
+    in the drain count: whatever raises there, an edge waiting on the call's
+    own task hears that error — not a cancellation that never happened."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _broken(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("the drain count broke")
+        yield
+
+    async with run_app(
+        SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        await _redis_or_skip()
+        call = await _opened(app, AGENT)
+        monkeypatch.setattr(drain, "live_call", _broken)
+
+        with pytest.raises(RuntimeError, match="the drain count broke"):
+            await run_call(call, Edge().factory(), own_task=True)
+
+
 async def test_a_call_cancelled_before_it_starts_closes_mcp(monkeypatch):
     async with run_app(
         SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr

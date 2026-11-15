@@ -144,13 +144,22 @@ async def _run(
         # Live until the session has finalized: a SIGTERM waits for it (#199).
         with drain.live_call(call.call_id, config.max_call_duration_seconds):
             async with _slot(call):
-                session = await _build(call, make_transport, settings, built=built)
-                if session is not None:
-                    await session.start()
-    finally:
+                session = await _build(call, make_transport, settings)
+                if built is not None:
+                    built.set_result(None)
+                await session.start()
+    except Exception as exc:
+        if built is None or built.done():
+            raise
+        # The edge waits on `built` and nothing awaits this task: it is told
+        # what went wrong, from the build or anything before it — once the
+        # slot and the drain count are already given back.
+        built.set_exception(exc)
+    except BaseException:
         # A cancellation before the build answered: the edge is waiting.
         if built is not None and not built.done():
             built.set_exception(CallCancelledBeforeStart(str(call.call_id)))
+        raise
 
 
 @contextlib.asynccontextmanager
@@ -165,26 +174,16 @@ async def _slot(call: CallToRun) -> AsyncIterator[None]:
 
 
 async def _build(
-    call: CallToRun,
-    make_transport: TransportFactory,
-    settings: Settings,
-    *,
-    built: asyncio.Future[None] | None,
-) -> CallSession | None:
-    """The call's session, built — or None when the build raised and the edge
-    was told (own task). MCP is closed on every path where the session will
-    not close it."""
+    call: CallToRun, make_transport: TransportFactory, settings: Settings
+) -> CallSession:
+    """The call's session, built. MCP is closed on every path where the
+    session will not close it: a build that raises or is cancelled."""
     config = call.agent.config
-    mcp_manager: Any | None = None
+    mcp_manager = _mcp_manager(call)
     session: CallSession | None = None
     try:
         mcp_tools: list[Any] = []
-        if config.mcp_servers:
-            from turncall.services.mcp_client import MCPSessionManager
-
-            mcp_manager = MCPSessionManager(
-                call_id=call.call_id, project_id=call.project_id
-            )
+        if mcp_manager is not None:
             mcp_tools = await mcp_manager.connect_servers(config.mcp_servers)
         mixer = await build_ambience_mixer(
             config,
@@ -203,18 +202,20 @@ async def _build(
             mcp_tools=mcp_tools or None,
             carries_video=make_transport.carries_video,
         )
-    except Exception as exc:
-        if built is None:
-            raise
-        built.set_exception(exc)
-        return None
     finally:
         # `except Exception` alone skipped this when the build was cancelled.
         if session is None and mcp_manager is not None:
             await mcp_manager.close()
-    if built is not None:
-        built.set_result(None)
     return session
+
+
+def _mcp_manager(call: CallToRun) -> Any | None:
+    """The agent's MCP servers, not yet connected; None without any."""
+    if not call.agent.config.mcp_servers:
+        return None
+    from turncall.services.mcp_client import MCPSessionManager
+
+    return MCPSessionManager(call_id=call.call_id, project_id=call.project_id)
 
 
 def _context(call: CallToRun, mcp_manager: Any | None) -> CallContext:
