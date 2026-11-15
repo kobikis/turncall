@@ -298,3 +298,57 @@ def _wav(seconds: float = 1.0) -> bytes:
     rng = np.random.default_rng(0)
     sf.write(buf, rng.uniform(-0.3, 0.3, int(16000 * seconds)), 16000, format="WAV")
     return buf.getvalue()
+
+
+async def test_a_call_with_no_database_runs_and_records_nothing(monkeypatch):
+    """The website demo's call (#493): no row, no slot, no event — but
+    counted, so a SIGTERM still waits for it."""
+    from loguru import logger
+    from sqlalchemy import select
+
+    from turncall.storage.database import create_session_factory, get_engine
+    from turncall.storage.models import CallEventRow
+    from turncall.storage.repositories import call_repo
+
+    async with run_app(
+        SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        await _redis_or_skip()
+        errors: list[str] = []
+        sink = logger.add(
+            lambda m: errors.append(str(m)),
+            level="ERROR",
+            filter=lambda record: record["name"].startswith("turncall"),
+        )
+        project_id, edge = uuid.UUID(app.project_id), Edge()
+        call = CallToRun(
+            call_id=uuid.uuid4(),
+            project_id=project_id,
+            agent=accepted(AGENT),
+            agent_id=None,
+            call_sid="webrtc",
+            stream_sid="webrtc",
+            session_factory=None,
+        )
+        try:
+            task = await run_call(call, edge.factory(), own_task=True)
+            counted, slot_free = drain.active_calls(), not await _slot_held(call)
+
+            await edge.transport.hang_up()
+            assert task is not None
+            await asyncio.wait_for(task, 10)
+        finally:
+            logger.remove(sink)
+        async with create_session_factory(get_engine())() as session:
+            row = await call_repo.get_call_by_id(session, call.call_id)
+            events = (
+                await session.execute(
+                    select(CallEventRow).where(CallEventRow.call_id == call.call_id)
+                )
+            ).all()
+
+    assert (counted, slot_free) == (1, True)
+    assert drain.active_calls() == 0
+    assert row is None
+    assert events == []
+    assert errors == []
