@@ -120,7 +120,7 @@ async def test_start_holds_the_channel_for_the_whole_run(monkeypatch) -> None:
 
 def test_every_voice_entry_point_runs_the_call_through_call_session_start() -> None:
     """A module that builds a voice transport must hand the call to
-    `CallSession.start()` — through `start_call_pipeline`, or
+    `CallSession.start()` — through `run_call`, or
     `build_call_pipeline` and then `.start()` — or its calls have no channel."""
     src = Path(turncall.__file__).parent
     builders = {}
@@ -131,15 +131,20 @@ def test_every_voice_entry_point_runs_the_call_through_call_session_start() -> N
             for node in ast.walk(tree)
             if isinstance(node, ast.Call)
         }
-        if called & VOICE_FACTORIES and path.name != "transport_factory.py":
+        # Called, or handed over as a factory (`run_call`'s edges, #491).
+        named = {
+            getattr(node, "id", None) or getattr(node, "attr", None)
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Name, ast.Attribute))
+        }
+        if named & VOICE_FACTORIES and path.name != "transport_factory.py":
             builders[path.relative_to(src).as_posix()] = called
 
     assert builders, "found no voice transport call sites"
     unsubscribed = [
         module
         for module, called in builders.items()
-        if "start_call_pipeline" not in called
-        and not {"build_call_pipeline", "start"} <= called
+        if "run_call" not in called and not {"build_call_pipeline", "start"} <= called
     ]
     assert unsubscribed == []
     # The three this was written against; a fourth must pass the check above.
@@ -147,24 +152,19 @@ def test_every_voice_entry_point_runs_the_call_through_call_session_start() -> N
     assert any("whatsapp" in m for m in builders)
 
 
-def test_start_call_pipeline_runs_the_session_it_built() -> None:
-    """The fire-and-forget transports' half of the check above."""
-    from turncall.orchestrator import pipeline_builder
+def test_run_call_runs_the_session_it_built() -> None:
+    """The edges' half of the check above (#491)."""
+    from turncall.orchestrator import call_runner
 
-    tree = ast.parse(Path(pipeline_builder.__file__).read_text())
-    fn = next(
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.AsyncFunctionDef) and n.name == "start_call_pipeline"
-    )
+    tree = ast.parse(Path(call_runner.__file__).read_text())
     starts = [
         n
-        for n in ast.walk(fn)
+        for n in ast.walk(tree)
         if isinstance(n, ast.Await)
         and isinstance(n.value, ast.Call)
         and getattr(n.value.func, "attr", None) == "start"
     ]
-    assert starts, "start_call_pipeline no longer awaits CallSession.start()"
+    assert starts, "call_runner no longer awaits CallSession.start()"
 
 
 class TestTheChannel:

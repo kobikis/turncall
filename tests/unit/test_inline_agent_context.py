@@ -30,8 +30,8 @@ _SRC = Path(turncall.__file__).parent
 VOICE_PATHS = [
     # Every carrier's media stream (Twilio, Telnyx) builds it here (ADR-0022).
     ("carrier", _SRC / "webhooks" / "media_stream.py"),
-    ("whatsapp", _SRC / "webhooks" / "whatsapp_handlers.py"),
-    ("webrtc", _SRC / "api" / "v1" / "webrtc.py"),
+    # WebRTC and WhatsApp voice run their calls through it (#491).
+    ("run_call", _SRC / "orchestrator" / "call_runner.py"),
 ]
 
 

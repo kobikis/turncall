@@ -6,6 +6,7 @@ Pipecat 1.0 uses SmallWebRTCRequestHandler for signaling:
 """
 
 from dataclasses import fields
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -26,10 +27,8 @@ from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ErrorCode, NotFoundError
 from turncall.auth import Auth, WriteAuth
 from turncall.config import get_settings
-from turncall.orchestrator.ambience import build_ambience_mixer
 from turncall.orchestrator.avatar import skip_reason
-from turncall.orchestrator.pipeline_builder import start_call_pipeline
-from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
+from turncall.orchestrator.call_runner import CallToRun, TransportFactory, run_call
 from turncall.orchestrator.transport_factory import (
     WEBRTC_SAMPLE_RATE,
     create_whatsapp_transport,
@@ -259,13 +258,20 @@ async def webrtc_connect(
         await release_live_call(auth.project_id, call_id)
         raise
 
-    call_context = CallContext(
+    opened = CallToRun(
         call_id=call.id,
         project_id=auth.project_id,
-        agent_id=agent_id_for_call or DYNAMIC_AGENT_ID,
+        agent=agent,
+        agent_id=agent_id_for_call,
         call_sid="webrtc",
         stream_sid="webrtc",
         session_factory=session_factory,
+    )
+    # A browser call is the one that can show an Avatar. Whether this one will
+    # is the build's decision (`avatar_gate`, which records why not); the
+    # transport only needs to know whether to send video.
+    avatar_on = (
+        config.avatar.enabled and skip_reason(config, carries_video=True) is None
     )
 
     # pipecat's handler logs an exception from this callback and answers the
@@ -276,36 +282,15 @@ async def webrtc_connect(
     # Use SmallWebRTCRequestHandler — it creates/reuses the connection
     async def on_connection(connection: SmallWebRTCConnection) -> None:
         """Callback invoked when a new WebRTC connection is established."""
-        # A browser call is the one that can show an Avatar. Whether this one
-        # will is the build's decision (`avatar_gate`, which records why not);
-        # the transport only needs to know whether to send video.
-        avatar_on = (
-            config.avatar.enabled and skip_reason(config, carries_video=True) is None
-        )
-
-        mixer = await build_ambience_mixer(
-            config,
-            project_id=call_context.project_id,
+        transport = TransportFactory(
+            make=partial(create_whatsapp_transport, connection, video_out=avatar_on),
             sample_rate=WEBRTC_SAMPLE_RATE,
-            session_factory=session_factory,
-            settings=settings,
+            carries_video=True,
         )
-        transport = create_whatsapp_transport(
-            connection, video_out=avatar_on, mixer=mixer
-        )
-
         try:
             # Returns once the pipeline is built; the call runs in a task of its
             # own so any MCP servers are connected and closed inside it.
-            await start_call_pipeline(
-                agent=agent,
-                transport=transport,
-                call_context=call_context,
-                settings=settings,
-                session_factory=session_factory,
-                audio_sample_rate=WEBRTC_SAMPLE_RATE,
-                carries_video=True,
-            )
+            await run_call(opened, transport, own_task=True, settings=settings)
         except Exception as exc:
             # The call is already failed with its reason (build_call_pipeline).
             logger.exception("webrtc pipeline build failed", call_id=str(call.id))

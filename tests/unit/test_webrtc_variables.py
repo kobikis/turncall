@@ -43,13 +43,12 @@ def _connect(app, monkeypatch, resolved) -> dict:
     monkeypatch.setattr(webrtc, "admit_live_call", AsyncMock())
     monkeypatch.setattr(webrtc, "get_engine", lambda: None)
     monkeypatch.setattr(webrtc, "create_session_factory", lambda _e: _session_cm)
-    monkeypatch.setattr(webrtc, "build_ambience_mixer", AsyncMock(return_value=None))
     monkeypatch.setattr(webrtc, "create_whatsapp_transport", lambda *a, **k: None)
 
-    async def _start(**kwargs):
-        seen["prompt"] = kwargs["agent"].config.system_prompt
+    async def _start(opened, *_args, **_kwargs):
+        seen["prompt"] = opened.agent.config.system_prompt
 
-    monkeypatch.setattr(webrtc, "start_call_pipeline", _start)
+    monkeypatch.setattr(webrtc, "run_call", _start)
 
     async def _create_call(_s, **kwargs):
         seen["metadata"] = kwargs["metadata_json"]
