@@ -223,10 +223,6 @@ async def webrtc_connect(
     engine = get_engine()
     session_factory = create_session_factory(engine)
 
-    # Create call record
-    from turncall.domain.enums import CallDirection, CallEventType
-    from turncall.storage.repositories import call_repo
-
     call_metadata: dict[str, Any] = {
         "transport": "webrtc",
         **({"template_variables": template_variables} if template_variables else {}),
@@ -240,41 +236,28 @@ async def webrtc_connect(
         **({"dynamic_config": dynamic_config} if dynamic_config else {}),
     }
 
-    async with session_factory() as db_session:
-        call = await call_repo.create_call(
-            db_session,
+    # The slot is ours until the pipeline task holds it, so a row that cannot
+    # be written gives it back here: left to its lease, a project at its limit
+    # would refuse its next caller for two minutes (#489).
+    try:
+        call = await _write_call_row(
+            session_factory,
             project_id=auth.project_id,
             call_id=call_id,
-            direction=CallDirection.INBOUND,
-            active_agent_id=agent_id_for_call,
-            metadata_json=call_metadata,
+            agent_id=agent_id_for_call,
+            metadata=call_metadata,
         )
-
-        # Recorded *and* dispatched, as every carrier's inbound call is: these
-        # were stored only, and call.started never written, so a subscriber's
-        # first word of a WebRTC call was its first transcript.
-        from turncall.events.emit import emit_call_event
-
-        await emit_call_event(
-            db_session,
-            call_id=call.id,
-            project_id=auth.project_id,
-            event_type=CallEventType.CALL_INITIALIZING,
-            payload={"direction": "inbound", "transport": "webrtc"},
-        )
-        await emit_call_event(
-            db_session,
-            call_id=call.id,
-            project_id=auth.project_id,
-            event_type=CallEventType.CALL_STARTED,
-            payload={
-                "direction": "inbound",
-                "transport": "webrtc",
-                # agent_id is carried in the envelope (ADR-0007).
-                "dynamic_config": bool(dynamic_config),
-            },
-        )
-        await db_session.commit()
+    except Exception as exc:
+        await release_live_call(auth.project_id, call_id)
+        logger.exception("webrtc call row not written", call_id=str(call_id))
+        raise ApiError(
+            status_code=500,
+            code=ErrorCode.PIPELINE_START_FAILED,
+            message="The call could not be opened",
+        ) from exc
+    except BaseException:
+        await release_live_call(auth.project_id, call_id)
+        raise
 
     call_context = CallContext(
         call_id=call.id,
@@ -374,6 +357,55 @@ async def webrtc_connect(
     if isinstance(answer, dict):
         answer = {**answer, "call_id": str(call.id)}
     return JSONResponse(content=answer)
+
+
+async def _write_call_row(
+    session_factory: Any,
+    *,
+    project_id: UUID,
+    call_id: UUID,
+    agent_id: UUID | None,
+    metadata: dict[str, Any],
+) -> Any:
+    """The call row and its start events, in one commit: all or none."""
+    from turncall.domain.enums import CallDirection, CallEventType
+    from turncall.events.emit import emit_call_event
+    from turncall.storage.repositories import call_repo
+
+    async with session_factory() as db_session:
+        call = await call_repo.create_call(
+            db_session,
+            project_id=project_id,
+            call_id=call_id,
+            direction=CallDirection.INBOUND,
+            active_agent_id=agent_id,
+            metadata_json=metadata,
+        )
+
+        # Recorded *and* dispatched, as every carrier's inbound call is: these
+        # were stored only, and call.started never written, so a subscriber's
+        # first word of a WebRTC call was its first transcript.
+        await emit_call_event(
+            db_session,
+            call_id=call.id,
+            project_id=project_id,
+            event_type=CallEventType.CALL_INITIALIZING,
+            payload={"direction": "inbound", "transport": "webrtc"},
+        )
+        await emit_call_event(
+            db_session,
+            call_id=call.id,
+            project_id=project_id,
+            event_type=CallEventType.CALL_STARTED,
+            payload={
+                "direction": "inbound",
+                "transport": "webrtc",
+                # agent_id is carried in the envelope (ADR-0007).
+                "dynamic_config": bool(metadata.get("dynamic_config")),
+            },
+        )
+        await db_session.commit()
+    return call
 
 
 def _held_call_id(pc_id: str | None, project_id: UUID) -> UUID:
