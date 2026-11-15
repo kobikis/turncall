@@ -21,7 +21,7 @@ from turncall.orchestrator import call_runner
 pytestmark = pytest.mark.unit
 
 SRC = Path(turncall.__file__).parent
-ADMISSIONS = {"admit_inbound_call", "admit_live_call", "admit_outbound_call"}
+ADMISSIONS = {"admit_inbound_call", "admit_outbound_call"}
 # An eval is not a call: no row, no slot (ADR-0018). A website demo call has
 # no project to count it against, and no Redis: its server caps itself
 # (`DEMO_MAX_CALLS`).
@@ -55,7 +55,8 @@ def _calling(name: str) -> dict[str, ast.Module]:
 
 def test_every_call_row_is_created_under_a_slot():
     creators = _calling("create_call")
-    assert len(creators) >= 4, creators  # Twilio, outbound, WebRTC, WhatsApp
+    # Opening a call (every inbound voice edge, #494) and the outbound dial.
+    assert len(creators) >= 2, creators
     for rel, tree in creators.items():
         names = {_name(c) for c in _calls(tree)}
         assert names & ADMISSIONS, f"{rel} writes a call row without taking a slot"

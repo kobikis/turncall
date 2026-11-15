@@ -39,6 +39,7 @@ from turncall.orchestrator.pipeline_builder import build_call_pipeline
 from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
 from turncall.services import drain
 from turncall.services.agent_acceptance import AcceptedAgent
+from turncall.services.call_opening import OpenedCall
 from turncall.services.limits import hold_live_call
 
 
@@ -60,6 +61,32 @@ class CallToRun:
     call_sid: str
     stream_sid: str
     session_factory: Any | None
+
+    @classmethod
+    def of(
+        cls,
+        opened: OpenedCall,
+        *,
+        session_factory: Any | None,
+        stream_sid: str | None = None,
+    ) -> CallToRun:
+        """The call `open_call` opened, to run: its agent rendered with the
+        call's variables and knowledge context, named by the edge's handles
+        (`stream_sid` when the stream has an id of its own)."""
+        metadata = opened.metadata
+        call_sid = opened.handles.call_sid
+        return cls(
+            call_id=opened.call_id,
+            project_id=opened.project_id,
+            agent=opened.agent.rendered(
+                metadata.template_variables,
+                knowledge_context=metadata.knowledge_context,
+            ),
+            agent_id=opened.agent.agent_id,
+            call_sid=call_sid,
+            stream_sid=stream_sid or call_sid,
+            session_factory=session_factory,
+        )
 
 
 @dataclass(frozen=True)

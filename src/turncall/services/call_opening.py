@@ -7,7 +7,8 @@ through agent acceptance (#474), a live-call slot (#224), the call row — an
 inline agent's raw config as `dynamic_config` and no agent id (ADR-0017) —
 and `call.initializing` + `call.started`. `open_call` does all of it once and
 answers an `OpenedCall`, or a `CallRefusal` the edge turns into its reply:
-TwiML, a Call Control command, an ARI `continue`.
+TwiML, a Call Control command, an ARI `continue`, a WebRTC `429`, a WhatsApp
+reject. `CallToRun.of` turns an opened call into what `run_call` takes.
 
 A slot is never left held without a row: any failure between taking it and
 committing the row gives it back. From the commit on, the slot is the run's
@@ -73,11 +74,39 @@ class CallParties:
 class EdgeHandles:
     """What only the edge knows of its call, in one place: its carrier
     (`calls.provider`), the carrier's id for the call, and keys of its own on
-    the row's metadata (Telnyx's Call Control application)."""
+    the row's metadata (Telnyx's Call Control application).
+
+    A call that no carrier carries names its `transport` (`webrtc`,
+    `whatsapp`), and the id that transport gives it (WhatsApp's call id) as
+    `transport_call_id` — never as the carrier's sid, which a hang-up or a
+    transfer would act on."""
 
     carrier: str
     provider_call_sid: str | None = None
     row_metadata: Mapping[str, Any] = field(default_factory=dict)
+    transport: str | None = None
+    transport_call_id: str | None = None
+
+    @property
+    def transport_name(self) -> str:
+        """How the call arrived, as its events and `call.rejected` say."""
+        return self.transport or self.carrier
+
+    @property
+    def provider_call_id(self) -> str:
+        """The call's id outside TurnCall, as call-init and `call.rejected`
+        are told it."""
+        return self.provider_call_sid or self.transport_call_id or ""
+
+    @property
+    def call_sid(self) -> str:
+        """What the call's pipeline names it: the carrier's sid, else its
+        transport's (`webrtc`, `whatsapp:<id>`)."""
+        if self.provider_call_sid:
+            return self.provider_call_sid
+        if self.transport_call_id:
+            return f"{self.transport_name}:{self.transport_call_id}"
+        return self.transport_name
 
 
 @dataclass(frozen=True)
@@ -209,7 +238,7 @@ async def _call_init_agent(
         call_id=str(call_id),
         from_number=source.parties.from_number,
         to_number=source.parties.to_number,
-        call_sid=source.handles.provider_call_sid or "",
+        provider_call_id=source.handles.provider_call_id,
         transport_type=source.call_init_type,
         secret=number.server_url_secret,
     )
@@ -298,10 +327,10 @@ async def open_call(
         session,
         project_id=project_id,
         call_id=call_id,
-        transport=source.handles.carrier,
+        transport=source.handles.transport_name,
         from_number=source.parties.from_number,
         to_number=source.parties.to_number,
-        provider_call_id=source.handles.provider_call_sid or "",
+        provider_call_id=source.handles.provider_call_id,
     ):
         return AT_LIVE_CALL_LIMIT
     try:
@@ -332,7 +361,7 @@ async def open_call(
         raise
     logger.info(
         "call_opened",
-        carrier=source.handles.carrier,
+        transport=source.handles.transport_name,
         call_id=str(call_id),
         agent_id=str(opened.agent.agent_id or "dynamic"),
         provider_call_sid=source.handles.provider_call_sid,
@@ -351,8 +380,9 @@ async def write_call(session: AsyncSession, opened: OpenedCall) -> CallRow:
         project_id=opened.project_id,
         call_id=opened.call_id,
         direction=opened.direction,
-        from_number=parties.from_number,
-        to_number=parties.to_number,
+        # A browser call has no numbers: stored as none, not as "".
+        from_number=parties.from_number or None,
+        to_number=parties.to_number or None,
         # None for an inline agent: it has no row (ADR-0017).
         active_agent_id=opened.agent.agent_id,
         provider_call_sid=handles.provider_call_sid,
@@ -368,7 +398,7 @@ async def write_call(session: AsyncSession, opened: OpenedCall) -> CallRow:
             "from_number": parties.from_number,
             "to_number": parties.to_number,
             "direction": opened.direction.value,
-            "transport": handles.carrier,
+            "transport": handles.transport_name,
         },
     )
     await emit_call_event(
@@ -383,6 +413,7 @@ async def write_call(session: AsyncSession, opened: OpenedCall) -> CallRow:
             # agent_id is carried in the envelope (ADR-0007), not the payload.
             "agent_name": opened.agent_name or "dynamic",
             "dynamic_config": bool(opened.metadata.dynamic_config),
+            "transport": handles.transport_name,
         },
     )
     return call
