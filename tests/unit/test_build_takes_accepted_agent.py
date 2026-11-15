@@ -29,7 +29,7 @@ from turncall.services.agent_acceptance import AcceptedAgent
 pytestmark = pytest.mark.unit
 
 SRC = Path(turncall.__file__).parent
-BUILD_ENTRIES = ("build_call_pipeline", "start_call_pipeline")
+BUILD_ENTRIES = ("build_call_pipeline",)
 
 
 def _source_files() -> list[Path]:
@@ -43,6 +43,15 @@ def test_the_build_entry_takes_an_accepted_agent_and_no_config(entry: str) -> No
     assert "config" not in params
     assert params["agent"].kind is inspect.Parameter.KEYWORD_ONLY
     assert params["agent"].annotation in ("AcceptedAgent", AcceptedAgent)
+
+
+def test_a_call_to_run_carries_an_accepted_agent_and_no_config() -> None:
+    """What every voice edge hands `run_call` (#491), which builds on it."""
+    from turncall.orchestrator.call_runner import CallToRun
+
+    fields = {f.name: f.type for f in dataclasses.fields(CallToRun)}
+    assert "config" not in fields
+    assert fields["agent"] in ("AcceptedAgent", AcceptedAgent)
 
 
 def test_every_caller_of_the_build_passes_an_accepted_agent() -> None:
@@ -61,9 +70,9 @@ def test_every_caller_of_the_build_passes_an_accepted_agent() -> None:
             keywords = {k.arg for k in node.keywords}
             assert "agent" in keywords and "config" not in keywords, where
             calls.append(where)
-    # media stream, the WebRTC and WhatsApp starts, start_call_pipeline itself,
-    # the eval harness and the demo.
-    assert len(calls) == 6, calls
+    # media stream, run_call (WebRTC, WhatsApp and the demo) and the eval
+    # harness.
+    assert len(calls) == 3, calls
 
 
 def test_only_agent_acceptance_builds_an_accepted_agent() -> None:

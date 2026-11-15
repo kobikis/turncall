@@ -10,12 +10,11 @@ import asyncio
 import os
 import signal
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 
-from tests.accepted import accepted
 from turncall.services import drain
 
 pytestmark = pytest.mark.unit
@@ -168,57 +167,10 @@ def test_readiness_fails_while_liveness_and_the_gauge_answer(app, monkeypatch):
     assert "turncall_active_calls 1\n" in metrics.text
 
 
-async def test_webrtc_and_whatsapp_calls_are_counted_while_they_run():
-    """start_call_pipeline is their shared entry point (media_stream is
-    Twilio's, and the integration test covers it through the gauge)."""
-    from types import SimpleNamespace
-
-    from turncall.orchestrator import pipeline_builder
-    from turncall.orchestrator.pipeline_factory import CallContext
-
-    release = asyncio.Event()
-    counted: list[int] = []
-
-    class Session:
-        async def start(self) -> None:
-            counted.append(drain.active_calls())
-            await release.wait()
-
-    context = CallContext(
-        call_id=uuid4(),
-        project_id=uuid4(),
-        agent_id=uuid4(),
-        call_sid="webrtc",
-        stream_sid="webrtc",
-        session_factory="SF",
-    )
-    with patch.object(
-        pipeline_builder, "build_call_pipeline", new=AsyncMock(return_value=Session())
-    ):
-        await pipeline_builder.start_call_pipeline(
-            agent=accepted(),
-            transport="T",
-            call_context=context,
-            settings=SimpleNamespace(),
-            session_factory="SF",
-        )
-        for _ in range(50):
-            if counted:
-                break
-            await asyncio.sleep(0.01)
-        assert counted == [1]
-        release.set()
-        for _ in range(50):
-            if drain.active_calls() == 0:
-                break
-            await asyncio.sleep(0.01)
-    assert drain.active_calls() == 0
-
-
 def test_every_voice_entry_point_counts_its_calls():
     """A call nobody counted is one a SIGTERM does not wait for — dropped on the
-    next deploy with nothing to say why. `start_call_pipeline` counts its own
-    (WebRTC, WhatsApp voice); a module building a pipeline directly must too.
+    next deploy with nothing to say why. `run_call` counts its own (WebRTC,
+    WhatsApp voice, the demo); a module building a pipeline directly must too.
     The eval worker is exempt: an eval is not a call."""
     from pathlib import Path
 
@@ -230,10 +182,11 @@ def test_every_voice_entry_point_counts_its_calls():
         for path in root.rglob("*.py")
         if "build_call_pipeline(" in path.read_text()
         and path.relative_to(root).parts[0] != "evals"
+        # Where it is defined, not called.
+        and path.name != "pipeline_builder.py"
     }
     assert builders == {
-        "demo/app.py",
-        "orchestrator/pipeline_builder.py",
+        "orchestrator/call_runner.py",
         "webhooks/media_stream.py",
     }
     for module in builders:
