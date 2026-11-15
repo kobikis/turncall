@@ -141,7 +141,7 @@ async def test_over_the_limit_telnyx_inbound_is_rejected_busy(monkeypatch, redis
 async def test_over_the_limit_asterisk_call_goes_back_to_the_dialplan(
     monkeypatch, redis_env
 ):
-    """The ARI edge admits through the same `open_inbound_call` (#209): over
+    """The ARI edge admits through the same `open_call` (#209): over
     the limit the caller's channel is continued to the dialplan unanswered, as
     any refused call is, and `call.rejected` names the carrier. A call whose
     caller leaves before its media stream came gives its slot back — no
