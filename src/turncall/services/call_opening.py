@@ -113,6 +113,28 @@ class EdgeHandles:
             return f"{self.transport_name}:{self.transport_call_id}"
         return self.transport_name
 
+    @property
+    def transport_call_ref(self) -> dict[str, str]:
+        """The transport's id for the call under its own name
+        (`whatsapp_call_id`), as the row and `call.started` have always
+        carried it; empty for a call no such transport carries."""
+        if not (self.transport and self.transport_call_id):
+            return {}
+        return {f"{self.transport}_call_id": self.transport_call_id}
+
+    @property
+    def inline_agent_name(self) -> str | None:
+        """What `call.started` names an inline agent, which has no row: a
+        phone call's has always said "dynamic", WhatsApp's null (#487 changes
+        neither)."""
+        return None if self.transport else "dynamic"
+
+    def row_json(self) -> dict[str, Any]:
+        """The edge's keys on the call row's metadata: its own, the transport
+        a call no carrier carries arrived on, and that transport's id."""
+        transport = {"transport": self.transport} if self.transport else {}
+        return {**self.row_metadata, **transport, **self.transport_call_ref}
+
 
 @dataclass(frozen=True)
 class CallMetadata:
@@ -473,7 +495,7 @@ async def write_call_row(session: AsyncSession, start: CallStart) -> CallRow:
         # None for an inline agent: it has no row (ADR-0017).
         active_agent_id=start.agent_id,
         provider_call_sid=handles.provider_call_sid,
-        metadata_json={**start.metadata.row_json(), **handles.row_metadata},
+        metadata_json={**start.metadata.row_json(), **handles.row_json()},
         carrier=handles.carrier,
     )
 
@@ -508,9 +530,14 @@ async def write_call_start(session: AsyncSession, start: CallStart) -> None:
             # Also in the envelope (ADR-0007); kept here, where an outbound
             # call's subscribers read it first. None for an inline agent.
             "agent_id": str(start.agent_id) if start.agent_id else None,
-            "agent_name": start.agent_name or "dynamic",
+            "agent_name": (
+                start.agent_name
+                if start.agent_name is not None
+                else handles.inline_agent_name
+            ),
             "dynamic_config": bool(start.metadata.dynamic_config),
             "direction": start.direction.value,
             "transport": handles.transport_name,
+            **handles.transport_call_ref,
         },
     )

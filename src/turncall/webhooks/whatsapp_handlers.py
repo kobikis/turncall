@@ -253,10 +253,6 @@ async def _open_connect(
             carrier=DEFAULT_CARRIER,
             transport="whatsapp",
             transport_call_id=whatsapp_call_id,
-            row_metadata={
-                "transport": "whatsapp",
-                "whatsapp_call_id": whatsapp_call_id,
-            },
         ),
     )
     try:

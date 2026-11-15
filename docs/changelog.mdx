@@ -5,10 +5,13 @@ description: "Latest updates and improvements to TurnCall"
 
 <Update label="Unreleased" description="Unreleased" tags={["Feature"]}>
 
-`call.started` has one shape on every call: an outbound call's gains
-`agent_name` and `dynamic_config`, an inbound call's `agent_id` and
-`direction`, and every call's `transport` (`webrtc`, `whatsapp`, or the
-carrier).
+`call.started` carries the same fields on every call — `provider_call_sid`,
+`from_number`, `to_number`, `agent_id`, `agent_name`, `dynamic_config`,
+`direction` and `transport` (`webrtc`, `whatsapp`, or the carrier) — and a
+WhatsApp call's keeps its `whatsapp_call_id`. Each call's payload only grows:
+no field is removed and none changes its value. An inline agent's
+`agent_name` is still `"dynamic"` on a phone call and null on WhatsApp (and
+on WebRTC, which did not send one).
 
 </Update>
 

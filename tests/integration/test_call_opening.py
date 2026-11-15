@@ -114,8 +114,11 @@ async def test_an_inline_agents_row_keeps_its_config_and_no_agent_id(
         assert isinstance(opened, OpenedCall), opened
         row = await _stored(opened.call_id)
         events = await _event_types(app, opened.call_id)
+        started = await app.sink.wait_for("call.started")
 
     assert row.active_agent_id is None
+    # A phone call's `call.started` has always named an inline agent so.
+    assert started["payload"]["agent_name"] == "dynamic"
     assert opened.agent.agent_id is None
     assert row.metadata_json["dynamic_config"] == INLINE
     assert row.metadata_json["template_variables"] == {"name": "Jane"}

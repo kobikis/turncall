@@ -401,7 +401,7 @@ def _request_variables(raw: Any) -> dict[str, str]:
 # carrier (`calls.provider`) as it always has, and its events say `webrtc`.
 _NO_NUMBERS = CallParties(from_number="", to_number="")
 _BROWSER = EdgeHandles(
-    carrier=DEFAULT_CARRIER, transport="webrtc", row_metadata={"transport": "webrtc"}
+    carrier=DEFAULT_CARRIER, transport="webrtc"
 )
 
 
