@@ -217,12 +217,11 @@ async def test_prepare_counts_the_targets_linked_tool_knowledge_base() -> None:
 async def test_a_numbers_stored_agent_counts_its_linked_tool_knowledge_base(
     kb_modes, refused
 ) -> None:
-    from turncall.services import call_opening
+    from turncall.services import call_agents
 
-    number = SimpleNamespace(project_id=PROJECT)
     with _stored(GPT_LIVE_1_ON_A_GATEWAY, kb_modes=kb_modes):
-        chosen = await call_opening._stored_agent(
-            MagicMock(), number, uuid4(), call_id=uuid4()
+        chosen = await call_agents.stored_agent(
+            MagicMock(), uuid4(), project_id=PROJECT, call_id=uuid4()
         )
 
-    assert isinstance(chosen, call_opening.CallRefusal) is refused
+    assert isinstance(chosen, call_agents.CallRefusal) is refused

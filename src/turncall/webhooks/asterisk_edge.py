@@ -195,6 +195,7 @@ class AriEdge:
     ) -> tuple[UUID, UUID] | CallRefusal:
         """The call's id and project, or why this Asterisk cannot take it."""
         from turncall.services.call_opening import (
+            INBOUND_PHONE_CALL,
             CallParties,
             CallRefusal,
             EdgeHandles,
@@ -224,9 +225,11 @@ class AriEdge:
                 )
             call = await open_call(
                 NumberSource(
-                    number,
-                    CallParties(from_number=caller or "", to_number=dialled),
-                    EdgeHandles(carrier=ASTERISK, provider_call_sid=caller_id),
+                    number=number,
+                    parties=CallParties(from_number=caller or "", to_number=dialled),
+                    handles=EdgeHandles(carrier=ASTERISK, provider_call_sid=caller_id),
+                    call_type=INBOUND_PHONE_CALL,
+                    weighted=True,
                 ),
                 project_id=number.project_id,
                 session=session,

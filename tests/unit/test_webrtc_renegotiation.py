@@ -13,7 +13,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from tests.unit.test_webrtc_validation import _auth, fake_open_call
+from tests.unit.test_webrtc_validation import _auth
+from turncall.services.call_opening import CallRefusal, RefusalReason
 
 
 def _offer(pc_id: str | None, **extra) -> dict:
@@ -32,16 +33,14 @@ def held(monkeypatch):
         return_value={"sdp": "v=0", "type": "answer", "pc_id": pc_id}
     )
     monkeypatch.setattr(webrtc._request_handler, "handle_web_request", renegotiated)
-    resolve = AsyncMock()
-    monkeypatch.setattr(webrtc, "_resolve_agent", resolve)
-    admit = fake_open_call()
+    # Asked only to see that it is not: a renegotiation opens nothing.
+    admit = AsyncMock(return_value=CallRefusal(RefusalReason.NO_AGENT, "none"))
     monkeypatch.setattr(webrtc, "open_call", admit)
     return SimpleNamespace(
         pc_id=pc_id,
         call_id=call_id,
         project_id=project_id,
         renegotiated=renegotiated,
-        resolve=resolve,
         admit=admit,
     )
 
@@ -72,7 +71,6 @@ def test_a_renegotiation_answers_under_the_live_calls_id(app, held):
     assert r.json()["call_id"] == str(held.call_id)
     held.renegotiated.assert_awaited_once()
     # Nothing a new call does: no call-init, no slot, no row.
-    held.resolve.assert_not_awaited()
     held.admit.assert_not_awaited()
 
 
@@ -92,10 +90,7 @@ def test_another_projects_connection_cannot_be_renegotiated(app, held):
 @pytest.mark.unit
 def test_a_pc_id_this_process_does_not_hold_is_a_new_call(app, held):
     """pipecat opens a new connection for an unknown pc_id, so it is one."""
-    from turncall.api.errors import NotFoundError
-
     _auth(app)
-    held.resolve.side_effect = NotFoundError("Agent", "a")  # stop once resolving
     r = app.post(
         "/v1/webrtc/connect",
         json=_offer("pc-unknown", agent_id=str(uuid.uuid4())),
@@ -103,7 +98,7 @@ def test_a_pc_id_this_process_does_not_hold_is_a_new_call(app, held):
     )
 
     assert r.status_code == 404, r.text
-    held.resolve.assert_awaited_once()
+    held.admit.assert_awaited_once()
 
 
 @pytest.mark.unit
@@ -116,18 +111,3 @@ def test_pipecat_still_keeps_its_connections_where_we_look():
     )
 
     assert isinstance(SmallWebRTCRequestHandler()._pcs_map, dict)
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_a_started_call_is_held_until_its_connection_closes(app, monkeypatch):
-    from tests.accepted import accepted
-    from tests.unit.test_webrtc_variables import _chosen, _connect
-    from turncall.api.v1 import webrtc
-
-    seen = _connect(app, monkeypatch, _chosen(accepted({"system_prompt": "Hi."})))
-
-    assert webrtc._calls_by_pc["pc"][0] == seen["call_id"]
-    for closed in seen["connection"].closed:
-        await closed(seen["connection"])
-    assert "pc" not in webrtc._calls_by_pc

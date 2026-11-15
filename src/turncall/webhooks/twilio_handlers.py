@@ -283,6 +283,7 @@ async def inbound_voice_webhook(
         )
 
     from turncall.services.call_opening import (
+        INBOUND_PHONE_CALL,
         CallParties,
         CallRefusal,
         EdgeHandles,
@@ -292,9 +293,11 @@ async def inbound_voice_webhook(
 
     call = await open_call(
         NumberSource(
-            phone_number,
-            CallParties(from_number=from_number, to_number=to_number),
-            EdgeHandles(carrier=TWILIO, provider_call_sid=call_sid),
+            number=phone_number,
+            parties=CallParties(from_number=from_number, to_number=to_number),
+            handles=EdgeHandles(carrier=TWILIO, provider_call_sid=call_sid),
+            call_type=INBOUND_PHONE_CALL,
+            weighted=True,
         ),
         project_id=phone_number.project_id,
         session=session,

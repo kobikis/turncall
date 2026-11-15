@@ -25,6 +25,7 @@ from loguru import logger
 
 from tests.harness.app import HARNESS_AGENT
 from tests.harness.stubs import Script, ToolCall, install_stub_providers, tone
+from turncall.services import drain
 
 RATE = 48000
 FRAME = RATE // 50  # 20 ms
@@ -199,6 +200,8 @@ async def test_a_demo_call_runs_and_ends_with_no_platform(
 
         # Spoken once the browser is connected, not into the void before it.
         await ear.wait_for(1)
+        # Counted for a graceful shutdown, as every call is (#493).
+        live_mid_call = drain.active_calls()
         mic.say()
         await ear.wait_for(2)  # the goodbye, after end_call
 
@@ -214,6 +217,8 @@ async def test_a_demo_call_runs_and_ends_with_no_platform(
         logger.remove(sink)
 
     assert errors == []
+    assert live_mid_call == 1
+    assert drain.active_calls() == 0
 
 
 async def _until_idle(http: httpx.AsyncClient, timeout: float = 15) -> bool:

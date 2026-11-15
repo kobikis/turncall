@@ -17,8 +17,8 @@ import pytest
 from tests.harness import HARNESS_AGENT, Script, run_app
 from tests.integration.test_text_session_variables import CallInitServer
 from turncall.domain.carriers import TWILIO
-from turncall.services import call_opening
 from turncall.services.call_opening import (
+    INBOUND_PHONE_CALL,
     CallParties,
     CallRefusal,
     EdgeHandles,
@@ -44,13 +44,23 @@ async def _held(project_id: UUID) -> set[str]:
     return {m.decode() if isinstance(m, bytes) else m for m in members}
 
 
+def _source(number: Any, e164: str, handles: EdgeHandles) -> NumberSource:
+    return NumberSource(
+        number=number,
+        parties=CallParties(from_number=CALLER, to_number=e164),
+        handles=handles,
+        call_type=INBOUND_PHONE_CALL,
+        weighted=True,
+    )
+
+
 async def _open(e164: str, **handles: Any) -> OpenedCall | CallRefusal:
     async with get_session_factory()() as session:
         number = await phone_number_repo.get_by_e164(session, e164)
         assert number is not None
-        source = NumberSource(
+        source = _source(
             number,
-            CallParties(from_number=CALLER, to_number=e164),
+            e164,
             EdgeHandles(carrier=TWILIO, provider_call_sid=f"CA{uuid.uuid4().hex}"),
         )
         return await open_call(source, project_id=number.project_id, session=session)
@@ -114,8 +124,11 @@ async def test_an_inline_agents_row_keeps_its_config_and_no_agent_id(
         assert isinstance(opened, OpenedCall), opened
         row = await _stored(opened.call_id)
         events = await _event_types(app, opened.call_id)
+        started = await app.sink.wait_for("call.started")
 
     assert row.active_agent_id is None
+    # A phone call's `call.started` has always named an inline agent so.
+    assert started["payload"]["agent_name"] == "dynamic"
     assert opened.agent.agent_id is None
     assert row.metadata_json["dynamic_config"] == INLINE
     assert row.metadata_json["template_variables"] == {"name": "Jane"}
@@ -200,7 +213,7 @@ async def test_a_row_that_cannot_be_written_gives_the_slot_back(monkeypatch) -> 
         Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
     ) as app:
         number = await app.bind_number(await app.create_agent(HARNESS_AGENT))
-        monkeypatch.setattr(call_opening.call_repo, "create_call", unwritable)
+        monkeypatch.setattr(call_repo, "create_call", unwritable)
         with pytest.raises(CredentialKeyError):
             await _open(number)
         held = await _held(UUID(app.project_id))
@@ -219,9 +232,9 @@ async def test_the_edges_own_keys_ride_on_the_row(monkeypatch) -> None:
             number = await phone_number_repo.get_by_e164(session, e164)
             assert number is not None
             opened = await open_call(
-                NumberSource(
+                _source(
                     number,
-                    CallParties(from_number=CALLER, to_number=e164),
+                    e164,
                     EdgeHandles(
                         carrier=TWILIO,
                         provider_call_sid="CA1",

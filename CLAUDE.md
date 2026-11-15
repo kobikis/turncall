@@ -184,37 +184,51 @@ does only what belongs to its protocol: it verifies the request, reads the
 call's parties and handles, answers in its own format and supplies a factory
 for its transport. The rest is two modules below the edges (#487, ADR-0034):
 
-- **Opening a call**, `services/call_opening.open_call(source, *, project_id,
-  session)`, where `source` is a `CallSource` the edge resolved (a number's
-  `NumberSource`, WebRTC's request, WhatsApp's connect): agent acceptance
-  (#474), the live-call slot (#224), the
-  call row (an inline agent's raw config as `dynamic_config`, no agent id —
-  ADR-0017) and `call.initializing` + `call.started`. It answers an
-  **`OpenedCall`** (call id, project, accepted agent, the row's
-  `CallMetadata`, the edge's `EdgeHandles`) or a **`CallRefusal`** (`reason`:
-  `live_call_limit` — `busy`, refuse unanswered — `no_agent`,
-  `agent_refused` with its `field`), which the edge turns into its reply.
-  Nothing is left of a refused call, and any failure before the row commits
-  gives the slot back. An outbound dial keeps its own opener
-  (`place_outbound_call`) but writes its row and events through the same
-  `write_call_row` / `write_call_start`.
+- **Opening a call**, `services/call_opening.open_call(source, *,
+  project_id, session)`, where `source` is a `CallSource` the edge resolved:
+  a number's `NumberSource(number=, parties=, handles=, call_type=,
+  weighted=)` (every carrier's inbound call, `weighted=True`; WhatsApp's
+  connect, `weighted=False` — A/B weights are a phone call's), or WebRTC's
+  request. A source says whether its refusal is answered at a carrier
+  (`refused_unanswered`, and so announced as `call.rejected`; not WebRTC's)
+  and chooses its agent (`choose_agent(session, *, call_id)`) through the
+  shared choosers in `services/call_agents` (`call_init_agent`,
+  `stored_agent`). `open_call` runs agent acceptance (#474), the live-call
+  slot (#224), the call row (an inline agent's raw config as
+  `dynamic_config`, no agent id — ADR-0017) and `call.initializing` +
+  `call.started`. It answers an **`OpenedCall`** (`start`, the `CallStart`
+  its row and events were written from — id, project, `CallMetadata`,
+  parties, `EdgeHandles` — and `agent`, the accepted agent) or a
+  **`CallRefusal`** (`reason`: `live_call_limit` — `busy`, refuse
+  unanswered, `live_call_limit` its size — `no_agent`, `agent_refused` with
+  acceptance's `refusal`), which the edge turns into its reply. Nothing is
+  left of a refused call, and any failure before the row commits gives the
+  slot back. An outbound dial keeps its own opener (`place_outbound_call`)
+  but writes its row and events through the same `services/call_start`
+  (`write_call_row` / `write_call_start`).
 - **Running a call**, `orchestrator/call_runner.run_call(call, make_transport,
   *, own_task)`: the drain count (#199), holding and renewing the slot and
   freeing it however the run ends, MCP connect and close (a failed build, a
   cancellation, the end of the call — in the task that connected them), the
-  ambience mixer at the factory's `sample_rate`, the `CallContext` (with
-  `DYNAMIC_AGENT_ID` for an inline agent), the build and the start.
-  `CallToRun.of(opened, ...)` is what it takes; `TransportFactory(make,
-  sample_rate, carries_video)` the edge's transport. `own_task=True` (WebRTC,
-  WhatsApp voice, the demo, which return from a connection callback) runs the
-  call in a task the module keeps and returns once the build succeeded, or
-  raises what it raised; without it the run blocks until the call ends (a
-  carrier's media stream).
+  ambience mixer at the factory's `sample_rate`, the `CallContext`
+  (`call_context`, with `DYNAMIC_AGENT_ID` for an inline agent), the build
+  and the start. It takes a `CallToRun`: `CallToRun.of(opened, ...)` for an
+  opened call; a carrier's media stream reads its call back from the row as
+  an `OpenedCall` and replaces `stream_sid` with the stream's own; the demo,
+  which opens nothing, builds one directly. `TransportFactory(make,
+  sample_rate, carries_video)` is the edge's transport. `own_task=True`
+  (WebRTC, WhatsApp voice, the demo, which return from a connection
+  callback) runs the call in a task the module keeps and returns once the
+  build succeeded, or raises what it raised; without it the run blocks until
+  the call ends (a carrier's media stream). A run cancelled before its
+  pipeline exists ends the call as a hangup during setup does: completed,
+  `call.ended` sent.
 
 A new edge calls both and remembers none of the steps:
 `tests/unit/test_voice_edges_use_the_call_module.py` fails, naming the module,
 on one that builds a voice transport without `run_call`, builds a call's
-pipeline itself, or writes a call row outside the opening module. What each
+pipeline itself, or writes a call row outside the opening module's row
+writer (`services/call_start`). What each
 step does is tested through the modules (`tests/integration/test_call_opening.py`,
 `test_run_call.py`, `test_outbound_opening.py`, `test_whatsapp_voice_opening.py`).
 
@@ -938,11 +952,11 @@ a call"):
 
 - `CallContext(agent_id=... or DYNAMIC_AGENT_ID)` — the zero-UUID sentinel from
   `orchestrator/pipeline_factory.py`, never written to `active_agent_id`.
-  `run_call` builds every call's context; the media stream's, for a call it
-  refuses, uses the same fallback.
+  `call_runner.call_context` builds every call's context, the one the media
+  stream fails a call it refuses in included.
 - the config is stored raw as `metadata_json["dynamic_config"]` on the call
-  row, which the opening module writes (`open_call`, and `write_call_row` for
-  an outbound dial). `services/call_analysis_trigger.config_for_call()` is
+  row, which the opening module writes (`open_call`, and
+  `call_start.write_call_row` for an outbound dial). `services/call_analysis_trigger.config_for_call()` is
   the only reader — post-call code must go through it rather than
   `agent.config_blob`, **log lines included**.
 

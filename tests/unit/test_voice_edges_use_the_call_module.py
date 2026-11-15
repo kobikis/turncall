@@ -95,6 +95,7 @@ def test_only_the_running_module_builds_a_calls_pipeline() -> None:
 
 
 def test_only_the_opening_module_writes_a_call_row() -> None:
-    """An outbound dial writes its row through it too (#495)."""
+    """An outbound dial writes its row through it too (#495): its row
+    writer, `call_start`, is the opening module's part."""
     writers = _calling("create_call") - {"storage/repositories/call_repo.py"}
-    assert writers == {"services/call_opening.py"}, writers
+    assert writers == {"services/call_start.py"}, writers

@@ -126,13 +126,20 @@ async def test_a_call_whose_build_is_cancelled_closes_its_mcp_sessions(
     ) as app:
         number = await TWILIO.bind(app, await app.create_agent(AGENT))
         monkeypatch.setattr(pipeline_builder, "load_call_credentials", _stuck)
-        await TWILIO.ring(app, CALLER, number)
+        call = await TWILIO.ring(app, CALLER, number)
         (await asyncio.wait_for(building, 10)).cancel()
         await _closed(mcp)
+        # Ended as a hangup during setup is, not as a failure: no pipeline
+        # ran, and the carrier's `completed` cannot end a call still at
+        # `initiated` (an invalid transition), so nothing else would.
+        ended = await app.sink.wait_for("call.ended")
         slots = await _live_calls(app.project_id)
 
     assert [(m.connected, m.closes) for m in mcp] == [(True, 1)]
     assert slots == 0
+    assert ended["call_id"] == call.call_id
+    assert ended["payload"]["status"] == "completed"
+    assert ended["payload"]["ended_reason"] == "customer_ended_call"
 
 
 async def test_a_call_that_runs_closes_its_mcp_sessions_once(

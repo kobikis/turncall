@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ErrorCode, NotFoundError, RateLimitedError
-from turncall.auth import Auth, WriteAuth
+from turncall.auth import WriteAuth
 from turncall.config import get_settings
 from turncall.domain.carriers import DEFAULT_CARRIER
 from turncall.orchestrator.avatar import skip_reason
@@ -36,15 +36,8 @@ from turncall.orchestrator.transport_factory import (
     ice_servers,
 )
 from turncall.orchestrator.webrtc_offer import bundled
-from turncall.services.agent_acceptance import (
-    AcceptedAgent,
-    AgentOrigin,
-    AgentRefusal,
-    accept_agent_row,
-    log_refusal,
-)
+from turncall.services.call_agents import call_init_agent, stored_agent
 from turncall.services.call_opening import (
-    CallMetadata,
     CallParties,
     CallRefusal,
     ChosenAgent,
@@ -52,11 +45,10 @@ from turncall.services.call_opening import (
     open_call,
 )
 from turncall.services.credentials import MissingProviderKeyError
-from turncall.services.limits import limits_for_project, release_live_call
+from turncall.services.limits import release_live_call
 from turncall.services.outbound_url import check_outbound_url
 from turncall.services.template_renderer import check_variables
 from turncall.storage.database import create_session_factory, get_engine
-from turncall.storage.repositories import agent_repo
 
 router = APIRouter(prefix="/webrtc", tags=["webrtc"])
 
@@ -167,7 +159,7 @@ async def webrtc_connect(
         )
 
     # Validate agent_id shape here so a malformed value is a clean 400, not a
-    # 500 when _resolve_agent does UUID(agent_id_str).
+    # 500 when the source does UUID(agent_id_str).
     if agent_id_str and not _is_uuid(agent_id_str):
         raise ApiError(
             status_code=400,
@@ -199,23 +191,17 @@ async def webrtc_connect(
 
     # Opened like every voice call (#494): the slot, the agent the request
     # names or its call-init answers, the row and its start events. A refusal
-    # of the agent is raised as the error this request answers with, and
-    # nothing of the call is left, its slot included.
+    # is answered as this request's error, and nothing of the call is left,
+    # its slot included.
     source = _BrowserSource(
-        auth=auth,
+        project_id=auth.project_id,
         agent_id=agent_id_str,
         server_url=server_url,
         server_url_secret=server_url_secret,
         variables=variables,
     )
     try:
-        # Its 429 is the answer: a browser is not refused at a carrier, so
-        # no `call.rejected`.
-        opened = await open_call(
-            source, project_id=auth.project_id, session=session, announce_busy=False
-        )
-    except ApiError:
-        raise
+        opened = await open_call(source, project_id=auth.project_id, session=session)
     except Exception as exc:
         # A row that cannot be written gave its slot back at once (#489).
         logger.exception("webrtc call not opened")
@@ -225,7 +211,7 @@ async def webrtc_connect(
             message="The call could not be opened",
         ) from exc
     if isinstance(opened, CallRefusal):
-        raise await _refused(session, auth.project_id, opened)
+        raise _refused(opened, agent_id=agent_id_str)
     call_id = opened.call_id
 
     call = CallToRun.of(opened, session_factory=create_session_factory(get_engine()))
@@ -400,183 +386,90 @@ def _request_variables(raw: Any) -> dict[str, str]:
 # A browser call has no numbers and no carrier: its row keeps the default
 # carrier (`calls.provider`) as it always has, and its events say `webrtc`.
 _NO_NUMBERS = CallParties(from_number="", to_number="")
-_BROWSER = EdgeHandles(
-    carrier=DEFAULT_CARRIER, transport="webrtc", row_metadata={"transport": "webrtc"}
-)
+_BROWSER = EdgeHandles(carrier=DEFAULT_CARRIER, transport="webrtc")
 
 
 @dataclass(frozen=True)
 class _BrowserSource:
     """A connect request, as `open_call` takes it: the agent it names, or
-    the one its call-init answers. A refusal is raised as the error the
-    request is answered with (404, 422, 502); `open_call` gives the slot back
-    for it, as for any failure before the row."""
+    the one its call-init answers — chosen as a number's call chooses
+    either. A refusal is the request's to answer (`_refused`), and the
+    browser hears it: none is announced as `call.rejected`."""
 
-    auth: Auth
+    project_id: UUID
     agent_id: str | None
     server_url: str | None
     server_url_secret: str | None
     variables: dict[str, str]
     parties: CallParties = _NO_NUMBERS
     handles: EdgeHandles = _BROWSER
+    refused_unanswered: bool = False
 
     async def choose_agent(
-        self, session: AsyncSession, *, project_id: UUID, call_id: UUID
-    ) -> ChosenAgent:
-        chosen = await _resolve_agent(
-            session,
-            self.auth,
-            self.agent_id,
-            self.server_url,
-            self.server_url_secret,
-            self.variables,
-            call_id=call_id,
-        )
+        self, session: AsyncSession, *, call_id: UUID
+    ) -> ChosenAgent | CallRefusal:
+        chosen = await self._chosen(session, call_id=call_id)
+        if isinstance(chosen, CallRefusal):
+            return chosen
         # The request's own win a clash with call-init's, as an outbound
         # dial's do.
         metadata = chosen.metadata
         variables = {**metadata.template_variables, **self.variables}
         return replace(chosen, metadata=replace(metadata, template_variables=variables))
 
-
-async def _refused(
-    session: AsyncSession, project_id: UUID, refusal: CallRefusal
-) -> ApiError:
-    """The answer to a connect `open_call` refused: over the live-call limit
-    (#224) is a 429 naming it. The source raises every other refusal itself."""
-    if not refusal.busy:
-        return _no_valid_agent()
-    limits = await limits_for_project(session, project_id)
-    return RateLimitedError(
-        f"This project is at its limit of {limits.live_calls} live calls",
-        {"limit": "live_calls", "max": limits.live_calls},
-    )
-
-
-async def _resolve_agent(
-    session: AsyncSession,
-    auth: Auth,
-    agent_id_str: str | None,
-    server_url: str | None,
-    server_url_secret: str | None,
-    variables: dict[str, str] | None = None,
-    *,
-    call_id: UUID,
-) -> ChosenAgent:
-    """Resolve the call's agent from agent_id or server_url, through agent
-    acceptance either way (#477, #481), with what call-init adds to the call
-    row: its variables, metadata, knowledge context and inline agent (the raw
-    config, stored as `dynamic_config`).
-
-    `variables` are the request's own, shown to call-init as `call.variables`
-    so it can answer with them in mind.
-    """
-    if agent_id_str:
-        accepted, name = await _accepted_stored(
-            session, UUID(agent_id_str), auth.project_id
+    async def _chosen(
+        self, session: AsyncSession, *, call_id: UUID
+    ) -> ChosenAgent | CallRefusal:
+        if self.agent_id:
+            return await stored_agent(
+                session,
+                UUID(self.agent_id),
+                project_id=self.project_id,
+                call_id=call_id,
+            )
+        return await call_init_agent(
+            session,
+            server_url=str(self.server_url),
+            secret=self.server_url_secret,
+            call_type="webrtc",
+            parties=self.parties,
+            handles=self.handles,
+            variables=self.variables,
+            project_id=self.project_id,
+            call_id=call_id,
         )
-        return ChosenAgent(accepted, name)
-    return await _call_init_agent(
-        session,
-        auth,
-        server_url,
-        server_url_secret,
-        variables,
-        call_id=call_id,
-    )
 
 
-def _no_valid_agent() -> ApiError:
+def _refused(refusal: CallRefusal, *, agent_id: str | None) -> ApiError:
+    """The answer to a connect `open_call` refused. Over the live-call limit
+    (#224) is a 429 naming it. A named agent that is not the project's is a
+    404, one acceptance refuses a 422 naming the field; a `server_url` that
+    names no agent, or one that cannot run, a 502."""
+    if refusal.busy:
+        limit = refusal.live_call_limit
+        return RateLimitedError(
+            f"This project is at its limit of {limit} live calls",
+            {"limit": "live_calls", "max": limit},
+        )
+    refused = refusal.refusal
+    if agent_id and refused is None:
+        return NotFoundError("Agent", agent_id)
+    if agent_id and refused is not None:
+        return ApiError(
+            status_code=422,
+            code=ErrorCode.INVALID_AGENT_CONFIG,
+            message=f"agent {agent_id} cannot run: {refused.describe()}",
+            details={"reason": refused.reason, "field": refused.field},
+        )
+    if refused is not None:
+        return ApiError(
+            status_code=502,
+            code=ErrorCode.INVALID_AGENT_CONFIG,
+            message=f"server_url returned an agent that cannot run: {refused.reason}",
+            details={"reason": refused.reason, "field": refused.field},
+        )
     return ApiError(
         status_code=502,
         code=ErrorCode.INTERNAL_ERROR,
         message="server_url did not return a valid agent",
     )
-
-
-async def _call_init_agent(
-    session: AsyncSession,
-    auth: Auth,
-    server_url: str | None,
-    server_url_secret: str | None,
-    variables: dict[str, str] | None,
-    *,
-    call_id: UUID,
-) -> ChosenAgent:
-    """`_resolve_agent` for a request naming a `server_url`: the agent its
-    call-init answers, accepted before the row (#477) — one that cannot run
-    is refused here, saying why, never at build."""
-    from turncall.events.server_events import send_call_init
-    from turncall.services.call_init_resolver import (
-        accept_call_init_agent,
-        resolve_call_init,
-    )
-
-    response = await send_call_init(
-        server_url,
-        call_id=str(call_id),
-        from_number="",
-        to_number="",
-        transport_type="webrtc",
-        secret=server_url_secret,
-        variables=variables or None,
-    )
-    if not (response.success and response.data):
-        raise _no_valid_agent()
-    result = await resolve_call_init(session, response.data, project_id=auth.project_id)
-    accepted = await accept_call_init_agent(
-        session, result, project_id=auth.project_id, call_id=str(call_id)
-    )
-    if isinstance(accepted, AgentRefusal):
-        raise ApiError(
-            status_code=502,
-            code=ErrorCode.INVALID_AGENT_CONFIG,
-            message=f"server_url returned an agent that cannot run: {accepted.reason}",
-            details={"reason": accepted.reason, "field": accepted.field},
-        )
-    if accepted is None:
-        raise _no_valid_agent()
-    return ChosenAgent(
-        accepted,
-        result.agent.name if result.agent else None,
-        CallMetadata(
-            result.dynamic_config,
-            result.template_variables,
-            result.metadata,
-            result.knowledge_context,
-        ),
-    )
-
-
-async def _accepted_stored(
-    session: AsyncSession, agent_id: UUID, project_id: UUID
-) -> tuple[AcceptedAgent, str]:
-    """The named agent through agent acceptance (`stored_call`, #481), with
-    its name: one of another project, or none, is a 404 as before; one saved
-    before a newer rule existed is a 422 naming the field, before any call
-    row, rather than a build that fails after the browser connected."""
-    row = await agent_repo.get_agent_by_id(session, agent_id, project_id=project_id)
-    outcome = await accept_agent_row(
-        session,
-        row,
-        agent_id=agent_id,
-        project_id=project_id,
-        origin=AgentOrigin.STORED_CALL,
-    )
-    if isinstance(outcome, AgentRefusal):
-        if outcome.field == "agent_id":
-            raise NotFoundError("Agent", str(agent_id))
-        log_refusal(
-            outcome,
-            origin=AgentOrigin.STORED_CALL,
-            project_id=project_id,
-            agent_id=str(agent_id),
-        )
-        raise ApiError(
-            status_code=422,
-            code=ErrorCode.INVALID_AGENT_CONFIG,
-            message=f"agent {agent_id} cannot run: {outcome.describe()}",
-            details={"reason": outcome.reason, "field": outcome.field},
-        )
-    assert row is not None  # accepted, so it was read
-    return outcome, row.name

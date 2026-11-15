@@ -218,7 +218,6 @@ async def _start_call(
         call_id=uuid4(),
         project_id=DEMO_PROJECT_ID,
         agent=agent,
-        agent_id=None,
         call_sid="webrtc",
         stream_sid="webrtc",
         session_factory=None,

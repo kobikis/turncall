@@ -20,6 +20,7 @@ from tests.harness import HARNESS_AGENT, Script, run_app
 from tests.integration.test_text_session_variables import CallInitServer
 from turncall.domain.carriers import TWILIO
 from turncall.services.call_opening import (
+    INBOUND_PHONE_CALL,
     CallParties,
     EdgeHandles,
     NumberSource,
@@ -58,9 +59,13 @@ async def _inbound(e164: str) -> UUID:
         assert number is not None
         opened = await open_call(
             NumberSource(
-                number,
-                CallParties(from_number=CALLER, to_number=e164),
-                EdgeHandles(carrier=TWILIO, provider_call_sid=f"CA{uuid.uuid4().hex}"),
+                number=number,
+                parties=CallParties(from_number=CALLER, to_number=e164),
+                handles=EdgeHandles(
+                    carrier=TWILIO, provider_call_sid=f"CA{uuid.uuid4().hex}"
+                ),
+                call_type=INBOUND_PHONE_CALL,
+                weighted=True,
             ),
             project_id=number.project_id,
             session=session,
