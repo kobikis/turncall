@@ -44,7 +44,7 @@ def placed(monkeypatch):
         ),
         patch(
             f"{MODULE}.agent_repo.get_agent_by_id",
-            AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())),
+            AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4(), name="support")),
         ),
         patch(f"{MODULE}.phone_number_repo.get_by_id", AsyncMock(return_value=number)),
         patch(

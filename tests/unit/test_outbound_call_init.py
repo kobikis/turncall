@@ -26,7 +26,10 @@ INLINE = {"system_prompt": "Built for this call", "mcp_servers": []}
 
 def _agent(project_id) -> SimpleNamespace:
     return SimpleNamespace(
-        id=uuid.uuid4(), project_id=project_id, config_blob={"system_prompt": "x"}
+        id=uuid.uuid4(),
+        name="support",
+        project_id=project_id,
+        config_blob={"system_prompt": "x"},
     )
 
 
