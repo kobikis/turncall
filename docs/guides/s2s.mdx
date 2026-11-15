@@ -340,6 +340,22 @@ Realtime: tools run through TurnCall, recorded and mocked in evals.
 ElevenLabs' own `mcp` tool type is never sent — an agent's MCP servers are
 connected by TurnCall.
 
+### Known issues
+
+Both are on Max, the model tool-using agents need:
+
+- **It can say a tool call out loud** ([#472](https://github.com/kobikis/turncall/issues/472)).
+  Max sometimes writes a tool call into its reply as text, and the caller hears
+  it, for example "End call." or a tool's name and arguments. ElevenLabs
+  speaks its own text and sends no word timing, so TurnCall can't cut the
+  words out of the audio.
+- **It can repeat the greeting at the goodbye** ([#485](https://github.com/kobikis/turncall/issues/485)).
+  To make ElevenLabs speak first, the session opens on a caller message asking
+  for `first_message`. That message stays in the conversation, and Max
+  sometimes answers it again later, usually in the same reply as `end_call`. The
+  caller hears the greeting, then the goodbye. ElevenLabs can't delete a
+  conversation item yet, and rewording the opening didn't help.
+
 ## Gateways and third-party models
 
 The `openai` provider speaks the OpenAI-Realtime WebSocket protocol — and so do OpenAI-Realtime-compatible gateways ([Vercel AI Gateway](https://vercel.com/docs/ai-gateway), [LiteLLM](https://docs.litellm.ai/)). Set `s2s.base_url` to route the realtime connection through one; provider-prefixed models like `openai/gpt-realtime-2` then flow over the same protocol — no new provider, same pipeline.
