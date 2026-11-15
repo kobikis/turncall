@@ -26,7 +26,7 @@ def fake_open_call(seen: dict | None = None) -> AsyncMock:
     the real one chooses it, and the call opened under a fresh id."""
     from turncall.services.call_opening import OpenedCall
 
-    async def _open(source, *, project_id, session):
+    async def _open(source, *, project_id, session, announce_busy=True):
         call_id = uuid.uuid4()
         chosen = await source.choose_agent(
             session, project_id=project_id, call_id=call_id

@@ -651,7 +651,8 @@ Customer calls WhatsApp Business number → Meta POSTs /webhooks/whatsapp (field
 
 A connect is opened **before** pipecat's client answers it (#483, #494,
 `webhooks/whatsapp_handlers._open_connect`), through `services/call_opening
-.open_call` like every inbound call (A/B weights included): a number nobody
+.open_call` like every inbound call (call-init's agent, else the bound one;
+no A/B weights, which are a phone call's): a number nobody
 bound, a project at its live-call limit (#224), and a call with no usable
 agent — call-init failing or naming none, another project's `agent_id`
 (#475), an agent acceptance refuses (#477), a bound agent whose row is gone —

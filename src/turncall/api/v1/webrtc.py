@@ -209,7 +209,11 @@ async def webrtc_connect(
         variables=variables,
     )
     try:
-        opened = await open_call(source, project_id=auth.project_id, session=session)
+        # Its 429 is the answer: a browser is not refused at a carrier, so
+        # no `call.rejected`.
+        opened = await open_call(
+            source, project_id=auth.project_id, session=session, announce_busy=False
+        )
     except ApiError:
         raise
     except Exception as exc:

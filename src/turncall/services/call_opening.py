@@ -29,7 +29,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from turncall.domain.enums import CallDirection, CallEventType
 from turncall.services import telemetry_redaction
 from turncall.services.agent_acceptance import AcceptedAgent
-from turncall.services.limits import admit_inbound_call, release_live_call
+from turncall.services.limits import (
+    admit_inbound_call,
+    claim_live_call,
+    limits_for_project,
+    release_live_call,
+)
 from turncall.storage.models import CallRow, PhoneNumberRow
 from turncall.storage.repositories import agent_repo, call_repo
 
@@ -362,26 +367,26 @@ async def _stored_agent(
 
 
 async def open_call(
-    source: CallSource, *, project_id: UUID, session: AsyncSession
+    source: CallSource,
+    *,
+    project_id: UUID,
+    session: AsyncSession,
+    announce_busy: bool = True,
 ) -> OpenedCall | CallRefusal:
     """Admit the call, choose and accept its agent, and commit its row with
     `call.initializing` + `call.started`; or why it is not opened, with
-    nothing of it left behind. The slot is the run's to hold from here."""
+    nothing of it left behind. The slot is the run's to hold from here.
+
+    `announce_busy=False` for an edge whose caller hears the refusal itself
+    (WebRTC's 429): `call.rejected` is for a call refused unanswered."""
     # From here on the call's logs follow its project's redaction (#314),
     # the edge's own included: this runs in its task.
     await telemetry_redaction.for_project(project_id, session=session)
     call_id = uuid4()
     # Before the agent: a call refused busy asks nobody for one. The slot is
-    # taken under the call's id before the row exists (#224);
-    # `admit_inbound_call` has already announced `call.rejected` when it says no.
-    if not await admit_inbound_call(
-        session,
-        project_id=project_id,
-        call_id=call_id,
-        transport=source.handles.transport_name,
-        from_number=source.parties.from_number,
-        to_number=source.parties.to_number,
-        provider_call_id=source.handles.provider_call_id,
+    # taken under the call's id before the row exists (#224).
+    if not await _admit(
+        session, source, project_id=project_id, call_id=call_id, announce=announce_busy
     ):
         return AT_LIVE_CALL_LIMIT
     try:
@@ -418,6 +423,30 @@ async def open_call(
         provider_call_sid=source.handles.provider_call_sid,
     )
     return opened
+
+
+async def _admit(
+    session: AsyncSession,
+    source: CallSource,
+    *,
+    project_id: UUID,
+    call_id: UUID,
+    announce: bool,
+) -> bool:
+    """The call's live-call slot, or False; `admit_inbound_call` has then
+    announced `call.rejected`, unless `announce` is off."""
+    if not announce:
+        limits = await limits_for_project(session, project_id)
+        return await claim_live_call(project_id, call_id, limits.live_calls)
+    return await admit_inbound_call(
+        session,
+        project_id=project_id,
+        call_id=call_id,
+        transport=source.handles.transport_name,
+        from_number=source.parties.from_number,
+        to_number=source.parties.to_number,
+        provider_call_id=source.handles.provider_call_id,
+    )
 
 
 async def write_call(session: AsyncSession, opened: OpenedCall) -> CallRow:

@@ -3,7 +3,7 @@
 The connect is opened before pipecat's client answers it, through the same
 module every carrier's edge opens through: the slot, the row with its
 WhatsApp handles, `call.initializing` + `call.started`, and the agent the
-number routes to — A/B weights included. What each case checks is what the
+number routes to (call-init's, else the bound one). What each case checks is what the
 world holds afterwards: the row, the events, the slot, and the call running
 sees.
 """
@@ -69,9 +69,12 @@ async def test_a_connect_opens_its_call_with_its_whatsapp_handles(
     assert slots == 1
 
 
-async def test_a_number_with_ab_weights_runs_the_agent_picked_for_the_caller(
+async def test_a_weighted_number_still_runs_its_bound_agent(
     monkeypatch, redis_env, whatsapp_voice
 ) -> None:
+    """WhatsApp voice runs call-init's agent, else the bound one: A/B
+    weights are a phone call's, and opening it through the shared module
+    changes nothing a WhatsApp caller gets."""
     async with run_app(
         SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
     ) as app:
@@ -93,7 +96,7 @@ async def test_a_number_with_ab_weights_runs_the_agent_picked_for_the_caller(
         await app.api.post("/webhooks/whatsapp", json=_whatsapp_connect(number))
         [(_, running)] = whatsapp_voice.started
 
-    assert str(running.agent_id) == picked
+    assert str(running.agent_id) == bound
 
 
 async def test_a_connect_pipecat_cannot_answer_frees_its_slot_and_fails_its_call(

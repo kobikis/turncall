@@ -268,9 +268,13 @@ async def test_webrtc_over_the_limit_is_429_and_leaves_no_call(monkeypatch, redi
             json={"sdp": "v=0", "type": "offer", "agent_id": agent_id},
         )
         calls = (await app.api.get("/v1/calls")).json()["data"]
+        # The 429 is the answer: a browser is not refused at a carrier.
+        with pytest.raises(TimeoutError):
+            await app.sink.wait_for("call.rejected", timeout=1.0)
 
     assert r.status_code == 429
     assert r.json()["code"] == "rate_limited"
+    assert r.json()["details"] == {"limit": "live_calls", "max": 1}
     assert len(calls) == 1
 
 

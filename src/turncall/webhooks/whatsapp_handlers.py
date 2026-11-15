@@ -8,8 +8,10 @@ Handles:
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from functools import partial
 from typing import Any
+from uuid import UUID
 
 import aiohttp
 from fastapi import APIRouter, Request
@@ -215,6 +217,18 @@ async def _handle_call_event(
     return JSONResponse({"status": "ok"})
 
 
+@dataclass(frozen=True)
+class _WhatsAppSource(NumberSource):
+    """A WhatsApp voice call to one of the project's numbers: call-init's
+    agent, else the bound one. A/B weights are a phone call's, never applied
+    here."""
+
+    call_init_type: str = "inboundWhatsAppCall"
+
+    def _routed_agent_id(self) -> UUID:
+        return self.number.routing_target_id
+
+
 async def _open_connect(
     session: AsyncSession, body: dict[str, Any]
 ) -> OpenedCall | None:
@@ -232,7 +246,7 @@ async def _open_connect(
             whatsapp_call_id=whatsapp_call_id,
         )
         return None
-    source = NumberSource(
+    source = _WhatsAppSource(
         phone_row,
         CallParties(from_number=from_number, to_number=to_number),
         EdgeHandles(
@@ -244,7 +258,6 @@ async def _open_connect(
                 "whatsapp_call_id": whatsapp_call_id,
             },
         ),
-        call_init_type="inboundWhatsAppCall",
     )
     try:
         opened = await open_call(
