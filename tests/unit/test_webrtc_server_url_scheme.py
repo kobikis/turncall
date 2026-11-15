@@ -79,7 +79,8 @@ def test_a_server_url_that_is_not_a_string_is_a_400(app, monkeypatch):
 def test_a_server_url_beside_an_agent_id_is_not_checked(app, monkeypatch):
     # The agent_id wins, so the server_url is never called and never refused.
     monkeypatch.setattr(
-        webrtc.agent_repo, "get_agent_by_id", AsyncMock(return_value=None)
+        "turncall.storage.repositories.agent_repo.get_agent_by_id",
+        AsyncMock(return_value=None),
     )
     agent_id = str(uuid.uuid4())
 

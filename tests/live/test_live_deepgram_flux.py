@@ -26,10 +26,10 @@ from uuid import uuid4
 
 import pytest
 from loguru import logger
+from tests.accepted import accepted
 
 from turncall.config.settings import Settings
 from turncall.domain.enums import EvalKind, EvalModality
-from turncall.domain.models import AgentConfig
 from turncall.evals import scenario as scenario_mod
 from turncall.evals.harness import run_iteration
 from turncall.evals.runner import ResolvedTarget
@@ -100,7 +100,7 @@ async def _converse(stt: dict, session_factory: Any) -> Any:
         kind=EvalKind.SCRIPTED,
         target=ResolvedTarget(
             project_id=uuid4(),
-            config=AgentConfig.model_validate(blob),
+            agent=accepted(blob),
             config_blob=blob,
             agent_id=None,
         ),

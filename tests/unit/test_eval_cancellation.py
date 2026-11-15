@@ -14,8 +14,8 @@ from uuid import uuid4
 
 import pytest
 
+from tests.accepted import accepted
 from turncall.domain.enums import EvalRunStatus
-from turncall.domain.models import AgentConfig
 from turncall.evals.runner import ResolvedTarget
 from turncall.evals.runner import logger as runner_logger
 
@@ -91,7 +91,7 @@ async def _execute_run(run_row, *, get_run, finish=None, execute=None):
     execute = execute or AsyncMock(return_value=_result())
     target = ResolvedTarget(
         project_id=run_row.project_id,
-        config=AgentConfig(),
+        agent=accepted(),
         config_blob={"system_prompt": "hi"},
         agent_id=uuid4(),
     )

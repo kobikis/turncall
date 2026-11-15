@@ -91,3 +91,26 @@ Knowledge-base attachments are loaded by `agent_id`
 matches no agent, and there is no row to have attached one to. Per-call context
 still reaches the prompt through call-init's `dynamic_data.knowledge_context`,
 which is the mechanism an inline agent should use for it.
+
+## Addendum: the guard is structural at the build too (#481, 2026-11)
+
+An inline config used to reach `build_call_pipeline` as a plain `AgentConfig`,
+parsed by whichever transport held it, so every provider rule the API's schema
+enforces (xAI's LLM and TTS, Grok Voice, Eleven Realtime, the Flux group,
+procedures) had a second copy in the build, failing the call halfway into it.
+
+The build now takes an **accepted agent** (`services/agent_acceptance`,
+#474) and nothing else, and only that module constructs one. A config the
+rules refuse never reaches the build: an inline agent is refused at call-init,
+before the caller is answered; a stored agent saved before a newer rule is
+refused where it is run (the carrier, a WebRTC 422, WhatsApp's reject, a
+handoff's result, an eval run's error), and the media stream accepts the
+call's agent again before it builds, which is what covers an outbound dial's
+own agent. The build's copies are deleted.
+
+`tests/unit/test_build_takes_accepted_agent.py` holds this the way the
+sentinel checks above hold the rest: the entry's signature, every call to it
+in `src` passing `agent=`, `AcceptedAgent(` built only in agent acceptance,
+and no rule function called from `orchestrator/`. The two rules of this ADR
+are unchanged: the sentinel is still the inline agent's `CallContext.agent_id`,
+and `dynamic_config` is still stored raw.

@@ -17,9 +17,9 @@ from uuid import uuid4
 
 import pytest
 
+from tests.accepted import accepted
 from turncall.config.settings import EvalSettings
 from turncall.domain.enums import EvalRunStatus
-from turncall.domain.models import AgentConfig
 from turncall.evals.harness import IterationTimeout, _run_harness, run_iteration
 from turncall.evals.runner import (
     MIN_ITERATION_BUDGET_S,
@@ -131,7 +131,7 @@ class TestTheIterationGivesEverythingBack:
                         parsed=MagicMock(),
                         kind=MagicMock(),
                         target=SimpleNamespace(
-                            project_id=uuid4(), config=AgentConfig(), agent_id=uuid4()
+                            project_id=uuid4(), agent=accepted(), agent_id=uuid4()
                         ),
                         modality=MagicMock(),
                         settings=SimpleNamespace(),
@@ -252,7 +252,7 @@ class TestTheRunStillCompletes:
         finish = AsyncMock()
         target = ResolvedTarget(
             project_id=run.project_id,
-            config=AgentConfig(),
+            agent=accepted(),
             config_blob={},
             agent_id=uuid4(),
         )

@@ -27,6 +27,7 @@ from pipecat.tests.utils import SleepFrame, run_test
 from pipecat.utils.errors import ErrorCategory
 from pydantic import ValidationError
 
+from tests.accepted import refusal
 from tests.conftest import creds
 from turncall.api.v1.schemas.agents import (
     AgentConfigSchema,
@@ -35,6 +36,7 @@ from turncall.api.v1.schemas.agents import (
 )
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator import failover
+from turncall.orchestrator.deepgram_flux import MIXED_FLUX_GROUP
 from turncall.orchestrator.failover import FailoverSTT, FailoverTTS
 from turncall.orchestrator.pipeline_factory import (
     _create_stt_stage,
@@ -526,15 +528,14 @@ class TestBuild:
         ],
         ids=["flux-then-nova", "nova-then-flux", "flux-then-openai"],
     )
-    def test_a_mixed_flux_group_never_builds(self, stt: dict) -> None:
+    def test_a_mixed_flux_group_never_runs(self, stt: dict) -> None:
         """Either direction, and whichever way the config arrived: a stored
-        agent is refused at the API (422), but a call-init inline agent never
-        passes through it — it reaches the build as a plain domain config."""
+        agent is refused at the API (422), a call-init inline agent by agent
+        acceptance at call-init, in the same words (#481)."""
         with pytest.raises(ValidationError, match="Flux"):
             STTConfigSchema.model_validate(stt)
-        config = AgentConfig.model_validate({"stt": stt})
-        with pytest.raises(ValueError, match="Flux"):
-            _create_stt_stage(config, creds("sk", deepgram="dg"), sample_rate=8000)
+        refused = refusal({"stt": stt})
+        assert (refused.field, refused.reason) == ("stt.failover", MIXED_FLUX_GROUP)
 
     def test_flux_only_group_builds_flux_members(self) -> None:
         from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService

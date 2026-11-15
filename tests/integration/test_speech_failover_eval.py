@@ -40,9 +40,9 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.utils.errors import ErrorCategory
 
+from tests.accepted import accepted
 from turncall.config.settings import Settings
 from turncall.domain.enums import EvalKind, EvalModality
-from turncall.domain.models import AgentConfig
 from turncall.evals import scenario as scenario_mod
 from turncall.evals.harness import run_iteration
 from turncall.evals.runner import ResolvedTarget
@@ -174,7 +174,7 @@ def _target(**blocks: Any) -> ResolvedTarget:
     blob = {"system_prompt": "Echo.", "first_message": None, **blocks}
     return ResolvedTarget(
         project_id=uuid4(),
-        config=AgentConfig.model_validate(blob),
+        agent=accepted(blob),
         config_blob=blob,
         agent_id=None,
     )

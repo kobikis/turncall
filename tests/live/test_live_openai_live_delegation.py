@@ -29,10 +29,10 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from tests.accepted import accepted
 
 from turncall.config.settings import Settings
 from turncall.domain.enums import EvalKind, EvalModality
-from turncall.domain.models import AgentConfig
 from turncall.evals import scenario as scenario_mod
 from turncall.evals.harness import run_iteration
 from turncall.evals.runner import ResolvedTarget
@@ -95,7 +95,7 @@ async def test_a_mocked_tool_and_end_call_are_delegated(
     }
     target = ResolvedTarget(
         project_id=uuid4(),
-        config=AgentConfig.model_validate(blob),
+        agent=accepted(blob),
         config_blob=blob,
         agent_id=None,
     )
@@ -193,7 +193,7 @@ async def test_client_mode_delegates_a_mocked_tool_to_the_agents_llm(
     }
     target = ResolvedTarget(
         project_id=uuid4(),
-        config=AgentConfig.model_validate(blob),
+        agent=accepted(blob),
         config_blob=blob,
         agent_id=None,
     )
@@ -271,7 +271,7 @@ async def test_a_client_delegate_with_a_rejected_key_fails_over(
     }
     target = ResolvedTarget(
         project_id=uuid4(),
-        config=AgentConfig.model_validate(blob),
+        agent=accepted(blob),
         config_blob=blob,
         agent_id=None,
     )
@@ -371,7 +371,7 @@ async def test_a_tool_mode_kb_is_delegated_and_its_fact_relayed(
     }
     target = ResolvedTarget(
         project_id=project.id,
-        config=AgentConfig.model_validate(blob),
+        agent=accepted(blob),
         config_blob=blob,
         agent_id=None,
     )

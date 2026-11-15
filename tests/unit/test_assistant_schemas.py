@@ -3,9 +3,9 @@
 import pytest
 from pydantic import ValidationError
 
+from turncall.api.v1.schemas.agent_requests import CreateAgentRequest
 from turncall.api.v1.schemas.agents import (
     AgentConfigSchema,
-    CreateAgentRequest,
     LLMConfigSchema,
     STTConfigSchema,
     ToolDefinitionSchema,

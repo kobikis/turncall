@@ -41,7 +41,8 @@ def is_flux(model: str) -> bool:
 # Turn handling is chosen once, at build, from the primary STT (#204): Flux
 # ends turns itself, the others need VAD + Smart Turn. After a failover switch
 # across that line nothing would end the caller's turns but pipecat's 5s
-# timeout, so a group is all Flux or none.
+# timeout, so a group is all Flux or none. Refused by agent acceptance for
+# every config that runs (#481) and by the API schema, in these words.
 MIXED_FLUX_GROUP = (
     "stt.failover cannot mix Deepgram Flux (flux-*) with other STT models: "
     "Flux decides when the caller's turn ends and the others do not, so a "

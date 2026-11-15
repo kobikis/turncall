@@ -24,6 +24,12 @@ PROJECT = uuid.uuid4()
 INLINE = {"system_prompt": "Built for this call", "mcp_servers": []}
 
 
+def _agent(project_id) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid.uuid4(), project_id=project_id, config_blob={"system_prompt": "x"}
+    )
+
+
 def _answer(data, success: bool = True) -> ServerEventResponse:
     return ServerEventResponse(success=success, status_code=200, data=data)
 
@@ -33,7 +39,7 @@ def dial(monkeypatch):
     """Everything succeeds; the number is webhook-routed, call-init answers
     `state.answer`, and agents are looked up from `state.agents`."""
     state = SimpleNamespace()
-    dial_agent = SimpleNamespace(id=uuid.uuid4(), project_id=PROJECT)
+    dial_agent = _agent(PROJECT)
     state.dial_agent = dial_agent
     state.agents = {dial_agent.id: dial_agent}
     state.number = SimpleNamespace(
@@ -49,8 +55,12 @@ def dial(monkeypatch):
     settings = SimpleNamespace(server=SimpleNamespace(public_base_url="https://tc"))
     monkeypatch.setattr(f"{MODULE}.get_settings", lambda: settings)
 
-    async def agent_by_id(_s, agent_id, **_kw):
-        return state.agents.get(agent_id)
+    async def agent_by_id(_s, agent_id, *, project_id=None):
+        # Scoped as the repository scopes it.
+        agent = state.agents.get(agent_id)
+        if agent is None or project_id not in (None, agent.project_id):
+            return None
+        return agent
 
     with (
         patch(
@@ -62,6 +72,10 @@ def dial(monkeypatch):
         patch(
             "turncall.services.call_init_resolver.agent_repo.get_agent_by_id",
             AsyncMock(side_effect=agent_by_id),
+        ),
+        patch(
+            "turncall.services.agent_acceptance.knowledge_repo.kb_modes_by_agent",
+            AsyncMock(return_value={}),
         ),
         patch(
             f"{MODULE}.phone_number_repo.get_by_id",
@@ -123,7 +137,7 @@ async def test_an_inline_agent_from_call_init_runs_the_call(dial):
 
 
 async def test_an_agent_id_from_call_init_wins_over_the_dials(dial):
-    other = SimpleNamespace(id=uuid.uuid4(), project_id=PROJECT)
+    other = _agent(PROJECT)
     dial.agents[other.id] = other
     dial.answer = _answer({"agent_id": str(other.id)})
 
@@ -159,7 +173,7 @@ async def test_call_init_with_no_agent_keeps_the_dials_and_adds_its_context(dial
     assert dial.call_init.await_args.kwargs["variables"] == {"tier": "platinum"}
 
 
-STRANGER = SimpleNamespace(id=uuid.uuid4(), project_id=uuid.uuid4())
+STRANGER = _agent(uuid.uuid4())
 # Context written for an agent that will not run: none of it is kept.
 CONTEXT = {"variables": {"name": "Ada"}, "dynamic_data": {"knowledge_context": "k"}}
 
@@ -173,6 +187,8 @@ CONTEXT = {"variables": {"name": "Ada"}, "dynamic_data": {"knowledge_context": "
         _answer({"agent_id": str(STRANGER.id), **CONTEXT}),  # another project's
         # Would ring the callee into a call that fails at its first frame.
         _answer({"agent": {"max_call_duration_seconds": "forever"}, **CONTEXT}),
+        # Would fail at build, after the callee picked up (#476).
+        _answer({"agent": {"llm": {"provider": "xai", "base_url": "https://gw"}}}),
     ],
 )
 async def test_an_unusable_call_init_falls_back_to_the_dials_agent(dial, answer):

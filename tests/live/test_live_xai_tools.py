@@ -25,6 +25,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from tests.accepted import accepted
 from tests.conftest import creds
 
 from turncall.config.settings import Settings
@@ -73,7 +74,7 @@ async def test_a_mocked_tool_round_trips_and_the_eval_reaches_a_verdict(
     }
     target = ResolvedTarget(
         project_id=uuid4(),
-        config=AgentConfig.model_validate(blob),
+        agent=accepted(blob),
         config_blob=blob,
         agent_id=None,
     )

@@ -81,11 +81,11 @@ def test_a_pipeline_that_cannot_start_is_an_error_not_a_dead_answer(app, monkeyp
     has to come back as an error, and the half-made peer has to be closed."""
     from types import SimpleNamespace
 
+    from tests.accepted import accepted
     from turncall.api.v1 import webrtc
-    from turncall.domain.models import AgentConfig
 
     _auth(app)
-    resolved = (AgentConfig(), uuid.uuid4(), None, None, None, None)
+    resolved = (accepted(), uuid.uuid4(), None, None, None, None)
     monkeypatch.setattr(webrtc, "_resolve_agent", AsyncMock(return_value=resolved))
     monkeypatch.setattr(webrtc, "admit_live_call", AsyncMock())
     monkeypatch.setattr(webrtc, "get_engine", lambda: None)
@@ -148,12 +148,12 @@ def test_a_missing_key_rides_back_as_a_list(app, monkeypatch):
     """So a console can name the key without parsing the sentence."""
     from types import SimpleNamespace
 
+    from tests.accepted import accepted
     from turncall.api.v1 import webrtc
-    from turncall.domain.models import AgentConfig
     from turncall.services.credentials import MissingProviderKeyError
 
     _auth(app)
-    resolved = (AgentConfig(), uuid.uuid4(), None, None, None, None)
+    resolved = (accepted(), uuid.uuid4(), None, None, None, None)
     monkeypatch.setattr(webrtc, "_resolve_agent", AsyncMock(return_value=resolved))
     monkeypatch.setattr(webrtc, "admit_live_call", AsyncMock())
     monkeypatch.setattr(webrtc, "get_engine", lambda: None)

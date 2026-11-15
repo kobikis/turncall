@@ -17,9 +17,9 @@ from uuid import uuid4
 
 import pytest
 from loguru import logger
+from tests.accepted import accepted
 
 from turncall.domain.enums import EvalKind, EvalModality
-from turncall.domain.models import AgentConfig
 from turncall.evals import scenario as scenario_mod
 from turncall.evals.harness import run_iteration
 from turncall.evals.runner import ResolvedTarget, map_script_result
@@ -38,7 +38,7 @@ def _target(project_id, prompt: str, **over):
     }
     return ResolvedTarget(
         project_id=project_id,
-        config=AgentConfig.model_validate(blob),
+        agent=accepted(blob),
         config_blob=blob,
         agent_id=None,
     )

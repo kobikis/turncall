@@ -19,8 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.domain.enums import CallDirection, CallEventType
 from turncall.services import telemetry_redaction
+from turncall.services.agent_acceptance import AcceptedAgent
 from turncall.services.limits import admit_inbound_call, release_live_call
-from turncall.storage.models import CallRow, PhoneNumberRow
+from turncall.storage.models import AgentRow, CallRow, PhoneNumberRow
 from turncall.storage.repositories import agent_repo, call_repo
 
 
@@ -57,28 +58,16 @@ async def _resolve_agent(
     call_id: UUID,
 ) -> _Resolved | InboundRefusal:
     if number.routing_target_type == "webhook" and number.server_url:
-        from turncall.events.server_events import send_call_init
-        from turncall.services.call_init_resolver import resolve_call_init
-
-        response = await send_call_init(
-            number.server_url,
-            call_id=str(call_id),
+        resolved = await _call_init_agent(
+            session,
+            number,
             from_number=from_number,
             to_number=to_number,
-            call_sid=provider_call_sid,
-            transport_type="inboundPhoneCall",
-            secret=number.server_url_secret,
+            provider_call_sid=provider_call_sid,
+            call_id=call_id,
         )
-        if response.success and response.data:
-            result = await resolve_call_init(session, response.data)
-            if result.agent is not None or result.dynamic_config is not None:
-                return _Resolved(
-                    result.agent,
-                    result.dynamic_config,
-                    result.template_variables,
-                    result.metadata,
-                    result.knowledge_context,
-                )
+        if resolved is not None:
+            return resolved
         logger.warning("inbound_server_url_no_agent", server_url=number.server_url)
         return InboundRefusal("Unable to resolve agent.")
 
@@ -96,7 +85,7 @@ async def _resolve_agent(
                 caller=from_number,
                 selected_agent_id=str(agent_id),
             )
-        agent = await agent_repo.get_agent_by_id(session, agent_id)
+        agent = await _stored_agent(session, number, agent_id, call_id=call_id)
     if agent is None:
         logger.warning(
             "inbound_no_agent",
@@ -105,6 +94,92 @@ async def _resolve_agent(
         )
         return InboundRefusal("This agent is not available.")
     return _Resolved(agent)
+
+
+async def _call_init_agent(
+    session: AsyncSession,
+    number: PhoneNumberRow,
+    *,
+    from_number: str,
+    to_number: str,
+    provider_call_sid: str,
+    call_id: UUID,
+) -> _Resolved | None:
+    """The agent call-init answers for the number, or None. Accepted before
+    the row and before the caller is answered (#477): an agent that cannot
+    run is refused here, never at build."""
+    from turncall.events.server_events import send_call_init
+    from turncall.services.call_init_resolver import (
+        accept_call_init_agent,
+        resolve_call_init,
+    )
+
+    response = await send_call_init(
+        number.server_url,
+        call_id=str(call_id),
+        from_number=from_number,
+        to_number=to_number,
+        call_sid=provider_call_sid,
+        transport_type="inboundPhoneCall",
+        secret=number.server_url_secret,
+    )
+    if not (response.success and response.data):
+        return None
+    result = await resolve_call_init(
+        session, response.data, project_id=number.project_id
+    )
+    accepted = await accept_call_init_agent(
+        session, result, project_id=number.project_id, call_id=str(call_id)
+    )
+    if not isinstance(accepted, AcceptedAgent):
+        return None
+    return _Resolved(
+        result.agent,
+        result.dynamic_config,
+        result.template_variables,
+        result.metadata,
+        result.knowledge_context,
+    )
+
+
+async def _stored_agent(
+    session: AsyncSession, number: PhoneNumberRow, agent_id: UUID, *, call_id: UUID
+) -> AgentRow | None:
+    """The agent the number routes to, when agent acceptance takes its config
+    (`stored_call`, #480): one saved before a newer rule existed is refused
+    here, with the reason logged, rather than failing in the build after the
+    call was answered."""
+    from turncall.services.agent_acceptance import (
+        AgentOrigin,
+        AgentRefusal,
+        accept_agent_row,
+        log_refusal,
+    )
+
+    agent = await agent_repo.get_agent_by_id(
+        session, agent_id, project_id=number.project_id
+    )
+    if agent is None:
+        return None
+    # As a stored agent, so its linked knowledge bases count too (#484); the
+    # row read above, not read again.
+    outcome = await accept_agent_row(
+        session,
+        agent,
+        agent_id=agent.id,
+        project_id=number.project_id,
+        origin=AgentOrigin.STORED_CALL,
+    )
+    if isinstance(outcome, AgentRefusal):
+        log_refusal(
+            outcome,
+            origin=AgentOrigin.STORED_CALL,
+            project_id=number.project_id,
+            call_id=str(call_id),
+            agent_id=str(agent_id),
+        )
+        return None
+    return agent
 
 
 async def open_inbound_call(

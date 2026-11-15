@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from tests.accepted import accepted
 from turncall.api.v1.schemas.agents import AgentConfigSchema
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator import pipeline_builder
@@ -133,7 +134,7 @@ async def _assemble(
         patch("turncall.services.retrieval.build_knowledge_preamble", preamble),
     ):
         await pipeline_builder.build_call_pipeline(
-            config=config,
+            agent=accepted(config),
             transport="T",
             call_context=SimpleNamespace(
                 agent_id=agent_id,

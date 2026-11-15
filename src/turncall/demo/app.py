@@ -24,15 +24,15 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 from turncall.config.settings import Settings
-from turncall.domain.models import AgentConfig
 from turncall.orchestrator.webrtc_offer import bundled
 from turncall.services import drain
+from turncall.services.agent_acceptance import AcceptedAgent
 
 # A demo call belongs to no project; the zero UUID says so in its logs.
 DEMO_PROJECT_ID = UUID(int=0)
 
 
-def create_demo_app(agents: dict[str, AgentConfig], settings: Settings) -> FastAPI:
+def create_demo_app(agents: dict[str, AcceptedAgent], settings: Settings) -> FastAPI:
     """The demo server for `agents`. The first is the default."""
     from pipecat.transports.smallwebrtc.request_handler import (
         ConnectionMode,
@@ -119,8 +119,8 @@ def create_demo_app(agents: dict[str, AgentConfig], settings: Settings) -> FastA
             return await _answer(handler, offer, _no_new_call)
 
         name = _requested_agent(offer.request_data, body) or default
-        config = agents.get(name)
-        if config is None:
+        agent = agents.get(name)
+        if agent is None:
             return _error(404, f"No demo agent named {name!r}.")
         if drain.is_draining():
             return _error(503, "This demo server is shutting down.")
@@ -133,12 +133,12 @@ def create_demo_app(agents: dict[str, AgentConfig], settings: Settings) -> FastA
 
         async def on_connection(connection: Any) -> None:
             try:
-                session = await _build_call(config, connection, settings)
+                session = await _build_call(agent, connection, settings)
             except Exception as exc:
                 logger.exception("demo_call_build_failed", agent=name)
                 failure.append((connection, exc))
                 raise
-            task = asyncio.create_task(_run(session, config))
+            task = asyncio.create_task(_run(session, agent))
             running.add(task)
             task.add_done_callback(running.discard)
             task.add_done_callback(lambda _task: release())
@@ -199,13 +199,13 @@ def import_call_path() -> None:
     from turncall.orchestrator import pipeline_builder  # noqa: F401
 
 
-async def _run(session: Any, config: AgentConfig) -> None:
+async def _run(session: Any, agent: AcceptedAgent) -> None:
     # Counted, so a SIGTERM waits for it.
-    with drain.live_call(session.call_id, config.max_call_duration_seconds):
+    with drain.live_call(session.call_id, agent.config.max_call_duration_seconds):
         await session.start()
 
 
-async def _build_call(config: AgentConfig, connection: Any, settings: Settings) -> Any:
+async def _build_call(agent: AcceptedAgent, connection: Any, settings: Settings) -> Any:
     """The call's CallSession, built and not yet started."""
     from turncall.orchestrator.pipeline_builder import build_call_pipeline
     from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
@@ -223,7 +223,7 @@ async def _build_call(config: AgentConfig, connection: Any, settings: Settings) 
         session_factory=None,
     )
     return await build_call_pipeline(
-        config=config,
+        agent=agent,
         # No room to mix in: the demo refuses an agent with ambience, whose
         # sound lives in a project's storage.
         transport=create_whatsapp_transport(connection, mixer=None),

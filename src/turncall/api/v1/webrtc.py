@@ -20,12 +20,12 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequest,
     SmallWebRTCRequestHandler,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.deps import DbSession
 from turncall.api.errors import ApiError, ErrorCode, NotFoundError
 from turncall.auth import Auth, WriteAuth
 from turncall.config import get_settings
-from turncall.domain.models import AgentConfig
 from turncall.orchestrator.ambience import build_ambience_mixer
 from turncall.orchestrator.avatar import skip_reason
 from turncall.orchestrator.pipeline_builder import start_call_pipeline
@@ -36,12 +36,18 @@ from turncall.orchestrator.transport_factory import (
     ice_servers,
 )
 from turncall.orchestrator.webrtc_offer import bundled
+from turncall.services.agent_acceptance import (
+    AcceptedAgent,
+    AgentOrigin,
+    AgentRefusal,
+    accept_agent,
+    log_refusal,
+)
 from turncall.services.credentials import MissingProviderKeyError
 from turncall.services.limits import admit_live_call, release_live_call
 from turncall.services.outbound_url import check_outbound_url
 from turncall.services.template_renderer import check_variables
 from turncall.storage.database import create_session_factory, get_engine
-from turncall.storage.repositories import agent_repo
 
 router = APIRouter(prefix="/webrtc", tags=["webrtc"])
 
@@ -188,7 +194,7 @@ async def webrtc_connect(
 
     # Resolve agent config
     (
-        config,
+        accepted,
         agent_id_for_call,
         template_variables,
         request_metadata,
@@ -207,14 +213,8 @@ async def webrtc_connect(
     template_variables = {**(template_variables or {}), **variables}
 
     # Apply template variables and knowledge context
-    if template_variables:
-        from turncall.services.template_renderer import render_agent_config
-
-        config = render_agent_config(config, template_variables)
-    if knowledge_context:
-        from turncall.services.template_renderer import prepend_knowledge_context
-
-        config = prepend_knowledge_context(config, knowledge_context)
+    agent = accepted.rendered(template_variables, knowledge_context=knowledge_context)
+    config = agent.config
 
     # Before the call row, so a refusal leaves nothing behind (#224). The slot
     # is the pipeline task's to free once it runs; until then, ours.
@@ -315,7 +315,7 @@ async def webrtc_connect(
             # Returns once the pipeline is built; the call runs in a task of its
             # own so any MCP servers are connected and closed inside it.
             await start_call_pipeline(
-                config=config,
+                agent=agent,
                 transport=transport,
                 call_context=call_context,
                 settings=settings,
@@ -467,7 +467,7 @@ def _request_variables(raw: Any) -> dict[str, str]:
 
 
 async def _resolve_agent(
-    session: Any,
+    session: AsyncSession,
     auth: Auth,
     agent_id_str: str | None,
     server_url: str | None,
@@ -475,68 +475,114 @@ async def _resolve_agent(
     variables: dict[str, str] | None = None,
     *,
     call_id: UUID,
-) -> tuple[AgentConfig, UUID | None, dict, dict, str | None, dict | None]:
-    """Resolve agent config from agent_id or server_url.
+) -> tuple[AcceptedAgent, UUID | None, dict, dict, str | None, dict | None]:
+    """Resolve the call's agent from agent_id or server_url, through agent
+    acceptance either way (#477, #481).
 
     `variables` are the request's own, shown to call-init as `call.variables`
     so it can answer with them in mind.
 
-    Returns (config, agent_id, template_variables, metadata, knowledge_context,
-    dynamic_config). The last is the inline agent as call-init sent it, or None
-    for a stored agent — the caller persists it on the call row.
+    Returns (accepted agent, agent_id, template_variables, metadata,
+    knowledge_context, dynamic_config). The last is the inline agent as
+    call-init sent it, or None for a stored agent — the caller persists it on
+    the call row.
     """
-    agent = None
-    dynamic_config = None
-    template_variables: dict[str, str] = {}
-    request_metadata: dict = {}
-    knowledge_context: str | None = None
-
     if agent_id_str:
-        agent_id = UUID(agent_id_str)
-        agent = await agent_repo.get_agent_by_id(
-            session, agent_id, project_id=auth.project_id
-        )
-        if agent is None:
-            raise NotFoundError("Agent", str(agent_id))
-    elif server_url:
-        from turncall.events.server_events import send_call_init
-        from turncall.services.call_init_resolver import resolve_call_init
-
-        response = await send_call_init(
-            server_url,
-            call_id=str(call_id),
-            from_number="",
-            to_number="",
-            transport_type="webrtc",
-            secret=server_url_secret,
-            variables=variables or None,
-        )
-        if response.success and response.data:
-            result = await resolve_call_init(session, response.data)
-            agent = result.agent
-            dynamic_config = result.dynamic_config
-            template_variables = result.template_variables
-            request_metadata = result.metadata
-            knowledge_context = result.knowledge_context
-
-        if agent is None and dynamic_config is None:
-            raise ApiError(
-                status_code=502,
-                code=ErrorCode.INTERNAL_ERROR,
-                message="server_url did not return a valid agent",
-            )
-
-    if dynamic_config:
-        config = AgentConfig.model_validate(dynamic_config)
-    else:
-        config = AgentConfig.model_validate(agent.config_blob)
-
-    agent_id_for_call = agent.id if agent else None
-    return (
-        config,
-        agent_id_for_call,
-        template_variables,
-        request_metadata,
-        knowledge_context,
-        dynamic_config,
+        accepted = await _accepted_stored(session, UUID(agent_id_str), auth.project_id)
+        return accepted, accepted.agent_id, {}, {}, None, None
+    return await _call_init_agent(
+        session,
+        auth,
+        server_url,
+        server_url_secret,
+        variables,
+        call_id=call_id,
     )
+
+
+def _no_valid_agent() -> ApiError:
+    return ApiError(
+        status_code=502,
+        code=ErrorCode.INTERNAL_ERROR,
+        message="server_url did not return a valid agent",
+    )
+
+
+async def _call_init_agent(
+    session: AsyncSession,
+    auth: Auth,
+    server_url: str | None,
+    server_url_secret: str | None,
+    variables: dict[str, str] | None,
+    *,
+    call_id: UUID,
+) -> tuple[AcceptedAgent, UUID | None, dict, dict, str | None, dict | None]:
+    """`_resolve_agent` for a request naming a `server_url`: the agent its
+    call-init answers, accepted before the slot and the row (#477) — one
+    that cannot run is refused here, saying why, never at build."""
+    from turncall.events.server_events import send_call_init
+    from turncall.services.call_init_resolver import (
+        accept_call_init_agent,
+        resolve_call_init,
+    )
+
+    response = await send_call_init(
+        server_url,
+        call_id=str(call_id),
+        from_number="",
+        to_number="",
+        transport_type="webrtc",
+        secret=server_url_secret,
+        variables=variables or None,
+    )
+    if not (response.success and response.data):
+        raise _no_valid_agent()
+    result = await resolve_call_init(session, response.data, project_id=auth.project_id)
+    accepted = await accept_call_init_agent(
+        session, result, project_id=auth.project_id, call_id=str(call_id)
+    )
+    if isinstance(accepted, AgentRefusal):
+        raise ApiError(
+            status_code=502,
+            code=ErrorCode.INVALID_AGENT_CONFIG,
+            message=f"server_url returned an agent that cannot run: {accepted.reason}",
+            details={"reason": accepted.reason, "field": accepted.field},
+        )
+    if accepted is None:
+        raise _no_valid_agent()
+    return (
+        accepted,
+        result.agent.id if result.agent else None,
+        result.template_variables,
+        result.metadata,
+        result.knowledge_context,
+        result.dynamic_config,
+    )
+
+
+async def _accepted_stored(
+    session: AsyncSession, agent_id: UUID, project_id: UUID
+) -> AcceptedAgent:
+    """The named agent through agent acceptance (`stored_call`, #481): one of
+    another project, or none, is a 404 as before; one saved before a newer
+    rule existed is a 422 naming the field, before any slot or call row,
+    rather than a build that fails after the browser connected."""
+    outcome = await accept_agent(
+        agent_id, project_id=project_id, origin=AgentOrigin.STORED_CALL, session=session
+    )
+    if isinstance(outcome, AgentRefusal):
+        if outcome.field == "agent_id":
+            raise NotFoundError("Agent", str(agent_id))
+        log_refusal(
+            outcome,
+            origin=AgentOrigin.STORED_CALL,
+            project_id=project_id,
+            agent_id=str(agent_id),
+        )
+        raise ApiError(
+            status_code=422,
+            code=ErrorCode.INVALID_AGENT_CONFIG,
+            message=f"agent {agent_id} cannot run: {outcome.describe()}",
+            details={"reason": outcome.reason, "field": outcome.field},
+        )
+    return outcome

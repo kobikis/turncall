@@ -911,19 +911,6 @@ class AgentConfigSchema(BaseModel):
 # --- Request/Response ---
 
 
-class CreateAgentRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
-    environment: str = Field(
-        default="development", pattern=r"^(development|staging|production)$"
-    )
-    config: AgentConfigSchema = Field(default_factory=AgentConfigSchema)
-
-
-class UpdateAgentRequest(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=255)
-    config: AgentConfigSchema | None = None
-
-
 class AgentResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 

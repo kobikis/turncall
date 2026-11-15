@@ -46,12 +46,17 @@ async def _handoff(target_config: AgentConfig, call_metadata: dict | None = None
         _prepare_handoff,
     )
 
+    project_id = uuid4()  # the target is one of the call's project's agents
+
     agent = SimpleNamespace(
-        name="Billing", config_blob=target_config.model_dump(mode="json")
+        id=uuid4(),
+        project_id=project_id,
+        name="Billing",
+        config_blob=target_config.model_dump(mode="json"),
     )
     call_context = SimpleNamespace(
         call_id=uuid4(),
-        project_id=uuid4(),
+        project_id=project_id,
         agent_id=uuid4(),
         session_factory=_SessionFactory(agent),
         mcp_manager=None,
@@ -66,6 +71,11 @@ async def _handoff(target_config: AgentConfig, call_metadata: dict | None = None
         patch(
             "turncall.storage.repositories.agent_repo.get_agent_by_id",
             new=AsyncMock(return_value=agent),
+        ),
+        # Accepted by id, so its knowledge-base links are read too (#484).
+        patch(
+            "turncall.storage.repositories.knowledge_repo.kb_modes_by_agent",
+            new=AsyncMock(return_value={}),
         ),
         patch(
             "turncall.storage.repositories.call_repo.get_call_by_id",

@@ -17,6 +17,32 @@ from turncall.evals.targets import TargetError, resolve_target
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def no_knowledge_links():
+    """A stored target is accepted by id (#481), which reads its linked
+    knowledge bases' modes too: none here."""
+    with patch(
+        "turncall.storage.repositories.knowledge_repo.kb_modes_by_agent",
+        AsyncMock(return_value={}),
+    ):
+        yield
+
+
+def _published(agent):
+    """`agent` as the published version a name finds, and as the row its id
+    names when acceptance reads it back."""
+    return (
+        patch(
+            "turncall.storage.repositories.agent_repo.get_latest_published",
+            AsyncMock(return_value=agent),
+        ),
+        patch(
+            "turncall.storage.repositories.agent_repo.get_agent_by_id",
+            AsyncMock(return_value=agent),
+        ),
+    )
+
+
 class TestResolveTarget:
     async def test_an_agent_target_resolves_to_its_config(self) -> None:
         agent_id = project_id = uuid4()
@@ -68,8 +94,15 @@ class TestResolveTarget:
             id=agent_id, version=7, config_blob={"system_prompt": "live"}
         )
         latest = AsyncMock(return_value=published)
-        with patch(
-            "turncall.storage.repositories.agent_repo.get_latest_published", latest
+        with (
+            patch(
+                "turncall.storage.repositories.agent_repo.get_latest_published",
+                latest,
+            ),
+            patch(
+                "turncall.storage.repositories.agent_repo.get_agent_by_id",
+                AsyncMock(return_value=published),
+            ),
         ):
             resolved = await resolve_target(
                 AsyncMock(),
@@ -126,4 +159,55 @@ class TestResolveTarget:
                 AsyncMock(),
                 project_id=uuid4(),
                 target={"type": "inline", "agent": {"llm": "not a mapping"}},
+            )
+
+
+XAI_GATEWAY = {"llm": {"provider": "xai", "base_url": "https://gw.example/v1"}}
+
+
+class TestAgentAcceptance:
+    """#479: every target goes through agent acceptance, so a config that
+    cannot run errors the run naming the field, before any iteration."""
+
+    async def test_an_agent_target_that_cannot_run_names_the_field(self) -> None:
+        agent = SimpleNamespace(id=uuid4(), version=2, config_blob=XAI_GATEWAY)
+        with patch(
+            "turncall.storage.repositories.agent_repo.get_agent_by_id",
+            AsyncMock(return_value=agent),
+        ):
+            with pytest.raises(TargetError) as raised:
+                await resolve_target(
+                    AsyncMock(),
+                    project_id=uuid4(),
+                    target={"type": "agent", "agent_id": str(agent.id)},
+                )
+        assert str(raised.value) == (
+            f"agent {agent.id} (v2) cannot run: "
+            "llm: base_url is not supported for the xai provider"
+        )
+
+    async def test_a_published_name_that_cannot_run_names_the_field(self) -> None:
+        agent = SimpleNamespace(id=uuid4(), version=4, config_blob=XAI_GATEWAY)
+        latest, by_id = _published(agent)
+        with latest, by_id:
+            with pytest.raises(
+                TargetError, match=r"'support' \(v4\) cannot run: llm: "
+            ):
+                await resolve_target(
+                    AsyncMock(),
+                    project_id=uuid4(),
+                    target={"type": "agent_name", "name": "support"},
+                )
+
+    async def test_an_inline_config_is_held_to_the_api_schema(self) -> None:
+        """What the API's 422 refused, the worker refuses too: an unknown field
+        the domain model would have dropped silently."""
+        with pytest.raises(
+            TargetError,
+            match="inline agent configuration is invalid: sytem_prompt is not",
+        ):
+            await resolve_target(
+                AsyncMock(),
+                project_id=uuid4(),
+                target={"type": "inline", "agent": {"sytem_prompt": "typo"}},
             )

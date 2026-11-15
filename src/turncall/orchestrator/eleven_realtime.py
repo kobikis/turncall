@@ -14,8 +14,9 @@ A session ends at `max_duration_seconds` (60-7,200, default 600), so it is
 sent as the call's own limit plus a margin, and a call allowed longer than a
 session can last is refused.
 
-One rule, applied twice: at the API schema, and at build for a call-init
-inline agent. No pipecat here; `eleven_realtime_service` is the pipecat half.
+One rule, applied by agent acceptance (#474, #481) to every config that runs,
+and by the API schema, in the same words. No pipecat here;
+`eleven_realtime_service` is the pipecat half, which assumes it passed.
 """
 
 from typing import Any

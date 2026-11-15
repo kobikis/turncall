@@ -18,6 +18,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests.accepted import accepted
 from turncall.evals.harness import PipelineFailed, _stop_bot
 
 pytestmark = pytest.mark.unit
@@ -86,7 +87,6 @@ class TestTheRunnerScoresItAsErrored:
         from unittest.mock import AsyncMock, patch
 
         from turncall.domain.enums import EvalRunStatus
-        from turncall.domain.models import AgentConfig
         from turncall.evals import runner as runner_mod
         from turncall.evals.runner import ResolvedTarget
 
@@ -128,7 +128,7 @@ class TestTheRunnerScoresItAsErrored:
         finish = AsyncMock()
         target = ResolvedTarget(
             project_id=run.project_id,
-            config=AgentConfig(),
+            agent=accepted(),
             config_blob={},
             agent_id=uuid4(),
         )

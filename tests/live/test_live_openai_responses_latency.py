@@ -50,6 +50,7 @@ from pipecat.metrics.metrics import LLMUsageMetricsData
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.services.llm_service import LLMService
 from pipecat.services.openai.responses.llm import OpenAIResponsesLLMService
+from tests.accepted import accepted
 
 from turncall.config.settings import Settings
 from turncall.domain.enums import EvalKind, EvalModality
@@ -235,7 +236,7 @@ async def _converse(
         kind=EvalKind.SCRIPTED,
         target=ResolvedTarget(
             project_id=uuid4(),
-            config=AgentConfig.model_validate(blob),
+            agent=accepted(blob),
             config_blob=blob,
             agent_id=None,
         ),

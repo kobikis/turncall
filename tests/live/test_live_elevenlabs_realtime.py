@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from tests.accepted import accepted
 from tests.conftest import creds
 
 from turncall.config.settings import Settings
@@ -106,7 +107,7 @@ def session_factory() -> Any:
 async def _run(blob: dict[str, Any], definition: dict, session_factory: Any):
     target = ResolvedTarget(
         project_id=uuid4(),
-        config=AgentConfig.model_validate(blob),
+        agent=accepted(blob),
         config_blob=blob,
         agent_id=None,
     )

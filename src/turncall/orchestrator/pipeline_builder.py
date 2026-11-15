@@ -20,7 +20,6 @@ from loguru import logger
 
 from turncall.config.settings import Settings
 from turncall.domain.models import AgentConfig
-from turncall.domain.procedure_graph import procedures_refusal
 from turncall.orchestrator.avatar import avatar_gate
 from turncall.orchestrator.call_session import CallSession, fail_unstarted_call
 from turncall.orchestrator.config_warnings import (
@@ -35,6 +34,7 @@ from turncall.orchestrator.pipeline_factory import (
 from turncall.orchestrator.procedures import with_procedures
 from turncall.orchestrator.tool_bridge import register_tools, remember_config_tools
 from turncall.services import drain
+from turncall.services.agent_acceptance import AcceptedAgent
 from turncall.services.credentials import (
     Credentials,
     MissingProviderKeyError,
@@ -60,7 +60,7 @@ async def load_call_credentials(
 
 async def build_call_pipeline(
     *,
-    config: AgentConfig,
+    agent: AcceptedAgent,
     transport: Any,
     call_context: CallContext,
     settings: Settings,
@@ -69,13 +69,17 @@ async def build_call_pipeline(
 ) -> CallSession:
     """Assemble the pipeline and return an unstarted CallSession.
 
+    `agent` is agent acceptance's answer (#481): a config nothing checked
+    cannot reach a pipeline, and the build holds no copy of a rule — the
+    provider rules and the procedures graph rule are acceptance's alone.
+
     A build that raises — a provider SDK refusing an empty key, say — fails the
     call here, for every transport, with the reason and `call.ended`; the error
     still propagates to the caller.
     """
     try:
         return await _assemble(
-            config=config,
+            config=agent.config,
             transport=transport,
             call_context=call_context,
             settings=settings,
@@ -154,16 +158,12 @@ async def _with_skills(
     return skills.config(), replace(call_context, skills=skills)
 
 
-def _check_procedures(config: AgentConfig) -> None:
-    """The agent API's graph rule, for an inline agent that skipped it
-    (#444): a broken procedure fails the call naming it, rather than the
-    call running without it or with half of it. On S2S none runs
-    (`with_procedures`), so there is only that to say."""
+def _log_skipped_procedures(config: AgentConfig) -> None:
+    """On S2S no procedure runs (`with_procedures`), which agent acceptance
+    answered as a warning: said here, where it is skipped. The graph rule
+    itself is acceptance's (#444, #481)."""
     if (ignored := procedures_on_s2s_warning(config)) is not None:
         logger.warning("procedures_skipped: {message}", message=ignored["message"])
-        return
-    if (problem := procedures_refusal(config.procedures)) is not None:
-        raise ValueError(problem)
 
 
 async def _assemble(
@@ -204,7 +204,7 @@ async def _assemble(
         session_factory, call_context.project_id, settings
     )
 
-    _check_procedures(config)
+    _log_skipped_procedures(config)
     # Before the skills: a skill load rebuilds the tools from the config
     # they start from, which must keep move_to_step.
     config, call_context = with_procedures(config, call_context)
@@ -280,7 +280,7 @@ _RUNNING: set[asyncio.Task] = set()
 
 async def start_call_pipeline(
     *,
-    config: AgentConfig,
+    agent: AcceptedAgent,
     transport: Any,
     call_context: CallContext,
     settings: Settings,
@@ -298,7 +298,9 @@ async def start_call_pipeline(
 
     Returns once the pipeline is built, so a build failure still reaches the
     caller (WebRTC turns it into a 500); the run continues in the background.
+    `agent` is agent acceptance's answer, as for `build_call_pipeline`.
     """
+    config = agent.config
     ready = asyncio.Event()
     failure: BaseException | None = None
 
@@ -325,7 +327,7 @@ async def start_call_pipeline(
                     mcp_tools = await mcp_manager.connect_servers(config.mcp_servers)
 
                 session = await build_call_pipeline(
-                    config=config,
+                    agent=agent,
                     transport=transport,
                     call_context=replace(call_context, mcp_manager=mcp_manager),
                     settings=settings,

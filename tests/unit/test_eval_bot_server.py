@@ -19,7 +19,7 @@ from pipecat.evals.serializer import EvalConnectionFlags, eval_connect_message
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
-from turncall.domain.models import AgentConfig
+from tests.accepted import accepted
 from turncall.evals.bot_server import LoopbackBot
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
@@ -204,7 +204,7 @@ async def test_run_iteration_reports_the_build_failure_not_the_closed_socket() -
                 parsed=MagicMock(),
                 kind=MagicMock(),
                 target=SimpleNamespace(
-                    project_id=uuid4(), config=AgentConfig(), agent_id=uuid4()
+                    project_id=uuid4(), agent=accepted(), agent_id=uuid4()
                 ),
                 modality=MagicMock(),
                 settings=SimpleNamespace(),
@@ -293,7 +293,7 @@ async def test_run_iteration_cleans_up_a_bot_that_did_not_start() -> None:
                 parsed=MagicMock(),
                 kind=MagicMock(),
                 target=SimpleNamespace(
-                    project_id=uuid4(), config=AgentConfig(), agent_id=uuid4()
+                    project_id=uuid4(), agent=accepted(), agent_id=uuid4()
                 ),
                 modality=MagicMock(),
                 settings=SimpleNamespace(),

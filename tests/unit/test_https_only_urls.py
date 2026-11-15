@@ -232,7 +232,7 @@ def test_a_demo_agents_file_is_not_refused_for_plain_http(env, tmp_path) -> None
 
     agents = load_demo_agents(path, max_call_seconds=60)
 
-    assert agents["front-desk"].server_url.url == PLAIN
+    assert agents["front-desk"].config.server_url.url == PLAIN
 
 
 # Through the routes: each refusal is a 422 in the API's error shape, raised
