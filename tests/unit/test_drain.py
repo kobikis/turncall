@@ -169,8 +169,9 @@ def test_readiness_fails_while_liveness_and_the_gauge_answer(app, monkeypatch):
 
 def test_every_voice_entry_point_counts_its_calls():
     """A call nobody counted is one a SIGTERM does not wait for — dropped on the
-    next deploy with nothing to say why. `run_call` counts its own (WebRTC,
-    WhatsApp voice); a module building a pipeline directly must too.
+    next deploy with nothing to say why. `run_call` counts its own (every
+    carrier's media stream, WebRTC, WhatsApp voice, the demo); a module
+    building a pipeline directly must too.
     The eval worker is exempt: an eval is not a call."""
     from pathlib import Path
 
@@ -185,10 +186,6 @@ def test_every_voice_entry_point_counts_its_calls():
         # Where it is defined, not called.
         and path.name != "pipeline_builder.py"
     }
-    assert builders == {
-        "demo/app.py",
-        "orchestrator/call_runner.py",
-        "webhooks/media_stream.py",
-    }
+    assert builders == {"orchestrator/call_runner.py"}
     for module in builders:
         assert "drain.live_call(" in (root / module).read_text(), module

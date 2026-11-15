@@ -26,6 +26,7 @@ from turncall.auth.context import AuthContext
 from turncall.auth.dependencies import resolve_auth_context
 from turncall.domain.carriers import CARRIERS
 from turncall.domain.enums import ProjectRole
+from turncall.orchestrator import call_runner
 from turncall.orchestrator import transport_factory as tf
 from turncall.orchestrator.serializer import TwilioFrameSerializer
 from turncall.services.media_token import media_token
@@ -103,8 +104,9 @@ async def _run_media_stream(carrier: str) -> MagicMock:
         ),
         patch.object(media_stream, "accept_agent", AsyncMock(return_value=agent)),
         patch.object(media_stream, "create_carrier_transport", create),
+        # The call runs through the running module (#492).
         patch.object(
-            media_stream, "build_call_pipeline", AsyncMock(return_value=session)
+            call_runner, "build_call_pipeline", AsyncMock(return_value=session)
         ),
     ):
         call_id = uuid.uuid4()

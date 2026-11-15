@@ -39,17 +39,18 @@ AGENT = {**HARNESS_AGENT, "first_message": "Hello there."}
 
 
 def _count_pipelines(monkeypatch: Any) -> list[str]:
-    """The call ids a pipeline was built for, in order."""
-    from turncall.webhooks import media_stream
+    """The call ids a pipeline was built for, in order. Every carrier's media
+    stream builds through the running module (#492)."""
+    from turncall.orchestrator import call_runner
 
     built: list[str] = []
-    real = media_stream.build_call_pipeline
+    real = call_runner.build_call_pipeline
 
     async def counting(*args: Any, **kwargs: Any) -> Any:
         built.append(str(kwargs["call_context"].call_id))
         return await real(*args, **kwargs)
 
-    monkeypatch.setattr(media_stream, "build_call_pipeline", counting)
+    monkeypatch.setattr(call_runner, "build_call_pipeline", counting)
     return built
 
 

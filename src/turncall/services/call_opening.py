@@ -132,6 +132,28 @@ class CallMetadata:
             if value
         }
 
+    @classmethod
+    def split(cls, row: Mapping[str, Any]) -> tuple[CallMetadata, dict[str, Any]]:
+        """A row's metadata read back: these keys, and the rest of it. The
+        two written together (`write_call_row`) are `row` again."""
+        known = {
+            key: value
+            for key, value in row.items()
+            if key in _METADATA_KINDS
+            and value
+            and isinstance(value, _METADATA_KINDS[key])
+        }
+        rest = {key: value for key, value in row.items() if key not in known}
+        return cls(**known), rest
+
+
+_METADATA_KINDS: dict[str, type] = {
+    "dynamic_config": Mapping,
+    "template_variables": Mapping,
+    "metadata": Mapping,
+    "knowledge_context": str,
+}
+
 
 @dataclass(frozen=True)
 class ChosenAgent:
@@ -156,6 +178,35 @@ class OpenedCall:
     parties: CallParties
     handles: EdgeHandles
     direction: CallDirection = CallDirection.INBOUND
+
+    @property
+    def start(self) -> CallStart:
+        return CallStart(
+            call_id=self.call_id,
+            project_id=self.project_id,
+            agent_id=self.agent.agent_id,
+            agent_name=self.agent_name,
+            metadata=self.metadata,
+            parties=self.parties,
+            handles=self.handles,
+            direction=self.direction,
+        )
+
+
+@dataclass(frozen=True)
+class CallStart:
+    """What a call's row and start events are written from: an opened
+    call's, or an outbound dial's, whose agent is accepted only once its
+    media stream connects (#481). `agent_id` None for an inline agent."""
+
+    call_id: UUID
+    project_id: UUID
+    agent_id: UUID | None
+    agent_name: str | None
+    metadata: CallMetadata
+    parties: CallParties
+    handles: EdgeHandles
+    direction: CallDirection
 
 
 class CallSource(Protocol):
@@ -372,48 +423,65 @@ async def open_call(
 async def write_call(session: AsyncSession, opened: OpenedCall) -> CallRow:
     """The opened call's row and its `call.initializing` + `call.started`,
     flushed, not committed — the one write every voice call starts with."""
-    from turncall.events.emit import emit_call_event
+    call = await write_call_row(session, opened.start)
+    await write_call_start(session, opened.start)
+    return call
 
-    parties, handles = opened.parties, opened.handles
-    call = await call_repo.create_call(
+
+async def write_call_row(session: AsyncSession, start: CallStart) -> CallRow:
+    """The first half of `write_call`, for an outbound dial: its row is
+    written before the carrier is asked (a row that cannot be sealed, #338,
+    then dials nothing), and its start events once the carrier answered."""
+    parties, handles = start.parties, start.handles
+    return await call_repo.create_call(
         session,
-        project_id=opened.project_id,
-        call_id=opened.call_id,
-        direction=opened.direction,
+        project_id=start.project_id,
+        call_id=start.call_id,
+        direction=start.direction,
         # A browser call has no numbers: stored as none, not as "".
         from_number=parties.from_number or None,
         to_number=parties.to_number or None,
         # None for an inline agent: it has no row (ADR-0017).
-        active_agent_id=opened.agent.agent_id,
+        active_agent_id=start.agent_id,
         provider_call_sid=handles.provider_call_sid,
-        metadata_json={**opened.metadata.row_json(), **handles.row_metadata},
+        metadata_json={**start.metadata.row_json(), **handles.row_metadata},
         carrier=handles.carrier,
     )
+
+
+async def write_call_start(session: AsyncSession, start: CallStart) -> None:
+    """The second half: `call.initializing` + `call.started`, stored and
+    sent. The carrier's id for the call is the one `start` carries."""
+    from turncall.events.emit import emit_call_event
+
+    parties, handles = start.parties, start.handles
     await emit_call_event(
         session,
-        call_id=call.id,
-        project_id=opened.project_id,
+        call_id=start.call_id,
+        project_id=start.project_id,
         event_type=CallEventType.CALL_INITIALIZING,
         payload={
             "from_number": parties.from_number,
             "to_number": parties.to_number,
-            "direction": opened.direction.value,
+            "direction": start.direction.value,
             "transport": handles.transport_name,
         },
     )
     await emit_call_event(
         session,
-        call_id=call.id,
-        project_id=opened.project_id,
+        call_id=start.call_id,
+        project_id=start.project_id,
         event_type=CallEventType.CALL_STARTED,
         payload={
             "provider_call_sid": handles.provider_call_sid,
             "from_number": parties.from_number,
             "to_number": parties.to_number,
-            # agent_id is carried in the envelope (ADR-0007), not the payload.
-            "agent_name": opened.agent_name or "dynamic",
-            "dynamic_config": bool(opened.metadata.dynamic_config),
+            # Also in the envelope (ADR-0007); kept here, where an outbound
+            # call's subscribers read it first. None for an inline agent.
+            "agent_id": str(start.agent_id) if start.agent_id else None,
+            "agent_name": start.agent_name or "dynamic",
+            "dynamic_config": bool(start.metadata.dynamic_config),
+            "direction": start.direction.value,
             "transport": handles.transport_name,
         },
     )
-    return call

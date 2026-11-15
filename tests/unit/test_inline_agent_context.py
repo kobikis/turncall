@@ -28,9 +28,9 @@ _SRC = Path(turncall.__file__).parent
 
 # (label, file) for every entry point that builds a CallContext for a voice call.
 VOICE_PATHS = [
-    # Every carrier's media stream (Twilio, Telnyx) builds it here (ADR-0022).
+    # Every carrier's media stream builds one here for a call it refuses.
     ("carrier", _SRC / "webhooks" / "media_stream.py"),
-    # WebRTC and WhatsApp voice run their calls through it (#491).
+    # Every voice edge runs its calls through it (#491, #492).
     ("run_call", _SRC / "orchestrator" / "call_runner.py"),
 ]
 

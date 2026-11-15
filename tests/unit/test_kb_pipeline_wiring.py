@@ -7,10 +7,9 @@ The pipeline assembly is now centralized in orchestrator/pipeline_builder.py
      knowledge_base_attachments — else KB auto/tool retrieval goes dead
      everywhere at once;
   2. every voice transport MUST route through the shared assembly — else a
-     transport silently stops using the centralized (KB-wired) one. Twilio
-     calls build_call_pipeline directly (its WS handler awaits the run);
-     WebRTC and WhatsApp go via call_runner.run_call, which builds it in
-     the task that also owns their MCP sessions.
+     transport silently stops using the centralized (KB-wired) one. Every
+     carrier's media stream, WebRTC and WhatsApp go via call_runner.run_call,
+     which builds it in the task that also owns their MCP sessions.
 
 Structural (AST) so it survives renames and needs no transport/DB.
 """
