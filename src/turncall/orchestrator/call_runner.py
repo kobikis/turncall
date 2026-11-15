@@ -50,33 +50,26 @@ class CallToRun:
     """What running needs of an opened call.
 
     `agent` is acceptance's answer, already rendered with the call's
-    variables and knowledge context. `agent_id` is the call row's — None for
-    an inline agent, which has no row (ADR-0017). `call_sid`/`stream_sid` are
-    the edge's handles for the call. `session_factory` None is a call with no
-    database (the demo): nothing is recorded and no slot is held.
+    variables and knowledge context; its `agent_id` is the call row's — None
+    for an inline agent, which has no row (ADR-0017). `call_sid`/`stream_sid`
+    are the edge's handles for the call. `session_factory` None is a call
+    with no database (the demo): nothing is recorded and no slot is held.
     """
 
     call_id: UUID
     project_id: UUID
     agent: AcceptedAgent
-    agent_id: UUID | None
     call_sid: str
     stream_sid: str
     session_factory: Any | None
 
     @classmethod
-    def of(
-        cls,
-        opened: OpenedCall,
-        *,
-        session_factory: Any | None,
-        stream_sid: str | None = None,
-    ) -> CallToRun:
-        """The call `open_call` opened, to run: its agent rendered with the
-        call's variables and knowledge context, named by the edge's handles
-        (`stream_sid` when the stream has an id of its own)."""
-        metadata = opened.metadata
-        call_sid = opened.handles.call_sid
+    def of(cls, opened: OpenedCall, *, session_factory: Any | None) -> CallToRun:
+        """An opened call, to run: its agent rendered with the call's
+        variables and knowledge context, named by the edge's handles. A
+        carrier's media stream, which has an id of its own, replaces
+        `stream_sid` with it."""
+        metadata, call_sid = opened.start.metadata, opened.start.handles.call_sid
         return cls(
             call_id=opened.call_id,
             project_id=opened.project_id,
@@ -84,9 +77,8 @@ class CallToRun:
                 metadata.template_variables,
                 knowledge_context=metadata.knowledge_context,
             ),
-            agent_id=opened.agent.agent_id,
             call_sid=call_sid,
-            stream_sid=stream_sid or call_sid,
+            stream_sid=call_sid,
             session_factory=session_factory,
         )
 
@@ -187,22 +179,8 @@ async def _build(
         mcp_tools: list[Any] = []
         if mcp_manager is not None:
             mcp_tools = await mcp_manager.connect_servers(config.mcp_servers)
-        mixer = await build_ambience_mixer(
-            config,
-            project_id=call.project_id,
-            sample_rate=make_transport.sample_rate,
-            session_factory=call.session_factory,
-            settings=settings,
-        )
-        session = await build_call_pipeline(
-            agent=call.agent,
-            transport=make_transport.make(mixer=mixer),
-            call_context=_context(call, mcp_manager),
-            settings=settings,
-            session_factory=call.session_factory,
-            audio_sample_rate=make_transport.sample_rate,
-            mcp_tools=mcp_tools or None,
-            carries_video=make_transport.carries_video,
+        session = await _pipeline(
+            call, make_transport, settings, mcp_manager=mcp_manager, mcp_tools=mcp_tools
         )
     except asyncio.CancelledError:
         # No session exists to end the call, and the carrier's own ending
@@ -216,6 +194,42 @@ async def _build(
         if session is None and mcp_manager is not None:
             await mcp_manager.close()
     return session
+
+
+async def _pipeline(
+    call: CallToRun,
+    make_transport: TransportFactory,
+    settings: Settings,
+    *,
+    mcp_manager: Any | None,
+    mcp_tools: list[Any],
+) -> CallSession:
+    """The mixer, the transport built around it, and the pipeline on both."""
+    mixer = await build_ambience_mixer(
+        call.agent.config,
+        project_id=call.project_id,
+        sample_rate=make_transport.sample_rate,
+        session_factory=call.session_factory,
+        settings=settings,
+    )
+    return await build_call_pipeline(
+        agent=call.agent,
+        transport=make_transport.make(mixer=mixer),
+        call_context=call_context(
+            call_id=call.call_id,
+            project_id=call.project_id,
+            agent_id=call.agent.agent_id,
+            call_sid=call.call_sid,
+            stream_sid=call.stream_sid,
+            session_factory=call.session_factory,
+            mcp_manager=mcp_manager,
+        ),
+        settings=settings,
+        session_factory=call.session_factory,
+        audio_sample_rate=make_transport.sample_rate,
+        mcp_tools=mcp_tools or None,
+        carries_video=make_transport.carries_video,
+    )
 
 
 async def _end_unstarted(call: CallToRun) -> None:
@@ -239,14 +253,26 @@ def _mcp_manager(call: CallToRun) -> Any | None:
     return MCPSessionManager(call_id=call.call_id, project_id=call.project_id)
 
 
-def _context(call: CallToRun, mcp_manager: Any | None) -> CallContext:
+def call_context(
+    *,
+    call_id: UUID,
+    project_id: UUID,
+    agent_id: UUID | None,
+    call_sid: str,
+    stream_sid: str,
+    session_factory: Any | None,
+    mcp_manager: Any | None,
+) -> CallContext:
+    """A call's context: the one a call runs in, and the one a call refused
+    before it ran is failed in (`fail_unstarted_call`, the media stream's).
+    `agent_id` None is an inline agent, which has no row (ADR-0017)."""
     return CallContext(
-        call_id=call.call_id,
-        project_id=call.project_id,
+        call_id=call_id,
+        project_id=project_id,
         # The sentinel, never written anywhere: an inline agent has no row.
-        agent_id=call.agent_id or DYNAMIC_AGENT_ID,
-        call_sid=call.call_sid,
-        stream_sid=call.stream_sid,
-        session_factory=call.session_factory,
+        agent_id=agent_id or DYNAMIC_AGENT_ID,
+        call_sid=call_sid,
+        stream_sid=stream_sid,
+        session_factory=session_factory,
         mcp_manager=mcp_manager,
     )

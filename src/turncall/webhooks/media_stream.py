@@ -17,6 +17,7 @@ with nothing built and the call's live-call slot untouched — the slot is the
 real stream's.
 """
 
+from dataclasses import replace
 from functools import partial
 from typing import Any
 from uuid import UUID
@@ -26,9 +27,14 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.config import get_settings
-from turncall.orchestrator.call_runner import CallToRun, TransportFactory, run_call
+from turncall.domain.enums import CallDirection
+from turncall.orchestrator.call_runner import (
+    CallToRun,
+    TransportFactory,
+    call_context,
+    run_call,
+)
 from turncall.orchestrator.call_session import fail_unstarted_call
-from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
 from turncall.orchestrator.transport_factory import (
     CARRIER_MEDIA,
     CarrierStream,
@@ -40,6 +46,13 @@ from turncall.services.agent_acceptance import (
     AgentRefusal,
     accept_agent,
     log_refusal,
+)
+from turncall.services.call_opening import (
+    CallMetadata,
+    CallParties,
+    CallStart,
+    EdgeHandles,
+    OpenedCall,
 )
 from turncall.services.limits import release_live_call
 from turncall.services.media_token import media_token_valid
@@ -136,41 +149,62 @@ async def _opened_call(
         if call_row is None:
             logger.error("media_stream_call_not_found: {id}", id=str(call_id))
             return None
-        if carrier not in CARRIER_MEDIA:
-            # A call reaching a media stream this deployment has no serializer
-            # for: decoding it as some other carrier's would be noise.
-            logger.error(
-                "media_stream_unknown_carrier", call_id=str(call_id), carrier=carrier
-            )
-            await release_live_call(call_row.project_id, call_id)
-            return None
-        origin = _agent_origin(call_row)
+        origin = _runnable_origin(call_row, carrier)
         if origin is None:
-            logger.error(
-                "media_stream_no_config",
-                agent_id=str(call_row.active_agent_id or "dynamic"),
-            )
             await release_live_call(call_row.project_id, call_id)
             return None
         outcome = await _accepted_agent(session, call_row, origin)
-        if isinstance(outcome, AgentRefusal):
-            await _refuse(call_row, outcome, origin, session_factory, stream)
-            return None
-        metadata = call_row.metadata_json or {}
-        return CallToRun(
-            call_id=call_id,
-            project_id=call_row.project_id,
-            agent=outcome.rendered(
-                metadata.get("template_variables") or {},
-                knowledge_context=metadata.get("knowledge_context"),
-            ),
-            agent_id=call_row.active_agent_id,
-            # A stream that does not name the call's REST handle (Asterisk's)
-            # leaves it to the call record, which always has it.
-            call_sid=stream.call_sid or call_row.provider_call_sid or "",
-            stream_sid=stream.stream_id,
-            session_factory=session_factory,
+    start = _call_start(call_row, stream)
+    if isinstance(outcome, AgentRefusal):
+        await _refuse(start, outcome, origin, session_factory, stream)
+        return None
+    call = CallToRun.of(
+        OpenedCall(start=start, agent=outcome), session_factory=session_factory
+    )
+    return replace(call, stream_sid=stream.stream_id)
+
+
+def _runnable_origin(call_row: CallRow, carrier: str) -> AgentOrigin | None:
+    """Where the row's agent came from, or None (logged) for a call that
+    cannot run here at all."""
+    if carrier not in CARRIER_MEDIA:
+        # A call reaching a media stream this deployment has no serializer
+        # for: decoding it as some other carrier's would be noise.
+        logger.error(
+            "media_stream_unknown_carrier", call_id=str(call_row.id), carrier=carrier
         )
+        return None
+    origin = _agent_origin(call_row)
+    if origin is None:
+        logger.error(
+            "media_stream_no_config",
+            agent_id=str(call_row.active_agent_id or "dynamic"),
+        )
+    return origin
+
+
+def _call_start(call_row: CallRow, stream: CarrierStream) -> CallStart:
+    """What the call was opened with, read back from its row. Its name was
+    for `call.started`, long sent; a stream that does not name the call's
+    REST handle (Asterisk's) leaves it to the row, which always has it."""
+    metadata, own = CallMetadata.split(call_row.metadata_json or {})
+    return CallStart(
+        call_id=call_row.id,
+        project_id=call_row.project_id,
+        agent_id=call_row.active_agent_id,
+        agent_name=None,
+        metadata=metadata,
+        parties=CallParties(
+            from_number=call_row.from_number or "",
+            to_number=call_row.to_number or "",
+        ),
+        handles=EdgeHandles(
+            carrier=call_row.provider,
+            provider_call_sid=stream.call_sid or call_row.provider_call_sid,
+            row_metadata=own,
+        ),
+        direction=CallDirection(call_row.direction),
+    )
 
 
 def _agent_origin(call_row: CallRow) -> AgentOrigin | None:
@@ -206,7 +240,7 @@ async def _accepted_agent(
 
 
 async def _refuse(
-    call_row: CallRow,
+    start: CallStart,
     refusal: AgentRefusal,
     origin: AgentOrigin,
     session_factory: async_sessionmaker[AsyncSession],
@@ -218,16 +252,17 @@ async def _refuse(
     log_refusal(
         refusal,
         origin=origin,
-        project_id=call_row.project_id,
-        call_id=str(call_row.id),
+        project_id=start.project_id,
+        call_id=str(start.call_id),
     )
-    call_context = CallContext(
-        call_id=call_row.id,
-        project_id=call_row.project_id,
-        agent_id=call_row.active_agent_id or DYNAMIC_AGENT_ID,
-        call_sid=stream.call_sid or call_row.provider_call_sid or "",
+    context = call_context(
+        call_id=start.call_id,
+        project_id=start.project_id,
+        agent_id=start.agent_id,
+        call_sid=start.handles.call_sid,
         stream_sid=stream.stream_id,
         session_factory=session_factory,
+        mcp_manager=None,
     )
-    await fail_unstarted_call(call_context, ValueError(refusal.describe()))
-    await release_live_call(call_row.project_id, call_row.id)
+    await fail_unstarted_call(context, ValueError(refusal.describe()))
+    await release_live_call(start.project_id, start.call_id)

@@ -6,7 +6,9 @@ number nobody bound. The project's own agent, and a number's bound one, run.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Any
@@ -45,17 +47,31 @@ class WhatsAppLeg:
     started: list[Any] = field(default_factory=list)
 
 
+class _Running:
+    """A built call's session that runs until the test is over: its slot
+    stays held, as a live call's is."""
+
+    def __init__(self, over: asyncio.Event) -> None:
+        self._over = over
+
+    async def start(self) -> None:
+        await self._over.wait()
+
+
 @pytest.fixture
-def whatsapp_voice(monkeypatch) -> WhatsAppLeg:
+async def whatsapp_voice(monkeypatch) -> AsyncIterator[WhatsAppLeg]:
     """WhatsApp's WebRTC leg, skipped: pipecat's client hands the call's
-    connection straight to TurnCall, and the pipeline it would start is
-    recorded instead of run."""
+    connection straight to TurnCall, and the pipeline its run would build is
+    recorded instead — (config, call context) — and left running until the
+    test ends."""
     from pipecat.transports.whatsapp.api import WhatsAppApi
     from pipecat.transports.whatsapp.client import WhatsAppClient
 
+    from turncall.orchestrator import call_runner
     from turncall.webhooks import whatsapp_handlers
 
     leg = WhatsAppLeg()
+    over = asyncio.Event()
 
     async def _connected(_self: Any, *, request: Any, connection_callback: Any) -> None:
         leg.accepted.append(request)
@@ -65,18 +81,21 @@ def whatsapp_voice(monkeypatch) -> WhatsAppLeg:
         leg.rejected.append(call_id)
         return {"success": True}
 
-    async def _start(opened: Any, *_args: Any, **_kwargs: Any) -> None:
-        # The call as running sees it: its agent, id and agent id.
-        leg.started.append((opened.agent.config, opened))
+    async def _build(*, agent: Any, call_context: Any, **_kwargs: Any) -> _Running:
+        leg.started.append((agent.config, call_context))
+        return _Running(over)
 
     monkeypatch.setattr(WhatsAppClient, "handle_webhook_request", _connected)
     monkeypatch.setattr(WhatsAppApi, "reject_call_to_whatsapp", _reject)
     monkeypatch.setattr(
         whatsapp_handlers, "create_whatsapp_transport", lambda *a, **k: None
     )
-    monkeypatch.setattr(whatsapp_handlers, "run_call", _start)
+    monkeypatch.setattr(call_runner, "build_call_pipeline", _build)
     monkeypatch.delenv("WHATSAPP_APP_SECRET", raising=False)
-    return leg
+    yield leg
+    over.set()
+    # Each call's run ends, its slot given back, before the next test.
+    await asyncio.gather(*list(call_runner._RUNNING), return_exceptions=True)
 
 
 async def _live_calls(project_id: str) -> int:

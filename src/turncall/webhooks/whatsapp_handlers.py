@@ -8,10 +8,8 @@ Handles:
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from functools import partial
 from typing import Any
-from uuid import UUID
 
 import aiohttp
 from fastapi import APIRouter, Request
@@ -30,6 +28,7 @@ from turncall.orchestrator.transport_factory import (
 )
 from turncall.services import telemetry_redaction
 from turncall.services.call_opening import (
+    INBOUND_WHATSAPP_CALL,
     CallParties,
     CallRefusal,
     EdgeHandles,
@@ -217,18 +216,6 @@ async def _handle_call_event(
     return JSONResponse({"status": "ok"})
 
 
-@dataclass(frozen=True)
-class _WhatsAppSource(NumberSource):
-    """A WhatsApp voice call to one of the project's numbers: call-init's
-    agent, else the bound one. A/B weights are a phone call's, never applied
-    here."""
-
-    call_init_type: str = "inboundWhatsAppCall"
-
-    def _routed_agent_id(self) -> UUID:
-        return self.number.routing_target_id
-
-
 async def _open_connect(
     session: AsyncSession, body: dict[str, Any]
 ) -> OpenedCall | None:
@@ -246,14 +233,18 @@ async def _open_connect(
             whatsapp_call_id=whatsapp_call_id,
         )
         return None
-    source = _WhatsAppSource(
-        phone_row,
-        CallParties(from_number=from_number, to_number=to_number),
-        EdgeHandles(
+    source = NumberSource(
+        number=phone_row,
+        parties=CallParties(from_number=from_number, to_number=to_number),
+        handles=EdgeHandles(
             carrier=DEFAULT_CARRIER,
             transport="whatsapp",
             transport_call_id=whatsapp_call_id,
         ),
+        call_type=INBOUND_WHATSAPP_CALL,
+        # A/B weights are a phone call's: a WhatsApp call runs call-init's
+        # agent, else the bound one.
+        weighted=False,
     )
     try:
         opened = await open_call(
@@ -347,7 +338,7 @@ async def _start_voice_pipeline(connection: object, call: OpenedCall) -> None:
         "whatsapp_voice_call_started",
         call_id=str(call.call_id),
         agent_id=str(call.agent.agent_id or "dynamic"),
-        whatsapp_call_id=call.handles.transport_call_id,
+        whatsapp_call_id=call.start.handles.transport_call_id,
     )
 
 

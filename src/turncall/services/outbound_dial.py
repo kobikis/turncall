@@ -30,7 +30,7 @@ from turncall.services.call_init_resolver import (
     accept_call_init_agent,
     resolve_call_init,
 )
-from turncall.services.call_opening import (
+from turncall.services.call_start import (
     CallMetadata,
     CallParties,
     CallStart,

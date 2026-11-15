@@ -32,7 +32,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.errors import RateLimitedError
 from turncall.config import get_settings
-from turncall.domain.enums import CallEventType
 from turncall.storage.redis import get_redis
 from turncall.storage.repositories import project_repo
 
@@ -264,46 +263,3 @@ async def admit_message(
             f"This conversation is at its limit of {cap} messages per minute",
             {"limit": "messages_per_minute", "max": cap, "retry_after_ms": wait_ms},
         )
-
-
-async def admit_inbound_call(
-    session: AsyncSession,
-    *,
-    project_id: UUID,
-    call_id: UUID,
-    transport: str,
-    from_number: str,
-    to_number: str,
-    provider_call_id: str,
-) -> bool:
-    """Take a live-call slot for an inbound call, or record `call.rejected`.
-
-    False means the carrier must refuse the call (busy) without answering:
-    answering only to say no bills minutes, and so would queueing it. There is
-    no call row — the call never started — so the event goes to webhook
-    subscribers with no `call_id`, and the carrier's id in its payload.
-    """
-    from turncall.events.emit import dispatch_project_event
-
-    limits = await limits_for_project(session, project_id)
-    if await claim_live_call(project_id, call_id, limits.live_calls):
-        return True
-    payload = {
-        "reason": "live_call_limit",
-        "limit": limits.live_calls,
-        "transport": transport,
-        "from_number": from_number,
-        "to_number": to_number,
-        "provider_call_id": provider_call_id,
-    }
-    logger.warning("inbound_call_rejected", project_id=str(project_id), **payload)
-    try:
-        await dispatch_project_event(
-            session,
-            project_id=project_id,
-            event_type=CallEventType.CALL_REJECTED.value,
-            payload=payload,
-        )
-    except Exception:
-        logger.exception("call_rejected_dispatch_error", project_id=str(project_id))
-    return False

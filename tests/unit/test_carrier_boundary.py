@@ -82,11 +82,18 @@ class _Session:
 async def _run_media_stream(carrier: str) -> MagicMock:
     """Hand a stream to the shared entry point for a call on `carrier`;
     returns the transport factory, to see what it was asked for."""
+    call_id = uuid.uuid4()
+    # An inline agent's call: no agent row, its config on the call's.
     call_row = SimpleNamespace(
+        id=call_id,
         provider=carrier,
         project_id=uuid.uuid4(),
-        active_agent_id=uuid.uuid4(),
-        metadata_json={},
+        active_agent_id=None,
+        metadata_json={"dynamic_config": {"system_prompt": "hi"}},
+        from_number="+15550001111",
+        to_number="+15550002222",
+        provider_call_sid="CA1",
+        direction="inbound",
     )
     agent = accepted({"system_prompt": "hi"})
     create = MagicMock(return_value="transport")
@@ -109,7 +116,6 @@ async def _run_media_stream(carrier: str) -> MagicMock:
             call_runner, "build_call_pipeline", AsyncMock(return_value=session)
         ),
     ):
-        call_id = uuid.uuid4()
         await media_stream.run_media_stream(
             MagicMock(),
             call_id,
