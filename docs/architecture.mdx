@@ -106,6 +106,8 @@ sequenceDiagram
   </Accordion>
 </AccordionGroup>
 
+Every voice entry point opens its call the same way (agent acceptance, the project's live-call limit, the call record and its `call.initializing` + `call.started` events) and runs it the same way (graceful-shutdown counting, MCP servers, ambience, the pipeline). Only how each answers its own protocol differs.
+
 ## Real-time Pipeline
 
 Two pipeline modes, selected per agent via `pipeline_mode`.
@@ -244,7 +246,7 @@ stateDiagram-v2
 | `auth/` | API key generation (SHA-256, `tc_` prefix), RBAC, project scoping |
 | `domain/` | Immutable Pydantic models, enums, call + session state machines |
 | `orchestrator/` | Pipecat pipeline — **all** Pipecat imports isolated here |
-| `services/` | Call control, SMS/chat, retrieval, analysis, weighted routing, template rendering |
+| `services/` | Call opening, call control, SMS/chat, retrieval, analysis, weighted routing, template rendering |
 | `storage/` | SQLAlchemy async models, repository pattern, PostgreSQL + Redis |
 | `adapters/` | Each carrier's REST actions (Twilio, Telnyx, Asterisk ARI) and object storage (local filesystem, S3) |
 | `events/` | Webhook delivery, server events, signing |

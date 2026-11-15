@@ -69,9 +69,13 @@ class FakeTransport(BaseTransport):
     def output(self) -> FrameProcessor:
         return self._output
 
+    async def started(self) -> None:
+        """The call is up: its pipeline started."""
+        await self._output.started.wait()
+
     async def hang_up(self) -> None:
         """The caller leaving a call that is up: its pipeline is running."""
-        await asyncio.wait_for(self._output.started.wait(), 10)
+        await asyncio.wait_for(self.started(), 10)
         await self._call_event_handler("on_client_disconnected", self)
 
 
@@ -197,6 +201,30 @@ async def test_a_running_call_holds_its_slot_and_is_counted(monkeypatch):
 
     assert (counted, held) == (1, True)
     assert freed
+
+
+async def test_a_running_call_answers_its_control_channel(monkeypatch):
+    """`POST /v1/calls/{id}/messages` reaches a call that runs here, whatever
+    edge opened it (#215): live while it runs, `409 call_not_live` after."""
+    async with run_app(
+        SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        await _redis_or_skip()
+        call, edge = await _opened(app, AGENT), Edge()
+        url = f"/v1/calls/{call.call_id}/messages"
+
+        await run_call(call, edge.factory(), own_task=True)
+        await asyncio.wait_for(edge.transport.started(), 10)
+        live = await app.api.post(url, json={"message": "VIP", "role": "system"})
+
+        await edge.transport.hang_up()
+        await _until(_drained)
+        after = await app.api.post(url, json={"message": "VIP"})
+
+    assert live.status_code == 200, live.text
+    assert live.json()["data"]["details"] == {"role": "system"}
+    assert after.status_code == 409
+    assert after.json()["code"] == "call_not_live"
 
 
 async def test_a_call_in_its_own_task_opens_and_closes_mcp_in_that_task(
