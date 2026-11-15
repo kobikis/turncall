@@ -1777,7 +1777,7 @@ and only hands the signal back once the process is empty:
   Then `signal.raise_signal(SIGTERM)` with uvicorn's handler restored; the
   process exits by the signal (-15 / 143). A second SIGTERM hands back at once.
 - A call is counted by `drain.live_call(...)` at the transport entry points —
-  `webhooks/media_stream.py` (Twilio) and `pipeline_builder.start_call_pipeline`
+  `webhooks/media_stream.py` (Twilio) and `call_runner.run_call`
   (WebRTC, WhatsApp voice) — from config resolution through finalize. A new
   voice entry point must count its calls the same way.
 - `GET /metrics`: `turncall_active_calls`, per process, Prometheus text, no
@@ -1832,7 +1832,7 @@ a guardrail must not take the phone line down.
   `call.rejected` with **no** `call_id` (there is no row) —
   outbound in `place_outbound_call` and WebRTC in `/connect`, both `429`.
   A slot is a **lease** (`LIVE_CALL_LEASE_MS`, 2 min) that whoever runs the call
-  renews (`hold_live_call`, in `media_stream` and `start_call_pipeline`) and
+  renews (`hold_live_call`, in `media_stream` and `call_runner.run_call`) and
   frees on any exit; the Twilio status callback frees it on any terminal status
   (an unanswered outbound call's only ending), as Telnyx's `call.hangup` does
   and the Asterisk edge for a caller who leaves before the media is up, and a
@@ -2510,7 +2510,7 @@ Connect agents to MCP servers for auto-discovered tools. Tools are fetched at ca
 - `services/mcp_client.py` — `MCPSessionManager`: connect, discover, call, cleanup. **mcp 2.x only** (`mcp>=2.1.1,<3`), which pipecat 1.12's `mcp` extra forces: the dual-spelling reads for 1.x's `Tool.inputSchema` / `CallToolResult.isError` are gone, since under that pin they could never match — on 2.x the old names survive only as pydantic aliases. Uses `streamable_http_client`, building its own HTTP client for headers/timeout
 - `orchestrator/tool_bridge.py` — Routes MCP tool calls through MCP client
 - `orchestrator/pipeline_factory.py` — Merges MCP tools into pipeline at creation
-- `orchestrator/pipeline_builder.py` — `start_call_pipeline()`: MCP discovery for WebRTC + WhatsApp voice (in the task that also runs the call — MCP transports open anyio cancel scopes that must be exited where they were entered)
+- `orchestrator/call_runner.py` — `run_call()`: runs an opened call for WebRTC + WhatsApp voice (#491) — drain count, live-call slot, MCP connect and close (in the task that also runs the call: MCP transports open anyio cancel scopes that must be exited where they were entered), ambience mixer, call context, build, start
 - `webhooks/media_stream.py` — MCP discovery before pipeline start (every carrier's media stream)
 - `services/chat_tools.py` — webhook + MCP tools for text turns (per-message connect/close)
 - `services/tool_webhook.py` — the shared webhook POST + HMAC signing, used by both paths

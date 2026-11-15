@@ -5,14 +5,13 @@ transport existed: load the agent's KB attachments, `create_pipeline(...)`,
 register tools on the LLM service, and construct a `CallSession`. That block was
 triplicated and had drifted before (the KB-attachments wiring had to be fixed in
 three places — review finding #1). This centralizes it: callers pass their
-transport plus the transport-specific options and get back a ready `CallSession`
-to start however suits them (await it in a blocking WS handler, or wrap it in a
-task from a fire-and-forget connection callback).
+transport plus the transport-specific options and get back a ready `CallSession`.
+Running it — the drain count, the live-call slot, MCP, the mixer, the start —
+is `call_runner.run_call`'s (#491).
 """
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import replace
 from typing import Any
 
@@ -33,14 +32,12 @@ from turncall.orchestrator.pipeline_factory import (
 )
 from turncall.orchestrator.procedures import with_procedures
 from turncall.orchestrator.tool_bridge import register_tools, remember_config_tools
-from turncall.services import drain
 from turncall.services.agent_acceptance import AcceptedAgent
 from turncall.services.credentials import (
     Credentials,
     MissingProviderKeyError,
     for_project,
 )
-from turncall.services.limits import hold_live_call
 
 
 async def load_call_credentials(
@@ -271,97 +268,3 @@ async def _assemble(
         max_call_duration_seconds=config.max_call_duration_seconds,
         idle_message=config.idle_message,
     )
-
-
-# Spawned pipeline tasks kept referenced so asyncio (which holds only a weak
-# ref) can't GC a running call.
-_RUNNING: set[asyncio.Task] = set()
-
-
-async def start_call_pipeline(
-    *,
-    agent: AcceptedAgent,
-    transport: Any,
-    call_context: CallContext,
-    settings: Settings,
-    session_factory: Any,
-    **build_kwargs: Any,
-) -> None:
-    """Connect MCP servers, build the pipeline and run it — all in one task.
-
-    For the fire-and-forget callers (WebRTC, WhatsApp voice), which return from
-    a connection callback while the call keeps going. They can't do what
-    media_stream does — connect inline, then `await start()` — because an MCP
-    transport opens anyio cancel scopes that must be exited in the task that
-    entered them, and `CallSession` closes the manager during its own cleanup.
-    Connecting in the caller's task would therefore blow up at hangup.
-
-    Returns once the pipeline is built, so a build failure still reaches the
-    caller (WebRTC turns it into a 500); the run continues in the background.
-    `agent` is agent acceptance's answer, as for `build_call_pipeline`.
-    """
-    config = agent.config
-    ready = asyncio.Event()
-    failure: BaseException | None = None
-
-    async def _run() -> None:
-        # The call's live-call slot (#224) is this task's from here: renewed
-        # while it runs, freed however it ends — a failed build included.
-        async with hold_live_call(call_context.project_id, call_context.call_id):
-            await _build_and_run()
-
-    async def _build_and_run() -> None:
-        nonlocal failure
-        mcp_manager: Any | None = None
-        session: CallSession | None = None
-        try:
-            try:
-                mcp_tools: list[Any] = []
-                if config.mcp_servers:
-                    from turncall.services.mcp_client import MCPSessionManager
-
-                    mcp_manager = MCPSessionManager(
-                        call_id=call_context.call_id,
-                        project_id=call_context.project_id,
-                    )
-                    mcp_tools = await mcp_manager.connect_servers(config.mcp_servers)
-
-                session = await build_call_pipeline(
-                    agent=agent,
-                    transport=transport,
-                    call_context=replace(call_context, mcp_manager=mcp_manager),
-                    settings=settings,
-                    session_factory=session_factory,
-                    mcp_tools=mcp_tools or None,
-                    **build_kwargs,
-                )
-            except Exception as exc:
-                failure = exc
-            finally:
-                # Unconditionally, cancellation included: the caller is blocked
-                # on this event and nothing else will ever release it.
-                ready.set()
-
-            if session is not None:
-                await session.start()
-        finally:
-            # Every path where CallSession.cleanup won't run — a build failure,
-            # or cancellation before start() took ownership — and in the task
-            # that opened the transports, which is what their cancel scopes
-            # require. `except Exception` alone used to skip this entirely when
-            # the build was cancelled.
-            if session is None and mcp_manager is not None:
-                await mcp_manager.close()
-
-    async def _run_live() -> None:
-        # Live until the session has finalized: a SIGTERM waits for it (#199).
-        with drain.live_call(call_context.call_id, config.max_call_duration_seconds):
-            await _run()
-
-    task = asyncio.create_task(_run_live())
-    _RUNNING.add(task)
-    task.add_done_callback(_RUNNING.discard)
-
-    await ready.wait()
-    if failure is not None:
-        raise failure

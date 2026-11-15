@@ -23,9 +23,7 @@ from turncall.api.deps import DbSession
 from turncall.api.errors import RateLimitedError
 from turncall.config import get_settings
 from turncall.domain.enums import CallDirection, CallEventType
-from turncall.orchestrator.ambience import build_ambience_mixer
-from turncall.orchestrator.pipeline_builder import start_call_pipeline
-from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
+from turncall.orchestrator.call_runner import CallToRun, TransportFactory, run_call
 from turncall.orchestrator.transport_factory import (
     WEBRTC_SAMPLE_RATE,
     create_whatsapp_transport,
@@ -501,7 +499,6 @@ async def _start_voice_pipeline(connection: object, call: _WhatsAppCall) -> None
         agent = call.agent.rendered(
             template_variables, knowledge_context=knowledge_context
         )
-        config = agent.config
 
         # Create call record
         agent_id_for_call = call.agent_id
@@ -557,32 +554,23 @@ async def _start_voice_pipeline(connection: object, call: _WhatsAppCall) -> None
         )
         await db.commit()
 
-    call_context = CallContext(
+    opened = CallToRun(
         call_id=call_row.id,
         project_id=call.project_id,
-        agent_id=agent_id_for_call or DYNAMIC_AGENT_ID,
+        agent=agent,
+        agent_id=agent_id_for_call,
         call_sid=f"whatsapp:{whatsapp_call_id}",
         stream_sid=f"whatsapp:{whatsapp_call_id}",
         session_factory=session_factory,
     )
-
-    # Build transport and pipeline
-    mixer = await build_ambience_mixer(
-        config,
-        project_id=call_context.project_id,
-        sample_rate=WEBRTC_SAMPLE_RATE,
-        session_factory=session_factory,
+    await run_call(
+        opened,
+        TransportFactory(
+            make=partial(create_whatsapp_transport, connection),
+            sample_rate=WEBRTC_SAMPLE_RATE,
+        ),
+        own_task=True,
         settings=settings,
-    )
-    transport = create_whatsapp_transport(connection, mixer=mixer)
-
-    await start_call_pipeline(
-        agent=agent,
-        transport=transport,
-        call_context=call_context,
-        settings=settings,
-        session_factory=session_factory,
-        audio_sample_rate=WEBRTC_SAMPLE_RATE,
     )
 
     logger.info(

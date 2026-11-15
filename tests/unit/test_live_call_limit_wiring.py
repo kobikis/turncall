@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import turncall
-from turncall.orchestrator import pipeline_builder
+from turncall.orchestrator import call_runner
 
 pytestmark = pytest.mark.unit
 
@@ -67,14 +67,14 @@ def test_every_call_row_is_created_under_a_slot():
 
 
 def test_every_call_that_runs_holds_its_slot():
-    runners = _calling("build_call_pipeline") | _calling("start_call_pipeline")
+    runners = _calling("build_call_pipeline") | _calling("run_call")
     for rel, tree in runners.items():
-        if rel == "orchestrator/pipeline_builder.py":
+        if rel in ("orchestrator/pipeline_builder.py", "orchestrator/call_runner.py"):
             continue
-        uses_start = any(_name(c) == "start_call_pipeline" for c in _calls(tree))
+        uses_run = any(_name(c) == "run_call" for c in _calls(tree))
         holds = any(_name(c) == "hold_live_call" for c in _calls(tree))
-        assert uses_start or holds, f"{rel} runs a call without holding its slot"
-    assert "hold_live_call" in inspect.getsource(pipeline_builder.start_call_pipeline)
+        assert uses_run or holds, f"{rel} runs a call without holding its slot"
+    assert "hold_live_call" in inspect.getsource(call_runner)
 
 
 async def test_without_redis_a_call_is_admitted(monkeypatch):

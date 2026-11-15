@@ -65,15 +65,16 @@ def whatsapp_voice(monkeypatch) -> WhatsAppLeg:
         leg.rejected.append(call_id)
         return {"success": True}
 
-    async def _start(*, agent: Any, call_context: Any, **_kwargs: Any) -> None:
-        leg.started.append((agent.config, call_context))
+    async def _start(opened: Any, *_args: Any, **_kwargs: Any) -> None:
+        # The call as running sees it: its agent, id and agent id.
+        leg.started.append((opened.agent.config, opened))
 
     monkeypatch.setattr(WhatsAppClient, "handle_webhook_request", _connected)
     monkeypatch.setattr(WhatsAppApi, "reject_call_to_whatsapp", _reject)
     monkeypatch.setattr(
         whatsapp_handlers, "create_whatsapp_transport", lambda *a, **k: None
     )
-    monkeypatch.setattr(whatsapp_handlers, "start_call_pipeline", _start)
+    monkeypatch.setattr(whatsapp_handlers, "run_call", _start)
     monkeypatch.delenv("WHATSAPP_APP_SECRET", raising=False)
     return leg
 

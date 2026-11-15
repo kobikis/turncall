@@ -90,11 +90,10 @@ def test_a_pipeline_that_cannot_start_is_an_error_not_a_dead_answer(app, monkeyp
     monkeypatch.setattr(webrtc, "admit_live_call", AsyncMock())
     monkeypatch.setattr(webrtc, "get_engine", lambda: None)
     monkeypatch.setattr(webrtc, "create_session_factory", lambda _e: _session_cm)
-    monkeypatch.setattr(webrtc, "build_ambience_mixer", AsyncMock(return_value=None))
     monkeypatch.setattr(webrtc, "create_whatsapp_transport", lambda *a, **k: None)
     monkeypatch.setattr(
         webrtc,
-        "start_call_pipeline",
+        "run_call",
         AsyncMock(side_effect=RuntimeError("Missing credentials")),
     )
     call_id = uuid.uuid4()
@@ -158,11 +157,10 @@ def test_a_missing_key_rides_back_as_a_list(app, monkeypatch):
     monkeypatch.setattr(webrtc, "admit_live_call", AsyncMock())
     monkeypatch.setattr(webrtc, "get_engine", lambda: None)
     monkeypatch.setattr(webrtc, "create_session_factory", lambda _e: _session_cm)
-    monkeypatch.setattr(webrtc, "build_ambience_mixer", AsyncMock(return_value=None))
     monkeypatch.setattr(webrtc, "create_whatsapp_transport", lambda *a, **k: None)
     monkeypatch.setattr(
         webrtc,
-        "start_call_pipeline",
+        "run_call",
         AsyncMock(side_effect=MissingProviderKeyError(["deepgram"])),
     )
     monkeypatch.setattr(

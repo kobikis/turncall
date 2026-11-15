@@ -9,8 +9,8 @@ The pipeline assembly is now centralized in orchestrator/pipeline_builder.py
   2. every voice transport MUST route through the shared assembly — else a
      transport silently stops using the centralized (KB-wired) one. Twilio
      calls build_call_pipeline directly (its WS handler awaits the run);
-     WebRTC and WhatsApp go via start_call_pipeline, which wraps it in the
-     task that also owns their MCP sessions.
+     WebRTC and WhatsApp go via call_runner.run_call, which builds it in
+     the task that also owns their MCP sessions.
 
 Structural (AST) so it survives renames and needs no transport/DB.
 """
@@ -24,6 +24,7 @@ import turncall
 
 _SRC = Path(turncall.__file__).parent
 _BUILDER = _SRC / "orchestrator" / "pipeline_builder.py"
+_RUNNER = _SRC / "orchestrator" / "call_runner.py"
 
 # (label, file) for every entry point that starts a voice pipeline.
 VOICE_PATHS = [
@@ -62,7 +63,7 @@ def test_shared_builder_passes_kb_attachments() -> None:
 @pytest.mark.unit
 @pytest.mark.parametrize("label,path", VOICE_PATHS, ids=[p[0] for p in VOICE_PATHS])
 def test_voice_path_uses_shared_builder(label: str, path: Path) -> None:
-    entry_points = ("build_call_pipeline", "start_call_pipeline")
+    entry_points = ("build_call_pipeline", "run_call")
     assert any(_calls_named(path, name) for name in entry_points), (
         f"{label} ({path.name}): calls none of {entry_points} — this transport "
         "no longer routes through the centralized (KB-wired) pipeline assembly"
@@ -70,24 +71,10 @@ def test_voice_path_uses_shared_builder(label: str, path: Path) -> None:
 
 
 @pytest.mark.unit
-def test_start_call_pipeline_delegates_to_the_builder() -> None:
-    """start_call_pipeline is the second entry point the guard above accepts,
-    so it has to actually reach the KB-wired assembly."""
-    assert _calls_named(_BUILDER, "start_call_pipeline") == [], (
-        "start_call_pipeline should not call itself"
-    )
-    tree = ast.parse(_BUILDER.read_text())
-    fn = next(
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.AsyncFunctionDef) and n.name == "start_call_pipeline"
-    )
-    called = {
-        getattr(c.func, "id", getattr(c.func, "attr", None))
-        for c in ast.walk(fn)
-        if isinstance(c, ast.Call)
-    }
-    assert "build_call_pipeline" in called, (
-        "start_call_pipeline no longer calls build_call_pipeline — WebRTC and "
+def test_run_call_delegates_to_the_builder() -> None:
+    """run_call is the second entry point the guard above accepts, so it has
+    to actually reach the KB-wired assembly."""
+    assert _calls_named(_RUNNER, "build_call_pipeline"), (
+        "call_runner no longer calls build_call_pipeline — WebRTC and "
         "WhatsApp would lose the centralized (KB-wired) assembly"
     )
