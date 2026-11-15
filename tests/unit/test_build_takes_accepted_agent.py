@@ -70,9 +70,9 @@ def test_every_caller_of_the_build_passes_an_accepted_agent() -> None:
             keywords = {k.arg for k in node.keywords}
             assert "agent" in keywords and "config" not in keywords, where
             calls.append(where)
-    # media stream, run_call (WebRTC and WhatsApp), the eval harness and the
-    # demo.
-    assert len(calls) == 4, calls
+    # run_call (every carrier's media stream, WebRTC and WhatsApp, #492), the
+    # eval harness and the demo.
+    assert len(calls) == 3, calls
 
 
 def test_only_agent_acceptance_builds_an_accepted_agent() -> None:
