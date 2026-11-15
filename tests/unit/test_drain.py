@@ -2,8 +2,8 @@
 
 `tests/integration/test_graceful_shutdown.py` signals a real server; these pin
 the pieces that are slow or impossible to reach there — the bounds (an hour is
-not a test), a second SIGTERM, what the probes answer, and that the
-fire-and-forget transports (WebRTC, WhatsApp voice) count their calls too.
+not a test), a second SIGTERM and what the probes answer. That every voice
+call is counted is the running module's (`test_run_call.py`).
 """
 
 import asyncio
@@ -165,27 +165,3 @@ def test_readiness_fails_while_liveness_and_the_gauge_answer(app, monkeypatch):
     assert metrics.headers["content-type"].startswith("text/plain")
     assert "# TYPE turncall_active_calls gauge" in metrics.text
     assert "turncall_active_calls 1\n" in metrics.text
-
-
-def test_every_voice_entry_point_counts_its_calls():
-    """A call nobody counted is one a SIGTERM does not wait for — dropped on the
-    next deploy with nothing to say why. `run_call` counts its own (every
-    carrier's media stream, WebRTC, WhatsApp voice, the demo); a module
-    building a pipeline directly must too.
-    The eval worker is exempt: an eval is not a call."""
-    from pathlib import Path
-
-    import turncall
-
-    root = Path(turncall.__file__).parent
-    builders = {
-        path.relative_to(root).as_posix()
-        for path in root.rglob("*.py")
-        if "build_call_pipeline(" in path.read_text()
-        and path.relative_to(root).parts[0] != "evals"
-        # Where it is defined, not called.
-        and path.name != "pipeline_builder.py"
-    }
-    assert builders == {"orchestrator/call_runner.py"}
-    for module in builders:
-        assert "drain.live_call(" in (root / module).read_text(), module

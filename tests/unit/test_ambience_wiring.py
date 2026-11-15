@@ -2,12 +2,12 @@
 call (#169, #173, ADR-0021).
 
 Every failure here is inaudible to whoever configured it — a transport with no
-mixer, a mixer at the wrong rate, a sound from someone else's project — so the
-assertions are structural where a happy path per transport would miss the
-fourth transport someone adds later.
+mixer, a mixer at the wrong rate, a sound from someone else's project. Each
+voice factory is checked to carry the mixer it is given; that every call is
+handed one is the running module's (`run_call` builds the mixer and passes it
+to the edge's factory, `tests/integration/test_run_call.py`).
 """
 
-import ast
 import inspect
 import uuid
 from pathlib import Path
@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-import turncall
 from turncall.api.v1.schemas.agents import AgentConfigSchema
 from turncall.domain.models import AgentConfig
 from turncall.orchestrator import transport_factory as tf
@@ -106,21 +105,6 @@ class TestTransports:
 
     def test_the_eval_transport_cannot_take_one(self) -> None:
         assert "mixer" not in inspect.signature(tf.create_eval_transport).parameters
-
-    def test_every_voice_transport_call_site_passes_a_mixer(self) -> None:
-        """The factory taking a mixer is half of it; each entry point handing
-        one over is the other, and forgetting it is silent."""
-        src = Path(turncall.__file__).parent
-        missing = []
-        for path in src.rglob("*.py"):
-            for node in ast.walk(ast.parse(path.read_text())):
-                if (
-                    isinstance(node, ast.Call)
-                    and getattr(node.func, "id", None) in VOICE_FACTORIES
-                    and "mixer" not in {k.arg for k in node.keywords}
-                ):
-                    missing.append(f"{path.name}:{node.lineno}")
-        assert not missing, f"voice transports built without a mixer: {missing}"
 
 
 def _session_factory(row):

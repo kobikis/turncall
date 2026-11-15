@@ -1,11 +1,10 @@
 """Every live call holds its control channel for exactly as long as it runs (#215).
 
 The channel is how `POST /v1/calls/{id}/messages` and `/handoff` (#216) reach
-a call. A transport that stopped subscribing would be silent about it — every
-request to its calls a 409 that reads like a hangup — so the wiring is checked
-structurally: the channel lives in `CallSession.start()`, and every voice
-entry point ends there. The harness test (`test_harness_call_messages.py`)
-proves the Twilio path end to end.
+a call. The channel lives in `CallSession.start()`, which every voice call
+reaches through the running module: `test_run_call.py` sends a message to a
+call `run_call` runs, and `test_harness_call_messages.py` proves the Twilio
+path end to end.
 """
 
 import ast
@@ -20,19 +19,9 @@ import pytest
 import turncall
 from turncall.orchestrator import call_session as cs
 from turncall.orchestrator import live_control
-from turncall.orchestrator import transport_factory as tf
 from turncall.services.live_call_channel import HANDOFF, MESSAGE, ControlRefused
 
 pytestmark = pytest.mark.unit
-
-VOICE_FACTORIES = {
-    n
-    for n, f in vars(tf).items()
-    if n.startswith("create_")
-    and n.endswith("_transport")
-    and callable(f)
-    and n != "create_eval_transport"
-}
 
 
 def _context(*, is_eval: bool = False) -> SimpleNamespace:
@@ -116,55 +105,6 @@ async def test_start_holds_the_channel_for_the_whole_run(monkeypatch) -> None:
     await given["handlers"][MESSAGE]({"message": "hi", "role": "system"})
     (frame,) = session._task.queued  # type: ignore[union-attr]
     assert frame.messages == [{"role": "system", "content": "hi"}]
-
-
-def test_every_voice_entry_point_runs_the_call_through_call_session_start() -> None:
-    """A module that builds a voice transport must hand the call to
-    `CallSession.start()` — through `run_call`, or
-    `build_call_pipeline` and then `.start()` — or its calls have no channel."""
-    src = Path(turncall.__file__).parent
-    builders = {}
-    for path in src.rglob("*.py"):
-        tree = ast.parse(path.read_text())
-        called = {
-            getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-        }
-        # Called, or handed over as a factory (`run_call`'s edges, #491).
-        named = {
-            getattr(node, "id", None) or getattr(node, "attr", None)
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.Name, ast.Attribute))
-        }
-        if named & VOICE_FACTORIES and path.name != "transport_factory.py":
-            builders[path.relative_to(src).as_posix()] = called
-
-    assert builders, "found no voice transport call sites"
-    unsubscribed = [
-        module
-        for module, called in builders.items()
-        if "run_call" not in called and not {"build_call_pipeline", "start"} <= called
-    ]
-    assert unsubscribed == []
-    # The three this was written against; a fourth must pass the check above.
-    assert {"webhooks/media_stream.py", "api/v1/webrtc.py"} <= set(builders)
-    assert any("whatsapp" in m for m in builders)
-
-
-def test_run_call_runs_the_session_it_built() -> None:
-    """The edges' half of the check above (#491)."""
-    from turncall.orchestrator import call_runner
-
-    tree = ast.parse(Path(call_runner.__file__).read_text())
-    starts = [
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Await)
-        and isinstance(n.value, ast.Call)
-        and getattr(n.value.func, "attr", None) == "start"
-    ]
-    assert starts, "call_runner no longer awaits CallSession.start()"
 
 
 class TestTheChannel:

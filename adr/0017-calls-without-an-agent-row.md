@@ -114,3 +114,27 @@ in `src` passing `agent=`, `AcceptedAgent(` built only in agent acceptance,
 and no rule function called from `orchestrator/`. The two rules of this ADR
 are unchanged: the sentinel is still the inline agent's `CallContext.agent_id`,
 and `dynamic_config` is still stored raw.
+
+## Addendum: the call module holds both rules (#487, 2026-11)
+
+The two rules no longer rest on every transport remembering them. Every voice
+edge opens its call through `services/call_opening` and runs it through
+`orchestrator/call_runner.run_call` (ADR-0034):
+
+1. `run_call` builds the call's `CallContext`, with `agent_id or
+   DYNAMIC_AGENT_ID`, for every edge. The one context an edge still builds
+   itself is the media stream's for a call it refuses (its agent no longer
+   accepted), which uses the same fallback.
+2. The opening module writes every voice call row — `open_call` for inbound
+   calls on every carrier, WebRTC and WhatsApp voice, `write_call_row` for an
+   outbound dial — and stores an inline agent's raw config as
+   `dynamic_config` with `active_agent_id` null.
+
+So the structural guard above is gone. The rules are tested through the
+module (`tests/integration/test_call_opening.py`, `test_run_call.py`,
+`test_outbound_opening.py`), an inline agent end to end on every transport
+(`test_voice_call_init_acceptance.py`) and refused at its media stream
+(`test_build_takes_accepted_agent.py`). What is left structural is that every
+edge goes through the module: `tests/unit/test_voice_edges_use_the_call_module.py`
+fails on one that builds a voice transport without `run_call` or writes a
+call row itself. The rules themselves are unchanged.

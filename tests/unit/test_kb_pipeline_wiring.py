@@ -1,15 +1,11 @@
 """Regression guard for review finding #1: KB retrieval must stay wired into
-every voice path.
+the voice pipeline.
 
-The pipeline assembly is now centralized in orchestrator/pipeline_builder.py
-(build_call_pipeline), so the guard is two-part:
-  1. the shared builder's create_pipeline(...) call MUST pass
-     knowledge_base_attachments — else KB auto/tool retrieval goes dead
-     everywhere at once;
-  2. every voice transport MUST route through the shared assembly — else a
-     transport silently stops using the centralized (KB-wired) one. Every
-     carrier's media stream, WebRTC and WhatsApp go via call_runner.run_call,
-     which builds it in the task that also owns their MCP sessions.
+Every voice call is built by `pipeline_builder.build_call_pipeline`, through
+the running module (`test_voice_edges_use_the_call_module.py` holds every
+edge to it). So one check is left: the shared builder's `create_pipeline(...)`
+call must pass `knowledge_base_attachments`, or KB auto/tool retrieval goes
+dead on every transport at once.
 
 Structural (AST) so it survives renames and needs no transport/DB.
 """
@@ -21,16 +17,7 @@ import pytest
 
 import turncall
 
-_SRC = Path(turncall.__file__).parent
-_BUILDER = _SRC / "orchestrator" / "pipeline_builder.py"
-_RUNNER = _SRC / "orchestrator" / "call_runner.py"
-
-# (label, file) for every entry point that starts a voice pipeline.
-VOICE_PATHS = [
-    ("twilio", _SRC / "webhooks" / "media_stream.py"),
-    ("whatsapp", _SRC / "webhooks" / "whatsapp_handlers.py"),
-    ("webrtc", _SRC / "api" / "v1" / "webrtc.py"),
-]
+_BUILDER = Path(turncall.__file__).parent / "orchestrator" / "pipeline_builder.py"
 
 
 def _calls_named(path: Path, name: str) -> list[ast.Call]:
@@ -57,23 +44,3 @@ def test_shared_builder_passes_kb_attachments() -> None:
             "pipeline_builder: create_pipeline() is missing "
             "knowledge_base_attachments — KB retrieval is dead on every transport"
         )
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("label,path", VOICE_PATHS, ids=[p[0] for p in VOICE_PATHS])
-def test_voice_path_uses_shared_builder(label: str, path: Path) -> None:
-    entry_points = ("build_call_pipeline", "run_call")
-    assert any(_calls_named(path, name) for name in entry_points), (
-        f"{label} ({path.name}): calls none of {entry_points} — this transport "
-        "no longer routes through the centralized (KB-wired) pipeline assembly"
-    )
-
-
-@pytest.mark.unit
-def test_run_call_delegates_to_the_builder() -> None:
-    """run_call is the second entry point the guard above accepts, so it has
-    to actually reach the KB-wired assembly."""
-    assert _calls_named(_RUNNER, "build_call_pipeline"), (
-        "call_runner no longer calls build_call_pipeline — WebRTC and "
-        "WhatsApp would lose the centralized (KB-wired) assembly"
-    )

@@ -1,55 +1,22 @@
-"""Regression guard: a call running an inline agent must still build a pipeline.
+"""A call running an inline agent has no agent row (ADR-0017).
 
 Managed call-init can answer with an inline `agent` config instead of an
-`agent_id` (ADR-0008, and the integrations work that finally exercises it). Such
-a call has no agent row, so `CallContext.agent_id` has nothing real to carry and
-every transport substitutes `DYNAMIC_AGENT_ID`.
-
-Twilio did not. `media_stream.py` built its context with `UUID(agent_id_str)`,
-where `agent_id_str` was the literal string "dynamic" on exactly that path, so
-every inline-agent call over Twilio died with `ValueError: badly formed
-hexadecimal UUID string` before the pipeline started. WebRTC and WhatsApp voice
-had each invented their own `UUID(int=0)` in the same place and worked.
-
-Structural (AST), like test_kb_pipeline_wiring, so it survives renames and needs
-no transport or DB.
+`agent_id`. Such a call has nothing real for `CallContext.agent_id` to carry,
+so it carries `DYNAMIC_AGENT_ID`, and the raw config is stored on the call row
+as `dynamic_config`. The call module holds both rules for every voice edge:
+opening writes the row (`tests/integration/test_call_opening.py`,
+`test_outbound_opening.py`), running builds the context
+(`tests/integration/test_run_call.py`), and an inline agent runs end to end
+on every transport in `test_voice_call_init_acceptance.py` — or is refused at
+its media stream, the one context an edge still builds, in
+`test_build_takes_accepted_agent.py`.
 """
 
-import ast
-from pathlib import Path
 from uuid import UUID
 
 import pytest
 
-import turncall
 from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID
-
-_SRC = Path(turncall.__file__).parent
-
-# (label, file) for every entry point that builds a CallContext for a voice call.
-VOICE_PATHS = [
-    # Every carrier's media stream builds one here for a call it refuses.
-    ("carrier", _SRC / "webhooks" / "media_stream.py"),
-    # Every voice edge runs its calls through it (#491, #492).
-    ("run_call", _SRC / "orchestrator" / "call_runner.py"),
-]
-
-
-def _agent_id_args(path: Path) -> list[str]:
-    """Source of the `agent_id=` argument of every CallContext(...) in a file."""
-    tree = ast.parse(path.read_text())
-    out = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
-        if name != "CallContext":
-            continue
-        for kw in node.keywords:
-            if kw.arg == "agent_id":
-                out.append(ast.unparse(kw.value))
-    return out
 
 
 @pytest.mark.unit
@@ -58,137 +25,6 @@ def test_the_sentinel_is_a_real_uuid() -> None:
     it has to be one, and it must match no agent that exists."""
     assert isinstance(DYNAMIC_AGENT_ID, UUID)
     assert DYNAMIC_AGENT_ID == UUID(int=0)
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("label,path", VOICE_PATHS, ids=[p[0] for p in VOICE_PATHS])
-def test_every_voice_transport_tolerates_a_call_with_no_agent_row(
-    label: str, path: Path
-) -> None:
-    args = _agent_id_args(path)
-    assert args, f"{label} ({path.name}): no CallContext(agent_id=...) found — moved?"
-    for arg in args:
-        assert "DYNAMIC_AGENT_ID" in arg, (
-            f"{label} ({path.name}): CallContext(agent_id={arg}) does not fall back "
-            "to DYNAMIC_AGENT_ID — a call-init response carrying an inline `agent` "
-            "instead of an `agent_id` will crash this transport before the pipeline "
-            "starts"
-        )
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("label,path", VOICE_PATHS, ids=[p[0] for p in VOICE_PATHS])
-def test_no_transport_reinvents_the_sentinel(label: str, path: Path) -> None:
-    """Three placeholders in three files is how one of them ended up being a
-    string that was then fed to UUID()."""
-    for arg in _agent_id_args(path):
-        assert "UUID(int=0)" not in arg, (
-            f"{label} ({path.name}): uses its own UUID(int=0) instead of the "
-            "shared DYNAMIC_AGENT_ID"
-        )
-
-
-def _function(path: Path, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
-    for node in ast.walk(ast.parse(path.read_text())):
-        if (
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == name
-        ):
-            return node
-    raise AssertionError(f"{path.name}: no function named {name}")
-
-
-# Every function an inbound phone call's agent passes through. The carriers'
-# edges share `call_opening.open_call` (ADR-0022), so it is checked once for all.
-INBOUND_FUNCTIONS = [
-    (_SRC / "webhooks" / "twilio_handlers.py", "inbound_voice_webhook"),
-    (_SRC / "services" / "call_opening.py", "open_call"),
-    (_SRC / "services" / "call_opening.py", "write_call"),
-]
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize(
-    "path,name", INBOUND_FUNCTIONS, ids=[n for _, n in INBOUND_FUNCTIONS]
-)
-def test_the_inbound_webhook_never_dereferences_a_possibly_absent_agent(
-    path: Path, name: str
-) -> None:
-    """`agent` is None whenever call-init returned an inline config, and the
-    handler runs on past that. A bare `agent.id` in a *log line* is what crashed
-    every inbound call with integrations attached — the resolved
-    `agent_id_for_call` is the safe form, and `agent.name if agent else ...` the
-    safe idiom where the object itself is wanted.
-    """
-    fn = _function(path, name)
-    bare = [
-        f"agent.{node.attr}"
-        for node in ast.walk(fn)
-        if isinstance(node, ast.Attribute)
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "agent"
-        # `agent.x if agent else y` guards itself.
-        and not any(
-            isinstance(p, ast.IfExp)
-            for p in ast.walk(fn)
-            if isinstance(p, ast.IfExp) and node in ast.walk(p)
-        )
-    ]
-    assert bare == [], (
-        f"{name} dereferences {bare} unguarded — a call running an "
-        "inline agent has no agent row and this crashes the webhook"
-    )
-
-
-# --- the config the call ran with has to survive the call ---------------------
-#
-# An inline agent leaves no agent row, so the only record of what the call ran
-# with is `metadata_json["dynamic_config"]`. Everything after the hangup reads it
-# back through `config_for_call`: post-call analysis, and — because the analysis
-# trigger is what dispatches `call.ended` — the webhook itself, and therefore
-# every end-of-call Automation hanging off it. Twilio and WhatsApp store it.
-# WebRTC resolved it, used it, and dropped it, so a browser call with an inline
-# agent finalized silently and no `call.ended` ever went out.
-
-
-def _metadata_keys(path: Path) -> set[str]:
-    """Every string key of every dict literal in a file. Blunt on purpose: the
-    three transports assemble their metadata differently (inline `**{...} if`
-    spreads, separate locals) and the invariant is only that the key is written
-    somewhere on the path that builds it."""
-    tree = ast.parse(path.read_text())
-    return {
-        key.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Dict)
-        for key in node.keys
-        if isinstance(key, ast.Constant) and isinstance(key.value, str)
-    }
-
-
-# Not VOICE_PATHS: the file that builds the CallContext is not always the one
-# that creates the call row. A carrier answers the inbound webhook in one
-# request and opens the media stream in another; every inbound voice edge —
-# each carrier's, WebRTC and WhatsApp voice (#494) — creates its row through
-# the shared `services/call_opening.py`.
-CALL_ROW_PATHS = [
-    ("inbound", _SRC / "services" / "call_opening.py"),
-]
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize(
-    "label,path", CALL_ROW_PATHS, ids=[p[0] for p in CALL_ROW_PATHS]
-)
-def test_every_transport_persists_the_inline_config(label: str, path: Path) -> None:
-    src = path.read_text()
-    if "dynamic_config" not in src:
-        pytest.skip(f"{label} does not resolve an inline agent")
-    assert "dynamic_config" in _metadata_keys(path), (
-        f"{label} resolves an inline agent config but never stores it under "
-        '"dynamic_config" — the call finalizes with nothing to analyse and '
-        "dispatches no call.ended."
-    )
 
 
 # --- procedures on an inline agent (#444) -------------------------------------

@@ -18,6 +18,8 @@ reason as a build that raised once did.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import uuid
 from collections.abc import Iterator
 
@@ -275,3 +277,78 @@ async def test_an_outbound_dials_own_refused_agent_fails_the_call_at_its_stream(
     assert XAI_REASON in raised["payload"]["error"]
     assert slots == 0
     assert XAI_REASON in _refused(warnings, "stored_call")
+
+
+async def test_an_inline_agent_refused_at_its_stream_fails_the_call(
+    monkeypatch, redis_env, warnings
+) -> None:
+    """A call opened with an inline agent its stream no longer accepts (a
+    rule newer than the call-init that answered). The call has no agent row
+    (ADR-0017) and is failed with the reason all the same: nothing is built,
+    the slot is freed, `call.ended` still goes out."""
+    async with run_app(
+        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        call_id = await _inline_call_row(app.project_id, XAI_BROKEN)
+        await _open_twilio_stream(app, call_id)
+        ended = await app.sink.wait_for("call.ended")
+        events = (
+            await app.api.get(
+                f"/v1/calls/{call_id}/events", params={"event_type": "error.raised"}
+            )
+        ).json()["data"]
+        slots = await _live_calls(app.project_id)
+
+    assert ended["call_id"] == str(call_id)
+    assert ended["agent_id"] is None
+    assert ended["payload"]["ended_reason"] == "pipeline_error"
+    [raised] = events
+    assert XAI_REASON in raised["payload"]["error"]
+    assert slots == 0
+    assert XAI_REASON in _refused(warnings, "call_init")
+
+
+XAI_BROKEN = {**HARNESS_AGENT, "llm": {"provider": "xai", "base_url": "https://x"}}
+
+
+async def _inline_call_row(project_id: str, config: dict) -> uuid.UUID:
+    """A Twilio call as call-init left it: an inline agent's row, its slot
+    taken."""
+    from turncall.domain.enums import CallDirection
+    from turncall.services import limits
+    from turncall.storage.database import create_session_factory, get_engine
+    from turncall.storage.repositories import call_repo
+
+    project, call_id = uuid.UUID(project_id), uuid.uuid4()
+    async with create_session_factory(get_engine())() as session:
+        await call_repo.create_call(
+            session,
+            project_id=project,
+            call_id=call_id,
+            direction=CallDirection.INBOUND,
+            provider_call_sid="CAinline",
+            metadata_json={"dynamic_config": config},
+        )
+        await session.commit()
+    assert await limits.claim_live_call(project, call_id, 1)
+    return call_id
+
+
+async def _open_twilio_stream(app, call_id: uuid.UUID) -> None:
+    """Twilio opening the call's media stream, with its token, until the app
+    closes it."""
+    import json
+
+    import websockets
+
+    from turncall.services.media_token import media_token
+
+    params = {"callId": str(call_id), "mediaToken": media_token(call_id)}
+    start = {"streamSid": "MZ1", "callSid": "CAinline", "customParameters": params}
+    url = app.base_url.replace("http", "ws") + "/ws/media-stream"
+    async with websockets.connect(url) as ws:
+        await ws.send(json.dumps({"event": "connected"}))
+        await ws.send(json.dumps({"event": "start", "start": start}))
+        with contextlib.suppress(websockets.ConnectionClosed, TimeoutError):
+            while True:
+                await asyncio.wait_for(ws.recv(), 5)
