@@ -41,9 +41,9 @@ src/turncall/
   config/          # Settings (env vars via pydantic-settings + dotenv)
   domain/          # Enums, immutable models, call + session state machines
   events/          # Webhook delivery, server events, signing
-  orchestrator/    # Pipecat pipeline: serializer, factory, session, tools, VAD, smart turn
+  orchestrator/    # Pipecat pipeline: serializer, factory, call runner, session, tools, VAD, smart turn
   campaigns/       # Campaign worker: dialler pass, process entrypoint, wake-up list
-  services/        # Call control, SMS/chat orchestration, WhatsApp chat, LLM text completion, template rendering, document ingestion, retrieval, weighted routing, post-call analysis
+  services/        # Call opening, call control, SMS/chat orchestration, WhatsApp chat, LLM text completion, template rendering, document ingestion, retrieval, weighted routing, post-call analysis
   storage/         # SQLAlchemy models, repositories, database/redis
   adapters/        # Object storage (local filesystem, S3)
   webhooks/        # Twilio handlers (voice + SMS), WhatsApp handlers (voice + text), media stream WS
@@ -177,6 +177,61 @@ inbound message → session lookup/create → message history → [KB retrieval]
   → [chat_tools: webhook + MCP] → LLM chat completion (tool loop) → store reply → respond
 ```
 
+## Opening and running a call
+
+Every voice edge — each carrier's, WebRTC, WhatsApp voice, the website demo —
+does only what belongs to its protocol: it verifies the request, reads the
+call's parties and handles, answers in its own format and supplies a factory
+for its transport. The rest is two modules below the edges (#487, ADR-0034):
+
+- **Opening a call**, `services/call_opening.open_call(source, *,
+  project_id, session)`, where `source` is a `CallSource` the edge resolved:
+  a number's `NumberSource(number=, parties=, handles=, call_type=,
+  weighted=)` (every carrier's inbound call, `weighted=True`; WhatsApp's
+  connect, `weighted=False` — A/B weights are a phone call's), or WebRTC's
+  request. A source says whether its refusal is answered at a carrier
+  (`refused_unanswered`, and so announced as `call.rejected`; not WebRTC's)
+  and chooses its agent (`choose_agent(session, *, call_id)`) through the
+  shared choosers in `services/call_agents` (`call_init_agent`,
+  `stored_agent`). `open_call` runs agent acceptance (#474), the live-call
+  slot (#224), the call row (an inline agent's raw config as
+  `dynamic_config`, no agent id — ADR-0017) and `call.initializing` +
+  `call.started`. It answers an **`OpenedCall`** (`start`, the `CallStart`
+  its row and events were written from — id, project, `CallMetadata`,
+  parties, `EdgeHandles` — and `agent`, the accepted agent) or a
+  **`CallRefusal`** (`reason`: `live_call_limit` — `busy`, refuse
+  unanswered, `live_call_limit` its size — `no_agent`, `agent_refused` with
+  acceptance's `refusal`), which the edge turns into its reply. Nothing is
+  left of a refused call, and any failure before the row commits gives the
+  slot back. An outbound dial keeps its own opener (`place_outbound_call`)
+  but writes its row and events through the same `services/call_start`
+  (`write_call_row` / `write_call_start`).
+- **Running a call**, `orchestrator/call_runner.run_call(call, make_transport,
+  *, own_task)`: the drain count (#199), holding and renewing the slot and
+  freeing it however the run ends, MCP connect and close (a failed build, a
+  cancellation, the end of the call — in the task that connected them), the
+  ambience mixer at the factory's `sample_rate`, the `CallContext`
+  (`call_context`, with `DYNAMIC_AGENT_ID` for an inline agent), the build
+  and the start. It takes a `CallToRun`: `CallToRun.of(opened, ...)` for an
+  opened call; a carrier's media stream reads its call back from the row as
+  an `OpenedCall` and replaces `stream_sid` with the stream's own; the demo,
+  which opens nothing, builds one directly. `TransportFactory(make,
+  sample_rate, carries_video)` is the edge's transport. `own_task=True`
+  (WebRTC, WhatsApp voice, the demo, which return from a connection
+  callback) runs the call in a task the module keeps and returns once the
+  build succeeded, or raises what it raised; without it the run blocks until
+  the call ends (a carrier's media stream). A run cancelled before its
+  pipeline exists ends the call as a hangup during setup does: completed,
+  `call.ended` sent.
+
+A new edge calls both and remembers none of the steps:
+`tests/unit/test_voice_edges_use_the_call_module.py` fails, naming the module,
+on one that builds a voice transport without `run_call`, builds a call's
+pipeline itself, or writes a call row outside the opening module's row
+writer (`services/call_start`). What each
+step does is tested through the modules (`tests/integration/test_call_opening.py`,
+`test_run_call.py`, `test_outbound_opening.py`, `test_whatsapp_voice_opening.py`).
+
 ## Carriers
 
 A **carrier** is the telephony company a number belongs to (ADR-0022): Twilio,
@@ -194,7 +249,11 @@ them:
   picks the serializer from the **call's** carrier (`calls.provider`) through
   `transport_factory.CARRIER_MEDIA`. A call whose carrier has no entry there is
   refused before anything is built. Past the serializer nothing learns the
-  carrier.
+  carrier. Once the stream is proven the call's (below), the entry point
+  accepts the row's agent again (#481: an inline one as `call_init`, a stored
+  one by id — the only check an outbound dial's own agent gets), which makes
+  it a `CallToRun`, and runs it through `run_call` (see "Opening and running
+  a call"); a refused one is failed with the reason and its slot freed.
 - **A media stream must prove it is the call's** (the takeover fix). A call
   id is not a secret — it rides in webhooks, call-init, the API, logs — and
   every route used to build the real pipeline on any socket that named one,
@@ -227,11 +286,13 @@ them:
   `CARRIER_MEDIA` entry. Telnyx runs every case; Asterisk every case but the
   warm transfers (`WARM_TRANSFER_CARRIERS`), since its transfer is a `continue`
   into the PBX's dialplan, which has no briefing or message of ours to play.
-- **The shared middle of an inbound call** — resolve the agent (call-init, A/B
-  weights, the bound agent), create the call row on its carrier, record
-  `call.initializing` + `call.started` — is `services/inbound_call
-  .open_inbound_call`, for every carrier's edge. An edge only answers numbers
-  bound on its own carrier. A number's stored agent (A/B pick included) is
+- **An inbound call is opened** by `services/call_opening.open_call` (#490),
+  for every carrier's edge (see "Opening and running a call"): the edge hands
+  it a `NumberSource` (the number, the `CallParties`, the edge's
+  `EdgeHandles` — carrier, its call id, keys of its own on the row's
+  metadata), which resolves the agent (call-init, A/B weights, the bound
+  agent), and answers the carrier from the `OpenedCall` or `CallRefusal` it
+  gets back. An edge only answers numbers bound on its own carrier. A number's stored agent (A/B pick included) is
   looked up in the number's project and goes through agent acceptance (origin
   `stored_call`, #480): one saved before a newer rule existed is refused there
   (logged `agent_refused`), so the call is refused at the carrier and its slot
@@ -257,7 +318,7 @@ them:
 ```
 Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
   → verify with the key of the project the call/number belongs to
-  → open_inbound_call (carrier "telnyx") → REST `answer` with stream_url
+  → open_call (carrier "telnyx") → REST `answer` with stream_url
   → Telnyx opens /ws/telnyx/media-stream/{call_id}/{token} → run_media_stream
      (pipecat TelnyxFrameSerializer, PCMU both ways)
   → stream ends → REST `hangup`; call.hangup is recorded on the event log
@@ -329,7 +390,7 @@ Telnyx POSTs call.initiated → /webhooks/telnyx/voice (Ed25519-signed)
   `user_busy`/`call_rejected` → `busy`, `not_found` → `failed` +
   `call.failed` — which is what a campaign's retry policy reads.
 - **The live-call limit** (#224) admits an inbound call in
-  `open_inbound_call`, ahead of call-init, for every carrier; an outbound one
+  `call_opening.open_call`, ahead of call-init, for every carrier; an outbound one
   in `place_outbound_call`, as on Twilio.
 - **DTMF** is the `send_dtmf` command; the stream keeps running.
 
@@ -410,7 +471,7 @@ the channel id. Verified against a real 23.4.1 by `tests/live/test_live_asterisk
   — or one over the project's live-call limit (#224; `call.rejected` with
   `transport: "asterisk"`) — is `continue`d **unanswered** to the dialplan's
   next priority, so the PBX's own fallback takes it. Admission is
-  `open_inbound_call`, as for every carrier.
+  `call_opening.open_call`, as for every carrier.
 - **The media route** is `/ws/asterisk-media` (`webhooks/asterisk_media_stream.py`):
   the PBX's `websocket_client.conf` entry (`ASTERISK_MEDIA_CONNECTION`,
   default `turncall`, `connection_type=per_call_config`) points its `uri` here.
@@ -645,14 +706,19 @@ Customer calls WhatsApp Business number → Meta POSTs /webhooks/whatsapp (field
   → on "terminate" event: cleanup
 ```
 
-A connect is refused **before** pipecat's client answers it (#483,
-`webhooks/whatsapp_handlers._admit_connect`): a number nobody bound, a
-project at its live-call limit (#224), and a call with no usable agent —
-call-init failing or naming none, another project's `agent_id` (#475), an
-agent acceptance refuses (#477), a bound agent whose row is gone — are
-rejected with `reject_call_to_whatsapp` and the slot freed. The agent is
-resolved there, once; the connection callback only writes the call row and
-starts the pipeline on it.
+A connect is opened **before** pipecat's client answers it (#483, #494,
+`webhooks/whatsapp_handlers._open_connect`), through `services/call_opening
+.open_call` like every inbound call (call-init's agent, else the bound one;
+no A/B weights, which are a phone call's): a number nobody
+bound, a project at its live-call limit (#224), and a call with no usable
+agent — call-init failing or naming none, another project's `agent_id`
+(#475), an agent acceptance refuses (#477), a bound agent whose row is gone —
+are rejected with `reject_call_to_whatsapp`, the slot freed and no row. The
+connection callback only runs the opened call (`CallToRun.of` → `run_call`);
+a connect pipecat's client then fails to answer has its slot freed and its
+call failed. The row keeps the default carrier and no `provider_call_sid`
+(WhatsApp's call id is `metadata.whatsapp_call_id`), so no carrier hang-up
+acts on it.
 
 ### WhatsApp Webhook Setup
 1. Set Callback URL: `https://<host>/webhooks/whatsapp`
@@ -733,9 +799,10 @@ DELETE /v1/ambience-sounds/{id}       # 409 naming the agents while any names it
   agents alike (#173). Stored agents are also checked at save (422).
 - **Every voice transport, S2S included; never evals.** The mixer lives in the
   transport, so there is no TTS stage to gate on. An eval run carries an
-  `ambience_skipped` warning instead. Every entry point hands its voice
-  transport a `mixer=` — `tests/unit/test_ambience_wiring.py` fails on one
-  that does not.
+  `ambience_skipped` warning instead. `run_call` builds the mixer at the
+  edge's rate and hands it to the edge's transport factory, so every voice
+  call gets one (`tests/integration/test_run_call.py`); each factory carrying
+  the mixer it is given is `tests/unit/test_ambience_wiring.py`'s.
 - **A streamed voice is judged before the mix** (#265). gpt-live-1 and the
   video avatars stream silence too, and pipecat finds the end of a reply by
   that silence *after* mixing the room in — so the bot never stopped speaking
@@ -777,7 +844,9 @@ It authenticates nothing: what fronts it decides who calls.
   `agent_acceptance.accept_raw_config`: the whole schema, no event loop), which
   keeps inline `knowledge_bases` — the schema's dump used to drop them, so the
   KB refusal never fired.
-- Calls are counted (`drain.live_call`) and SIGTERM drains as in the API.
+- Calls run through `run_call` (#493) with no session factory: no row, no
+  slot, nothing recorded, but counted for the drain, and SIGTERM drains as in
+  the API.
 - `tests/integration/test_demo_call.py`: an aiortc caller on the harness stubs,
   with DATABASE_URL and REDIS_URL pointing at nothing; fails on any error a
   `turncall` logger records.
@@ -819,7 +888,7 @@ row is written: an `agent_id` outside the project, an inline config the domain
 model cannot read, or one breaking a provider rule or the procedures graph rule
 is refused, logged `agent_refused` with origin, project and reason, and the
 transport answers as for an answer naming no agent. Inbound phone calls (every
-carrier, `services/inbound_call`) are refused at the carrier, before the caller
+carrier, `services/call_opening`) are refused at the carrier, before the caller
 is answered; WebRTC answers `502 invalid_agent_config` whose `details` carry
 `{reason, field}` (an answer naming no agent stays `502 internal_error`);
 WhatsApp voice rejects the call unanswered (`reject_call_to_whatsapp`, #483),
@@ -877,14 +946,17 @@ the transport refuses as for an answer naming none.
 
 `agent` (inline config) instead of `agent_id` means there is nothing in `agents`
 to point at, so `calls.active_agent_id` stays **null** for the whole call and
-every event carries `agent_id: null`. Two rules hold it together, and every voice
-transport obeys both (`adr/0017`):
+every event carries `agent_id: null`. Two rules hold it together (`adr/0017`),
+and the call module holds both for every voice edge (see "Opening and running
+a call"):
 
 - `CallContext(agent_id=... or DYNAMIC_AGENT_ID)` — the zero-UUID sentinel from
-  `orchestrator/pipeline_factory.py`, never a locally invented one, and never
-  written to `active_agent_id`.
-- the config is stored raw as `metadata_json["dynamic_config"]` by whatever
-  creates the call row. `services/call_analysis_trigger.config_for_call()` is
+  `orchestrator/pipeline_factory.py`, never written to `active_agent_id`.
+  `call_runner.call_context` builds every call's context, the one the media
+  stream fails a call it refuses in included.
+- the config is stored raw as `metadata_json["dynamic_config"]` on the call
+  row, which the opening module writes (`open_call`, and
+  `call_start.write_call_row` for an outbound dial). `services/call_analysis_trigger.config_for_call()` is
   the only reader — post-call code must go through it rather than
   `agent.config_blob`, **log lines included**.
 
@@ -894,8 +966,10 @@ the second skips post-call processing, and since that trigger dispatches
 credentials (MCP headers, an inline `llm.api_key`), so it is never shown: the
 call read and `call.ended`'s `metadata` drop it (`call_view.public_metadata`,
 #276), and `POST /v1/calls/outbound` refuses a `metadata.dynamic_config` with
-a 422 — only call-init puts one there. `tests/unit/test_inline_agent_context.py`
-guards both structurally.
+a 422 — only call-init puts one there. Tested through the module
+(`tests/integration/test_call_opening.py`, `test_run_call.py`,
+`test_outbound_opening.py`) and end to end on every transport
+(`test_voice_call_init_acceptance.py`).
 
 Knowledge bases are links on an agent row, so an inline config names its own in
 `knowledge_bases` (#260, the link's fields). `pipeline_builder._assemble` reads
@@ -1545,9 +1619,9 @@ task running the call can do — so they go through the call (#215, tracker
 (`services/live_call_channel.py`):
 
 - `CallSession.start()` subscribes before the call reads as live and drops it
-  when the call stops running, so every voice transport has it (Twilio,
-  WebRTC, WhatsApp all end there; `test_live_control_wiring.py` fails on an
-  entry point that does not). None in an eval. Its connection is its own,
+  when the call stops running, so every voice call has it: `run_call` starts
+  every call's session (`test_run_call.py` sends a message to one). None in
+  an eval. Its connection is its own,
   outside the shared pool — a subscription holds it for the whole call. A
   Redis that cannot be reached costs the call its channel, never the call.
 - The API publishes `{kind, body, id}`. `PUBLISH`'s receiver count of **0 is a
@@ -1776,10 +1850,11 @@ and only hands the signal back once the process is empty:
   (`pending_post_call_tasks`, `pending_deliveries`) so `call.ended` goes out.
   Then `signal.raise_signal(SIGTERM)` with uvicorn's handler restored; the
   process exits by the signal (-15 / 143). A second SIGTERM hands back at once.
-- A call is counted by `drain.live_call(...)` at the transport entry points —
-  `webhooks/media_stream.py` (Twilio) and `pipeline_builder.start_call_pipeline`
-  (WebRTC, WhatsApp voice) — from config resolution through finalize. A new
-  voice entry point must count its calls the same way.
+- A call is counted by `drain.live_call(...)` in `call_runner.run_call`, for
+  every voice edge (each carrier's media stream, WebRTC, WhatsApp voice, the
+  demo), from before its MCP servers connect through finalize. An edge that
+  runs its calls through `run_call` (see "Opening and running a call") has
+  nothing to remember.
 - `GET /metrics`: `turncall_active_calls`, per process, Prometheus text, no
   client library.
 
@@ -1823,16 +1898,18 @@ env default, `0` there = unlimited). Redis unreachable → admitted and logged:
 a guardrail must not take the phone line down.
 
 - **Live calls per project** (#224). Every voice call takes a slot under its
-  call id *before* its row is written (`call_repo.create_call(call_id=)`):
-  inbound phone calls in `services/inbound_call.open_inbound_call` (every
-  carrier, #217) and WhatsApp voice in its webhook — over the limit, refused
+  call id *before* its row is written, in the opening module
+  (`services/call_opening.open_call`: every carrier's inbound call, WebRTC,
+  WhatsApp voice; an outbound dial in `place_outbound_call`, which writes its
+  row through the same `write_call_row`), and any failure before the row
+  commits gives it back. Over the limit, an inbound call is refused
   unanswered at the carrier (Twilio `<Reject reason="busy"/>`, Telnyx's
   `reject` command with cause `USER_BUSY`, Asterisk `continue` back to the
   dialplan, WhatsApp `reject`) and dispatched as
   `call.rejected` with **no** `call_id` (there is no row) —
-  outbound in `place_outbound_call` and WebRTC in `/connect`, both `429`.
-  A slot is a **lease** (`LIVE_CALL_LEASE_MS`, 2 min) that whoever runs the call
-  renews (`hold_live_call`, in `media_stream` and `start_call_pipeline`) and
+  outbound and WebRTC in `/connect` answer `429`.
+  A slot is a **lease** (`LIVE_CALL_LEASE_MS`, 2 min) that `run_call` renews
+  (`hold_live_call`) for every call it runs and
   frees on any exit; the Twilio status callback frees it on any terminal status
   (an unanswered outbound call's only ending), as Telnyx's `call.hangup` does
   and the Asterisk edge for a caller who leaves before the media is up, and a
@@ -1840,8 +1917,9 @@ a guardrail must not take the phone line down.
   once. A server that dies frees nothing — its leases lapse, so a crash costs a
   project slots for two minutes, never for good. Every call is counted even
   unlimited, so a limit set mid-day counts what is already live.
-  `test_live_call_limit_wiring.py` fails on a call row written without a slot
-  or a call run without a hold. Evals take none (not calls).
+  `test_call_opening.py` and `test_run_call.py` hold the slot's taking,
+  return and hold; `test_voice_edges_use_the_call_module.py` holds every edge
+  to the module. Evals take none (not calls).
 - **Outbound calls per second, per number** (#225). A sliding one-second
   window keyed on the from-number's E.164 (a carrier's cap is on the number),
   checked in `place_outbound_call` after the live-call slot
@@ -2510,8 +2588,7 @@ Connect agents to MCP servers for auto-discovered tools. Tools are fetched at ca
 - `services/mcp_client.py` — `MCPSessionManager`: connect, discover, call, cleanup. **mcp 2.x only** (`mcp>=2.1.1,<3`), which pipecat 1.12's `mcp` extra forces: the dual-spelling reads for 1.x's `Tool.inputSchema` / `CallToolResult.isError` are gone, since under that pin they could never match — on 2.x the old names survive only as pydantic aliases. Uses `streamable_http_client`, building its own HTTP client for headers/timeout
 - `orchestrator/tool_bridge.py` — Routes MCP tool calls through MCP client
 - `orchestrator/pipeline_factory.py` — Merges MCP tools into pipeline at creation
-- `orchestrator/pipeline_builder.py` — `start_call_pipeline()`: MCP discovery for WebRTC + WhatsApp voice (in the task that also runs the call — MCP transports open anyio cancel scopes that must be exited where they were entered)
-- `webhooks/media_stream.py` — MCP discovery before pipeline start (every carrier's media stream)
+- `orchestrator/call_runner.py` — `run_call()`: runs every voice call (each carrier's media stream, WebRTC, WhatsApp voice, the demo; #491–#493) — drain count, live-call slot, MCP connect and close (in the task that also runs the call: MCP transports open anyio cancel scopes that must be exited where they were entered), ambience mixer, call context, build, start. See "Opening and running a call"
 - `services/chat_tools.py` — webhook + MCP tools for text turns (per-message connect/close)
 - `services/tool_webhook.py` — the shared webhook POST + HMAC signing, used by both paths
 - `services/url_allowlist.py` — `check_url_allowed()`: MCP urls + BYOM/S2S base_urls share one SSRF gate (`BYOM_ALLOWED_URL_PATTERNS`; empty = allow all). Matches the whole URL **and** the host separately, so the trusted name can't be smuggled into a path, query or `user@` prefix
@@ -2536,6 +2613,7 @@ All Pipecat imports isolated in `orchestrator/`. No other module imports Pipecat
 - `asterisk_serializer.py` — Asterisk chan_websocket raw ulaw ↔ PCM16, `FLUSH_MEDIA` on barge-in
 - `pipeline_factory.py` — Builds pipeline from AgentConfig (providers, VAD, Smart Turn, voicemail)
 - `transport_factory.py` — Creates a carrier media-stream, WebRTC, or WhatsApp transport. `CARRIER_MEDIA` is the one place a call's carrier picks a serializer and rate (see "Carriers")
+- `call_runner.py` — `run_call`: runs every voice call an edge opened (see "Opening and running a call")
 - `call_session.py` — Per-call lifecycle, first message, cleanup
 - `tool_bridge.py` — Registers tools + writes ToolInvocation records
 - `observability.py` — Logs transcripts/events to DB + dispatches webhooks

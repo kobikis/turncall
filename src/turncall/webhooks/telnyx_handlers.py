@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Request
@@ -48,6 +48,9 @@ from turncall.webhooks.telnyx_signature import (
     TIMESTAMP_HEADER,
     verify_telnyx_signature,
 )
+
+if TYPE_CHECKING:
+    from turncall.services.call_opening import CallRefusal, OpenedCall
 
 router = APIRouter(prefix="/webhooks/telnyx", tags=["telnyx-webhooks"])
 
@@ -177,44 +180,67 @@ async def _answer_inbound(
     payload: dict[str, Any],
 ) -> None:
     call_control_id = str(payload.get("call_control_id") or "")
-    from_number = str(payload.get("from") or "")
-    to_number = str(payload.get("to") or "")
     logger.info(
         "telnyx_inbound_call",
         call_control_id=call_control_id,
-        from_number=from_number,
-        to_number=to_number,
+        from_number=payload.get("from"),
+        to_number=payload.get("to"),
     )
     if number is None:
-        logger.warning("telnyx_inbound_unknown_number", to_number=to_number)
+        logger.warning("telnyx_inbound_unknown_number", to_number=payload.get("to"))
         await _hang_up(account, call_control_id)
         return
+    from turncall.services.call_opening import CallRefusal
 
-    from turncall.services.inbound_call import InboundRefusal, open_inbound_call
-
-    call = await open_inbound_call(
-        session,
-        number,
-        carrier=TELNYX,
-        from_number=from_number,
-        to_number=to_number,
-        provider_call_sid=call_control_id,
-    )
-    if isinstance(call, InboundRefusal):
+    # Committed once it returns: the media stream Telnyx opens next reads the
+    # call row in a session of its own.
+    call = await _open(session, number, payload)
+    if isinstance(call, CallRefusal):
         if call.busy:
             await _reject_busy(account, call_control_id)
         else:
             await _hang_up(account, call_control_id)
         return
-    # The Call Control application a transfer dials the operator's leg on.
-    call.metadata_json = {
-        **call.metadata_json,
-        CONNECTION_KEY: str(payload.get("connection_id") or ""),
-    }
-    # Committed before answering: the media stream Telnyx opens next reads the
-    # call row in a session of its own.
-    await session.commit()
+    await _answer(request, session, account, call)
 
+
+async def _open(
+    session: AsyncSession, number: PhoneNumberRow, payload: dict[str, Any]
+) -> OpenedCall | CallRefusal:
+    """The `call.initiated` leg's call, opened on the number."""
+    from turncall.services.call_opening import (
+        INBOUND_PHONE_CALL,
+        CallParties,
+        EdgeHandles,
+        NumberSource,
+        open_call,
+    )
+
+    parties = CallParties(
+        from_number=str(payload.get("from") or ""),
+        to_number=str(payload.get("to") or ""),
+    )
+    handles = EdgeHandles(
+        carrier=TELNYX,
+        provider_call_sid=str(payload.get("call_control_id") or ""),
+        # The Call Control application a transfer dials the operator's leg on.
+        row_metadata={CONNECTION_KEY: str(payload.get("connection_id") or "")},
+    )
+    source = NumberSource(
+        number=number,
+        parties=parties,
+        handles=handles,
+        call_type=INBOUND_PHONE_CALL,
+        weighted=True,
+    )
+    return await open_call(source, project_id=number.project_id, session=session)
+
+
+async def _answer(
+    request: Request, session: AsyncSession, account: TelnyxAccount, call: OpenedCall
+) -> None:
+    """Answer an opened call with its media stream, or fail it with why."""
+    call_control_id = call.start.handles.provider_call_sid or ""
     if not account.api_key:
         from turncall.services.credentials import MissingProviderKeyError
 
@@ -222,10 +248,10 @@ async def _answer_inbound(
         return
     try:
         await account.adapter().answer_call(
-            call_control_id, stream_url=_stream_url(request, call.id)
+            call_control_id, stream_url=_stream_url(request, call.call_id)
         )
     except Exception as exc:
-        logger.exception("telnyx_answer_failed", call_id=str(call.id))
+        logger.exception("telnyx_answer_failed", call_id=str(call.call_id))
         # The answer may have reached Telnyx with only its reply lost: a leg
         # left up would be live and silent, with nothing to end it.
         await _hang_up(account, call_control_id)
@@ -255,7 +281,7 @@ async def _hang_up(account: TelnyxAccount, call_control_id: str) -> None:
 
 
 async def _fail(
-    session: AsyncSession, call: CallRow, error: Exception, missing_keys: list[str]
+    session: AsyncSession, call: OpenedCall, error: Exception, missing_keys: list[str]
 ) -> None:
     """A call that could not be answered: failed, with why, and `call.ended`."""
     from turncall.events.emit import emit_call_event, redact
@@ -281,15 +307,15 @@ async def _fail(
     )
     await emit_call_event(
         session,
-        call_id=call.id,
+        call_id=call.call_id,
         project_id=call.project_id,
         event_type=CallEventType.ERROR_RAISED,
         payload=raised,
     )
     await session.commit()
     # No media stream will ever hold the slot the call was admitted with.
-    await release_live_call(call.project_id, call.id)
-    await finalize_call(get_session_factory(), call.id, failed=True)
+    await release_live_call(call.project_id, call.call_id)
+    await finalize_call(get_session_factory(), call.call_id, failed=True)
 
 
 async def _on_hangup(

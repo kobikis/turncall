@@ -95,7 +95,7 @@ def dial(app, monkeypatch):
     monkeypatch.setattr(
         "turncall.services.outbound_dial.get_settings", lambda: state.settings
     )
-    agent = SimpleNamespace(id=uuid.uuid4())
+    agent = SimpleNamespace(id=uuid.uuid4(), name="support")
     number = SimpleNamespace(
         id=uuid.uuid4(),
         e164_number="+15550000001",

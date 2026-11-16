@@ -99,7 +99,7 @@ def stores(monkeypatch):
     )
     work = {
         "get_by_e164": AsyncMock(return_value=None),
-        "open_inbound_call": AsyncMock(),
+        "open_call": AsyncMock(),
         "handle_inbound_sms": AsyncMock(),
         "get_call_by_provider_sid": AsyncMock(return_value=None),
         "get_call_by_id": AsyncMock(return_value=None),
@@ -107,8 +107,8 @@ def stores(monkeypatch):
     }
     monkeypatch.setattr(f"{REPO}.get_by_e164", work["get_by_e164"])
     monkeypatch.setattr(
-        "turncall.services.inbound_call.open_inbound_call",
-        work["open_inbound_call"],
+        "turncall.services.call_opening.open_call",
+        work["open_call"],
     )
     monkeypatch.setattr(
         "turncall.services.sms_chat.handle_inbound_sms", work["handle_inbound_sms"]
@@ -160,7 +160,7 @@ class TestRefusedOutsideDevelopment:
         client, _ = _client(monkeypatch, settings)
 
         assert client.post(ROUTES[0], data=FORM).status_code == 403
-        assert stores["open_inbound_call"].await_count == 0
+        assert stores["open_call"].await_count == 0
 
     def test_a_whitespace_token_is_no_token(self, monkeypatch, stores) -> None:
         # A template rendering the token as " ": a key anyone can sign with.
@@ -175,7 +175,7 @@ class TestRefusedOutsideDevelopment:
 
         assert settings.twilio.auth_token == ""
         assert response.status_code == 403
-        assert stores["open_inbound_call"].await_count == 0
+        assert stores["open_call"].await_count == 0
 
     def test_a_flood_of_refusals_is_one_line_per_route(
         self, monkeypatch, stores, warnings

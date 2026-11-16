@@ -305,6 +305,40 @@ _Avoid_: "provider" for this (a [[provider]] is an STT/LLM/TTS backend), "teleph
 provider", "transport" (the media path a call's audio takes — a carrier's media
 stream, WebRTC, WhatsApp).
 
+**Voice edge**:
+Where a voice call arrives: a [[carrier]]'s inbound webhook and media stream,
+WebRTC's `/connect`, WhatsApp voice's webhook, the website demo. An edge verifies
+its request, reads its protocol, answers in its own format and supplies a factory
+for its transport; it [[open a call|opens]] and [[run a call|runs]] its calls
+through the call module and does none of their steps itself (#487, ADR-0034).
+_Avoid_: "entry point" for this (the media stream's shared entry point is one part
+of the carriers' edges), "transport" (the media path the edge builds).
+
+**Open a call** (an **opened call**):
+Turning what an edge resolved — the number or request, the project, call-init's
+answer or the stored agent — into a call that exists: its agent through
+[[agent acceptance]], a live-call slot admitted, the call row written (an
+[[inline agent]]'s raw config, no agent id) and `call.initializing` +
+`call.started` recorded (`services/call_opening.open_call`). It answers an
+**opened call** — the call id, project, [[accepted agent]], the row's metadata and
+the edge's own handles — or a **call refusal** (over the live-call limit, no usable
+agent, an [[agent refusal]]) the edge turns into its reply, with nothing of the call
+left behind. An outbound dial is opened by its own path (suppression, limits, the
+carrier dial) but writes its row the same way.
+_Avoid_: "admit" for the whole (admitting is taking the live-call slot, one step
+of opening), "accept" (that is [[agent acceptance]], another step), "start" (the
+pipeline starts when the call is run), "create a call" (writing the row is one step).
+
+**Run a call**:
+What happens to an opened call once its media is there
+(`orchestrator/call_runner.run_call`): counted for the drain, its live-call slot
+held and freed however it ends, its MCP servers connected and closed, the
+[[ambience]] mixer built and handed to the edge's transport, the call context
+built, the pipeline built and started. A carrier opens a call in one request and
+runs it in another, when its media stream connects; WebRTC and WhatsApp voice
+open and run it in one.
+_Avoid_: "start a call" for the whole (starting the pipeline is its last step).
+
 **Campaign**:
 A set of outbound calls one agent places to a list of targets, paced and retried by
 the platform; the unit an operator starts, pauses and cancels. The agent may be a

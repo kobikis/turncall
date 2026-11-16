@@ -5,9 +5,10 @@ Pipecat 1.0 uses SmallWebRTCRequestHandler for signaling:
   - PATCH /connect — ICE candidate trickle
 """
 
-from dataclasses import fields
+from dataclasses import dataclass, fields, replace
+from functools import partial
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -23,28 +24,28 @@ from pipecat.transports.smallwebrtc.request_handler import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from turncall.api.deps import DbSession
-from turncall.api.errors import ApiError, ErrorCode, NotFoundError
-from turncall.auth import Auth, WriteAuth
+from turncall.api.errors import ApiError, ErrorCode, NotFoundError, RateLimitedError
+from turncall.auth import WriteAuth
 from turncall.config import get_settings
-from turncall.orchestrator.ambience import build_ambience_mixer
+from turncall.domain.carriers import DEFAULT_CARRIER
 from turncall.orchestrator.avatar import skip_reason
-from turncall.orchestrator.pipeline_builder import start_call_pipeline
-from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
+from turncall.orchestrator.call_runner import CallToRun, TransportFactory, run_call
 from turncall.orchestrator.transport_factory import (
     WEBRTC_SAMPLE_RATE,
     create_whatsapp_transport,
     ice_servers,
 )
 from turncall.orchestrator.webrtc_offer import bundled
-from turncall.services.agent_acceptance import (
-    AcceptedAgent,
-    AgentOrigin,
-    AgentRefusal,
-    accept_agent,
-    log_refusal,
+from turncall.services.call_agents import call_init_agent, stored_agent
+from turncall.services.call_opening import (
+    CallParties,
+    CallRefusal,
+    ChosenAgent,
+    EdgeHandles,
+    open_call,
 )
 from turncall.services.credentials import MissingProviderKeyError
-from turncall.services.limits import admit_live_call, release_live_call
+from turncall.services.limits import release_live_call
 from turncall.services.outbound_url import check_outbound_url
 from turncall.services.template_renderer import check_variables
 from turncall.storage.database import create_session_factory, get_engine
@@ -158,7 +159,7 @@ async def webrtc_connect(
         )
 
     # Validate agent_id shape here so a malformed value is a clean 400, not a
-    # 500 when _resolve_agent does UUID(agent_id_str).
+    # 500 when the source does UUID(agent_id_str).
     if agent_id_str and not _is_uuid(agent_id_str):
         raise ApiError(
             status_code=400,
@@ -188,101 +189,38 @@ async def webrtc_connect(
                 message=str(exc),
             ) from exc
 
-    # The call's id, chosen before call-init so the server is told the id the
-    # call is then created with, not a stand-in nothing else ever carries.
-    call_id = uuid4()
-
-    # Resolve agent config
-    (
-        accepted,
-        agent_id_for_call,
-        template_variables,
-        request_metadata,
-        knowledge_context,
-        dynamic_config,
-    ) = await _resolve_agent(
-        session,
-        auth,
-        agent_id_str,
-        server_url,
-        server_url_secret,
-        variables,
-        call_id=call_id,
-    )
-    # The request's own win a clash with call-init's, as an outbound dial's do.
-    template_variables = {**(template_variables or {}), **variables}
-
-    # Apply template variables and knowledge context
-    agent = accepted.rendered(template_variables, knowledge_context=knowledge_context)
-    config = agent.config
-
-    # Before the call row, so a refusal leaves nothing behind (#224). The slot
-    # is the pipeline task's to free once it runs; until then, ours.
-    await admit_live_call(session, project_id=auth.project_id, call_id=call_id)
-
-    engine = get_engine()
-    session_factory = create_session_factory(engine)
-
-    # Create call record
-    from turncall.domain.enums import CallDirection, CallEventType
-    from turncall.storage.repositories import call_repo
-
-    call_metadata: dict[str, Any] = {
-        "transport": "webrtc",
-        **({"template_variables": template_variables} if template_variables else {}),
-        **({"metadata": request_metadata} if request_metadata else {}),
-        **({"knowledge_context": knowledge_context} if knowledge_context else {}),
-        # An inline agent leaves no agent row, so this is the only record of
-        # what the call ran with. Everything after the hangup reads it back:
-        # post-call analysis, and — since that trigger is what dispatches
-        # call.ended — the webhook and every Automation hanging off it.
-        # Stored raw, before rendering, to match the other transports.
-        **({"dynamic_config": dynamic_config} if dynamic_config else {}),
-    }
-
-    async with session_factory() as db_session:
-        call = await call_repo.create_call(
-            db_session,
-            project_id=auth.project_id,
-            call_id=call_id,
-            direction=CallDirection.INBOUND,
-            active_agent_id=agent_id_for_call,
-            metadata_json=call_metadata,
-        )
-
-        # Recorded *and* dispatched, as every carrier's inbound call is: these
-        # were stored only, and call.started never written, so a subscriber's
-        # first word of a WebRTC call was its first transcript.
-        from turncall.events.emit import emit_call_event
-
-        await emit_call_event(
-            db_session,
-            call_id=call.id,
-            project_id=auth.project_id,
-            event_type=CallEventType.CALL_INITIALIZING,
-            payload={"direction": "inbound", "transport": "webrtc"},
-        )
-        await emit_call_event(
-            db_session,
-            call_id=call.id,
-            project_id=auth.project_id,
-            event_type=CallEventType.CALL_STARTED,
-            payload={
-                "direction": "inbound",
-                "transport": "webrtc",
-                # agent_id is carried in the envelope (ADR-0007).
-                "dynamic_config": bool(dynamic_config),
-            },
-        )
-        await db_session.commit()
-
-    call_context = CallContext(
-        call_id=call.id,
+    # Opened like every voice call (#494): the slot, the agent the request
+    # names or its call-init answers, the row and its start events. A refusal
+    # is answered as this request's error, and nothing of the call is left,
+    # its slot included.
+    source = _BrowserSource(
         project_id=auth.project_id,
-        agent_id=agent_id_for_call or DYNAMIC_AGENT_ID,
-        call_sid="webrtc",
-        stream_sid="webrtc",
-        session_factory=session_factory,
+        agent_id=agent_id_str,
+        server_url=server_url,
+        server_url_secret=server_url_secret,
+        variables=variables,
+    )
+    try:
+        opened = await open_call(source, project_id=auth.project_id, session=session)
+    except Exception as exc:
+        # A row that cannot be written gave its slot back at once (#489).
+        logger.exception("webrtc call not opened")
+        raise ApiError(
+            status_code=500,
+            code=ErrorCode.PIPELINE_START_FAILED,
+            message="The call could not be opened",
+        ) from exc
+    if isinstance(opened, CallRefusal):
+        raise _refused(opened, agent_id=agent_id_str)
+    call_id = opened.call_id
+
+    call = CallToRun.of(opened, session_factory=create_session_factory(get_engine()))
+    config = call.agent.config
+    # A browser call is the one that can show an Avatar. Whether this one will
+    # is the build's decision (`avatar_gate`, which records why not); the
+    # transport only needs to know whether to send video.
+    avatar_on = (
+        config.avatar.enabled and skip_reason(config, carries_video=True) is None
     )
 
     # pipecat's handler logs an exception from this callback and answers the
@@ -293,43 +231,22 @@ async def webrtc_connect(
     # Use SmallWebRTCRequestHandler — it creates/reuses the connection
     async def on_connection(connection: SmallWebRTCConnection) -> None:
         """Callback invoked when a new WebRTC connection is established."""
-        # A browser call is the one that can show an Avatar. Whether this one
-        # will is the build's decision (`avatar_gate`, which records why not);
-        # the transport only needs to know whether to send video.
-        avatar_on = (
-            config.avatar.enabled and skip_reason(config, carries_video=True) is None
-        )
-
-        mixer = await build_ambience_mixer(
-            config,
-            project_id=call_context.project_id,
+        transport = TransportFactory(
+            make=partial(create_whatsapp_transport, connection, video_out=avatar_on),
             sample_rate=WEBRTC_SAMPLE_RATE,
-            session_factory=session_factory,
-            settings=settings,
+            carries_video=True,
         )
-        transport = create_whatsapp_transport(
-            connection, video_out=avatar_on, mixer=mixer
-        )
-
         try:
             # Returns once the pipeline is built; the call runs in a task of its
             # own so any MCP servers are connected and closed inside it.
-            await start_call_pipeline(
-                agent=agent,
-                transport=transport,
-                call_context=call_context,
-                settings=settings,
-                session_factory=session_factory,
-                audio_sample_rate=WEBRTC_SAMPLE_RATE,
-                carries_video=True,
-            )
+            await run_call(call, transport, own_task=True, settings=settings)
         except Exception as exc:
             # The call is already failed with its reason (build_call_pipeline).
-            logger.exception("webrtc pipeline build failed", call_id=str(call.id))
+            logger.exception("webrtc pipeline build failed", call_id=str(call_id))
             build_failure.append((connection, exc))
             raise
 
-        _calls_by_pc[connection.pc_id] = (call.id, auth.project_id)
+        _calls_by_pc[connection.pc_id] = (call_id, auth.project_id)
 
         @connection.event_handler("closed")
         async def _forget(closed: SmallWebRTCConnection) -> None:
@@ -349,7 +266,7 @@ async def webrtc_connect(
         raise ApiError(
             status_code=500,
             code=ErrorCode.PIPELINE_START_FAILED,
-            message=f"The agent could not start (call {call.id}): {exc}",
+            message=f"The agent could not start (call {call_id}): {exc}",
             details=(
                 {"missing_keys": exc.accounts}
                 if isinstance(exc, MissingProviderKeyError)
@@ -365,14 +282,14 @@ async def webrtc_connect(
             message="Failed to create WebRTC answer",
         )
 
-    logger.info("WebRTC call started: call={call_id}", call_id=str(call.id))
+    logger.info("WebRTC call started: call={call_id}", call_id=str(call_id))
     # The call id rides back with the answer (#87). Additive: a client reading
     # `sdp`/`type` is unaffected, and without it a browser that just held a
     # conversation cannot say which call that was — so it cannot fetch the
     # transcript, link to the recording, or derive a scenario from it. The id
     # was only ever logged.
     if isinstance(answer, dict):
-        answer = {**answer, "call_id": str(call.id)}
+        answer = {**answer, "call_id": str(call_id)}
     return JSONResponse(content=answer)
 
 
@@ -466,123 +383,93 @@ def _request_variables(raw: Any) -> dict[str, str]:
         ) from exc
 
 
-async def _resolve_agent(
-    session: AsyncSession,
-    auth: Auth,
-    agent_id_str: str | None,
-    server_url: str | None,
-    server_url_secret: str | None,
-    variables: dict[str, str] | None = None,
-    *,
-    call_id: UUID,
-) -> tuple[AcceptedAgent, UUID | None, dict, dict, str | None, dict | None]:
-    """Resolve the call's agent from agent_id or server_url, through agent
-    acceptance either way (#477, #481).
-
-    `variables` are the request's own, shown to call-init as `call.variables`
-    so it can answer with them in mind.
-
-    Returns (accepted agent, agent_id, template_variables, metadata,
-    knowledge_context, dynamic_config). The last is the inline agent as
-    call-init sent it, or None for a stored agent — the caller persists it on
-    the call row.
-    """
-    if agent_id_str:
-        accepted = await _accepted_stored(session, UUID(agent_id_str), auth.project_id)
-        return accepted, accepted.agent_id, {}, {}, None, None
-    return await _call_init_agent(
-        session,
-        auth,
-        server_url,
-        server_url_secret,
-        variables,
-        call_id=call_id,
-    )
+# A browser call has no numbers and no carrier: its row keeps the default
+# carrier (`calls.provider`) as it always has, and its events say `webrtc`.
+_NO_NUMBERS = CallParties(from_number="", to_number="")
+_BROWSER = EdgeHandles(carrier=DEFAULT_CARRIER, transport="webrtc")
 
 
-def _no_valid_agent() -> ApiError:
+@dataclass(frozen=True)
+class _BrowserSource:
+    """A connect request, as `open_call` takes it: the agent it names, or
+    the one its call-init answers — chosen as a number's call chooses
+    either. A refusal is the request's to answer (`_refused`), and the
+    browser hears it: none is announced as `call.rejected`."""
+
+    project_id: UUID
+    agent_id: str | None
+    server_url: str | None
+    server_url_secret: str | None
+    variables: dict[str, str]
+    parties: CallParties = _NO_NUMBERS
+    handles: EdgeHandles = _BROWSER
+    refused_unanswered: bool = False
+
+    async def choose_agent(
+        self, session: AsyncSession, *, call_id: UUID
+    ) -> ChosenAgent | CallRefusal:
+        chosen = await self._chosen(session, call_id=call_id)
+        if isinstance(chosen, CallRefusal):
+            return chosen
+        # The request's own win a clash with call-init's, as an outbound
+        # dial's do.
+        metadata = chosen.metadata
+        variables = {**metadata.template_variables, **self.variables}
+        return replace(chosen, metadata=replace(metadata, template_variables=variables))
+
+    async def _chosen(
+        self, session: AsyncSession, *, call_id: UUID
+    ) -> ChosenAgent | CallRefusal:
+        if self.agent_id:
+            return await stored_agent(
+                session,
+                UUID(self.agent_id),
+                project_id=self.project_id,
+                call_id=call_id,
+            )
+        return await call_init_agent(
+            session,
+            server_url=str(self.server_url),
+            secret=self.server_url_secret,
+            call_type="webrtc",
+            parties=self.parties,
+            handles=self.handles,
+            variables=self.variables,
+            project_id=self.project_id,
+            call_id=call_id,
+        )
+
+
+def _refused(refusal: CallRefusal, *, agent_id: str | None) -> ApiError:
+    """The answer to a connect `open_call` refused. Over the live-call limit
+    (#224) is a 429 naming it. A named agent that is not the project's is a
+    404, one acceptance refuses a 422 naming the field; a `server_url` that
+    names no agent, or one that cannot run, a 502."""
+    if refusal.busy:
+        limit = refusal.live_call_limit
+        return RateLimitedError(
+            f"This project is at its limit of {limit} live calls",
+            {"limit": "live_calls", "max": limit},
+        )
+    refused = refusal.refusal
+    if agent_id and refused is None:
+        return NotFoundError("Agent", agent_id)
+    if agent_id and refused is not None:
+        return ApiError(
+            status_code=422,
+            code=ErrorCode.INVALID_AGENT_CONFIG,
+            message=f"agent {agent_id} cannot run: {refused.describe()}",
+            details={"reason": refused.reason, "field": refused.field},
+        )
+    if refused is not None:
+        return ApiError(
+            status_code=502,
+            code=ErrorCode.INVALID_AGENT_CONFIG,
+            message=f"server_url returned an agent that cannot run: {refused.reason}",
+            details={"reason": refused.reason, "field": refused.field},
+        )
     return ApiError(
         status_code=502,
         code=ErrorCode.INTERNAL_ERROR,
         message="server_url did not return a valid agent",
     )
-
-
-async def _call_init_agent(
-    session: AsyncSession,
-    auth: Auth,
-    server_url: str | None,
-    server_url_secret: str | None,
-    variables: dict[str, str] | None,
-    *,
-    call_id: UUID,
-) -> tuple[AcceptedAgent, UUID | None, dict, dict, str | None, dict | None]:
-    """`_resolve_agent` for a request naming a `server_url`: the agent its
-    call-init answers, accepted before the slot and the row (#477) — one
-    that cannot run is refused here, saying why, never at build."""
-    from turncall.events.server_events import send_call_init
-    from turncall.services.call_init_resolver import (
-        accept_call_init_agent,
-        resolve_call_init,
-    )
-
-    response = await send_call_init(
-        server_url,
-        call_id=str(call_id),
-        from_number="",
-        to_number="",
-        transport_type="webrtc",
-        secret=server_url_secret,
-        variables=variables or None,
-    )
-    if not (response.success and response.data):
-        raise _no_valid_agent()
-    result = await resolve_call_init(session, response.data, project_id=auth.project_id)
-    accepted = await accept_call_init_agent(
-        session, result, project_id=auth.project_id, call_id=str(call_id)
-    )
-    if isinstance(accepted, AgentRefusal):
-        raise ApiError(
-            status_code=502,
-            code=ErrorCode.INVALID_AGENT_CONFIG,
-            message=f"server_url returned an agent that cannot run: {accepted.reason}",
-            details={"reason": accepted.reason, "field": accepted.field},
-        )
-    if accepted is None:
-        raise _no_valid_agent()
-    return (
-        accepted,
-        result.agent.id if result.agent else None,
-        result.template_variables,
-        result.metadata,
-        result.knowledge_context,
-        result.dynamic_config,
-    )
-
-
-async def _accepted_stored(
-    session: AsyncSession, agent_id: UUID, project_id: UUID
-) -> AcceptedAgent:
-    """The named agent through agent acceptance (`stored_call`, #481): one of
-    another project, or none, is a 404 as before; one saved before a newer
-    rule existed is a 422 naming the field, before any slot or call row,
-    rather than a build that fails after the browser connected."""
-    outcome = await accept_agent(
-        agent_id, project_id=project_id, origin=AgentOrigin.STORED_CALL, session=session
-    )
-    if isinstance(outcome, AgentRefusal):
-        if outcome.field == "agent_id":
-            raise NotFoundError("Agent", str(agent_id))
-        log_refusal(
-            outcome,
-            origin=AgentOrigin.STORED_CALL,
-            project_id=project_id,
-            agent_id=str(agent_id),
-        )
-        raise ApiError(
-            status_code=422,
-            code=ErrorCode.INVALID_AGENT_CONFIG,
-            message=f"agent {agent_id} cannot run: {outcome.describe()}",
-            details={"reason": outcome.reason, "field": outcome.field},
-        )
-    return outcome

@@ -250,22 +250,33 @@ async def test_a_retried_call_initiated_opens_one_call(monkeypatch) -> None:
     row, a second `answer` for the same leg."""
     import asyncio
 
-    from turncall.services import inbound_call
+    from tests.integration.test_text_session_variables import CallInitServer
 
-    resolve = inbound_call._resolve_agent
-
-    async def slow_resolve(*args: Any, **kwargs: Any) -> Any:
-        await asyncio.sleep(0.5)
-        return await resolve(*args, **kwargs)
+    class SlowCallInit(CallInitServer):
+        async def _answer(self, request: Any) -> Any:
+            await asyncio.sleep(0.5)
+            return await super()._answer(request)
 
     cc = _new_id()
-    async with run_app(
-        Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
-    ) as app:
-        number = await telnyx.bind_number(
-            app.api, app.carrier, await app.create_agent(AGENT)
+    async with (
+        SlowCallInit() as server,
+        run_app(
+            Script(), set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+        ) as app,
+    ):
+        server.answer = {"agent_id": await app.create_agent(AGENT)}
+        number = "+1555" + str(uuid.uuid4().int)[:7]
+        app.carrier.add_number(number)
+        bound = await app.api.post(
+            "/v1/phone-numbers",
+            json={
+                "carrier": "telnyx",
+                "e164_number": number,
+                "routing_target_type": "webhook",
+                "server_url": server.url,
+            },
         )
-        monkeypatch.setattr(inbound_call, "_resolve_agent", slow_resolve)
+        assert bound.status_code == 201, bound.text
         body = _initiated(cc, number)
         first, retry = await asyncio.gather(
             telnyx.post_signed(app.api, app.carrier, body),
@@ -275,6 +286,7 @@ async def test_a_retried_call_initiated_opens_one_call(monkeypatch) -> None:
 
     assert (first.status_code, retry.status_code) == (200, 200)
     assert len(_answered(app, cc)) == 1
+    assert len(server.requests) == 1  # the retry waited, then found the row
     assert calls["total"] == 1
 
 

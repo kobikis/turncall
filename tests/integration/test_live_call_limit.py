@@ -141,7 +141,7 @@ async def test_over_the_limit_telnyx_inbound_is_rejected_busy(monkeypatch, redis
 async def test_over_the_limit_asterisk_call_goes_back_to_the_dialplan(
     monkeypatch, redis_env
 ):
-    """The ARI edge admits through the same `open_inbound_call` (#209): over
+    """The ARI edge admits through the same `open_call` (#209): over
     the limit the caller's channel is continued to the dialplan unanswered, as
     any refused call is, and `call.rejected` names the carrier. A call whose
     caller leaves before its media stream came gives its slot back — no
@@ -268,9 +268,13 @@ async def test_webrtc_over_the_limit_is_429_and_leaves_no_call(monkeypatch, redi
             json={"sdp": "v=0", "type": "offer", "agent_id": agent_id},
         )
         calls = (await app.api.get("/v1/calls")).json()["data"]
+        # The 429 is the answer: a browser is not refused at a carrier.
+        with pytest.raises(TimeoutError):
+            await app.sink.wait_for("call.rejected", timeout=1.0)
 
     assert r.status_code == 429
     assert r.json()["code"] == "rate_limited"
+    assert r.json()["details"] == {"limit": "live_calls", "max": 1}
     assert len(calls) == 1
 
 
@@ -415,3 +419,97 @@ async def test_reserve_dial_takes_both_or_nothing(monkeypatch, redis_env):
         await limits.release_dial(project, N, first)
     finally:
         await close_redis()
+
+
+async def test_a_webrtc_row_that_cannot_be_written_gives_its_slot_back(
+    monkeypatch, redis_env
+):
+    """The slot is taken before the call row; a row write that fails must free
+    it at once, or a project at its limit refuses its next caller for the two
+    minutes the lease takes to lapse (#489)."""
+    from turncall.api.v1 import webrtc
+    from turncall.storage.repositories import call_repo
+
+    real_create_call = call_repo.create_call
+    failures = [RuntimeError("the database refused the row")]
+
+    async def _create_call_once_failing(session, **kwargs):
+        row = await real_create_call(session, **kwargs)
+        if failures:
+            raise failures.pop()
+        return row
+
+    async def _answer_without_peer(_request, _on_connection):
+        # No peer in this test: the second call only has to be admitted.
+        return {"sdp": "v=0", "type": "answer", "pc_id": "pc-489"}
+
+    monkeypatch.setattr(call_repo, "create_call", _create_call_once_failing)
+    monkeypatch.setattr(
+        webrtc._request_handler, "handle_web_request", _answer_without_peer
+    )
+    async with run_app(
+        SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        agent_id, _, _ = await limited_project(app, live_calls=1)
+        offer = {"sdp": "v=0", "type": "offer", "agent_id": agent_id}
+
+        failed = await app.api.post("/v1/webrtc/connect", json=offer)
+        calls_after_failure = (await app.api.get("/v1/calls")).json()["data"]
+        events_after_failure = app.sink.of("call.initializing") + app.sink.of(
+            "call.started"
+        )
+        second = await app.api.post("/v1/webrtc/connect", json=offer)
+        calls = (await app.api.get("/v1/calls")).json()["data"]
+
+    assert failed.status_code == 500, failed.text
+    assert "sdp" not in failed.json()
+    assert calls_after_failure == []
+    assert events_after_failure == []
+    assert second.status_code == 200, second.text
+    assert [c["id"] for c in calls] == [second.json()["call_id"]]
+
+
+async def test_a_webrtc_call_holds_its_slot_until_it_ends(monkeypatch, redis_env):
+    """A browser on a real peer: while its call runs the project is full, and
+    once the agent ends it the slot is free again."""
+    from aiortc import RTCPeerConnection, RTCSessionDescription
+
+    from tests.integration.test_demo_call import Mic
+
+    monkeypatch.setenv("WEBRTC_ICE_SERVERS", "[]")
+    async with run_app(
+        SCRIPT, set_env=monkeypatch.setenv, set_attr=monkeypatch.setattr
+    ) as app:
+        agent_id, _, _ = await limited_project(app, live_calls=1)
+        pc, mic = RTCPeerConnection(), Mic()
+        pc.addTrack(mic.track)
+        try:
+            await pc.setLocalDescription(await pc.createOffer())
+            connected = await app.api.post(
+                "/v1/webrtc/connect",
+                json={
+                    "sdp": pc.localDescription.sdp,
+                    "type": pc.localDescription.type,
+                    "agent_id": agent_id,
+                },
+            )
+            assert connected.status_code == 200, connected.text
+            await pc.setRemoteDescription(
+                RTCSessionDescription(sdp=connected.json()["sdp"], type="answer")
+            )
+            while_live = await app.api.post(
+                "/v1/webrtc/connect",
+                json={"sdp": "v=0", "type": "offer", "agent_id": agent_id},
+            )
+            mic.say()
+            ended = await app.sink.wait_for("call.ended")
+            # The agent ended the call; the browser has not hung up yet.
+            free_after = await limits.claim_live_call(
+                uuid.UUID(app.project_id), uuid.uuid4(), 1
+            )
+        finally:
+            await pc.close()
+
+    assert while_live.status_code == 429, while_live.text
+    assert ended["call_id"] == connected.json()["call_id"]
+    assert free_after

@@ -4,8 +4,8 @@ The channel itself — subscribe, answer, acknowledge — is
 `services/live_call_channel`. This is the call's half: which request kinds it
 answers and what each does to its pipeline. `CallSession.start()` holds the
 channel open for exactly as long as it runs the call, which is what makes it
-every voice transport's: Twilio, WebRTC and WhatsApp voice all end in that one
-method (`tests/unit/test_live_control_wiring.py` fails on one that does not).
+every voice call's: `call_runner.run_call` starts the session of every call
+every voice edge runs.
 """
 
 from __future__ import annotations

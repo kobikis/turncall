@@ -3,10 +3,11 @@
 Each carrier owns its inbound edge — its webhook routes, its signature check,
 its answer format, and the handshake its media stream opens with
 (`twilio_media_stream.py` for Twilio). Every one of them ends by handing the
-open stream to `run_media_stream`, which resolves the call's agent from the
-call record and builds the pipeline. The serializer is chosen here from the
-call's own carrier, in `create_carrier_transport`; past it, nothing learns
-which carrier the call is on.
+open stream to `run_media_stream`, which accepts the call's agent again from
+the call record and runs the call through `call_runner.run_call` (#492) —
+the run every voice edge gets. The serializer is chosen here from the call's
+own carrier, in `create_carrier_transport`; past it, nothing learns which
+carrier the call is on.
 
 Before any of that, the stream has to prove it is the call's (a call id is
 not a secret, and the socket gets the call's agent): it must carry the call's
@@ -16,6 +17,8 @@ with nothing built and the call's live-call slot untouched — the slot is the
 real stream's.
 """
 
+from dataclasses import replace
+from functools import partial
 from typing import Any
 from uuid import UUID
 
@@ -24,15 +27,19 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from turncall.config import get_settings
+from turncall.domain.enums import CallDirection
+from turncall.orchestrator.call_runner import (
+    CallToRun,
+    TransportFactory,
+    call_context,
+    run_call,
+)
 from turncall.orchestrator.call_session import fail_unstarted_call
-from turncall.orchestrator.pipeline_builder import build_call_pipeline
-from turncall.orchestrator.pipeline_factory import DYNAMIC_AGENT_ID, CallContext
 from turncall.orchestrator.transport_factory import (
     CARRIER_MEDIA,
     CarrierStream,
     create_carrier_transport,
 )
-from turncall.services import drain
 from turncall.services.agent_acceptance import (
     AcceptedAgent,
     AgentOrigin,
@@ -40,7 +47,14 @@ from turncall.services.agent_acceptance import (
     accept_agent,
     log_refusal,
 )
-from turncall.services.limits import hold_live_call, release_live_call
+from turncall.services.call_opening import (
+    CallMetadata,
+    CallParties,
+    CallStart,
+    EdgeHandles,
+    OpenedCall,
+)
+from turncall.services.limits import release_live_call
 from turncall.services.media_token import media_token_valid
 from turncall.storage.database import create_session_factory, get_engine
 from turncall.storage.models import CallRow
@@ -95,118 +109,102 @@ async def run_media_stream(
     carrier: str,
     token: str,
 ) -> None:
-    """Run one call's pipeline on an accepted, started carrier media stream.
+    """Run one call on an accepted, started carrier media stream.
 
     `carrier` is the edge's own — the route the stream arrived on — and
     `token` the media token its handshake carried. Raises `MediaStreamRefused`
     before anything is built for a stream that is not the call's (see the
-    module docstring). Returns when the call ends. Raises what the pipeline
-    raises; the carrier's edge owns the socket and decides what a failure
-    means to it.
+    module docstring). The call runs through `run_call`, blocking: this
+    returns when the call ends. Raises what the build raises; the carrier's
+    edge owns the socket and decides what a failure means to it.
     """
-    call_id_str = str(call_id)
     settings = get_settings()
-    engine = get_engine()
-    session_factory = create_session_factory(engine)
+    session_factory = create_session_factory(get_engine())
     await _claim(session_factory, call_id, carrier, token)
+    call = await _opened_call(session_factory, call_id, carrier, stream)
+    if call is None:
+        return
+    transport = TransportFactory(
+        # The serializer comes from the call's carrier (ADR-0022) — which the
+        # claim has made sure is also the edge's.
+        make=partial(create_carrier_transport, carrier, websocket, stream),
+        sample_rate=CARRIER_MEDIA[carrier].sample_rate,
+    )
+    await run_call(call, transport, own_task=False, settings=settings)
 
-    # Resolve everything from the call record (project_id, agent_id, config)
+
+async def _opened_call(
+    session_factory: async_sessionmaker[AsyncSession],
+    call_id: UUID,
+    carrier: str,
+    stream: CarrierStream,
+) -> CallToRun | None:
+    """The call this stream claimed, as an opened call: its row's agent
+    accepted again (#481) and rendered with the row's variables. None when it
+    cannot run — the call failed or its slot freed where that is ours to do."""
+    from turncall.storage.repositories import call_repo
+
     async with session_factory() as session:
-        from turncall.storage.repositories import call_repo
-
-        call_row = await call_repo.get_call_by_id(session, UUID(call_id_str))
+        call_row = await call_repo.get_call_by_id(session, call_id)
         if call_row is None:
-            logger.error("media_stream_call_not_found: {id}", id=call_id_str)
-            return
-
-        if carrier not in CARRIER_MEDIA:
-            # A call reaching a media stream this deployment has no serializer
-            # for: decoding it as some other carrier's would be noise.
-            logger.error(
-                "media_stream_unknown_carrier", call_id=call_id_str, carrier=carrier
-            )
-            await release_live_call(call_row.project_id, call_id)
-            return
-
-        project_id_str = str(call_row.project_id)
-        agent_id_str = (
-            str(call_row.active_agent_id) if call_row.active_agent_id else "dynamic"
-        )
-        origin = _agent_origin(call_row)
+            logger.error("media_stream_call_not_found: {id}", id=str(call_id))
+            return None
+        origin = _runnable_origin(call_row, carrier)
         if origin is None:
-            logger.error(
-                "media_stream_no_config",
-                agent_id=agent_id_str,
-            )
             await release_live_call(call_row.project_id, call_id)
-            return
+            return None
         outcome = await _accepted_agent(session, call_row, origin)
-        if isinstance(outcome, AgentRefusal):
-            await _refuse(call_row, outcome, origin, session_factory, stream)
-            return
+    start = _call_start(call_row, stream)
+    if isinstance(outcome, AgentRefusal):
+        await _refuse(start, outcome, origin, session_factory, stream)
+        return None
+    call = CallToRun.of(
+        OpenedCall(start=start, agent=outcome), session_factory=session_factory
+    )
+    return replace(call, stream_sid=stream.stream_id)
 
-        metadata = call_row.metadata_json or {}
-        agent = outcome.rendered(
-            metadata.get("template_variables") or {},
-            knowledge_context=metadata.get("knowledge_context"),
+
+def _runnable_origin(call_row: CallRow, carrier: str) -> AgentOrigin | None:
+    """Where the row's agent came from, or None (logged) for a call that
+    cannot run here at all."""
+    if carrier not in CARRIER_MEDIA:
+        # A call reaching a media stream this deployment has no serializer
+        # for: decoding it as some other carrier's would be noise.
+        logger.error(
+            "media_stream_unknown_carrier", call_id=str(call_row.id), carrier=carrier
         )
-    config = agent.config
+        return None
+    origin = _agent_origin(call_row)
+    if origin is None:
+        logger.error(
+            "media_stream_no_config",
+            agent_id=str(call_row.active_agent_id or "dynamic"),
+        )
+    return origin
 
-    # Live from here until the session has finalized: a SIGTERM waits (#199).
-    with drain.live_call(call_id, config.max_call_duration_seconds):
-        # The slot taken when the call was admitted (#224) is this task's to
-        # keep while the call runs, and to free however it ends.
-        async with hold_live_call(call_row.project_id, call_id):
-            # Connect MCP servers and discover tools (if configured)
-            mcp_manager = None
-            mcp_tools: list = []
-            if config.mcp_servers:
-                from turncall.services.mcp_client import MCPSessionManager
 
-                mcp_manager = MCPSessionManager(
-                    call_id=UUID(call_id_str),
-                    project_id=UUID(project_id_str),
-                )
-                mcp_tools = await mcp_manager.connect_servers(config.mcp_servers)
-
-            # Build call context
-            call_context = CallContext(
-                call_id=UUID(call_id_str),
-                project_id=UUID(project_id_str),
-                agent_id=call_row.active_agent_id or DYNAMIC_AGENT_ID,
-                # A stream that does not name the call's REST handle (Asterisk's)
-                # leaves it to the call record, which always has it.
-                call_sid=stream.call_sid or call_row.provider_call_sid or "",
-                stream_sid=stream.stream_id,
-                session_factory=session_factory,
-                mcp_manager=mcp_manager,
-            )
-
-            from turncall.orchestrator.ambience import build_ambience_mixer
-
-            mixer = await build_ambience_mixer(
-                config,
-                project_id=call_context.project_id,
-                sample_rate=CARRIER_MEDIA[carrier].sample_rate,
-                session_factory=session_factory,
-                settings=settings,
-            )
-            # The serializer comes from the call's carrier (ADR-0022) — which
-            # the claim has made sure is also the edge's.
-            transport = create_carrier_transport(
-                carrier, websocket, stream, mixer=mixer
-            )
-
-            call_session = await build_call_pipeline(
-                agent=agent,
-                transport=transport,
-                call_context=call_context,
-                settings=settings,
-                session_factory=session_factory,
-                mcp_tools=mcp_tools,
-            )
-            # WS handler stays open for the call — await (don't fire-and-forget).
-            await call_session.start()
+def _call_start(call_row: CallRow, stream: CarrierStream) -> CallStart:
+    """What the call was opened with, read back from its row. Its name was
+    for `call.started`, long sent; a stream that does not name the call's
+    REST handle (Asterisk's) leaves it to the row, which always has it."""
+    metadata, own = CallMetadata.split(call_row.metadata_json or {})
+    return CallStart(
+        call_id=call_row.id,
+        project_id=call_row.project_id,
+        agent_id=call_row.active_agent_id,
+        agent_name=None,
+        metadata=metadata,
+        parties=CallParties(
+            from_number=call_row.from_number or "",
+            to_number=call_row.to_number or "",
+        ),
+        handles=EdgeHandles(
+            carrier=call_row.provider,
+            provider_call_sid=stream.call_sid or call_row.provider_call_sid,
+            row_metadata=own,
+        ),
+        direction=CallDirection(call_row.direction),
+    )
 
 
 def _agent_origin(call_row: CallRow) -> AgentOrigin | None:
@@ -242,7 +240,7 @@ async def _accepted_agent(
 
 
 async def _refuse(
-    call_row: CallRow,
+    start: CallStart,
     refusal: AgentRefusal,
     origin: AgentOrigin,
     session_factory: async_sessionmaker[AsyncSession],
@@ -254,16 +252,17 @@ async def _refuse(
     log_refusal(
         refusal,
         origin=origin,
-        project_id=call_row.project_id,
-        call_id=str(call_row.id),
+        project_id=start.project_id,
+        call_id=str(start.call_id),
     )
-    call_context = CallContext(
-        call_id=call_row.id,
-        project_id=call_row.project_id,
-        agent_id=call_row.active_agent_id or DYNAMIC_AGENT_ID,
-        call_sid=stream.call_sid or call_row.provider_call_sid or "",
+    context = call_context(
+        call_id=start.call_id,
+        project_id=start.project_id,
+        agent_id=start.agent_id,
+        call_sid=start.handles.call_sid,
         stream_sid=stream.stream_id,
         session_factory=session_factory,
+        mcp_manager=None,
     )
-    await fail_unstarted_call(call_context, ValueError(refusal.describe()))
-    await release_live_call(call_row.project_id, call_row.id)
+    await fail_unstarted_call(context, ValueError(refusal.describe()))
+    await release_live_call(start.project_id, start.call_id)
