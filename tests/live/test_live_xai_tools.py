@@ -14,8 +14,9 @@ they run through TurnCall's tool bridge. Two seams:
   ends the pipeline after that goodbye.
 
 Both typed lines are appends queued at the pipeline's source, as the S2S idle
-check-in is. Before `realtime_appends`, Grok never heard them and both tests
-timed out in silence.
+check-in is. Until appends were carried past the user aggregator (TurnCall's
+`realtime_appends`, then pipecat itself from 1.17), Grok never heard them and
+both tests timed out in silence.
 
 Live: needs XAI_API_KEY. Skipped without it.
 """
