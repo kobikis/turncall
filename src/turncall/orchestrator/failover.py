@@ -290,20 +290,7 @@ class FailoverTTS(FailoverGroup, ServiceSwitcher[ServiceSwitcherStrategyFailover
 
     def _note_played(self, frame: Frame) -> None:
         if isinstance(frame, LLMFullResponseStartFrame):
-            # A reply's start comes out behind every earlier reply's audio, so
-            # those have finished; one that ended silent was dealt with by the
-            # failure that followed it. A replayed reply's start may be the
-            # written-off voice's, out ahead of the backup: it proves nothing.
-            at = next(
-                (
-                    i
-                    for i, r in enumerate(self._replies)
-                    if r.frames[0] is frame and not r.replayed
-                ),
-                None,
-            )
-            for _ in range(at or 0):
-                self._replies.popleft()
+            self._played_out_before(frame)
         elif isinstance(frame, TTSAudioRawFrame) and self._replies:
             self._replies[0].heard = True
         elif isinstance(frame, TTSStoppedFrame) and self._replies:
@@ -315,12 +302,30 @@ class FailoverTTS(FailoverGroup, ServiceSwitcher[ServiceSwitcherStrategyFailover
             if self._replies[0].heard:
                 self._replies.popleft()
 
+    def _played_out_before(self, start: LLMFullResponseStartFrame) -> None:
+        """A reply's start comes out behind every earlier reply's audio, so
+        those have finished; one that ended silent was dealt with by the
+        failure that followed it. A replayed reply's start may be the
+        written-off voice's, out ahead of the backup: it proves nothing."""
+        at = next(
+            (
+                i
+                for i, reply in enumerate(self._replies)
+                if reply.frames[0] is start and not reply.replayed
+            ),
+            0,
+        )
+        for _ in range(at):
+            self._replies.popleft()
+
     def _silenced_frame(self, frame: Frame) -> bool:
         """Audio and text of a context a written-off voice had taken before it
-        failed — the next reply, synthesized while the silent one played. The
-        switcher gates a member's input and its upstream output, never its
-        downstream output, so it would still play, beside the backup's replay
-        of the same reply."""
+        failed — the next reply, synthesized while the silent one played.
+        pipecat's switcher gates a member's input and its upstream output,
+        never its downstream output, so it would still play, beside the
+        backup's replay of the same reply.
+        `test_tts_failover_concurrent_contexts.py::test_pipecat_still_needs_it`
+        fails once pipecat gates it."""
         context_id = getattr(frame, "context_id", None)
         if context_id is None:
             return False
@@ -352,6 +357,6 @@ class FailoverTTS(FailoverGroup, ServiceSwitcher[ServiceSwitcherStrategyFailover
 
 
 def _open_contexts(service: Any) -> list[str]:
-    """The audio contexts a pipecat TTS holds, queued or playing."""
-    contexts = getattr(service, "get_audio_contexts", None)
-    return list(contexts()) if callable(contexts) else []
+    """The audio contexts a pipecat TTS holds, queued or playing. Every TTS
+    a group holds is pipecat's: a rename fails here, not silently."""
+    return list(service.get_audio_contexts())
