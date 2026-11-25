@@ -37,7 +37,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.tests.utils import SleepFrame, run_test
 
-from tests.unit.test_procedure_window import NO_INTERNET
+from tests.procedure_graphs import NO_INTERNET
 from turncall.domain.procedure_state import ProcedureState, move
 from turncall.domain.procedure_window import WINDOW_MARKER
 from turncall.domain.procedures import MOVE_TO_STEP
