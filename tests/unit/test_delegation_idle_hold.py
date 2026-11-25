@@ -19,7 +19,7 @@ import asyncio
 import uuid
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pipecat.frames.frames import BotStoppedSpeakingFrame, Frame
@@ -32,7 +32,6 @@ from pipecat.workers.llm.backend_llm_worker import BackendToolCall
 
 from tests.conftest import creds
 from turncall.domain.models import AgentConfig
-from turncall.orchestrator import delegation_events
 from turncall.orchestrator.pipeline_factory import CallContext, create_pipeline
 
 _IDLE_SECS = 0.05
@@ -66,16 +65,18 @@ def _live(controller: UserIdleController) -> Any:
         agent_id=uuid.uuid4(),
         call_sid="CA1",
         stream_sid="MZ1",
-        session_factory=MagicMock(),
+        # No platform behind it, as in the website demo: the call records
+        # nothing (no recording, no `delegation.completed`), so nothing
+        # TurnCall writes has to be faked.
+        session_factory=None,
     )
-    with patch("turncall.orchestrator.call_recorder.attach_recorder"):
-        pipeline = create_pipeline(
-            config=agent,
-            transport=MagicMock(),
-            call_context=context,
-            pipecat_settings=SimpleNamespace(),
-            credentials=creds("sk-test"),
-        )
+    pipeline = create_pipeline(
+        config=agent,
+        transport=MagicMock(),
+        call_context=context,
+        pipecat_settings=SimpleNamespace(),
+        credentials=creds("sk-test"),
+    )
     live = next(p for p in pipeline.processors if isinstance(p, OpenAILiveLLMService))
 
     async def _push(
@@ -114,20 +115,17 @@ async def _idle_during_a_delegation() -> list[bool]:
     # gpt-live-1 says "one moment" and stops: the timer starts.
     await controller.process_frame(BotStoppedSpeakingFrame())
     # It hands the work over, and the delegate calls a tool on the way.
-    with patch.object(delegation_events, "store_call_event", new=AsyncMock()):
-        await live._handle_server_event(
-            events.SessionDelegationCreatedEvent(
-                type="session.delegation.created",
-                delegation=events.DelegationMetadata(id="d1", target="client"),
-            )
+    await live._handle_server_event(
+        events.SessionDelegationCreatedEvent(
+            type="session.delegation.created",
+            delegation=events.DelegationMetadata(id="d1", target="client"),
         )
-        await live._on_backend_event(
-            BackendToolCall(
-                phase="started", function_name="book_table", tool_call_id="t1"
-            )
-        )
-        # The delegate is still at work when the caller's silence runs out.
-        await asyncio.sleep(_IDLE_SECS * 4)
+    )
+    await live._on_backend_event(
+        BackendToolCall(phase="started", function_name="book_table", tool_call_id="t1")
+    )
+    # The delegate is still at work when the caller's silence runs out.
+    await asyncio.sleep(_IDLE_SECS * 4)
     assert live.delegating
     await controller.stop()
     for task in live.tasks:
