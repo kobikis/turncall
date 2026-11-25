@@ -3,7 +3,7 @@
 **Status:** Accepted (not yet built)
 **Date:** 2026-11-25
 **Amends:** ADR-0024 ("redact what leaves the call, never what the model
-hears"), for the entity types an agent opts into. Follows ADR-0034 (pipecat
+hears"), for the entity types an agent opts into. Follows ADR-0036 (pipecat
 1.17), whose STT `text_transforms` make it possible.
 
 ## Context
