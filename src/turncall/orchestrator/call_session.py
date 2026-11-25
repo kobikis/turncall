@@ -515,7 +515,9 @@ class CallSession:
             if live is not None and live.delegating:
                 # gpt-live-1 went quiet to wait for its delegate, and the
                 # caller with it; pipecat holds the timer for a function call
-                # in this pipeline only. The relayed answer re-arms it (#257).
+                # in this pipeline or background work it announces (1.17), and
+                # a delegation announces none (test_delegation_idle_hold.py).
+                # The relayed answer re-arms it (#257).
                 logger.info("user_idle_while_delegating", call_id=str(self.call_id))
                 return
             self._idle_strikes += 1

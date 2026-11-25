@@ -2724,7 +2724,9 @@ restarts only when the agent stops speaking, so a
 check-in the model never voices leaves the line silent with no second strike,
 until `max_call_duration_seconds`. A silence while gpt-live-1's delegate is
 still working is not a strike: the caller is waiting on an answer, and pipecat
-holds the timer only for a function call in the call's own pipeline. Like
+holds the timer only for a function call in the call's own pipeline or the
+background work it announces (1.17), which a gpt-live-1 delegation never does
+(`test_delegation_idle_hold.py` fails once it does, and the hold can go). Like
 `max_duration_reached` it records a marker event (`call.customer_silent`) and is inferred **above** `assistant_ended` — ending
 the call is how the guard gives up, so without its own branch it would read as
 `assistant_ended_call`. Not to be confused with `silence_timeout_ms`, the VAD
