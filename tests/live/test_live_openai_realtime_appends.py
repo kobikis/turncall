@@ -2,8 +2,9 @@
 
 An eval's typed caller turn is an append queued at the pipeline's source, as
 the S2S idle check-in is. pipecat's OpenAI Realtime service, like Grok's,
-sent nothing for one until `realtime_appends` carried it around the user
-aggregator, so the second turn below went unanswered.
+sent nothing for one until TurnCall carried it around the user aggregator
+(`realtime_appends`, until pipecat 1.17 passed appends on itself), so the
+second turn below went unanswered.
 
 Live: needs OPENAI_API_KEY. Skipped without it.
 """

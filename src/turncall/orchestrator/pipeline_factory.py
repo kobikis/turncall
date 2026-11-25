@@ -2120,6 +2120,9 @@ def _create_s2s_pipeline(
     # realtime_service_mode: trailing context writes + auto-swapped turn
     # strategies for realtime S2S services (OpenAI Realtime / Gemini Live).
     # Orthogonal to vad_analyzer, so pipecat_vad mode keeps its Silero analyzer.
+    # It also passes an appended message (the idle check-in, an eval's typed
+    # turn) on to the service itself, which takes it in (pipecat 1.17;
+    # `test_s2s_appends.py`).
     context_aggregator = LLMContextAggregatorPair(
         context=context,
         user_params=s2s_user_params,
@@ -2174,12 +2177,6 @@ def _create_s2s_pipeline(
             dst=s2s_sample_rate,
         )
 
-    # An append (the idle check-in, an eval's typed turn) must reach Grok
-    # itself, past the user aggregator (#388).
-    from turncall.orchestrator.realtime_appends import around_the_user_aggregator
-
-    before_user, after_user = around_the_user_aggregator(config.s2s.provider)
-
     # When the caller stops, for the latency observer (#405).
     from turncall.orchestrator.caller_speech_timer import caller_speech_timers
 
@@ -2189,9 +2186,7 @@ def _create_s2s_pipeline(
     processors: list[Any] = [
         transport.input(),
         *_eval_rtvi(call_context),
-        *before_user,
         context_aggregator.user(),
-        *after_user,
         # The caller's stop, for the latency observer: the service decides the
         # turn, so nothing else on `server_vad` reports it.
         *caller_speech_timers(
