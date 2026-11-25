@@ -211,8 +211,8 @@ them — Twilio paces audio in hard realtime, so a late frame becomes a gap, the
 resumes. Caused by event-loop jitter (blocking I/O or CPU work on the loop), not
 by the resampler. The mechanism behind a recovering mid-word [[soft cut]].
 
-**The three timeouts**:
-Three unrelated durations, all of which someone will call "the silence timeout".
+**The four timeouts**:
+Four unrelated durations, all of which someone will call "the silence timeout".
 Name which one is meant.
 - **Turn silence** (`silence_timeout_ms`, 800ms): how much quiet ends the
   caller's sentence. Tuning this changes how eagerly the agent replies. It is
@@ -223,18 +223,32 @@ Name which one is meant.
   stays at 0.2s deciding nothing.
 - **User idle** (`user_idle_timeout_ms`, 10s): how long the caller may stay
   quiet *after the agent has finished speaking* before the idle guard reacts —
-  first the [[idle nudge]], then [[customer_silent]]. `0` disables it.
+  first the [[idle nudge]], then [[customer_silent]]. `0` disables it. Only
+  while nothing the caller is waiting on is still running; otherwise the
+  silence is user waiting.
+- **User waiting** (`wait_reassurance.interval_secs`): how long the caller may
+  stay quiet after the agent's turn *while work they are waiting on is still
+  running* — an async tool, a gpt-live-1 delegation — before the agent offers a
+  [[wait reassurance]]. Never a strike toward [[customer_silent]]: the caller
+  is quiet because the agent is busy.
 - **Pipeline idle** (300s, Pipecat's own): how long the whole pipeline may see
   no activity before the runner gives up. Not configurable per agent, and
   reached only when something is already wrong.
-_Avoid_: "silence timeout" unqualified, and "idle timeout" for the first of the
-three.
+_Avoid_: "silence timeout" unqualified, "idle timeout" for the first of the
+four, and "idle" for a caller who is waiting on the agent.
 
 **Idle nudge**:
-What the agent says on the first [[user idle|the three timeouts]] expiry —
+What the agent says on the first [[user idle|the four timeouts]] expiry —
 "Are you still there?". Cascade speaks `idle_message` verbatim through TTS; S2S
 has no TTS stage, so the model is asked to check in and phrases it itself. One
 nudge only: the second consecutive silence ends the call.
+
+**Wait reassurance**:
+What the agent may say when [[user waiting|the four timeouts]] expires — one short
+line in its own words ("Still pulling that up"), shaped by what the caller asked
+for. The model may also choose to say nothing. Opt-in per agent. Unlike the
+[[idle nudge]], it asks nothing of the caller and never leads to ending the call.
+_Avoid_: "filler" (pipecat's word for a fixed phrase said while a tool starts).
 
 **customer_silent**:
 The [[ended_reason]] for a call the idle guard gave up on — the caller stopped
@@ -246,7 +260,7 @@ pauses, answers, then pauses again starts over.
 **Empty user turn**:
 A caller turn that VAD opened and closed with **no transcript** behind it — a
 cough, a door, a word the STT could not resolve. A turn *outcome*, deliberately
-not a fourth entry in [[the three timeouts]]: nothing here is a duration, and
+not an entry in [[the four timeouts]]: nothing here is a duration, and
 the confusion this glossary exists to prevent is the one between durations.
 Two cases, and they are answered differently because the conversation is in a
 different state:
@@ -255,10 +269,10 @@ different state:
   the caller to repeat. On by default.
 - **Idle** — the agent had finished and was waiting. Unanswered by default:
   replying to what may have been a passing truck is intrusive, and the
-  conversation is not stuck. [[User idle|the three timeouts]] already covers
+  conversation is not stuck. [[User idle|the four timeouts]] already covers
   the case where it *is*.
 _Avoid_: "empty turn" for a turn the caller genuinely stayed silent through —
-that is [[user idle|the three timeouts]], and nothing opened a turn at all.
+that is [[user idle|the four timeouts]], and nothing opened a turn at all.
 
 ## Ambience
 
@@ -638,6 +652,16 @@ messages (redacted on every read while the session is live, rewritten once it en
 logs and spans (#314; regular expressions rather than Presidio, so only the types with a
 fixed shape). See ADR-0024.
 _Avoid_: "masking" (reads as display-only), "anonymization" (a stronger legal claim).
+
+**Withholding** (vs **redaction**):
+Keeping an entity the caller spoke (a card number, an SSN) from the agent: it is
+replaced in the caller's transcript before the context, the LLM vendor, tool arguments
+or anything stored sees it, so the agent never had the value. Opt-in per agent, for the
+entity types it names. Cascade only: an S2S agent sends the caller's audio itself to
+its vendor. [[Redaction]] protects what leaves the call; withholding protects what the
+agent hears. A withheld value reads `<ENTITY_TYPE>`, as a redacted one does. See
+ADR-0035.
+_Avoid_: "masking", "caller-side redaction".
 
 **Retention policy**:
 How long a project keeps recordings, transcripts and events, set separately for each, in

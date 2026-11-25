@@ -2728,7 +2728,7 @@ holds the timer only for a function call in the call's own pipeline. Like
 `max_duration_reached` it records a marker event (`call.customer_silent`) and is inferred **above** `assistant_ended` — ending
 the call is how the guard gives up, so without its own branch it would read as
 `assistant_ended_call`. Not to be confused with `silence_timeout_ms`, the VAD
-stop window inside a turn; see CONTEXT.md, "the three timeouts".
+stop window inside a turn; see CONTEXT.md, "the four timeouts".
 
 `max_duration_reached` comes from `max_call_duration_seconds`: a watchdog on the
 `CallSession` records `call.max_duration_reached` and cancels the worker, so the
