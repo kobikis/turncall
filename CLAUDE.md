@@ -1630,8 +1630,9 @@ task running the call can do — so they go through the call (#215, tracker
   `call_did_not_acknowledge`**. A handler that raises `ControlRefused` is a 409
   with its reason. Handlers run one at a time per call, in arrival order.
 - `message`: appended to the context (`run_llm=False`), read on the agent's
-  next turn. Cascade only — a realtime model reads no context added after it
-  starts, so S2S refuses it rather than answer 200 for a message nothing reads.
+  next turn. Cascade only: S2S refuses it (409) pending #519. gpt-live-1 reads
+  no context after its first; the other realtime services take an append into
+  their session since pipecat 1.17, but accepting it there is not enabled yet.
 - `handoff` (#216): the call runs `tool_bridge.run_handoff` — the model's
   `handoff_to_agent` path, prepare / commit / apply (#144) — on its own LLM,
   context and worker (`live_control.stages_of`), so the record and the pipeline
