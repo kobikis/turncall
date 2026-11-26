@@ -18,7 +18,6 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     TTSSpeakFrame,
     TTSStoppedFrame,
-    TTSTextFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
@@ -29,6 +28,7 @@ from pydantic import ValidationError
 
 from tests.accepted import refusal
 from tests.conftest import creds
+from tests.failover_fakes import FakeTTS, watch_failovers
 from turncall.api.v1.schemas.agents import (
     AgentConfigSchema,
     STTConfigSchema,
@@ -79,51 +79,6 @@ class _FakeSTT(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-class _FakeTTS(FrameProcessor):
-    """Speaks a reply (or a TTSSpeakFrame) as one TTSTextFrame — or, with
-    `fail`, is refused on the first sentence it is asked to say."""
-
-    def __init__(self, fail: ErrorCategory | None = None) -> None:
-        super().__init__()
-        self.fail = fail
-        self.text: list[str] = []
-        self.spoken: list[str] = []
-
-    async def _speak(self, text: str) -> None:
-        if self.fail is not None:
-            await self.push_error("tts refused", category=self.fail)
-            return
-        self.spoken.append(text)
-        await self.push_frame(TTSTextFrame(text, text_type="sentence"))
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, LLMTextFrame):
-            self.text.append(frame.text)
-            if frame.text.endswith("."):
-                # A sentence is ready: the first thing a TTS is asked to say.
-                await self._speak("".join(self.text))
-                self.text = []
-            return
-        if isinstance(frame, TTSSpeakFrame):
-            await self._speak(frame.text)
-            return
-        if isinstance(frame, LLMFullResponseEndFrame) and self.text:
-            await self._speak("".join(self.text))
-            self.text = []
-        await self.push_frame(frame, direction)
-
-
-def _watch(group: object) -> list[tuple[str, str, str]]:
-    seen: list[tuple[str, str, str]] = []
-
-    @group.event_handler("on_failover")  # type: ignore[attr-defined]
-    async def _on(_g: object, src: str, dst: str, error: ErrorFrame) -> None:
-        seen.append((src, dst, error.error))
-
-    return seen
-
-
 @pytest.mark.unit
 class TestSTT:
     async def test_the_backup_hears_the_sentence_the_primary_was_refused_on(
@@ -136,7 +91,7 @@ class TestSTT:
                 ("deepgram/nova-3-general", backup),
             ]
         )
-        seen = _watch(group)
+        seen = watch_failovers(group)
 
         down, up = await run_test(
             group,
@@ -230,7 +185,7 @@ class TestSilentSTT:
     async def test_two_silent_turns_move_the_call_and_replay_both(self) -> None:
         backup = _FakeSTT()
         group = FailoverSTT([("deepgram/nova-3-general", _Stalled()), ("b/2", backup)])
-        seen = _watch(group)
+        seen = watch_failovers(group)
 
         down, _up = await run_test(group, frames_to_send=_turns(2, 1))
 
@@ -263,14 +218,14 @@ class TestSilentSTT:
 @pytest.mark.unit
 class TestTTS:
     async def test_the_backup_says_the_whole_reply(self) -> None:
-        backup = _FakeTTS()
+        backup = FakeTTS()
         group = FailoverTTS(
             [
-                ("openai/tts-1", _FakeTTS(ErrorCategory.AUTHENTICATION)),
+                ("openai/tts-1", FakeTTS(ErrorCategory.AUTHENTICATION)),
                 ("deepgram/aura-2-helena-en", backup),
             ]
         )
-        seen = _watch(group)
+        seen = watch_failovers(group)
 
         down, up = await run_test(
             group,
@@ -290,9 +245,9 @@ class TestTTS:
         assert not [f for f in up if isinstance(f, ErrorFrame)]
 
     async def test_a_refused_greeting_is_spoken_by_the_backup(self) -> None:
-        backup = _FakeTTS()
+        backup = FakeTTS()
         group = FailoverTTS(
-            [("a/1", _FakeTTS(ErrorCategory.AUTHENTICATION)), ("b/2", backup)]
+            [("a/1", FakeTTS(ErrorCategory.AUTHENTICATION)), ("b/2", backup)]
         )
         await run_test(group, frames_to_send=[TTSSpeakFrame("Welcome to Nonna's.")])
         assert backup.spoken == ["Welcome to Nonna's."]
@@ -303,7 +258,7 @@ class TestTTS:
         only then the error that writes the service off. The stop must not
         count as the reply having been said."""
 
-        class _Stalled(_FakeTTS):
+        class _Stalled(FakeTTS):
             async def _speak(self, text: str) -> None:
                 await self.push_frame(TTSStoppedFrame())
                 await self.push_error(
@@ -311,7 +266,7 @@ class TestTTS:
                     force_treat_as_permanent=True,
                 )
 
-        backup = _FakeTTS()
+        backup = FakeTTS()
         group = FailoverTTS([("openai/gpt-4o-mini-tts", _Stalled()), ("b/2", backup)])
         await run_test(group, frames_to_send=[TTSSpeakFrame("Welcome to Nonna's.")])
         assert backup.spoken == ["Welcome to Nonna's."]
@@ -337,7 +292,7 @@ class TestTTS:
             stop_frame_timeout_s=0.1,
             max_consecutive_zero_audio_contexts=1,
         )
-        backup = _FakeTTS()
+        backup = FakeTTS()
         group = FailoverTTS([("openai/gpt-4o-mini-tts", stalled), ("b/2", backup)])
         async with server:
             await run_test(
@@ -347,7 +302,7 @@ class TestTTS:
         assert backup.spoken == ["Welcome."]
 
     async def test_recoverable_error_does_not_switch(self) -> None:
-        primary, backup = _FakeTTS(ErrorCategory.RATE_LIMIT), _FakeTTS()
+        primary, backup = FakeTTS(ErrorCategory.RATE_LIMIT), FakeTTS()
         group = FailoverTTS([("a/1", primary), ("b/2", backup)])
 
         _down, up = await run_test(group, frames_to_send=[TTSSpeakFrame("Hi.")])
@@ -362,8 +317,8 @@ class TestTTS:
 async def test_no_switching_back(group_cls: type) -> None:
     """A failed member is held down even when pipecat would revive it on a
     settings change — so the caller never hears the voice change twice."""
-    primary = _FakeTTS() if group_cls is FailoverTTS else _FakeSTT()
-    backup = _FakeTTS() if group_cls is FailoverTTS else _FakeSTT()
+    primary = FakeTTS() if group_cls is FailoverTTS else _FakeSTT()
+    backup = FakeTTS() if group_cls is FailoverTTS else _FakeSTT()
     group = group_cls([("a/1", primary), ("b/2", backup)])
     await run_test(group, frames_to_send=[])
     await primary.push_error("dead", category=ErrorCategory.AUTHENTICATION)
@@ -581,7 +536,7 @@ async def test_session_records_the_failover(role: str) -> None:
     from turncall.domain.enums import CallEventType
     from turncall.orchestrator.call_session import CallSession
 
-    cls, fake = (FailoverSTT, _FakeSTT) if role == "stt" else (FailoverTTS, _FakeTTS)
+    cls, fake = (FailoverSTT, _FakeSTT) if role == "stt" else (FailoverTTS, FakeTTS)
     group = cls([("a/1", fake()), ("b/2", fake())])
     cs = CallSession(
         call_context=MagicMock(is_eval=False),

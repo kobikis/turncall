@@ -23,6 +23,17 @@ conversation (call_id)
     └── tts   (metrics.ttfb, character_count)
 ```
 
+A speech-to-speech call has no STT or TTS stage, so its turns hold the model's replies and tool calls instead:
+
+```
+conversation (call_id)
+└── turn
+    ├── llm_response   one per reply (input, output, metrics.ttfb, llm.interrupted, gen_ai.usage.*)
+    └── llm_tool_call  one per tool call (gen_ai.tool.name, gen_ai.tool.call.arguments, gen_ai.tool.call.result)
+```
+
+An `llm_response` runs from the end of the caller's speech to the end of the reply, or to the barge-in that cut it off, so its duration includes the reply's spoken length: chart `metrics.ttfb` for how long the caller waited. It is exported up to two seconds after the reply ends. `gen_ai.provider.name` is named after the service TurnCall builds: `openai` for OpenAI Realtime, `handoffgeminilive` for Gemini Live, `elevenrealtime` for Eleven Realtime, `keyawaregrokrealtime` for Grok Voice and `_refreshingnovasonic` for Nova Sonic. gpt-live-1 calls carry no reply spans.
+
 Span attributes also carry `turncall.project_id`, `turncall.agent_id`, `turncall.call_sid`, `turncall.direction`, and `turncall.transport`. Caller numbers (`turncall.from_number` / `turncall.to_number`) are added only if you opt in with `PIPECAT_TRACE_INCLUDE_PII=true` (below).
 
 ### Enable it

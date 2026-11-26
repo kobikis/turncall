@@ -17,8 +17,9 @@ every role:
     STT refused at the end of the caller's first sentence (a bad key on an
     HTTP provider) loses that sentence, and the line sits silent until the
     caller repeats it.
-  - TTS: the reply being spoken. A TTS refused on its first sentence (often the
-    greeting) otherwise loses the reply's opening, or all of it.
+  - TTS: every reply handed over and not yet played out. A TTS refused on its
+    first sentence (often the greeting) otherwise loses the reply's opening,
+    or all of it.
 
 - **a stalled STT is written off.** One that takes the caller's audio and never
   answers reports no error, so pipecat never moves the call off it. The group
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from dataclasses import dataclass
 from typing import Any
 
 from pipecat.frames.frames import (
@@ -210,18 +212,36 @@ class FailoverSTT(FailoverGroup, ServiceSwitcher[ServiceSwitcherStrategyFailover
             )
 
 
+@dataclass
+class _Reply:
+    """One reply handed to the TTS: the frames that asked for it, whether any
+    of its audio has come out, and whether a backup was handed it again."""
+
+    frames: list[Frame]
+    heard: bool = False
+    replayed: bool = False
+
+
 class FailoverTTS(FailoverGroup, ServiceSwitcher[ServiceSwitcherStrategyFailover]):
-    """An agent's TTS and its backups, in order. `ttss` are `(label, service)`."""
+    """An agent's TTS and its backups, in order. `ttss` are `(label, service)`.
+
+    A voice may take the next reply before the last has finished coming out of
+    it: pipecat 1.17's ElevenLabs synthesizes several replies at once, as
+    Cartesia already did, and plays them in order (#499). So the group keeps
+    every reply handed over and not yet played out, oldest first — the one
+    whose audio is coming out is the oldest — and a failure replays them all.
+    """
 
     role = "tts"
 
     def __init__(self, ttss: list[tuple[str, Any]]) -> None:
         super().__init__([s for _, s in ttss], ServiceSwitcherStrategyFailover)
         self._init_group(ttss)
-        # The reply being spoken, as the frames that asked for it; and whether
-        # any of it has been heard.
-        self._reply: list[Frame] = []
-        self._reply_heard = False
+        self._replies: deque[_Reply] = deque()
+        # The LLM reply still being handed over, which its text joins.
+        self._open: _Reply | None = None
+        # Contexts a written-off voice had already taken (see `_silence`).
+        self._silenced: set[str] = set()
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         if direction is FrameDirection.DOWNSTREAM:
@@ -230,40 +250,113 @@ class FailoverTTS(FailoverGroup, ServiceSwitcher[ServiceSwitcherStrategyFailover
 
     def _note_reply(self, frame: Frame) -> None:
         if isinstance(frame, (LLMFullResponseStartFrame, TTSSpeakFrame)):
-            if not getattr(frame, "skip_tts", False):
-                self._reply = [frame]
-                self._reply_heard = False
+            if getattr(frame, "skip_tts", False):
+                return
+            reply = _Reply([frame])
+            self._replies.append(reply)
+            self._open = reply if isinstance(frame, LLMFullResponseStartFrame) else None
         elif isinstance(frame, InterruptionFrame):
-            # Cut off by the caller: nothing of it is wanted any more.
-            self._reply = []
+            # Cut off by the caller: nothing handed over is wanted any more.
+            self._replies.clear()
+            self._open = None
         elif (
-            self._reply
+            self._open is not None
             and isinstance(frame, (TextFrame, LLMFullResponseEndFrame))
             and not isinstance(frame, TranscriptionFrame)
             and not frame.skip_tts
         ):
-            self._reply.append(frame)
+            self._open.frames.append(frame)
+            if isinstance(frame, LLMFullResponseEndFrame):
+                self._close_open()
+
+    def _close_open(self) -> None:
+        """A reply with nothing to say (only tool calls) opens no context and
+        sends no stop: kept, it would take the next reply's audio for its own."""
+        reply, self._open = self._open, None
+        spoken = any(
+            isinstance(f, TextFrame) and f.text.strip() for f in reply.frames[1:]
+        )
+        if not spoken and reply in self._replies:
+            self._replies.remove(reply)
 
     async def push_frame(
         self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM
     ) -> None:
-        if isinstance(frame, TTSAudioRawFrame):
-            self._reply_heard = True
-        elif isinstance(frame, TTSStoppedFrame) and self._reply_heard:
-            # The reply has been spoken; a later failure owes it nothing. A
-            # stop with no audio before it is pipecat closing a context that
-            # timed out silent — the failure that writes a stalled TTS off
-            # comes right after it, and that reply is the one to replay.
-            self._reply = []
+        if direction is FrameDirection.DOWNSTREAM:
+            if self._silenced_frame(frame):
+                return
+            self._note_played(frame)
         await super().push_frame(frame, direction)
 
+    def _note_played(self, frame: Frame) -> None:
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._played_out_before(frame)
+        elif isinstance(frame, TTSAudioRawFrame) and self._replies:
+            self._replies[0].heard = True
+        elif isinstance(frame, TTSStoppedFrame) and self._replies:
+            # The oldest reply has been spoken; a later failure owes it
+            # nothing. A stop with no audio before it is pipecat closing a
+            # context that timed out silent — the failure that writes a
+            # stalled TTS off comes right after it, and that reply is the one
+            # to replay from.
+            if self._replies[0].heard:
+                self._replies.popleft()
+
+    def _played_out_before(self, start: LLMFullResponseStartFrame) -> None:
+        """A reply's start comes out behind every earlier reply's audio, so
+        those have finished; one that ended silent was dealt with by the
+        failure that followed it. A replayed reply's start may be the
+        written-off voice's, out ahead of the backup: it proves nothing."""
+        at = next(
+            (
+                i
+                for i, reply in enumerate(self._replies)
+                if reply.frames[0] is start and not reply.replayed
+            ),
+            0,
+        )
+        for _ in range(at):
+            self._replies.popleft()
+
+    def _silenced_frame(self, frame: Frame) -> bool:
+        """Audio and text of a context a written-off voice had taken before it
+        failed — the next reply, synthesized while the silent one played.
+        pipecat's switcher gates a member's input and its upstream output,
+        never its downstream output, so it would still play, beside the
+        backup's replay of the same reply.
+        `test_tts_failover_concurrent_contexts.py::test_pipecat_still_needs_it`
+        fails once pipecat gates it."""
+        context_id = getattr(frame, "context_id", None)
+        if context_id is None:
+            return False
+        if context_id not in self._silenced and any(
+            context_id in _open_contexts(s) for s in self._failed_members()
+        ):
+            self._silenced.add(context_id)
+        return context_id in self._silenced
+
+    def _failed_members(self) -> list[Any]:
+        return [s for s in self.strategy.services if id(s) in self._failed]
+
     async def _replay(self, service: Any) -> None:
-        """The reply from its start. The original frames, not copies: the
-        switcher passes a frame id out once and observers report one once, so
-        the bracket the failed member already let through is not repeated.
+        """Every reply not yet played out, from the oldest. The original
+        frames, not copies: the switcher passes a frame id out once and
+        observers report one once, so the bracket the failed member already
+        let through is not repeated.
 
         ponytail: a TTS that spoke half a reply before dying has it said again
         in full; the failures this is for (a refused key, an unknown voice, an
         outage) die before the first audio."""
-        for frame in list(self._reply):
-            await service.queue_frame(frame)
+        for failed in self._failed_members():
+            self._silenced.update(_open_contexts(failed))
+        for reply in list(self._replies):
+            reply.replayed = True
+            reply.heard = False
+            for frame in list(reply.frames):
+                await service.queue_frame(frame)
+
+
+def _open_contexts(service: Any) -> list[str]:
+    """The audio contexts a pipecat TTS holds, queued or playing. Every TTS
+    a group holds is pipecat's: a rename fails here, not silently."""
+    return list(service.get_audio_contexts())

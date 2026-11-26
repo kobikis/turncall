@@ -117,6 +117,11 @@ class _StubTTS(FrameProcessor):
         self._refused = refused
         self._text: list[str] = []
 
+    def get_audio_contexts(self) -> list[str]:
+        """pipecat's TTS method, which the failover group reads: it opens no
+        audio context."""
+        return []
+
     async def _say(self, text: str) -> None:
         if self._refused:
             await self.push_error(

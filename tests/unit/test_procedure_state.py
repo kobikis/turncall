@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from tests.unit.test_procedure_window import NO_INTERNET
+from tests.procedure_graphs import NO_INTERNET
 from turncall.domain.procedure_state import ProcedureState, move
 from turncall.domain.procedures import Procedure
 

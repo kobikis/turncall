@@ -41,18 +41,18 @@ OPENAI_LIVE_HANDOFF_REFUSAL = (
 def message_handler(queue_frame: QueueFrame, *, pipeline_mode: str) -> Handler:
     """Add an API message to the model's context, for its next turn.
 
-    Cascade only. A realtime model is configured from the context it starts
-    with and then reads only function results from it — pipecat's OpenAI
-    Realtime service logs "NEED TO IMPLEMENT MESSAGES APPEND", and gpt-live-1
-    reads no context after its first — so on S2S the message would land in a
-    context nothing reads. Refused there, so the API says so instead of 200.
+    Cascade only, for now. gpt-live-1 reads no context after its first, so a
+    message would land where nothing reads it. The other realtime services
+    take an appended message into their session since pipecat 1.17
+    (`test_s2s_appends.py`), but accepting it there is not enabled yet
+    (#519). So S2S refuses it, and the API says so instead of 200.
     """
 
     async def _append(body: dict[str, Any]) -> dict[str, Any]:
         if pipeline_mode == "s2s":
             raise ControlRefused(
-                "A speech-to-speech call does not read messages added after it "
-                "starts; the message was not applied"
+                "Messages are not yet accepted on a speech-to-speech call "
+                "(#519); the message was not applied"
             )
         role, content = body["role"], body["message"]
         await queue_frame(

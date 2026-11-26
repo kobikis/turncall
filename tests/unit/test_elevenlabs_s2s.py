@@ -293,11 +293,7 @@ class TestCallerAudioWaitsForTheSession:
 
 
 class TestTheS2SRulesHold:
-    def test_the_idle_check_in_reaches_the_service(self) -> None:
-        from turncall.orchestrator.realtime_appends import around_the_user_aggregator
-
-        before, after = around_the_user_aggregator("elevenlabs")
-        assert before and after
+    # The idle check-in reaching the service: `test_s2s_appends.py`.
 
     def test_failover_is_refused(self) -> None:
         with pytest.raises(ValidationError, match=r"llm\.failover"):
