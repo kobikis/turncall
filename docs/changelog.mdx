@@ -19,12 +19,13 @@ on WebRTC, which did not send one).
   the API or agent config changes. When a caller talks over the agent, the
   words the agent had said before the barge-in stay with the reply they were
   part of, instead of being read back to the model as the start of its next
-  one. A caller
-  waiting on a slow tool is no longer asked "Are you still there?" while it
-  runs. ElevenLabs voices start the next reply without a gap, and Cartesia
-  voices split sentences by the agent's language. In evals, a scripted turn's
-  pauses may total at most 60 seconds: a stored scenario with longer ones no
-  longer runs until they are shortened.
+  one. A caller waiting on a slow tool is no longer asked "Are you still
+  there?" while it runs. A Nova Sonic agent now gets its "Are you still
+  there?" check-in: before, the model was never sent it, so a caller who went
+  quiet heard nothing. ElevenLabs voices start the next reply without a gap,
+  and Cartesia voices split sentences by the agent's language. In evals, a
+  scripted turn's pauses may total at most 60 seconds: a stored scenario with
+  longer ones no longer runs until they are shortened.
 - **Tracing on speech-to-speech calls.** If you chart TurnCall's
   OpenTelemetry spans, speech-to-speech calls now carry one `llm_response`
   span per reply, from the caller's last word to the reply's end, with the
@@ -44,7 +45,9 @@ on WebRTC, which did not send one).
   over, a reply the first voice had already been handed could be lost, or
   heard twice, once from each voice. The backup now says every reply the
   failed voice had not played, in order, and nothing more comes from the
-  failed voice.
+  failed voice. This was already possible on Cartesia voices, which prepare
+  the next reply while one is playing; ElevenLabs voices do that too since
+  pipecat 1.17.
 
 </Update>
 

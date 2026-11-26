@@ -2718,8 +2718,12 @@ TTS; S2S has no TTS stage, so the model is asked to check in and words it
 itself — gpt-live-1 as spoken commentary, since it reads no context after its
 first (#257). Every other S2S service gets the check-in as an appended
 message, which pipecat's user aggregator passes on and the service takes in
-itself (pipecat 1.17; `tests/unit/test_s2s_appends.py`); an eval's typed caller
-turn takes the same path. The timer
+itself (pipecat 1.17); an eval's typed caller turn takes the same path.
+`tests/unit/test_s2s_appends.py` drives it to the session with only the socket
+faked: OpenAI Realtime, Grok Voice and Eleven Realtime send it and ask for a
+reply, Gemini Live completes the turn, Nova Sonic takes it as interactive text.
+On Nova Sonic that is new with 1.17 — its check-in never reached the model on
+1.16, where the context it read carried only function results. The timer
 restarts only when the agent stops speaking, so a
 check-in the model never voices leaves the line silent with no second strike,
 until `max_call_duration_seconds`. A silence while gpt-live-1's delegate is
